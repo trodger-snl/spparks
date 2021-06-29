@@ -50,7 +50,6 @@ This section has the following sub-sections:
 
 "Read this first"_#start_2_1
 "Building a SPPARKS executable"_#start_2_2
-"Common errors that can occur when making SPPARKS"_#start_2_3
 "Editing a new low-level Makefile"_#start_2_4
 "Additional build tips"_#start_2_5
 "Building for a Mac"_#start_2_6
@@ -98,31 +97,6 @@ use a -std=c++11 flag when compiling, as in the
 src/MAKE/Makefile.machine files provided with SPPARKS.
 
 :line
-:line
-
-[{Common errors that can occur when making SPPARKS:}] :link(start_2_3)
-
-(1) If the make command breaks immediately with errors that indicate
-it can't find files with a "*" in their names, this can be because
-your machine's make doesn't support wildcard expansion in a makefile.
-Try gmake instead of make.  If that doesn't work, try using a -f
-switch with your make command to use Makefile.list which explicitly
-lists all the needed files, e.g.
-
-make makelist
-make -f Makefile.list linux
-gmake -f Makefile.list mac :pre
-
-The first "make" command will create a current Makefile.list with all
-the file names in your src dir.  The 2nd "make" command (make or
-gmake) will use it to build SPPARKS.
-
-(2) Other errors typically occur because the low-level Makefile isn't
-setup correctly for your machine.  If your platform is named "foo",
-you need to create a Makefile.foo in the MAKE sub-directory.  Use
-whatever existing file is closest to your platform as a starting
-point.  See the next section for more instructions.
-
 :line
 
 [{Editing a new low-level Makefile.foo:}] :link(start_2_4)
@@ -377,6 +351,10 @@ simulate due to length scale and computational resource limitations.
 {Stitch} is intended and primarily focused on microstructural
 evolution simulations such as welding and additive manufacturing but
 other applications may be possible.
+
+If the {set stitch} command is used in an input script without configuring and
+building SPPARKS with {Stitch}, there will be a runtime error 
+'illegal set command.'
 
 Building SPPARKS with the STITCH package enables these commands to use
 stitch-related options:

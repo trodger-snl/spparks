@@ -55,7 +55,6 @@ sub-directories:
 </P>
 <UL><LI><A HREF = "#start_2_1">Read this first</A>
 <LI><A HREF = "#start_2_2">Building a SPPARKS executable</A>
-<LI><A HREF = "#start_2_3">Common errors that can occur when making SPPARKS</A>
 <LI><A HREF = "#start_2_4">Editing a new low-level Makefile</A>
 <LI><A HREF = "#start_2_5">Additional build tips</A>
 <LI><A HREF = "#start_2_6">Building for a Mac</A>
@@ -104,31 +103,6 @@ src/MAKE/Makefile.machine files provided with SPPARKS.
 </P>
 <HR>
 
-<HR>
-
-<A NAME = "start_2_3"></A><B><I>Common errors that can occur when making SPPARKS:</I></B> 
-
-<P>(1) If the make command breaks immediately with errors that indicate
-it can't find files with a "*" in their names, this can be because
-your machine's make doesn't support wildcard expansion in a makefile.
-Try gmake instead of make.  If that doesn't work, try using a -f
-switch with your make command to use Makefile.list which explicitly
-lists all the needed files, e.g.
-</P>
-<PRE>make makelist
-make -f Makefile.list linux
-gmake -f Makefile.list mac 
-</PRE>
-<P>The first "make" command will create a current Makefile.list with all
-the file names in your src dir.  The 2nd "make" command (make or
-gmake) will use it to build SPPARKS.
-</P>
-<P>(2) Other errors typically occur because the low-level Makefile isn't
-setup correctly for your machine.  If your platform is named "foo",
-you need to create a Makefile.foo in the MAKE sub-directory.  Use
-whatever existing file is closest to your platform as a starting
-point.  See the next section for more instructions.
-</P>
 <HR>
 
 <A NAME = "start_2_4"></A><B><I>Editing a new low-level Makefile.foo:</I></B> 
@@ -383,6 +357,10 @@ simulate due to length scale and computational resource limitations.
 <I>Stitch</I> is intended and primarily focused on microstructural
 evolution simulations such as welding and additive manufacturing but
 other applications may be possible.
+</P>
+<P>If the <I>set stitch</I> command is used in an input script without configuring and
+building SPPARKS with <I>Stitch</I>, there will be a runtime error 
+'illegal set command.'
 </P>
 <P>Building SPPARKS with the STITCH package enables these commands to use
 stitch-related options:

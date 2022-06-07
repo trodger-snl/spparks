@@ -3,7 +3,7 @@
 variable SEED equal                 1
 #
 # T: simulation temperature
-variable T equal                 0.25
+variable T equal                 0.0625
 #
 # DT: number of KMC steps
 variable DT equal 400.0
@@ -12,10 +12,11 @@ variable DT equal 400.0
 variable IN_FILLER world vf03_nvox100.st
 
 # OUT_FILLER: output filename
-variable OUT_FILLER world pairwise_weights.st
+variable OUT_FILLER world pin_filler.st
 
 #
 seed		 ${SEED}
+
 
 # Declare app
 app_style diffusion/multiphase
@@ -40,13 +41,6 @@ diffusion/multiphase pin 1
 diffusion/multiphase phase 2
 diffusion/multiphase phase 3
 
-# Pairwise phase weights are optional; default 1.0
-# Need only input weight once for pair (i,j); symmetry 
-#    is enforced in app; same weight is internally 
-#    assigned to pair(j,i)
-# diffusion/multiphase weight <double> pair <int phase_1,int phase_2> 
-diffusion/multiphase weight 0.5 pair 1 2
-
 # Initialize filler from stitch file;
 # In this case -- the filler phase label is '1' with 
 #    all remaining sites set to a phase value '0';
@@ -57,9 +51,9 @@ set i1 stitch ${IN_FILLER} first
 
 # NOTE: this command is sensitive to 'phase' values 
 #    specified above; Idea here is to evenly distribute
-#    phase labels '2 and 3' to sites that had a value 
+#    phase labels '2 and 3' to sites that have a value 
 #    of '0' from above 'set i1 stitch' command; all 
-#    values <1 were non-filler
+#    values < 1 are assumed to be non-filler
 set i1 range 2 3 if i1 < 1
 
 solve_style tree
@@ -70,7 +64,7 @@ stats            10.0
 
 # Dump stitch file and images at time intervals of 100
 dump         dump.id stitch 100 ${OUT_FILLER} i1
-dump threedee image 100 pairwise_weights.*.jpg site site crange 1 3 drange 1 1 shape cube box no 1 zoom 1.3 size 512 512 sdiam 1.05
+dump threedee image 100 pin_filler.*.jpg site site crange 1 3 drange 1 1 shape cube box no 1 zoom 1.3 size 512 512 sdiam 1.05
 dump_modify threedee scolor * red/white/black backcolor gray
 
 run             ${DT}

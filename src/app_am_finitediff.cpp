@@ -597,15 +597,8 @@ void AppAMFiniteDiff::iterate_rejection(double stoptime)
           SolidD[i]--;
         }
       }
-      //Find the highest temperature in the local array and compare with others
-      tempMax = compute_tempMax();
       timer->stamp(TIME_APP);
-      MPI_Allreduce(&tempMax,&tempMaxAll,1,MPI_DOUBLE,MPI_MAX,world);
       timer->stamp(TIME_COMM);
-      //Using the global maximum temperature, compute our smallest timestep
-      dtMC = compute_timeMin(tempMaxAll);
-      //Also using this value, compute the maximum solid-state Mobility
-      mobMax = exp(-Q/(R*tempMaxAll));
       timer->stamp(TIME_APP);
     }
   }

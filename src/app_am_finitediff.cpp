@@ -733,7 +733,7 @@ void AppAMFiniteDiff::app_update(double dt)
   // Update active flags
   for (int i=0; i<nlocal; i++) {
     //Keep looping if we're above the meltspot
-    if(xyz[i][2] > floor(z_meltspot)) continue;
+    if(xyz[i][2] > floor(z_meltspot)) break;
     else if (activeFlag[i] == 0) {
       activeFlag[i] = 1;
   }
@@ -741,7 +741,7 @@ void AppAMFiniteDiff::app_update(double dt)
   for (int i=0; i<nlocal; i++) {
     //Keep looping if we're above the meltspot
 
-    if(xyz[i][2] > floor(z_meltspot)) continue;
+    if(xyz[i][2] > floor(z_meltspot)) break;
         
     //If below melt spot, run finite difference
     site_event_finitedifference(i);

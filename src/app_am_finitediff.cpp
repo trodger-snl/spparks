@@ -597,15 +597,8 @@ void AppAMFiniteDiff::iterate_rejection(double stoptime)
           SolidD[i]--;
         }
       }
-      //Find the highest temperature in the local array and compare with others
-      tempMax = compute_tempMax();
       timer->stamp(TIME_APP);
-      MPI_Allreduce(&tempMax,&tempMaxAll,1,MPI_DOUBLE,MPI_MAX,world);
       timer->stamp(TIME_COMM);
-      //Using the global maximum temperature, compute our smallest timestep
-      dtMC = compute_timeMin(tempMaxAll);
-      //Also using this value, compute the maximum solid-state Mobility
-      mobMax = exp(-Q/(R*tempMaxAll));
       timer->stamp(TIME_APP);
     }
   }
@@ -639,11 +632,11 @@ void AppAMFiniteDiff::site_event_rejection(int i, RandomPark *random)
   for (j = 0; j < numneigh[i]; j++) {
     value = spin[neighbor[i][j]];
 
-    //Exclude gas, powder or molten sites from the Potts neighbor tally
+    //Exclude gas or molten sites from the Potts neighbor tally
 
     if (value == spin[i] || value == nspins || 
-        (activeFlag[neighbor[i][j]] != 3 && 
-         activeFlag[neighbor[i][j]] != 1)) continue;
+        activeFlag[neighbor[i][j]] ==0 || 
+         activeFlag[neighbor[i][j]] ==2) continue;
     for (m = 0; m < nevent; m++)
       if (value == unique[m]) break;
     if (m < nevent) continue;
@@ -737,18 +730,20 @@ void AppAMFiniteDiff::app_update(double dt)
       return;
     }
   }
-
+  // Update active flags
+  for (int i=0; i<nlocal; i++) {
+    //Keep looping if we're above the meltspot
+    if(xyz[i][2] > floor(z_meltspot)) break;
+    else if (activeFlag[i] == 0) {
+      activeFlag[i] = 1;
+  }
+  comm->all();
   for (int i=0; i<nlocal; i++) {
     //Keep looping if we're above the meltspot
 
-    if(xyz[i][2] > floor(z_meltspot)) continue;
+    if(xyz[i][2] > floor(z_meltspot)) break;
         
     //If below melt spot, run finite difference
-    //This could be slightly screwy for the first step after a new layer
-
-    else if (activeFlag[i] == 0) {
-      activeFlag[i] = 1;
-    }
     site_event_finitedifference(i);
         
     //Let's also update the active flag after each FD loop

@@ -110,7 +110,6 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     c1 = 0.5;
     c2 = 0.5;
     c3 = 2.5;
-    use_phase = 1;
     time_step = dt;
     
     //add the double array
@@ -198,13 +197,7 @@ void AppAdditiveExtTempTexture::app_update(double dt)
 
     if (domain->me == 0) {
         temperature_hdf(totalTime);
-        if(use_phase == 0) {
-          fprintf(screen,"Finished reading temperature file. %d\n ", totalTime);
-        }
-        else {
-          phase_hdf(totalTime);
-          fprintf(screen,"Finished reading temperature and phase files. %d\n", totalTime);
-        }
+        fprintf(screen,"Finished reading temperature file. %d\n ", totalTime);
     }
 
     if(totalTime == 0) {
@@ -213,12 +206,10 @@ void AppAdditiveExtTempTexture::app_update(double dt)
 
     if (domain->me != 0) {
         temp_in_array = new double[line_count];
-        if(use_phase != 0) phase_in_array = new double[line_count];
     }
 
 
     MPI_Bcast(temp_in_array,line_count,MPI_DOUBLE,0,world);
-    if(use_phase != 0) MPI_Bcast(phase_in_array,line_count,MPI_DOUBLE,0,world);
 
 
     totalTime = totalTime + 1;
@@ -242,17 +233,16 @@ void AppAdditiveExtTempTexture::app_update(double dt)
         i_local = i_shift - div_result.quot * xPeriod - div_y.quot * yPeriod * nx;
         
         //Check whether we're an active site and skip if not
-        if(use_phase != 0) {
-          if(phase_in_array[i_local] > 0) {
-            activeFlag[i] = 0;
-            continue;
-          }
-          //If we're on the first timestep, set the solid phase to activeFlag=1
-          if(totalTime == 1){ 
-	          activeFlag[i] = 1;
-          //  fprintf(screen,"Updating site %d\n",i);
-	        }
+        // if(phase_in_array[i_local] > 0) {
+        //   activeFlag[i] = 0;
+        //   continue;
+        // }
+        //If we're on the first timestep, set the solid phase to activeFlag=1
+        if(totalTime == 1){ 
+          activeFlag[i] = 1;
+        //  fprintf(screen,"Updating site %d\n",i);
         }
+        
             
         //Update the temperature at all the sites
         T[i] = temp_in_array[i_local];
@@ -284,7 +274,6 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     }
 
     delete[] temp_in_array;
-    delete [] phase_in_array;
 }
 
 /* ----------------------------------------------------------------------
@@ -308,7 +297,7 @@ void AppAdditiveExtTempTexture::temperature_hdf(int timestep)
 
     temp_in_array = new double[line_count];
     std::stringstream os;
-    os << temp_file_str << std::to_string(timestep) << ".hdf5";
+    os << temp_file_str << ".hdf5";
     const std::string tmp = os.str();
     const char* cstr = tmp.c_str();
 //     std::string in_file = temp_file_template + timestep + ".hdf5";
@@ -348,65 +337,6 @@ void AppAdditiveExtTempTexture::temperature_hdf(int timestep)
     H5Fclose(file);
 }
 
-/* ----------------------------------------------------------------------
-	Read in phase data from an hdf5 file
-------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::phase_hdf(int timestep)
-{
-
-    hid_t	file, phasedata;
-    hid_t	datatype, dataspace, memspace;
-    herr_t status;
-    hsize_t offset[2];
-    hsize_t offset2[1];
-    hsize_t count[2];
-    hsize_t count2[1];
-    int nx = domain->boxxhi;
-    int ny = domain->boxyhi;
-    int nz = domain->boxzhi;
-    line_count = nx * ny * nz;
-  
-    phase_in_array = new double[line_count];
-    std::stringstream os;
-    os << temp_file_str << std::to_string(timestep) << ".hdf5";
-    const std::string tmp = os.str();
-    const char* cstr = tmp.c_str();
-
-
-    file = H5Fopen(cstr, H5F_ACC_RDONLY, H5P_DEFAULT);
-
-    phasedata = H5Dopen2( file, "timeDependentValues/phase", H5P_DEFAULT);
-
-    datatype = H5Dget_type(phasedata);
-    dataspace = H5Dget_space(phasedata);
-
-
-    //Need to define the incides of the current "hyperslab"
-    //Always select an entire column of data
-    offset[0] = 0;
-    offset[1] = timestep;
-    count[0] = line_count;
-    count[1] = 1;
-
-    status = H5Sselect_hyperslab(dataspace, H5S_SELECT_SET,offset, NULL, count, NULL);
-
-    //We also need to define the dimensions of the "hyperslab" in memory, which should match
-    //the on-file dimension.
-    offset2[0] = 0;
-    count2[0] = line_count;
-    memspace = H5Screate_simple(1, count, NULL);
-    status = H5Sselect_hyperslab(memspace, H5S_SELECT_SET, offset2, NULL, count2,NULL);
-
-    //Now that we have everything configured, we can actually read the data from the file
-    status = H5Dread(phasedata, datatype, memspace, dataspace, H5P_DEFAULT, phase_in_array);
-
-    //Close everything back up
-    H5Tclose(datatype);
-    H5Dclose(phasedata);
-    H5Sclose(dataspace);
-    H5Sclose(memspace);
-    H5Fclose(file);
-}
 /* ----------------------------------------------------------------------
    Nucleation site initializer. Find the volume of a voxel from dx^3 and Multiply by No.
    This will be the average number of nucleation sites in the voxel. This is also the

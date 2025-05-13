@@ -31,7 +31,6 @@ class AppAdditiveExtTempTexture : public AppPotts {
   virtual void grow_app();
   virtual void init_app();
   virtual void temperature_hdf(int);
-  virtual void phase_hdf(int);
   virtual void site_event_rejection(int, class RandomPark *);
   virtual void app_update(double);
   virtual void nucleation_spins(class RandomPark *);
@@ -87,7 +86,6 @@ class AppAdditiveExtTempTexture : public AppPotts {
     double *x1, *x2, *x3;
     double *y1, *y2, *y3;
     double *orientation_vectors;
-    int use_phase;
     
   //New stuff
   double sizeNorm;

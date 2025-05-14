@@ -287,9 +287,8 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(int timestep){
       MPI_Comm_rank(MPI_COMM_WORLD, &rank);
       MPI_Comm_size(MPI_COMM_WORLD, &size);
   
-      // Create arrays to hold the data
-      int *data_counts = (int *)malloc(DIM1 * DIM2 * DIM3 * sizeof(int));
-      double *temperature = NULL; // Will be allocated later
+      // Create a vector to hold the data counts
+      std::vector<int> data_counts(nglobal);
   
       // Open the HDF5 file in parallel mode
       hid_t plist_id = H5Pcreate(H5P_DATASET_XFER);
@@ -298,12 +297,11 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(int timestep){
   
       // Read the data_counts array
       hid_t dataset_counts_id = H5Dopen(file_id, "data_counts");
-      H5Dread(dataset_counts_id, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, plist_id, data_counts);
+      H5Dread(dataset_counts_id, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, plist_id, data_counts.data());
       H5Dclose(dataset_counts_id);
   
       // Create a DoubleQueueContainer to hold valid temperature entries
-      // In this case, we will just use a simple array of pointers
-      double ***temperature_queues = (double ***)malloc(DIM1 * DIM2 * DIM3 * sizeof(double **));
+      DoubleQueueContainer container(DIM1, DIM2, DIM3);
   
       // Determine the sub-domain for each processor
       int sub_dim1 = DIM1 / size; // Assuming DIM1 is divisible by size
@@ -329,10 +327,8 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(int timestep){
   
                   // Allocate memory for valid temperature entries
                   if (valid_count > 0) {
-                      temperature_queues[index] = (double **)malloc(valid_count * sizeof(double *));
-                      for (int k = 0; k < valid_count; ++k) {
-                          temperature_queues[index][k] = (double *)malloc(sizeof(double));
-                      }
+                      // Create a vector to hold the valid entries
+                      std::vector<double> temp_values(valid_count); // Temporary array to hold the valid entries
   
                       // Define the hyperslab to read only the valid entries
                       hsize_t start[4] = { (hsize_t)x, (hsize_t)y, (hsize_t)z, 0 };
@@ -342,8 +338,13 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(int timestep){
                       hid_t filespace_id = H5Dget_space(dataset_temperature_id);
                       H5Sselect_hyperslab(filespace_id, H5S_SELECT_SET, start, NULL, count, NULL);
   
-                      // Read the valid entries into the allocated memory
-                      H5Dread(dataset_temperature_id, H5T_NATIVE_DOUBLE, H5S_ALL, filespace_id, plist_id, temperature_queues[index][0]);
+                      // Read the valid entries into the temporary array
+                      H5Dread(dataset_temperature_id, H5T_NATIVE_DOUBLE, H5S_ALL, filespace_id, plist_id, temp_values.data());
+
+                    // Store the valid entries in the corresponding queue
+                    for (int k = 0; k < valid_count; ++k) {
+                        container[index].push(temp_values[k]);
+                    }
   
                       // Free the hyperslab space
                       H5Sclose(filespace_id);

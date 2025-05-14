@@ -62,7 +62,6 @@ class AppAdditiveExtTempTexture : public AppPotts {
 	double *T;
 	double time_step;
 	int totalTime; //Keep track of time for app_update
-	char *temp_file_template;  
    int line_count;
   	double *temp_in_array;
   	double *phase_in_array;
@@ -102,6 +101,11 @@ class AppAdditiveExtTempTexture : public AppPotts {
 	double *nucleationTemps;
 	double *nucleationSizes;
   std::string temp_file_str;
+
+  //Parameters for reduced temperature files
+  double *temperature_in = NULL; // Will be allocated later, local temperature DoubleQueue container at each processor.
+
+
 
 };
 

@@ -301,7 +301,7 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(int timestep){
       H5Dclose(dataset_counts_id);
   
       // Create a DoubleQueueContainer to hold valid temperature entries
-      DoubleQueueContainer container(DIM1, DIM2, DIM3);
+      DoubleQueueContainer container(nlocal);
   
       // Determine the sub-domain for each processor
       int sub_dim1 = DIM1 / size; // Assuming DIM1 is divisible by size

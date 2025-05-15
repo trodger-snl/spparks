@@ -201,7 +201,7 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     for (int i=0; i<nlocal; i++) {    
             
         //Update the temperature at all the sites
-        temperature_time_interpolate(i,T[i],priorTime);
+        temperature_time_interpolate(i,T[i]);
     
         //Turn the sites on/off depending on the phase data and whether or not the
         //site's temperature has gone above Tl
@@ -228,7 +228,6 @@ void AppAdditiveExtTempTexture::app_update(double dt)
                 SolidD[i]--;
         }
     }
-    priorTime = priorTime + dt;
 }
 
 /* ----------------------------------------------------------------------
@@ -269,23 +268,34 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
 
   hid_t data_type = H5Dget_type(dataset_counts_id);
 
+
   // Define the hyperslab for data_counts
   hsize_t start_counts[3] = { (hsize_t)domain->subxlo, (hsize_t)domain->subylo, (hsize_t)domain->subzlo};
   hsize_t count_counts[3] = { (hsize_t)(domain->subxhi - domain->subxlo), (hsize_t)(domain->subyhi - domain->subylo), (hsize_t)(domain->subzhi - domain->subzlo) };
+
+  std::cout << "Subdomain dimensions x " << domain->subxhi << " y " << domain->subyhi << " z " << domain->subzlo << std::endl;
+
+  std::cout << "Hyperslab start: " << start_counts[0] << ", " << start_counts[1] << ", " << start_counts[2] << std::endl;
+  std::cout << "Hyperslab count: " << count_counts[0] << ", " << count_counts[1] << ", " << count_counts[2]  << std::endl;
+
+  //Create memory space
+  hid_t memspace_count_id = H5Screate_simple(3, count_counts, NULL);
 
   // Select the hyperslab in the data_counts dataset
   hid_t filespace_id = H5Dget_space(dataset_counts_id);
   H5Sselect_hyperslab(filespace_id, H5S_SELECT_SET, start_counts, NULL, count_counts, NULL);
 
   // Read the relevant portion of data_counts into the vector
-  H5Dread(dataset_counts_id, data_type, H5S_ALL, filespace_id, plist_id, data_counts.data());
+  H5Dread(dataset_counts_id, data_type, memspace_count_id, filespace_id, plist_id, data_counts.data());
 
   // Close the data_counts dataset
   MPI_Barrier(MPI_COMM_WORLD); // Synchronize all processes
-  H5Dclose(filespace_id);
+  H5Sclose(filespace_id);
   H5Dclose(dataset_counts_id);
-
   std::cout << "Read in the data_count values" << std::endl;
+
+
+
 
   // Open the temperature and time datasets
   hid_t dataset_temperature_id = H5Dopen(file_id, "temperature",H5P_DEFAULT);
@@ -296,25 +306,29 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
 
     std::cout << "Began reading temperatures " << std::endl;
 
+
 // Process the valid entries for the sub-domain using a single loop
 for (int local_index = 0; local_index < nlocal; ++local_index) {
 
   hid_t temperature_filespace_id, time_filespace_id;
 
-  // Calculate the (x, y, z) coordinates from the local index
+  // Calculate the (x, y, z) coordinates from the local index relative to the subdomain and global
+  int x_loc = xyz[local_index][0] - domain->subxlo;
+  int y_loc = xyz[local_index][1] - domain->subylo;
+  int z_loc = xyz[local_index][2] - domain->subzlo;
   int x = xyz[local_index][0];
   int y = xyz[local_index][1];
   int z = xyz[local_index][2];
 
-  std::cout << "Started reading temperature on " << domain->me << " at " << local_index << " x " << x << " y " << y << " z " << z << std::endl;
+  //  std::cout << "Started reading temperature on " << domain->me << " at " << local_index << " x " << x << " y " << y << " z " << z << std::endl;
 
   // Convert to column-major index for data_counts
-  int row_major_index = x * (domain->subyhi - domain->subylo) * (domain->subzhi - domain->subzlo) + y * (domain->subzhi - domain->subzlo) + z;
+  int row_major_index = x_loc * (domain->subyhi - domain->subylo) * (domain->subzhi - domain->subzlo) + y_loc * (domain->subzhi - domain->subzlo) + z_loc;
   // std::cout << "SPPARKS index " << local_index << " row index " << row_major_index << std::endl;
   int valid_count = data_counts[row_major_index]; // Get the number of valid entries
 
   // std::cout << "Number of temperature entries " << valid_count << std::endl;
-
+  
   // Define the hyperslab to read only the valid entries
   if (valid_count > 0) {
       // Create a vector to hold the valid entries
@@ -323,9 +337,9 @@ for (int local_index = 0; local_index < nlocal; ++local_index) {
 
       // Define the starting point in the file
       hsize_t start[4] = { (hsize_t)x, (hsize_t)y, (hsize_t)z, 0};
-      hsize_t count[4] = { 1, 1, 1, (hsize_t)valid_count };
+      hsize_t count[4] = { 1, 1, 1, (hsize_t)valid_count};
 
-      // std::cout << "Hyperslab start: " << start[0] << ", " << start[1] << ", " << start[2] << ", " << start[3] << std::endl;
+      //std::cout << "Hyperslab start: " << start[0] << ", " << start[1] << ", " << start[2] << ", " << start[3] << std::endl;
       // std::cout << "Hyperslab count: " << count[0] << ", " << count[1] << ", " << count[2] << ", " << count[3] << std::endl;
 
       // Select the hyperslab in the temperature dataset
@@ -353,17 +367,17 @@ for (int local_index = 0; local_index < nlocal; ++local_index) {
       }
 
       // Free the hyperslab space
-
-      // H5Sclose(temperature_filespace_id);
-      // H5Sclose(time_filespace_id);
-  }
-  
-  //Close resources after doing MPI_Barrier
-  MPI_Barrier(MPI_COMM_WORLD); // Synchronize all processes
-  if (valid_count > 0) {
       H5Sclose(temperature_filespace_id);
       H5Sclose(time_filespace_id);
   }
+  
+  //Close resources after doing MPI_Barrier
+  // MPI_Barrier(MPI_COMM_WORLD); // Synchronize all processes
+  // if (valid_count > 0) {
+  //     H5Sclose(temperature_filespace_id);
+  //     H5Sclose(time_filespace_id);
+  // }
+
 //  std::cout << "Finished reading temperature at " << local_index << " temp status is " << temp_in[local_index].empty() << std::endl;
   // if (!temp_in[local_index].empty()) {
   //     std::cout << "Finished reading temperature at " << local_index << " of " << temp_in[local_index].front() << std::endl;
@@ -375,6 +389,12 @@ for (int local_index = 0; local_index < nlocal; ++local_index) {
   H5Dclose(dataset_temperature_id);
   H5Dclose(dataset_time_id);
   H5Fclose(file_id);
+
+  for (int i=0; i < nlocal; i++) {
+    if(!temp_in[i].empty()) {
+      std::cout << "index " << i << " temperature " << temp_in[i].front() << std::endl;
+    }
+  }
 
   std::cout << "Finished reading temperatures " << std::endl;
 
@@ -455,7 +475,7 @@ void AppAdditiveExtTempTexture::temperature_hdf(int timestep)
   Does linear interpolation between two known temperatures and times to calculate current value at timestep.
   Also has checks for empty temperature vectors and timesteps before time
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::temperature_time_interpolate(int site, double priorTemp, double priorTime) {
+void AppAdditiveExtTempTexture::temperature_time_interpolate(int site, double priorTemp) {
 
   //If we're out of entires, also set to room temperature.
   if (time_in[site].empty()){ 

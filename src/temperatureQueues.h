@@ -9,8 +9,12 @@ namespace SPPARKS_NS {
 
 class DoubleQueueContainer {
 public:
-    // Constructor to initialize the container with a specified number of queues
-    DoubleQueueContainer(size_t numQueues) {
+
+    // Default constructor
+    DoubleQueueContainer() = default;
+
+    // Method to initialize the container with specified dimensions
+    void initialize(size_t numQueues) {
         temperatureQueues.resize(numQueues);
     }
 

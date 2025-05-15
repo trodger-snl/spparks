@@ -303,7 +303,7 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
   hid_t file_id = H5Fopen(cstr, H5F_ACC_RDONLY, H5P_DEFAULT);
 
   // Open the data_counts dataset
-  hid_t dataset_counts_id = H5Dopen(file_id, "data_counts");
+  hid_t dataset_counts_id = H5Dopen(file_id, "data_counts",H5P_DEFAULT);
 
   // Define the hyperslab for data_counts
   hsize_t start_counts[3] = { (hsize_t)domain->subxlo, (hsize_t)domain->subylo, (hsize_t)domain->subzlo};
@@ -320,8 +320,8 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
   H5Dclose(dataset_counts_id);
 
   // Open the temperature and time datasets
-  hid_t dataset_temperature_id = H5Dopen(file_id, "temperature");
-  hid_t dataset_time_id = H5Dopen(file_id, "time");
+  hid_t dataset_temperature_id = H5Dopen(file_id, "temperature",H5P_DEFAULT);
+  hid_t dataset_time_id = H5Dopen(file_id, "time",H5P_DEFAULT);
 
 
 // Process the valid entries for the sub-domain using a single loop
@@ -357,7 +357,7 @@ for (int local_index = 0; local_index < nlocal; ++local_index) {
 
       // Store the valid entries in the corresponding queue
       for (int k = 0; k < valid_count; ++k) {
-          temperature_in[local_index].push(temp_values[k]);
+          temp_in[local_index].push(temp_values[k]);
           time_in[local_index].push(time_values[k]);
       }
 
@@ -551,9 +551,9 @@ void AppAdditiveExtTempTexture::init_app()
   uniqueDot = new double[1 + maxneigh];
   RandomPark random(3000);
 
-  // Create a DoubleQueueContainer to hold valid temperature entries
-  DoubleQueueContainer temperature_in(nlocal);
-  DoubleQueueContainer time_in(nlocal);
+  //Allocate our temperature and time data structures
+  temp_in.initialize(nlocal);
+  time_in.initialize(nlocal);
 
   dt_sweep = dt;
   time_index = 0;
@@ -659,6 +659,8 @@ void AppAdditiveExtTempTexture::init_app()
       fprintf(screen,"Maximum allowable timestep is %e\n", dx/max_front_vel);
     }
   }
+
+
   
   //Read in our temperature values -- for now we're doing this all at once but might need to do in chunks.
   reduced_temperature_hdf();

@@ -20,6 +20,7 @@ AppStyle(additive_temperature_texture,AppAdditiveExtTempTexture)
 #define SPK_APP_ADDITIVE_EXT_TEMP_TEXTURE_H
 
 #include "app_potts.h"
+#include "temperatureQueues.h"
 #include <stdlib.h>
 #include <string>
 
@@ -105,10 +106,9 @@ class AppAdditiveExtTempTexture : public AppPotts {
 	double *nucleationSizes;
   std::string temp_file_str;
 
-  //Parameters for reduced temperature files
-  double *temperature_in = NULL; // Will be allocated later, local temperature DoubleQueue container at each processor.
-
-
+  //Variables for reduced temperature files
+  DoubleQueueContainer temp_in;
+  DoubleQueueContainer time_in;
 
 };
 

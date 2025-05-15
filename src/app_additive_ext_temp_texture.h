@@ -45,6 +45,7 @@ class AppAdditiveExtTempTexture : public AppPotts {
 	double melt_misorientation(int, double, double, double);
   void vec2euler(int, double *);
   void euler_init();
+  virtual void reduced_temperature_hdf();
 	
  protected:
 
@@ -77,6 +78,7 @@ class AppAdditiveExtTempTexture : public AppPotts {
  	double Q; //Arrhenius exponential factor
  	double Tl; //Liquidus point
  	double Ts; //Solidus point
+  double T_room;
     double *phi1;
     double *Phi;
     double *phi2;

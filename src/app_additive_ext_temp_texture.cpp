@@ -60,8 +60,7 @@
 #include "random_park.h"
 #include "error.h"
 #include "domain.h"
-//make #include "hdf5.h"
-#include <highfive/H5File.hpp>
+#include "hdf5.h"
 
 
 using namespace SPPARKS_NS;
@@ -112,6 +111,7 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     c2 = 0.5;
     c3 = 2.5;
     time_step = dt;
+    T_room = 300;
     
     //add the double array
     recreate_arrays();  
@@ -280,7 +280,7 @@ void AppAdditiveExtTempTexture::app_update(double dt)
 /* ----------------------------------------------------------------------
 	Read in and map reduced temperature data from an hdf5 file
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::reduced_temperature_hdf(int timestep){
+void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
 
   // Get the rank and size of the MPI processes
   int rank, size;
@@ -319,12 +319,10 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(int timestep){
   // Close the data_counts dataset
   H5Dclose(dataset_counts_id);
 
-  // Create a DoubleQueueContainer to hold valid temperature entries
-  //This needs to be a global variable defined elsewhere
-  DoubleQueueContainer temp_container(nlocal);
-
-  // Open the temperature dataset
+  // Open the temperature and time datasets
   hid_t dataset_temperature_id = H5Dopen(file_id, "temperature");
+  hid_t dataset_time_id = H5Dopen(file_id, "time");
+
 
 // Process the valid entries for the sub-domain using a single loop
 for (int local_index = 0; local_index < nlocal; ++local_index) {
@@ -339,6 +337,7 @@ for (int local_index = 0; local_index < nlocal; ++local_index) {
   if (valid_count > 0) {
       // Create a vector to hold the valid entries
       std::vector<double> temp_values(valid_count); // Temporary array to hold the valid entries
+      std::vector<double> time_values(valid_count); // Temporary array to hold the valid entries
 
       // Define the starting point in the file
       hsize_t start[4] = { (hsize_t)x, (hsize_t)y, (hsize_t)z, 0 };
@@ -348,21 +347,29 @@ for (int local_index = 0; local_index < nlocal; ++local_index) {
       hid_t temperature_filespace_id = H5Dget_space(dataset_temperature_id);
       H5Sselect_hyperslab(temperature_filespace_id, H5S_SELECT_SET, start, NULL, count, NULL);
 
+      // Select the hyperslab in the temperature dataset
+      hid_t time_filespace_id = H5Dget_space(dataset_time_id);
+      H5Sselect_hyperslab(time_filespace_id, H5S_SELECT_SET, start, NULL, count, NULL);
+
       // Read the valid entries into the temporary array
       H5Dread(dataset_temperature_id, H5T_NATIVE_DOUBLE, H5S_ALL, temperature_filespace_id, plist_id, temp_values.data());
+      H5Dread(dataset_time_id, H5T_NATIVE_DOUBLE, H5S_ALL, time_filespace_id, plist_id, time_values.data());
 
       // Store the valid entries in the corresponding queue
       for (int k = 0; k < valid_count; ++k) {
-          temp_container[nlocal].push(temp_values[k]);
+          temperature_in[local_index].push(temp_values[k]);
+          time_in[local_index].push(time_values[k]);
       }
 
       // Free the hyperslab space
       H5Sclose(temperature_filespace_id);
+      H5Sclose(time_filespace_id);
   }
 }
 
   // Close the dataset and file
   H5Dclose(dataset_temperature_id);
+  H5Dclose(dataset_time_id);
   H5Fclose(file_id);
 }
 
@@ -425,6 +432,38 @@ void AppAdditiveExtTempTexture::temperature_hdf(int timestep)
     H5Sclose(dataspace);
     H5Sclose(memspace);
     H5Fclose(file);
+}
+
+/* ----------------------------------------------------------------------
+  Does linear interpolation between two known temperatures and times to calculate current value at timestep.
+  Also has checks for empty temperature vectors and timesteps before time
+------------------------------------------------------------------------- */
+void AppAdditiveExtTempTexture::temperature_time_interpolate(int site, double priorTemp, double priorTime) {
+
+  //If we haven't encountered our first time value, set to default
+  if(priorTime == 0 && time < time_in[site].front()) {
+    T[site] = T_room;
+    return;
+  }
+  //If we're out of entires, also set to room temperature.
+  else if (time_in[site].empty()){ 
+    T[site] = T_room;
+    return;
+  }
+
+  //If we've stepped past the current time, update the stored values
+  if(time >= time_in[site].front()) {
+    priorTime = time_in[site].front();
+    priorTemp = temp_in[site].front();
+
+    //Pop off old values
+    time_in[site].pop();
+    temp_in[site].pop();
+  }
+
+  //Do linear interpolation
+  T[site] = priorTemp + (temp_in[site].front() - priorTemp)/(time_in[site].front() - priorTime) * (time - priorTime);
+
 }
 
 /* ----------------------------------------------------------------------
@@ -511,6 +550,10 @@ void AppAdditiveExtTempTexture::init_app()
   unique = new int[1 + maxneigh];
   uniqueDot = new double[1 + maxneigh];
   RandomPark random(3000);
+
+  // Create a DoubleQueueContainer to hold valid temperature entries
+  DoubleQueueContainer temperature_in(nlocal);
+  DoubleQueueContainer time_in(nlocal);
 
   dt_sweep = dt;
   time_index = 0;
@@ -609,17 +652,18 @@ void AppAdditiveExtTempTexture::init_app()
   
   if(dt > dx/max_front_vel) {
       fprintf(screen,"Temperature timestep too large, reduce to %f\n", dx/max_front_vel);
-          error->all(FLERR,"Illegal app_style command");
+          error->all(FLERR,"Temperature timestep too large");
   }
   else{
     if(domain->me == 0) {
       fprintf(screen,"Maximum allowable timestep is %e\n", dx/max_front_vel);
     }
   }
-          
-	this->app_update(0.0);
-    
+  
+  //Read in our temperature values -- for now we're doing this all at once but might need to do in chunks.
+  reduced_temperature_hdf();
 
+	this->app_update(0.0);
 }
 
 

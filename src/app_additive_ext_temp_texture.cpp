@@ -282,99 +282,88 @@ void AppAdditiveExtTempTexture::app_update(double dt)
 ------------------------------------------------------------------------- */
 void AppAdditiveExtTempTexture::reduced_temperature_hdf(int timestep){
 
-      // Get the rank and size of the MPI processes
-      int rank, size;
-      MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-      MPI_Comm_size(MPI_COMM_WORLD, &size);
-  
-      // Create a vector to hold the data counts
-      std::vector<int> data_counts(nglobal);
-  
-      // Open the HDF5 file in parallel mode
-      hid_t plist_id = H5Pcreate(H5P_DATASET_XFER);
-      H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_COLLECTIVE);
-      hid_t file_id = H5Fopen("your_file.h5", H5F_ACC_RDONLY, H5P_DEFAULT);
-  
-      // Read the data_counts array
-      hid_t dataset_counts_id = H5Dopen(file_id, "data_counts");
-      H5Dread(dataset_counts_id, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, plist_id, data_counts.data());
-      H5Dclose(dataset_counts_id);
-  
-      // Create a DoubleQueueContainer to hold valid temperature entries
-      DoubleQueueContainer container(nlocal);
-  
-      // Determine the sub-domain for each processor
-      int sub_dim1 = DIM1 / size; // Assuming DIM1 is divisible by size
-      int start_x = rank * sub_dim1;
-      int end_x = (rank + 1) * sub_dim1;
-  
-      // Open the temperature dataset
-      hid_t dataset_temperature_id = H5Dopen(file_id, "temperature");
-  
-      // Process the valid entries for the sub-domain
-      for (int x = start_x; x < end_x; ++x) {
-          for (int y = 0; y < DIM2; ++y) {
-              for (int z = 0; z < DIM3; ++z) {
-                  int index = x * DIM2 * DIM3 + y * DIM3 + z; // Calculate the index for data_counts
-                  int valid_count = data_counts[index]; // Get the number of valid entries
-  
-                  // Ensure valid_count does not exceed the 4th dimension
-                  if (valid_count > DIM4) {
-                      fprintf(stderr, "Warning: valid_count exceeds the size of the 4th dimension at (%d, %d, %d). Clamping to %d.\n", 
-                              x, y, z, DIM4);
-                      valid_count = DIM4;
-                  }
-  
-                  // Allocate memory for valid temperature entries
-                  if (valid_count > 0) {
-                      // Create a vector to hold the valid entries
-                      std::vector<double> temp_values(valid_count); // Temporary array to hold the valid entries
-  
-                      // Define the hyperslab to read only the valid entries
-                      hsize_t start[4] = { (hsize_t)x, (hsize_t)y, (hsize_t)z, 0 };
-                      hsize_t count[4] = { 1, 1, 1, (hsize_t)valid_count };
-  
-                      // Select the hyperslab in the file
-                      hid_t filespace_id = H5Dget_space(dataset_temperature_id);
-                      H5Sselect_hyperslab(filespace_id, H5S_SELECT_SET, start, NULL, count, NULL);
-  
-                      // Read the valid entries into the temporary array
-                      H5Dread(dataset_temperature_id, H5T_NATIVE_DOUBLE, H5S_ALL, filespace_id, plist_id, temp_values.data());
+  // Get the rank and size of the MPI processes
+  int rank, size;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-                    // Store the valid entries in the corresponding queue
-                    for (int k = 0; k < valid_count; ++k) {
-                        container[index].push(temp_values[k]);
-                    }
-  
-                      // Free the hyperslab space
-                      H5Sclose(filespace_id);
-                  }
-              }
-          }
+  //Setup file name
+  std::stringstream os;
+  os << temp_file_str << ".hdf5";
+  const std::string tmp = os.str();
+  const char* cstr = tmp.c_str();
+
+  // Create a vector to hold the data counts
+  //We should be able to break this up the same way for MPI as the temperature data.
+  std::vector<int> data_counts(nlocal);
+
+  // Open the HDF5 file in parallel mode
+  hid_t plist_id = H5Pcreate(H5P_DATASET_XFER);
+  H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_COLLECTIVE);
+  hid_t file_id = H5Fopen(cstr, H5F_ACC_RDONLY, H5P_DEFAULT);
+
+  // Open the data_counts dataset
+  hid_t dataset_counts_id = H5Dopen(file_id, "data_counts");
+
+  // Define the hyperslab for data_counts
+  hsize_t start_counts[3] = { (hsize_t)domain->subxlo, (hsize_t)domain->subylo, (hsize_t)domain->subzlo};
+  hsize_t count_counts[3] = { (hsize_t)(domain->subxhi - domain->subxlo), (hsize_t)(domain->subyhi - domain->subylo), (hsize_t)(domain->subzhi - domain->subzlo) };
+
+  // Select the hyperslab in the data_counts dataset
+  hid_t filespace_id = H5Dget_space(dataset_counts_id);
+  H5Sselect_hyperslab(filespace_id, H5S_SELECT_SET, start_counts, NULL, count_counts, NULL);
+
+  // Read the relevant portion of data_counts into the vector
+  H5Dread(dataset_counts_id, H5T_NATIVE_INT, H5S_ALL, filespace_id, plist_id, data_counts.data());
+
+  // Close the data_counts dataset
+  H5Dclose(dataset_counts_id);
+
+  // Create a DoubleQueueContainer to hold valid temperature entries
+  //This needs to be a global variable defined elsewhere
+  DoubleQueueContainer temp_container(nlocal);
+
+  // Open the temperature dataset
+  hid_t dataset_temperature_id = H5Dopen(file_id, "temperature");
+
+// Process the valid entries for the sub-domain using a single loop
+for (int local_index = 0; local_index < nlocal; ++local_index) {
+  // Calculate the (x, y, z) coordinates from the local index
+  int x = xyz[local_index][0];
+  int y = xyz[local_index][1];
+  int z = xyz[local_index][2];
+
+  int valid_count = data_counts[local_index]; // Get the number of valid entries
+
+  // Define the hyperslab to read only the valid entries
+  if (valid_count > 0) {
+      // Create a vector to hold the valid entries
+      std::vector<double> temp_values(valid_count); // Temporary array to hold the valid entries
+
+      // Define the starting point in the file
+      hsize_t start[4] = { (hsize_t)x, (hsize_t)y, (hsize_t)z, 0 };
+      hsize_t count[4] = { 1, 1, 1, (hsize_t)valid_count };
+
+      // Select the hyperslab in the temperature dataset
+      hid_t temperature_filespace_id = H5Dget_space(dataset_temperature_id);
+      H5Sselect_hyperslab(temperature_filespace_id, H5S_SELECT_SET, start, NULL, count, NULL);
+
+      // Read the valid entries into the temporary array
+      H5Dread(dataset_temperature_id, H5T_NATIVE_DOUBLE, H5S_ALL, temperature_filespace_id, plist_id, temp_values.data());
+
+      // Store the valid entries in the corresponding queue
+      for (int k = 0; k < valid_count; ++k) {
+          temp_container[nlocal].push(temp_values[k]);
       }
-  
-      // Output the valid temperature entries
-      for (int x = start_x; x < end_x; ++x) {
-          for (int y = 0; y < DIM2; ++y) {
-              for (int z = 0; z < DIM3; ++z) {
-                  int index = x * DIM2 * DIM3 + y * DIM3 + z; // Calculate the index for the queue
-                  printf("Queue (%d, %d, %d): ", x, y, z);
-                  if (temperature_queues[index] != NULL) {
-                      for (int k = 0; k < data_counts[index]; ++k) {
-                          printf("%f ", *(temperature_queues[index][k]));
-                          free(temperature_queues[index][k]); // Free each allocated entry
-                      }
-                      free(temperature_queues[index]); // Free the array of pointers
-                  }
-                  printf("\n");
-              }
-          }
-      }
-  
-      // Close the dataset and file
-      H5Dclose(dataset_temperature_id);
-      H5Fclose(file_id);
-      free(data_counts);
+
+      // Free the hyperslab space
+      H5Sclose(temperature_filespace_id);
+  }
+}
+
+  // Close the dataset and file
+  H5Dclose(dataset_temperature_id);
+  H5Fclose(file_id);
 }
 
 /* ----------------------------------------------------------------------

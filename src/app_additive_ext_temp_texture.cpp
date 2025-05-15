@@ -50,7 +50,9 @@
  ------------------------------------------------------------------------- */
 #include <fstream>
 #include <sstream>
+#include <iostream>
 #include <random>
+#include <chrono>
 #include "math.h"
 #include "math_const.h"
 #include "app_additive_ext_temp_texture.h"
@@ -195,58 +197,11 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
  ------------------------------------------------------------------------- */
 void AppAdditiveExtTempTexture::app_update(double dt)
 {
-
-    if (domain->me == 0) {
-        temperature_hdf(totalTime);
-        fprintf(screen,"Finished reading temperature file. %d\n ", totalTime);
-    }
-
-    if(totalTime == 0) {
-        MPI_Bcast(&line_count,1,MPI_INT,0,world);
-    }	
-
-    if (domain->me != 0) {
-        temp_in_array = new double[line_count];
-    }
-
-
-    MPI_Bcast(temp_in_array,line_count,MPI_DOUBLE,0,world);
-
-
-    totalTime = totalTime + 1;
-
-    int procIndex = domain->me * nlocal;
-    int i_local;
-    int nx = domain->boxxhi;
-    int ny = domain->boxyhi;
-    int nz = domain->boxzhi;
-    div_t div_result;
-    div_t div_y;
-    int i_shift = id[0] -1;
-      
     //iterate through all the sets
-    for (int i=0; i<nlocal; i++) {
-    
-        //Adjust the index for boundary conditions
-        i_shift = id[i] -1;
-        div_result = div(i_shift, nx + 1);
-        div_y = div(i_shift,(nx+1) * ny);
-        i_local = i_shift - div_result.quot * xPeriod - div_y.quot * yPeriod * nx;
-        
-        //Check whether we're an active site and skip if not
-        // if(phase_in_array[i_local] > 0) {
-        //   activeFlag[i] = 0;
-        //   continue;
-        // }
-        //If we're on the first timestep, set the solid phase to activeFlag=1
-        if(totalTime == 1){ 
-          activeFlag[i] = 1;
-        //  fprintf(screen,"Updating site %d\n",i);
-        }
-        
+    for (int i=0; i<nlocal; i++) {    
             
         //Update the temperature at all the sites
-        T[i] = temp_in_array[i_local];
+        temperature_time_interpolate(i,T[i],priorTime);
     
         //Turn the sites on/off depending on the phase data and whether or not the
         //site's temperature has gone above Tl
@@ -266,15 +221,14 @@ void AppAdditiveExtTempTexture::app_update(double dt)
         else if (activeFlag[i] == 2 && T[i] <= Tl) {
             mushy_phase(i, ranapp);
 //             fprintf(screen,"Ran mushy_phase\n");
-	}
+	      } 
         else if(SolidD[i] < 0 && SolidD[i] > -nrefine -1 && activeFlag[i] == 3)    {
                 MobilityOut[i] = 1;
                 site_event_rejection(i, ranapp);
                 SolidD[i]--;
         }
     }
-
-    delete[] temp_in_array;
+    priorTime = priorTime + dt;
 }
 
 /* ----------------------------------------------------------------------
@@ -282,16 +236,21 @@ void AppAdditiveExtTempTexture::app_update(double dt)
 ------------------------------------------------------------------------- */
 void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
 
+    // Record the start time
+  auto start = std::chrono::high_resolution_clock::now();
+
   // Get the rank and size of the MPI processes
   int rank, size;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   MPI_Comm_size(MPI_COMM_WORLD, &size);
 
   //Setup file name
-  std::stringstream os;
-  os << temp_file_str << ".hdf5";
-  const std::string tmp = os.str();
-  const char* cstr = tmp.c_str();
+  // std::stringstream os;
+  // os << temp_file_str;
+  // const std::string tmp = os.str();
+  // const char* cstr = tmp.c_str();
+
+  std::cout << "File path: " << temp_file_str << std::endl;
 
   // Create a vector to hold the data counts
   //We should be able to break this up the same way for MPI as the temperature data.
@@ -299,11 +258,16 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
 
   // Open the HDF5 file in parallel mode
   hid_t plist_id = H5Pcreate(H5P_DATASET_XFER);
-  H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_COLLECTIVE);
-  hid_t file_id = H5Fopen(cstr, H5F_ACC_RDONLY, H5P_DEFAULT);
+  H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);
+
+  hid_t fapl_id = H5Pcreate(H5P_FILE_ACCESS);
+  H5Pset_fclose_degree(fapl_id, H5F_CLOSE_STRONG);
+  hid_t file_id = H5Fopen(temp_file_str.c_str(), H5F_ACC_RDONLY, fapl_id);
 
   // Open the data_counts dataset
   hid_t dataset_counts_id = H5Dopen(file_id, "data_counts",H5P_DEFAULT);
+
+  hid_t data_type = H5Dget_type(dataset_counts_id);
 
   // Define the hyperslab for data_counts
   hsize_t start_counts[3] = { (hsize_t)domain->subxlo, (hsize_t)domain->subylo, (hsize_t)domain->subzlo};
@@ -314,24 +278,42 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
   H5Sselect_hyperslab(filespace_id, H5S_SELECT_SET, start_counts, NULL, count_counts, NULL);
 
   // Read the relevant portion of data_counts into the vector
-  H5Dread(dataset_counts_id, H5T_NATIVE_INT, H5S_ALL, filespace_id, plist_id, data_counts.data());
+  H5Dread(dataset_counts_id, data_type, H5S_ALL, filespace_id, plist_id, data_counts.data());
 
   // Close the data_counts dataset
+  MPI_Barrier(MPI_COMM_WORLD); // Synchronize all processes
+  H5Dclose(filespace_id);
   H5Dclose(dataset_counts_id);
+
+  std::cout << "Read in the data_count values" << std::endl;
 
   // Open the temperature and time datasets
   hid_t dataset_temperature_id = H5Dopen(file_id, "temperature",H5P_DEFAULT);
   hid_t dataset_time_id = H5Dopen(file_id, "time",H5P_DEFAULT);
 
+  hid_t data_type_temp = H5Dget_type(dataset_temperature_id);
+  hid_t data_type_time = H5Dget_type(dataset_time_id);
+
+    std::cout << "Began reading temperatures " << std::endl;
 
 // Process the valid entries for the sub-domain using a single loop
 for (int local_index = 0; local_index < nlocal; ++local_index) {
+
+  hid_t temperature_filespace_id, time_filespace_id;
+
   // Calculate the (x, y, z) coordinates from the local index
   int x = xyz[local_index][0];
   int y = xyz[local_index][1];
   int z = xyz[local_index][2];
 
-  int valid_count = data_counts[local_index]; // Get the number of valid entries
+  std::cout << "Started reading temperature on " << domain->me << " at " << local_index << " x " << x << " y " << y << " z " << z << std::endl;
+
+  // Convert to column-major index for data_counts
+  int row_major_index = x * (domain->subyhi - domain->subylo) * (domain->subzhi - domain->subzlo) + y * (domain->subzhi - domain->subzlo) + z;
+  // std::cout << "SPPARKS index " << local_index << " row index " << row_major_index << std::endl;
+  int valid_count = data_counts[row_major_index]; // Get the number of valid entries
+
+  // std::cout << "Number of temperature entries " << valid_count << std::endl;
 
   // Define the hyperslab to read only the valid entries
   if (valid_count > 0) {
@@ -340,37 +322,72 @@ for (int local_index = 0; local_index < nlocal; ++local_index) {
       std::vector<double> time_values(valid_count); // Temporary array to hold the valid entries
 
       // Define the starting point in the file
-      hsize_t start[4] = { (hsize_t)x, (hsize_t)y, (hsize_t)z, 0 };
+      hsize_t start[4] = { (hsize_t)x, (hsize_t)y, (hsize_t)z, 0};
       hsize_t count[4] = { 1, 1, 1, (hsize_t)valid_count };
 
+      // std::cout << "Hyperslab start: " << start[0] << ", " << start[1] << ", " << start[2] << ", " << start[3] << std::endl;
+      // std::cout << "Hyperslab count: " << count[0] << ", " << count[1] << ", " << count[2] << ", " << count[3] << std::endl;
+
       // Select the hyperslab in the temperature dataset
-      hid_t temperature_filespace_id = H5Dget_space(dataset_temperature_id);
+      temperature_filespace_id = H5Dget_space(dataset_temperature_id);
       H5Sselect_hyperslab(temperature_filespace_id, H5S_SELECT_SET, start, NULL, count, NULL);
 
       // Select the hyperslab in the temperature dataset
-      hid_t time_filespace_id = H5Dget_space(dataset_time_id);
+      time_filespace_id = H5Dget_space(dataset_time_id);
       H5Sselect_hyperslab(time_filespace_id, H5S_SELECT_SET, start, NULL, count, NULL);
 
+      //Create memory space
+      hid_t memspace_id = H5Screate_simple(4, count, NULL);
+
       // Read the valid entries into the temporary array
-      H5Dread(dataset_temperature_id, H5T_NATIVE_DOUBLE, H5S_ALL, temperature_filespace_id, plist_id, temp_values.data());
-      H5Dread(dataset_time_id, H5T_NATIVE_DOUBLE, H5S_ALL, time_filespace_id, plist_id, time_values.data());
+      H5Dread(dataset_temperature_id, data_type_temp, memspace_id, temperature_filespace_id, plist_id, temp_values.data());
+      H5Dread(dataset_time_id, data_type_time, memspace_id, time_filespace_id, plist_id, time_values.data());
 
       // Store the valid entries in the corresponding queue
       for (int k = 0; k < valid_count; ++k) {
-          temp_in[local_index].push(temp_values[k]);
-          time_in[local_index].push(time_values[k]);
+          // if (temp_values[k] != 0) {
+          //   std::cout << "Read temperature is " << temp_values[k] << std::endl;
+          // }
+          temp_in[row_major_index].push(temp_values[k]);
+          time_in[row_major_index].push(time_values[k]);
       }
 
       // Free the hyperslab space
+
+      // H5Sclose(temperature_filespace_id);
+      // H5Sclose(time_filespace_id);
+  }
+  
+  //Close resources after doing MPI_Barrier
+  MPI_Barrier(MPI_COMM_WORLD); // Synchronize all processes
+  if (valid_count > 0) {
       H5Sclose(temperature_filespace_id);
       H5Sclose(time_filespace_id);
   }
+//  std::cout << "Finished reading temperature at " << local_index << " temp status is " << temp_in[local_index].empty() << std::endl;
+  // if (!temp_in[local_index].empty()) {
+  //     std::cout << "Finished reading temperature at " << local_index << " of " << temp_in[local_index].front() << std::endl;
+  // }
 }
 
   // Close the dataset and file
+  MPI_Barrier(MPI_COMM_WORLD); // Synchronize all processes
   H5Dclose(dataset_temperature_id);
   H5Dclose(dataset_time_id);
   H5Fclose(file_id);
+
+  std::cout << "Finished reading temperatures " << std::endl;
+
+    // Record the end time
+  auto end = std::chrono::high_resolution_clock::now();
+
+  // Calculate the duration
+  auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+
+  // Print the duration
+  std::cout << "Function execution time: " << duration.count() << " ms" << std::endl;
+
+
 }
 
 /* ----------------------------------------------------------------------
@@ -440,13 +457,14 @@ void AppAdditiveExtTempTexture::temperature_hdf(int timestep)
 ------------------------------------------------------------------------- */
 void AppAdditiveExtTempTexture::temperature_time_interpolate(int site, double priorTemp, double priorTime) {
 
-  //If we haven't encountered our first time value, set to default
-  if(priorTime == 0 && time < time_in[site].front()) {
+  //If we're out of entires, also set to room temperature.
+  if (time_in[site].empty()){ 
     T[site] = T_room;
     return;
   }
-  //If we're out of entires, also set to room temperature.
-  else if (time_in[site].empty()){ 
+  
+  //If we haven't encountered our first time value, set to default
+  else if(priorTime == 0 && time < time_in[site].front()) {
     T[site] = T_room;
     return;
   }
@@ -461,9 +479,15 @@ void AppAdditiveExtTempTexture::temperature_time_interpolate(int site, double pr
     temp_in[site].pop();
   }
 
-  //Do linear interpolation
-  T[site] = priorTemp + (temp_in[site].front() - priorTemp)/(time_in[site].front() - priorTime) * (time - priorTime);
+  //If we're inbetween melt cycles, set temp to room temp
+  if(priorTemp < Ts && temp_in[site].front() < Ts) {
+    T[site] = T_room;
+  }
 
+  //Do linear interpolation
+  else {
+    T[site] = priorTemp + (temp_in[site].front() - priorTemp)/(time_in[site].front() - priorTime) * (time - priorTime);
+  }
 }
 
 /* ----------------------------------------------------------------------
@@ -557,7 +581,8 @@ void AppAdditiveExtTempTexture::init_app()
 
   dt_sweep = dt;
   time_index = 0;
-  
+  priorTime = 0;
+
   orientation_vectors = new double[nspins * 9];
   spin_euler = new double[nspins * 3];
   nucleationFlags = new int[nspins];

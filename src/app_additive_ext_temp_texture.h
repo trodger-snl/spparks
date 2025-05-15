@@ -109,6 +109,7 @@ class AppAdditiveExtTempTexture : public AppPotts {
   //Variables for reduced temperature files
   DoubleQueueContainer temp_in;
   DoubleQueueContainer time_in;
+  double priorTime;
 
 };
 

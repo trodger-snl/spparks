@@ -7,12 +7,12 @@ SHELL = /bin/sh
 # specify flags and libraries needed for your compiler
 
 CC =		mpic++
-CCFLAGS =	-O2 -std=c++17 -MMD
+CCFLAGS =	 -std=c++17 -MMD -O2
 SHFLAGS =	-fPIC
 DEPFLAGS =	-M
 
 LINK =		mpic++
-LINKFLAGS =	-O2 -std=c++17
+LINKFLAGS =	 -std=c++17 -O2
 LIB =	  	
 SIZE =		size
 

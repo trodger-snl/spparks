@@ -46,6 +46,7 @@ class AppAdditiveExtTempTexture : public AppPotts {
   void vec2euler(int, double *);
   void euler_init();
   virtual void reduced_temperature_hdf();
+  virtual void temperature_time_interpolate(int, double, double);
 	
  protected:
 

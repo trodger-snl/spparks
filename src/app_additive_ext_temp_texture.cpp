@@ -268,12 +268,14 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
 
   hid_t data_type = H5Dget_type(dataset_counts_id);
 
+  //Figure out which 
+
 
   // Define the hyperslab for data_counts
   hsize_t start_counts[3] = { (hsize_t)domain->subxlo, (hsize_t)domain->subylo, (hsize_t)domain->subzlo};
   hsize_t count_counts[3] = { (hsize_t)(domain->subxhi - domain->subxlo), (hsize_t)(domain->subyhi - domain->subylo), (hsize_t)(domain->subzhi - domain->subzlo) };
 
-  std::cout << "Subdomain dimensions x " << domain->subxhi << " y " << domain->subyhi << " z " << domain->subzlo << std::endl;
+  //std::cout << "Subdomain dimensions x " << domain->subxhi << " y " << domain->subyhi << " z " << domain->subzlo << std::endl;
 
   std::cout << "Hyperslab start: " << start_counts[0] << ", " << start_counts[1] << ", " << start_counts[2] << std::endl;
   std::cout << "Hyperslab count: " << count_counts[0] << ", " << count_counts[1] << ", " << count_counts[2]  << std::endl;
@@ -292,10 +294,10 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
   MPI_Barrier(MPI_COMM_WORLD); // Synchronize all processes
   H5Sclose(filespace_id);
   H5Dclose(dataset_counts_id);
+
+  //convert 1D data to 3d array
+  auto data_counts_array = convertTo3DArrayWithRange(data_counts,(int)domain->subxlo,(int)domain->subxhi,(int)domain->subylo,(int)domain->subyhi,(int)domain->subzlo,(int)domain->subzhi);
   std::cout << "Read in the data_count values" << std::endl;
-
-
-
 
   // Open the temperature and time datasets
   hid_t dataset_temperature_id = H5Dopen(file_id, "temperature",H5P_DEFAULT);
@@ -308,24 +310,19 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
 
 
 // Process the valid entries for the sub-domain using a single loop
-for (int local_index = 0; local_index < nlocal; ++local_index) {
+for (int local_index = 0; local_index < nlocal; local_index++) {
 
   hid_t temperature_filespace_id, time_filespace_id;
 
   // Calculate the (x, y, z) coordinates from the local index relative to the subdomain and global
-  int x_loc = xyz[local_index][0] - domain->subxlo;
-  int y_loc = xyz[local_index][1] - domain->subylo;
-  int z_loc = xyz[local_index][2] - domain->subzlo;
-  int x = xyz[local_index][0];
-  int y = xyz[local_index][1];
-  int z = xyz[local_index][2];
+  int x_loc = (int)xyz[local_index][0] - (int)domain->subxlo;
+  int y_loc = (int)xyz[local_index][1] - (int)domain->subylo;
+  int z_loc = (int)xyz[local_index][2] - (int)domain->subzlo;
+  int x = (int)xyz[local_index][0];
+  int y = (int)xyz[local_index][1];
+  int z = (int)xyz[local_index][2];
 
-  //  std::cout << "Started reading temperature on " << domain->me << " at " << local_index << " x " << x << " y " << y << " z " << z << std::endl;
-
-  // Convert to column-major index for data_counts
-  int row_major_index = x_loc * (domain->subyhi - domain->subylo) * (domain->subzhi - domain->subzlo) + y_loc * (domain->subzhi - domain->subzlo) + z_loc;
-  // std::cout << "SPPARKS index " << local_index << " row index " << row_major_index << std::endl;
-  int valid_count = data_counts[row_major_index]; // Get the number of valid entries
+  int valid_count = data_counts_array[x_loc][y_loc][z_loc]; // Get the number of valid entries
 
   // std::cout << "Number of temperature entries " << valid_count << std::endl;
   
@@ -339,7 +336,7 @@ for (int local_index = 0; local_index < nlocal; ++local_index) {
       hsize_t start[4] = { (hsize_t)x, (hsize_t)y, (hsize_t)z, 0};
       hsize_t count[4] = { 1, 1, 1, (hsize_t)valid_count};
 
-      //std::cout << "Hyperslab start: " << start[0] << ", " << start[1] << ", " << start[2] << ", " << start[3] << std::endl;
+      // std::cout << "Hyperslab start: " << start[0] << ", " << start[1] << ", " << start[2] << ", " << start[3] << std::endl;
       // std::cout << "Hyperslab count: " << count[0] << ", " << count[1] << ", " << count[2] << ", " << count[3] << std::endl;
 
       // Select the hyperslab in the temperature dataset
@@ -362,26 +359,14 @@ for (int local_index = 0; local_index < nlocal; ++local_index) {
           // if (temp_values[k] != 0) {
           //   std::cout << "Read temperature is " << temp_values[k] << std::endl;
           // }
-          temp_in[row_major_index].push(temp_values[k]);
-          time_in[row_major_index].push(time_values[k]);
+          temp_in(x_loc,y_loc,z_loc).push(temp_values[k]);
+          time_in(x_loc,y_loc,z_loc).push(time_values[k]);
       }
 
       // Free the hyperslab space
       H5Sclose(temperature_filespace_id);
       H5Sclose(time_filespace_id);
   }
-  
-  //Close resources after doing MPI_Barrier
-  // MPI_Barrier(MPI_COMM_WORLD); // Synchronize all processes
-  // if (valid_count > 0) {
-  //     H5Sclose(temperature_filespace_id);
-  //     H5Sclose(time_filespace_id);
-  // }
-
-//  std::cout << "Finished reading temperature at " << local_index << " temp status is " << temp_in[local_index].empty() << std::endl;
-  // if (!temp_in[local_index].empty()) {
-  //     std::cout << "Finished reading temperature at " << local_index << " of " << temp_in[local_index].front() << std::endl;
-  // }
 }
 
   // Close the dataset and file
@@ -390,11 +375,11 @@ for (int local_index = 0; local_index < nlocal; ++local_index) {
   H5Dclose(dataset_time_id);
   H5Fclose(file_id);
 
-  for (int i=0; i < nlocal; i++) {
-    if(!temp_in[i].empty()) {
-      std::cout << "index " << i << " temperature " << temp_in[i].front() << std::endl;
-    }
-  }
+  // for (int i=0; i < nlocal; i++) {
+  //   if(!temp_in[i].empty()) {
+  //     std::cout << "index " << i << " temperature " << temp_in[i].front() << std::endl;
+  //   }
+  // }
 
   std::cout << "Finished reading temperatures " << std::endl;
 
@@ -477,36 +462,45 @@ void AppAdditiveExtTempTexture::temperature_hdf(int timestep)
 ------------------------------------------------------------------------- */
 void AppAdditiveExtTempTexture::temperature_time_interpolate(int site, double priorTemp) {
 
+  int x_loc = xyz[site][0] - (int)domain->subxlo;
+  int y_loc = xyz[site][1] - (int)domain->subylo;
+  int z_loc = xyz[site][2] - (int)domain->subzlo;
+
+  //std::cout << " x_loc " << x_loc << " y_loc " <<y_loc << " z_loc " << z_loc <<  std::endl;
+
   //If we're out of entires, also set to room temperature.
-  if (time_in[site].empty()){ 
+  if (time_in(x_loc,y_loc,z_loc).empty()){ 
     T[site] = T_room;
     return;
   }
   
+  
+
   //If we haven't encountered our first time value, set to default
-  else if(priorTime == 0 && time < time_in[site].front()) {
+  else if(priorTime == 0 && time < time_in(x_loc,y_loc,z_loc).front()) {
     T[site] = T_room;
     return;
   }
 
+//  std::cout << " x_loc " << x_loc << " y_loc " <<y_loc << " z_loc " << z_loc <<  " time front " << time_in(x_loc,y_loc,z_loc).front() << std::endl;
   //If we've stepped past the current time, update the stored values
-  if(time >= time_in[site].front()) {
-    priorTime = time_in[site].front();
-    priorTemp = temp_in[site].front();
+  if(time >= time_in(x_loc,y_loc,z_loc).front()) {
+    priorTime = time_in(x_loc,y_loc,z_loc).front();
+    priorTemp = temp_in(x_loc,y_loc,z_loc).front();
 
     //Pop off old values
-    time_in[site].pop();
-    temp_in[site].pop();
+    time_in(x_loc,y_loc,z_loc).pop();
+    temp_in(x_loc,y_loc,z_loc).pop();
   }
 
   //If we're inbetween melt cycles, set temp to room temp
-  if(priorTemp < Ts && temp_in[site].front() < Ts) {
+  if(priorTemp < Ts && time_in(x_loc,y_loc,z_loc).front() < Ts) {
     T[site] = T_room;
   }
 
   //Do linear interpolation
   else {
-    T[site] = priorTemp + (temp_in[site].front() - priorTemp)/(time_in[site].front() - priorTime) * (time - priorTime);
+    T[site] = priorTemp + (temp_in(x_loc,y_loc,z_loc).front() - priorTemp)/(time_in(x_loc,y_loc,z_loc).front() - priorTime) * (time - priorTime);
   }
 }
 
@@ -596,8 +590,8 @@ void AppAdditiveExtTempTexture::init_app()
   RandomPark random(3000);
 
   //Allocate our temperature and time data structures
-  temp_in.initialize(nlocal);
-  time_in.initialize(nlocal);
+  temp_in.initialize((int)(domain->subxhi - domain->subxlo),(int)(domain->subyhi - domain->subylo),(int)(domain->subzhi - domain->subzlo));
+  time_in.initialize((int)(domain->subxhi - domain->subxlo),(int)(domain->subyhi - domain->subylo),(int)(domain->subzhi - domain->subzlo));
 
   dt_sweep = dt;
   time_index = 0;
@@ -1398,4 +1392,59 @@ void AppAdditiveExtTempTexture::nucleation_init() {
         nucleationTemps[i] = dist_T(gen);
         nucleationSizes[i] = dist_S(gen);
     }
+}
+
+/**
+ * @brief Converts a 1D vector (in row-major order) into a 3D array with custom index ranges.
+ *
+ * This function takes a 1D vector of values and maps it to a 3D array with specified ranges
+ * for the x, y, and z indices. The ranges allow the 3D array indices to start at arbitrary
+ * values instead of zero. The input vector must have a size equal to the total number of
+ * elements in the 3D array, calculated as:
+ *     (xEnd - xStart + 1) * (yEnd - yStart + 1) * (zEnd - zStart + 1).
+ *
+ * @param inputVector The 1D vector containing the values in row-major order.
+ * @param xStart The starting index for the x dimension.
+ * @param xEnd The ending index for the x dimension.
+ * @param yStart The starting index for the y dimension.
+ * @param yEnd The ending index for the y dimension.
+ * @param zStart The starting index for the z dimension.
+ * @param zEnd The ending index for the z dimension.
+ * @return A 3D array (vector of vectors of vectors) containing the mapped values.
+ * @throws std::invalid_argument If the size of the input vector does not match the expected
+ *         number of elements in the 3D array based on the specified ranges.
+ */
+std::vector<std::vector<std::vector<int>>> AppAdditiveExtTempTexture::convertTo3DArrayWithRange(std::vector<int>& inputVector, 
+    int xStart, int xEnd, 
+    int yStart, int yEnd, 
+    int zStart, int zEnd) {
+    // Calculate the sizes of each dimension
+    int xSize = xEnd - xStart;
+    int ySize = yEnd - yStart;
+    int zSize = zEnd - zStart;
+
+    // Ensure the input vector has the correct size
+
+    std::cout << "sizes " << inputVector.size() << " and " << xSize * ySize * zSize << std::endl;
+    if (inputVector.size() != xSize * ySize * zSize) {
+        throw std::invalid_argument("Input vector size does not match the specified dimensions.");
+    }
+
+    // Create the 3D array
+    std::vector<std::vector<std::vector<int>>> outputArray(
+        xSize, 
+        std::vector<std::vector<int>>(ySize, std::vector<int>(zSize))
+    );
+
+    // Fill the 3D array using the input vector
+    for (int x = xStart; x < xEnd; x++) {
+        for (int y = yStart; y < yEnd; y++) {
+            for (int z = zStart; z < zEnd; z++) {
+                // Compute the index in the 1D vector
+                int index = (x - xStart) * (ySize * zSize) + (y - yStart) * zSize + (z - zStart);
+                outputArray[x - xStart][y - yStart][z - zStart] = inputVector[index];
+            }
+        }
+    }
+    return outputArray;
 }

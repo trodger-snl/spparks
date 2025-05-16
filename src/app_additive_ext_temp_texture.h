@@ -23,6 +23,8 @@ AppStyle(additive_temperature_texture,AppAdditiveExtTempTexture)
 #include "temperatureQueues.h"
 #include <stdlib.h>
 #include <string>
+#include <map>
+#include <vector>
 
 namespace SPPARKS_NS {
 
@@ -47,8 +49,10 @@ class AppAdditiveExtTempTexture : public AppPotts {
   void vec2euler(int, double *);
   void euler_init();
   virtual void reduced_temperature_hdf();
+  int xyz_to_local( double x, double y, double z );
   virtual void temperature_time_interpolate(int, double);
-	
+	std::vector<std::vector<std::vector<int>>> convertTo3DArrayWithRange(std::vector<int>&,int,int,int,int,int,int);
+
  protected:
 
 	double *MobilityOut;

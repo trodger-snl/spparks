@@ -323,8 +323,6 @@ for (int local_index = 0; local_index < nlocal; local_index++) {
   int z = (int)xyz[local_index][2];
 
   int valid_count = data_counts_array[x_loc][y_loc][z_loc]; // Get the number of valid entries
-
-  // std::cout << "Number of temperature entries " << valid_count << std::endl;
   
   // Define the hyperslab to read only the valid entries
   if (valid_count > 0) {
@@ -335,9 +333,6 @@ for (int local_index = 0; local_index < nlocal; local_index++) {
       // Define the starting point in the file
       hsize_t start[4] = { (hsize_t)x, (hsize_t)y, (hsize_t)z, 0};
       hsize_t count[4] = { 1, 1, 1, (hsize_t)valid_count};
-
-      // std::cout << "Hyperslab start: " << start[0] << ", " << start[1] << ", " << start[2] << ", " << start[3] << std::endl;
-      // std::cout << "Hyperslab count: " << count[0] << ", " << count[1] << ", " << count[2] << ", " << count[3] << std::endl;
 
       // Select the hyperslab in the temperature dataset
       temperature_filespace_id = H5Dget_space(dataset_temperature_id);
@@ -356,9 +351,6 @@ for (int local_index = 0; local_index < nlocal; local_index++) {
 
       // Store the valid entries in the corresponding queue
       for (int k = 0; k < valid_count; ++k) {
-          // if (temp_values[k] != 0) {
-          //   std::cout << "Read temperature is " << temp_values[k] << std::endl;
-          // }
           temp_in(x_loc,y_loc,z_loc).push(temp_values[k]);
           time_in(x_loc,y_loc,z_loc).push(time_values[k]);
       }
@@ -374,12 +366,6 @@ for (int local_index = 0; local_index < nlocal; local_index++) {
   H5Dclose(dataset_temperature_id);
   H5Dclose(dataset_time_id);
   H5Fclose(file_id);
-
-  // for (int i=0; i < nlocal; i++) {
-  //   if(!temp_in[i].empty()) {
-  //     std::cout << "index " << i << " temperature " << temp_in[i].front() << std::endl;
-  //   }
-  // }
 
   std::cout << "Finished reading temperatures " << std::endl;
 

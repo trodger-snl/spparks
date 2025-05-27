@@ -700,12 +700,16 @@ void AppAMFiniteDiff::app_update(double dt)
   }
 
   timer->stamp(TIME_APP);
-  MPI_Bcast(&done_flag,1,MPI_INT,0,world);
-  MPI_Bcast(&path_index,1,MPI_INT,0,world);
-  MPI_Bcast(&x_meltspot,1,MPI_DOUBLE,0,world);
-  MPI_Bcast(&y_meltspot,1,MPI_DOUBLE,0,world);
-  MPI_Bcast(&z_meltspot,1,MPI_DOUBLE,0,world);
-  MPI_Bcast(&wait_time,1,MPI_DOUBLE,0,world);
+  int num_values = 6;
+  MPI_Request requests[num_values];
+  MPI_Ibcast(&done_flag,1,MPI_INT,0,world,&requests[0]);
+  MPI_Ibcast(&path_index,1,MPI_INT,0,world,&requests[1]);
+  MPI_Ibcast(&x_meltspot,1,MPI_DOUBLE,0,world,&requests[2]);
+  MPI_Ibcast(&y_meltspot,1,MPI_DOUBLE,0,world,&requests[3]);
+  MPI_Ibcast(&z_meltspot,1,MPI_DOUBLE,0,world,&requests[4]);
+  MPI_Ibcast(&wait_time,1,MPI_DOUBLE,0,world,&requests[5]);
+
+  MPI_Waitall(num_values, requests, MPI_STATUSES_IGNORE);
   timer->stamp(TIME_COMM);
 
   //If we're recoating, run until things get below Ts and then reset all values to room temp

@@ -726,6 +726,7 @@ void AppAdditiveExtTempTexture::init_app()
 void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
 {
   int oldstate = spin[i];
+  SiteState s_old(oldstate, {q0[i], qx[i], qy[i], qz[i]});
   double einitial = site_energy(i);
   double efinal = 0;
   double Mobloc = 0;
@@ -754,7 +755,7 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
         return;
     }
     
-    if(solid_d[i] < 0 && solid_d[i] > -nrefine -1) {
+    if(solid_d[i] < 0 && solid_d[i] > -nrefine -1) { //TODO Need to update this case.
         //Go through neighbor list and add them to possible switches
         for (int j = 0; j < numneigh[i]; j++) {
             if(active_flag[neighbor[i][j]] == 3) {
@@ -790,47 +791,47 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
         for (m = 0; m < nevent; m++)
           if (value == unique[m]) break;
         if (m < nevent) continue;
-        unique[nevent++] = value;
+        unique[nevent] = value;
+        unique_neigh[nevent] = neighbor[i][j];
+        nevent += 1;
       }
 
       if (nevent == 0) return;
       int iran = (int) (nevent*random->uniform());
       if (iran >= nevent) iran = nevent-1;
       spin[i] = unique[iran];
+      SiteState s_new(unique[iran],{q0[unique_neigh[iran]],qx[unique_neigh[iran]],qy[unique_neigh[iran]],qz[unique_neigh[iran]]});
+      flip_site(i,s_new);
       efinal = site_energy(i);
+
+
   }
   // accept or reject via Boltzmann criterion
 
   if (efinal <= einitial) {
      if (random->uniform() > Mobloc){
        spin[i] = oldstate;
+       flip_site(i,s_old);
      }
   }
   else if (temperature == 0.0) {
     spin[i] = oldstate;
+    flip_site(i,s_old);
   } 
   else if (random->uniform() > Mobloc * exp((einitial-efinal)*t_inverse)) {
     spin[i] = oldstate;
+    flip_site(i,s_old);
   }
 
 
 
   if (spin[i] != oldstate) {
- //    phi1[i] = spin_euler[spin[i] * 3 -2];
-//     Phi[i] = spin_euler[spin[i] * 3 -1];
-//     phi2[i] = spin_euler[spin[i] *3];
-    x1[i] = orientation_vectors[spin[i]*9];
-    x2[i] = orientation_vectors[spin[i]*9+1];
-    x3[i] = orientation_vectors[spin[i]*9+2];
-    y1[i] = orientation_vectors[spin[i]*9+3];
-    y2[i] = orientation_vectors[spin[i]*9+4];
-    y3[i] = orientation_vectors[spin[i]*9+5];
     naccept++;
   }
+
   // set mask if site could not have changed
   // if site changed, unset mask of sites with affected propensity
   // OK to change mask of ghost sites since never used
-
   if (Lmask) {
     if (einitial < 0.5*numneigh[i]) mask[i] = 1;
     if (spin[i] != oldstate)
@@ -989,7 +990,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
     int third_nearest [ ] = {0,25,23,2,6,19,17,8};
     int nneigh = 0;
     int possible_neigh[26];
-    
+    SiteState s_in(i,{q0[i], qx[i], qy[i], qz[i]});
 
     
 
@@ -1001,16 +1002,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
         for(int j = 0; j < numneigh[i]; j++) {
             if(active_flag[neighbor[i][j]] == 2) {
                 int i_chosen = neighbor[i][j];
-                spin[i_chosen] = spin[i];
-//                 phi1[i_chosen] = spin_euler[spin[i] * 3 -2];
-//                 Phi[i_chosen] = spin_euler[spin[i] * 3 -1];
-//                 phi2[i_chosen] = spin_euler[spin[i] *3];
-                x1[i_chosen] = orientation_vectors[spin[i]*9];
-                x2[i_chosen] = orientation_vectors[spin[i]*9+1];
-                x3[i_chosen] = orientation_vectors[spin[i]*9+2];
-                y1[i_chosen] = orientation_vectors[spin[i]*9+3];
-                y2[i_chosen] = orientation_vectors[spin[i]*9+4];
-                y3[i_chosen] = orientation_vectors[spin[i]*9+5];
+                flip_site(i_chosen,s_in); //TODO need to make flip_site accessible or implement my own version
                 active_flag[i_chosen] = 3;
                 solid_d[i_chosen] = -nrefine -3;
                 nSites--;
@@ -1029,16 +1021,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
 
             if(active_flag[neighbor[i][nearest_neigh[j]]] == 2) {
                 int i_chosen = neighbor[i][nearest_neigh[j]];
-                spin[i_chosen] = spin[i];
-//                 phi1[i_chosen] = spin_euler[spin[i] * 3 -2];
-//                 Phi[i_chosen] = spin_euler[spin[i] * 3 -1];
-//                 phi2[i_chosen] = spin_euler[spin[i] *3];     
-                x1[i_chosen] = orientation_vectors[spin[i]*9];
-                x2[i_chosen] = orientation_vectors[spin[i]*9+1];
-                x3[i_chosen] = orientation_vectors[spin[i]*9+2];
-                y1[i_chosen] = orientation_vectors[spin[i]*9+3];
-                y2[i_chosen] = orientation_vectors[spin[i]*9+4];
-                y3[i_chosen] = orientation_vectors[spin[i]*9+5];
+                flip_site(i_chosen,s_in);
                 active_flag[i_chosen] = 3;
                 solid_d[i_chosen] = -nrefine -3;
                 nSites--;
@@ -1052,16 +1035,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
         for(int j = 0; j < 12; j++) {
             if(active_flag[neighbor[i][second_nearest[j]]] == 2) {
                 int i_chosen = neighbor[i][second_nearest[j]];
-                spin[i_chosen] = spin[i];
-//                 phi1[i_chosen] = spin_euler[spin[i] * 3 -2];
-//                 Phi[i_chosen] = spin_euler[spin[i] * 3 -1];
-//                 phi2[i_chosen] = spin_euler[spin[i] *3];   
-                x1[i_chosen] = orientation_vectors[spin[i]*9];
-                x2[i_chosen] = orientation_vectors[spin[i]*9+1];
-                x3[i_chosen] = orientation_vectors[spin[i]*9+2];
-                y1[i_chosen] = orientation_vectors[spin[i]*9+3];
-                y2[i_chosen] = orientation_vectors[spin[i]*9+4];
-                y3[i_chosen] = orientation_vectors[spin[i]*9+5];             
+                flip_site(i_chosen,s_in);            
                 active_flag[i_chosen] = 3;
                 solid_d[i_chosen] = -nrefine -3;
                 nSites--;
@@ -1076,15 +1050,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
             if(active_flag[neighbor[i][third_nearest[j]]] ==2) {
                 int i_chosen = neighbor[i][third_nearest[j]];
                 spin[i_chosen] = spin[i];
-//                 phi1[i_chosen] = spin_euler[spin[i] * 3 -2];
-//                 Phi[i_chosen] = spin_euler[spin[i] * 3 -1];
-//                 phi2[i_chosen] = spin_euler[spin[i] *3];   
-                x1[i_chosen] = orientation_vectors[spin[i]*9];
-                x2[i_chosen] = orientation_vectors[spin[i]*9+1];
-                x3[i_chosen] = orientation_vectors[spin[i]*9+2];
-                y1[i_chosen] = orientation_vectors[spin[i]*9+3];
-                y2[i_chosen] = orientation_vectors[spin[i]*9+4];
-                y3[i_chosen] = orientation_vectors[spin[i]*9+5];
+                flip_site(i_chosen,s_in);
                 active_flag[i_chosen] = 3;
                 solid_d[i_chosen] = -nrefine -3;
                 nSites--;

@@ -65,6 +65,10 @@
 #include "error.h"
 #include "domain.h"
 #include "hdf5.h"
+#include "potts_quaternion/cubic_symmetries.h"
+#include "potts_quaternion/disorientation.h"
+#include "potts_quaternion/hcp_symmetries.h"
+#include "potts_quaternion/quaternion.h"
 
 
 using namespace SPPARKS_NS;
@@ -74,7 +78,7 @@ using namespace MathConst;
 /* ---------------------------------------------------------------------- */
 
 AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, char **arg) :
-  AppPotts(spk,narg,arg)
+  AppPottsQuaternion(spk,narg,arg)
 {
 
     if (narg != 8  )
@@ -88,8 +92,8 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     dt = atof(arg[6]); //The source timestep (in seconds)
     nrefine = atoi(arg[7]); //How many refinement MC steps to perform after a site solidifies
     
-    //I think we need all of these variables still!
-    ndouble = 9;
+    //I think we need all of these variables still!/  
+    ndouble = 7;
     allow_app_update = 1;
     ninteger = 2;
     total_time = 0;
@@ -116,6 +120,7 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     c3 = 2.5;
     time_step = dt;
     t_room = 300;
+    symmetries = CUBIC::get_symmetries(); //TODO Figure out how to assign symmetries in this child class.
     
     // Initialize bounds checking variables
     bounds_check_mode = 0; // Default to exact match
@@ -223,29 +228,28 @@ void AppAdditiveExtTempTexture::app_update(double dt)
   }
     //iterate through all the sets
     for (int i=0; i<nlocal; i++) {    
-      
-      
-      //Update the temperature at all the sites
-      temperature_time_interpolate(i,T[i]);
-      if(T[i] > t_room) t_active = 1;
-  
-      //Turn the sites on/off depending on the phase data and whether or not the
-      //site's temperature has gone above tl
-      //We will also have an active_flag value of 3 for something that's re-solidified
-      if( T[i] >= tl) {
-          active_flag[i] = 2;
-          spin[i] = (int) (nspins * ranapp->uniform());
-          x1[i] = orientation_vectors[spin[i]*9];
-          x2[i] = orientation_vectors[spin[i]*9+1];
-          x3[i] = orientation_vectors[spin[i]*9+2];
-          y1[i] = orientation_vectors[spin[i]*9+3];
-          y2[i] = orientation_vectors[spin[i]*9+4];
-          y3[i] = orientation_vectors[spin[i]*9+5];
-          solid_d[i] = 0;
-      }
-      //If we're molten, call the mushy_phase function to figure out any phase change
-      else if (active_flag[i] == 2 && T[i] <= tl) {
-          mushy_phase(i, ranapp);
+            
+        //Update the temperature at all the sites
+        temperature_time_interpolate(i,T[i]);
+        if(T[i] > t_room) t_active = 1;
+    
+        //Turn the sites on/off depending on the phase data and whether or not the
+        //site's temperature has gone above tl
+        //We will also have an active_flag value of 3 for something that's re-solidified
+        if( T[i] >= tl) {
+            active_flag[i] = 2;
+            spin[i] = (int) (nspins * ranapp->uniform());
+            // Create random orientation as each site
+            vector<double> uq = quaternion::generate_random_unit_quaternions(1);
+            q0[i] = uq[0];
+            qx[i] = uq[1];
+            qy[i] = uq[2];
+            qz[i] = uq[3];
+            solid_d[i] = 0;
+        }
+        //If we're molten, call the mushy_phase function to figure out any phase change
+        else if (active_flag[i] == 2 && T[i] <= tl) {
+            mushy_phase(i, ranapp);
 //             fprintf(screen,"Ran mushy_phase\n");
       } 
       else if(solid_d[i] < 0 && solid_d[i] > -nrefine -1 && active_flag[i] == 3)    {
@@ -541,15 +545,10 @@ void AppAdditiveExtTempTexture::grow_app()
   mobility_out = darray[0];
   T = darray[1];
   solid_d = darray[2];
-  //phi1 = darray[3];
-  //Phi = darray[4];
-  //phi2 = darray[5];
-  x1 = darray[3];
-  x2 = darray[4];
-  x3 = darray[5];
-  y1 = darray[6];
-  y2 = darray[7];
-  y3 = darray[8];
+  q0 = darray[3];
+  qx = darray[4];
+  qy = darray[5];
+  qz = darray[6];
 
       if (nlocal_app < nlocal) {
         nlocal_app = nlocal;
@@ -596,23 +595,22 @@ void AppAdditiveExtTempTexture::init_app()
   prior_time = 0;
 
   orientation_vectors = new double[nspins * 9];
-  spin_euler = new double[nspins * 3];
   nucleation_flags = new int[nspins];
   nucleation_temps = new double[nspins];
 	nucleation_sizes = new double[nspins];
 
 
   //Initialize orientations based on spins (which have hopefully been determined)...
-  if (domain->me==0) {
-  	orientation_init(ranapp);    
-  }
+  // if (domain->me==0) {
+  // 	orientation_init(ranapp);    
+  // }
 
 
-  MPI_Bcast(orientation_vectors,nspins*9, MPI_DOUBLE,0,world);
+  // MPI_Bcast(orientation_vectors,nspins*9, MPI_DOUBLE,0,world);
   
-  if(domain->me==0){
-    euler_init();
-  }
+  // if(domain->me==0){
+  //   euler_init();
+  // }
   
 //   MPI_Bcast(spin_euler, nspins*3, MPI_DOUBLE,0,world);
 
@@ -622,13 +620,12 @@ void AppAdditiveExtTempTexture::init_app()
 			if (spin[i] < 1 || spin[i] > nspins) {
 				flag = 1;
 			}
-			//Initialize spin-based orientation
-			x1[i] = orientation_vectors[spin[i]*9];
-			x2[i] = orientation_vectors[spin[i]*9+1];
-			x3[i] = orientation_vectors[spin[i]*9+2];
-			y1[i] = orientation_vectors[spin[i]*9+3];
-			y2[i] = orientation_vectors[spin[i]*9+4];
-			y3[i] = orientation_vectors[spin[i]*9+5];
+      // Create random orientation as each site
+      vector<double> uq = quaternion::generate_random_unit_quaternions(1);
+      q0[i] = uq[0];
+      qx[i] = uq[1];
+      qy[i] = uq[2];
+      qz[i] = uq[3];
     }
 
   MPI_Allreduce(&flag,&flagall,1,MPI_INT,MPI_SUM,world);

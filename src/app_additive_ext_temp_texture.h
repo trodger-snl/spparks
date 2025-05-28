@@ -19,7 +19,7 @@ AppStyle(additive_temperature_texture,AppAdditiveExtTempTexture)
 #ifndef SPK_APP_ADDITIVE_EXT_TEMP_TEXTURE_H
 #define SPK_APP_ADDITIVE_EXT_TEMP_TEXTURE_H
 
-#include "app_potts.h"
+#include "app_potts_quaternion.h"
 #include "temperatureQueues.h"
 #include "hdf5.h"
 #include <stdlib.h>
@@ -30,7 +30,7 @@ AppStyle(additive_temperature_texture,AppAdditiveExtTempTexture)
 
 namespace SPPARKS_NS {
 
-class AppAdditiveExtTempTexture : public AppPotts {
+class AppAdditiveExtTempTexture : public AppPottsQuaternion {
  public:
   AppAdditiveExtTempTexture(class SPPARKS *, int, char **);
   virtual void grow_app();
@@ -86,14 +86,9 @@ class AppAdditiveExtTempTexture : public AppPotts {
  	double tl; //Liquidus point
  	double ts; //Solidus point
   double t_room;
-    // double *phi1;
-    // double *Phi;
-    // double *phi2;
-    double *unique_dot;
-    double *spin_euler;
-    double *x1, *x2, *x3;
-    double *y1, *y2, *y3;
-    double *orientation_vectors;
+  double *unique_dot;
+  double *q0, *qx, *qy, *qz;
+  double *orientation_vectors;
     
     
   //New stuff

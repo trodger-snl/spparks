@@ -238,11 +238,6 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
     // Record the start time
   auto start = std::chrono::high_resolution_clock::now();
 
-  // Get the rank and size of the MPI processes
-  int rank, size;
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-  MPI_Comm_size(MPI_COMM_WORLD, &size);
-
   //Setup file name
   // std::stringstream os;
   // os << temp_file_str;

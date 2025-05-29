@@ -53,6 +53,7 @@
 #include <iostream>
 #include <random>
 #include <chrono>
+#include <cstring>
 #include "math.h"
 #include "math_const.h"
 #include "app_additive_ext_temp_texture.h"
@@ -286,7 +287,7 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
   H5Dread(dataset_counts_id, data_type, memspace_count_id, filespace_id, plist_id, data_counts.data());
 
   // Close the data_counts dataset
-  MPI_Barrier(MPI_COMM_WORLD); // Synchronize all processes
+  MPI_Barrier(world); // Synchronize all processes
   H5Sclose(filespace_id);
   H5Dclose(dataset_counts_id);
 
@@ -357,7 +358,7 @@ for (int local_index = 0; local_index < nlocal; local_index++) {
 }
 
   // Close the dataset and file
-  MPI_Barrier(MPI_COMM_WORLD); // Synchronize all processes
+  MPI_Barrier(world); // Synchronize all processes
   H5Dclose(dataset_temperature_id);
   H5Dclose(dataset_time_id);
   H5Fclose(file_id);

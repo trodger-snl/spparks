@@ -456,7 +456,6 @@ void AppAdditiveExtTempTexture::temperature_time_interpolate(int site, double pr
     return;
   }
   
-  
 
   //If we haven't encountered our first time value, set to default
   else if(priorTime == 0 && time < time_in(x_loc,y_loc,z_loc).front()) {
@@ -476,7 +475,7 @@ void AppAdditiveExtTempTexture::temperature_time_interpolate(int site, double pr
   }
 
   //If we're inbetween melt cycles, set temp to room temp
-  if(priorTemp < Ts && time_in(x_loc,y_loc,z_loc).front() < Ts) {
+  if(priorTemp < Ts && temp_in(x_loc,y_loc,z_loc).front() < Ts) {
     T[site] = T_room;
   }
 

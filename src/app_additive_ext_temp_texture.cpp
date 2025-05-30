@@ -244,7 +244,7 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     // Check if all processors have t_active = 0. If so, fast forward our simulation time.
     if (global_t_active == 0) {
         double min_time = time_in.findAndSyncSmallestFrontValue(MPI_COMM_WORLD);
-        std::cout << "min_time is " << min_time;
+        if (domain->me == 0) std::cout << "Fast fowarding to " << min_time << std::endl;
         //If min time is past stop time, update to it. Otherwise, fast forward to min_time.
         //We might want to fast forward to min_time - dt instead...
         if(min_time > stoptime) time = stoptime;
@@ -266,7 +266,7 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
   // const std::string tmp = os.str();
   // const char* cstr = tmp.c_str();
 
-  std::cout << "File path: " << temp_file_str << std::endl;
+  if (domain->me == 0) std::cout << "File path: " << temp_file_str << std::endl;
 
   // Create a vector to hold the data counts
   //We should be able to break this up the same way for MPI as the temperature data.
@@ -294,8 +294,8 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
 
   //std::cout << "Subdomain dimensions x " << domain->subxhi << " y " << domain->subyhi << " z " << domain->subzlo << std::endl;
 
-  std::cout << "Hyperslab start: " << start_counts[0] << ", " << start_counts[1] << ", " << start_counts[2] << std::endl;
-  std::cout << "Hyperslab count: " << count_counts[0] << ", " << count_counts[1] << ", " << count_counts[2]  << std::endl;
+  // std::cout << "Hyperslab start: " << start_counts[0] << ", " << start_counts[1] << ", " << start_counts[2] << std::endl;
+  // std::cout << "Hyperslab count: " << count_counts[0] << ", " << count_counts[1] << ", " << count_counts[2]  << std::endl;
 
   //Create memory space
   hid_t memspace_count_id = H5Screate_simple(3, count_counts, NULL);
@@ -314,7 +314,7 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
 
   //convert 1D data to 3d array
   auto data_counts_array = convertTo3DArrayWithRange(data_counts,(int)domain->subxlo,(int)domain->subxhi,(int)domain->subylo,(int)domain->subyhi,(int)domain->subzlo,(int)domain->subzhi);
-  std::cout << "Read in the data_count values" << std::endl;
+  if (domain->me == 0) std::cout << "Read in the data_count values" << std::endl;
 
   // Open the temperature and time datasets
   hid_t dataset_temperature_id = H5Dopen(file_id, "temperature",H5P_DEFAULT);
@@ -323,7 +323,7 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
   hid_t data_type_temp = H5Dget_type(dataset_temperature_id);
   hid_t data_type_time = H5Dget_type(dataset_time_id);
 
-    std::cout << "Began reading temperatures " << std::endl;
+  if (domain->me == 0) std::cout << "Began reading temperatures " << std::endl;
 
 
 // Process the valid entries for the sub-domain using a single loop
@@ -384,7 +384,7 @@ for (int local_index = 0; local_index < nlocal; local_index++) {
   H5Dclose(dataset_time_id);
   H5Fclose(file_id);
 
-  std::cout << "Finished reading temperatures " << std::endl;
+  if (domain->me == 0) std::cout << "Finished reading temperatures " << std::endl;
 
     // Record the end time
   auto end = std::chrono::high_resolution_clock::now();
@@ -393,7 +393,7 @@ for (int local_index = 0; local_index < nlocal; local_index++) {
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
   // Print the duration
-  std::cout << "Function execution time: " << duration.count() << " ms" << std::endl;
+  if (domain->me == 0) std::cout << "Reading temperatures took: " << duration.count() << " ms" << std::endl;
 
 
 }
@@ -1425,7 +1425,7 @@ std::vector<std::vector<std::vector<int>>> AppAdditiveExtTempTexture::convertTo3
 
     // Ensure the input vector has the correct size
 
-    std::cout << "sizes " << inputVector.size() << " and " << xSize * ySize * zSize << std::endl;
+    //std::cout << "sizes " << inputVector.size() << " and " << xSize * ySize * zSize << std::endl;
     if (inputVector.size() != xSize * ySize * zSize) {
         throw std::invalid_argument("Input vector size does not match the specified dimensions.");
     }

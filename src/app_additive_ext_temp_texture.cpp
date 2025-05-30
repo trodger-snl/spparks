@@ -207,6 +207,7 @@ void AppAdditiveExtTempTexture::app_update(double dt)
       
       //Update the temperature at all the sites
       temperature_time_interpolate(i,T[i]);
+      if(T[i] > T_room) t_active = 1;
   
       //Turn the sites on/off depending on the phase data and whether or not the
       //site's temperature has gone above Tl
@@ -221,22 +222,21 @@ void AppAdditiveExtTempTexture::app_update(double dt)
           y2[i] = orientation_vectors[spin[i]*9+4];
           y3[i] = orientation_vectors[spin[i]*9+5];
           SolidD[i] = 0;
-          t_active = 1;
       }
       //If we're molten, call the mushy_phase function to figure out any phase change
       else if (activeFlag[i] == 2 && T[i] <= Tl) {
           mushy_phase(i, ranapp);
-          t_active = 1;
 //             fprintf(screen,"Ran mushy_phase\n");
       } 
       else if(SolidD[i] < 0 && SolidD[i] > -nrefine -1 && activeFlag[i] == 3)    {
               MobilityOut[i] = 1;
               site_event_rejection(i, ranapp);
               SolidD[i]--;
-              t_active = 1;
       }
     }
-
+    
+    //Communicate changes
+    comm->all();
     // Use MPI_Allreduce to check if t_active is 0 on all processors
     int global_t_active;
     MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
@@ -471,7 +471,7 @@ void AppAdditiveExtTempTexture::temperature_time_interpolate(int site, double pr
 
   //std::cout << " x_loc " << x_loc << " y_loc " <<y_loc << " z_loc " << z_loc <<  std::endl;
 
-  //If we're out of entires, also set to room temperature.
+  //If we're out of entires, set to room temperature.
   if (time_in(x_loc,y_loc,z_loc).empty()){ 
     T[site] = T_room;
     return;
@@ -491,10 +491,16 @@ void AppAdditiveExtTempTexture::temperature_time_interpolate(int site, double pr
     //Pop off old values
     time_in(x_loc,y_loc,z_loc).pop();
     temp_in(x_loc,y_loc,z_loc).pop();
+    
+    //If we're out of entires, also set to room temperature.
+    if (time_in(x_loc,y_loc,z_loc).empty()){ 
+      T[site] = T_room;
+      return;
+    }
   }
 
   //If we're inbetween melt cycles, set temp to room temp
-  if(priorTemp < Ts && temp_in(x_loc,y_loc,z_loc).front() < Ts) {
+  if((priorTemp < Ts && temp_in(x_loc,y_loc,z_loc).front() > Tl) || ((time_in(x_loc,y_loc,z_loc)).front() - priorTime) > 1) {
     T[site] = T_room;
   }
 

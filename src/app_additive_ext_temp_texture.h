@@ -114,6 +114,7 @@ class AppAdditiveExtTempTexture : public AppPotts {
   DoubleQueueContainer temp_in;
   DoubleQueueContainer time_in;
   double priorTime;
+  int t_active;
 
 };
 

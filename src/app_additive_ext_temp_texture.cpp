@@ -198,36 +198,57 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
  ------------------------------------------------------------------------- */
 void AppAdditiveExtTempTexture::app_update(double dt)
 {
+
+  //Reset t_active to assume we don't have a melt pool right now
+  t_active = 0;
     //iterate through all the sets
     for (int i=0; i<nlocal; i++) {    
-            
-        //Update the temperature at all the sites
-        temperature_time_interpolate(i,T[i]);
-    
-        //Turn the sites on/off depending on the phase data and whether or not the
-        //site's temperature has gone above Tl
-        //We will also have an activeFlag value of 3 for something that's re-solidified
-        if( T[i] >= Tl) {
-            activeFlag[i] = 2;
-            spin[i] = (int) (nspins * ranapp->uniform());
-            x1[i] = orientation_vectors[spin[i]*9];
-            x2[i] = orientation_vectors[spin[i]*9+1];
-            x3[i] = orientation_vectors[spin[i]*9+2];
-            y1[i] = orientation_vectors[spin[i]*9+3];
-            y2[i] = orientation_vectors[spin[i]*9+4];
-            y3[i] = orientation_vectors[spin[i]*9+5];
-            SolidD[i] = 0;
-        }
-        //If we're molten, call the mushy_phase function to figure out any phase change
-        else if (activeFlag[i] == 2 && T[i] <= Tl) {
-            mushy_phase(i, ranapp);
+      
+      
+      //Update the temperature at all the sites
+      temperature_time_interpolate(i,T[i]);
+  
+      //Turn the sites on/off depending on the phase data and whether or not the
+      //site's temperature has gone above Tl
+      //We will also have an activeFlag value of 3 for something that's re-solidified
+      if( T[i] >= Tl) {
+          activeFlag[i] = 2;
+          spin[i] = (int) (nspins * ranapp->uniform());
+          x1[i] = orientation_vectors[spin[i]*9];
+          x2[i] = orientation_vectors[spin[i]*9+1];
+          x3[i] = orientation_vectors[spin[i]*9+2];
+          y1[i] = orientation_vectors[spin[i]*9+3];
+          y2[i] = orientation_vectors[spin[i]*9+4];
+          y3[i] = orientation_vectors[spin[i]*9+5];
+          SolidD[i] = 0;
+          t_active = 1;
+      }
+      //If we're molten, call the mushy_phase function to figure out any phase change
+      else if (activeFlag[i] == 2 && T[i] <= Tl) {
+          mushy_phase(i, ranapp);
+          t_active = 1;
 //             fprintf(screen,"Ran mushy_phase\n");
-	      } 
-        else if(SolidD[i] < 0 && SolidD[i] > -nrefine -1 && activeFlag[i] == 3)    {
-                MobilityOut[i] = 1;
-                site_event_rejection(i, ranapp);
-                SolidD[i]--;
-        }
+      } 
+      else if(SolidD[i] < 0 && SolidD[i] > -nrefine -1 && activeFlag[i] == 3)    {
+              MobilityOut[i] = 1;
+              site_event_rejection(i, ranapp);
+              SolidD[i]--;
+              t_active = 1;
+      }
+    }
+
+    // Use MPI_Allreduce to check if t_active is 0 on all processors
+    int global_t_active;
+    MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+
+    // Check if all processors have t_active = 0. If so, fast forward our simulation time.
+    if (global_t_active == 0) {
+        double min_time = temp_in.findAndSyncSmallestFrontValue(MPI_COMM_WORLD);
+
+        //If min time is past stop time, update to it. Otherwise, fast forward to min_time.
+        //We might want to fast forward to min_time - dt instead...
+        if(min_time > stoptime) time = stoptime;
+        else time = min_time - dt;
     }
 }
 
@@ -455,8 +476,6 @@ void AppAdditiveExtTempTexture::temperature_time_interpolate(int site, double pr
     T[site] = T_room;
     return;
   }
-  
-
   //If we haven't encountered our first time value, set to default
   else if(priorTime == 0 && time < time_in(x_loc,y_loc,z_loc).front()) {
     T[site] = T_room;

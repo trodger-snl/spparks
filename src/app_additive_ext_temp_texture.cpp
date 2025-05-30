@@ -243,8 +243,8 @@ void AppAdditiveExtTempTexture::app_update(double dt)
 
     // Check if all processors have t_active = 0. If so, fast forward our simulation time.
     if (global_t_active == 0) {
-        double min_time = temp_in.findAndSyncSmallestFrontValue(MPI_COMM_WORLD);
-
+        double min_time = time_in.findAndSyncSmallestFrontValue(MPI_COMM_WORLD);
+        std::cout << "min_time is " << min_time;
         //If min time is past stop time, update to it. Otherwise, fast forward to min_time.
         //We might want to fast forward to min_time - dt instead...
         if(min_time > stoptime) time = stoptime;

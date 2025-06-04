@@ -16,6 +16,58 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
+# Enhanced optimization flags for different build types
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    # Start with base optimization level
+    set(OPT_FLAGS "-DNDEBUG")
+    
+    if(SPPARKS_AGGRESSIVE_OPTIMIZATION)
+        set(OPT_FLAGS "${OPT_FLAGS} -O3")
+        message(STATUS "Using aggressive optimization (-O3)")
+    else()
+        set(OPT_FLAGS "${OPT_FLAGS} -O2")
+        message(STATUS "Using standard optimization (-O2)")
+    endif()
+    
+    # Add native optimizations if enabled
+    if(SPPARKS_NATIVE_OPTIMIZATION)
+        set(OPT_FLAGS "${OPT_FLAGS} -march=native -mtune=native")
+        message(STATUS "Enabled native CPU optimizations (-march=native)")
+    endif()
+    
+    # Add Link Time Optimization (LTO) for better performance
+    if(SPPARKS_AGGRESSIVE_OPTIMIZATION)
+        if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+            # Apple Silicon specific LTO
+            set(OPT_FLAGS "${OPT_FLAGS} -flto=thin")
+            message(STATUS "Apple Silicon: Enabled thin LTO")
+        elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            # GCC LTO
+            set(OPT_FLAGS "${OPT_FLAGS} -flto")
+            message(STATUS "GCC: Enabled LTO")
+        elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            # Clang LTO
+            set(OPT_FLAGS "${OPT_FLAGS} -flto")
+            message(STATUS "Clang: Enabled LTO")
+        endif()
+    endif()
+    
+    # Additional performance flags
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang")
+        set(OPT_FLAGS "${OPT_FLAGS} -ffast-math -funroll-loops")
+    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        set(OPT_FLAGS "${OPT_FLAGS} -ffast-math -funroll-loops -fomit-frame-pointer")
+    endif()
+    
+    set(CMAKE_CXX_FLAGS_RELEASE "${OPT_FLAGS}")
+    message(STATUS "Release optimization flags: ${CMAKE_CXX_FLAGS_RELEASE}")
+    
+elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    # Optimized with debug info
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
+    message(STATUS "RelWithDebInfo: Using -O2 -g optimizations")
+endif()
+
 # Automatic CPU detection and parallel build optimization
 include(ProcessorCount)
 ProcessorCount(N)
@@ -51,6 +103,10 @@ option(SPPARKS_ENABLE_JPEG "Enable JPEG support" ON)
 option(SPPARKS_ENABLE_PNG "Enable PNG support" OFF)
 option(SPPARKS_ENABLE_HDF5 "Enable HDF5 support" OFF)
 option(SPPARKS_UNORDERED_MAP "Use unordered_map" OFF)
+
+# Performance options
+option(SPPARKS_AGGRESSIVE_OPTIMIZATION "Enable aggressive optimizations (may increase compile time)" ON)
+option(SPPARKS_NATIVE_OPTIMIZATION "Enable native CPU optimizations (-march=native)" ON)
 
 # Integer size options
 option(SPPARKS_SMALLSMALL "Use 32-bit for all integers" OFF)

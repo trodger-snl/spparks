@@ -19,6 +19,8 @@ ENABLE_JPEG="AUTO"
 CLEAN=false
 VERBOSE=false
 PARALLEL_JOBS="AUTO"
+AGGRESSIVE_OPT="AUTO"
+NATIVE_OPT="AUTO"
 
 # Function to show usage
 show_usage() {
@@ -42,6 +44,10 @@ Options:
     --lib                       Build as library only
     --package PKG               Enable package (can be used multiple times)
     -j, --jobs N                Number of parallel build jobs (default: auto-detect)
+    --aggressive-opt            Enable aggressive optimizations (-O3, LTO)
+    --no-aggressive-opt         Disable aggressive optimizations (use -O2)
+    --native-opt                Enable native CPU optimizations (-march=native)
+    --no-native-opt             Disable native CPU optimizations
     --clean                     Clean build directory before building
     -v, --verbose               Verbose output
     -h, --help                  Show this help
@@ -57,10 +63,12 @@ Machine configurations:
     mpi_debug  MPI Debug build, mpicxx
 
 Examples:
-    $0 -m mac                           # Build for macOS (auto-enables JPEG if found)
+    $0 -m mac                           # Build for macOS (auto-optimized)
     $0 -m mpi --package stitch          # Build with MPI and STITCH package
-    $0 -m mac_arm --hdf5                # Build for Apple Silicon with HDF5+JPEG (auto-detects all cores)
+    $0 -m mac_arm --hdf5                # Build for Apple Silicon with HDF5+JPEG (auto-optimized)
     $0 --no-jpeg -j 8                  # Build without JPEG using 8 parallel jobs
+    $0 --aggressive-opt --native-opt    # Maximum performance (O3, LTO, native CPU)
+    $0 --no-aggressive-opt              # Conservative optimization (O2, no LTO)
     $0 --lib --shared                   # Build shared library
     $0 --clean -b Debug                 # Clean build in debug mode
 
@@ -126,6 +134,22 @@ while [[ $# -gt 0 ]]; do
             PARALLEL_JOBS="$2"
             shift 2
             ;;
+        --aggressive-opt)
+            AGGRESSIVE_OPT="ON"
+            shift
+            ;;
+        --no-aggressive-opt)
+            AGGRESSIVE_OPT="OFF"
+            shift
+            ;;
+        --native-opt)
+            NATIVE_OPT="ON"
+            shift
+            ;;
+        --no-native-opt)
+            NATIVE_OPT="OFF"
+            shift
+            ;;
         --clean)
             CLEAN=true
             shift
@@ -190,6 +214,15 @@ fi
 
 if [ "$ENABLE_JPEG" != "AUTO" ]; then
     CMAKE_ARGS+=("-DSPPARKS_ENABLE_JPEG=$ENABLE_JPEG")
+fi
+
+# Add optimization settings
+if [ "$AGGRESSIVE_OPT" != "AUTO" ]; then
+    CMAKE_ARGS+=("-DSPPARKS_AGGRESSIVE_OPTIMIZATION=$AGGRESSIVE_OPT")
+fi
+
+if [ "$NATIVE_OPT" != "AUTO" ]; then
+    CMAKE_ARGS+=("-DSPPARKS_NATIVE_OPTIMIZATION=$NATIVE_OPT")
 fi
 
 # Enable packages

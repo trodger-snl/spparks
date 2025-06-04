@@ -1,0 +1,34 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# Find dependencies that were used to build SPPARKS
+if(@SPPARKS_ENABLE_MPI@)
+    find_dependency(MPI REQUIRED)
+endif()
+
+if(@SPPARKS_ENABLE_GZIP@)
+    find_dependency(ZLIB)
+endif()
+
+if(@SPPARKS_ENABLE_JPEG@)
+    find_dependency(JPEG)
+endif()
+
+if(@SPPARKS_ENABLE_PNG@)
+    find_dependency(PNG)
+endif()
+
+if(@SPPARKS_ENABLE_HDF5@)
+    find_dependency(HDF5 REQUIRED COMPONENTS C)
+endif()
+
+# Include the targets file
+include("${CMAKE_CURRENT_LIST_DIR}/SpparksTargets.cmake")
+
+# Set variables for backward compatibility
+set(SPPARKS_LIBRARIES Spparks::spparks)
+set(SPPARKS_INCLUDE_DIRS "${PACKAGE_PREFIX_DIR}/include/spparks")
+set(SPPARKS_FOUND TRUE)
+
+check_required_components(Spparks)

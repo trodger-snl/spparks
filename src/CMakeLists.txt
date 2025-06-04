@@ -1,0 +1,465 @@
+cmake_minimum_required(VERSION 3.16)
+
+# Set project name and version
+project(SPPARKS 
+    VERSION 0.1.0
+    DESCRIPTION "Stochastic Parallel PARticle Kinetic Simulator"
+    LANGUAGES CXX C)
+
+# Set C++ standard
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Set default build type
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+# Build options
+option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
+option(SPPARKS_BUILD_EXECUTABLE "Build spparks executable" ON)
+option(SPPARKS_BUILD_LIB "Build spparks library" OFF)
+option(SPPARKS_ENABLE_MPI "Enable MPI support" ON)
+option(SPPARKS_ENABLE_GZIP "Enable GZIP support" ON)
+option(SPPARKS_ENABLE_JPEG "Enable JPEG support" ON)
+option(SPPARKS_ENABLE_PNG "Enable PNG support" OFF)
+option(SPPARKS_ENABLE_HDF5 "Enable HDF5 support" OFF)
+option(SPPARKS_UNORDERED_MAP "Use unordered_map" OFF)
+
+# Integer size options
+option(SPPARKS_SMALLSMALL "Use 32-bit for all integers" OFF)
+option(SPPARKS_BIGBIG "Use 64-bit tagint and bigint" OFF)
+# Default is SPPARKS_SMALLBIG (32-bit smallint/tagint, 64-bit bigint)
+
+# Configure integer types
+if(SPPARKS_SMALLSMALL)
+    add_compile_definitions(SPPARKS_SMALLSMALL)
+elseif(SPPARKS_BIGBIG)
+    add_compile_definitions(SPPARKS_BIGBIG)
+else()
+    add_compile_definitions(SPPARKS_SMALLBIG)
+endif()
+
+# Configure features
+if(SPPARKS_ENABLE_GZIP)
+    add_compile_definitions(SPPARKS_GZIP)
+endif()
+
+if(SPPARKS_UNORDERED_MAP)
+    add_compile_definitions(SPPARKS_UNORDERED_MAP)
+endif()
+
+# Move MPI configuration after machine config application
+
+if(SPPARKS_ENABLE_JPEG)
+    # First try standard CMake FindJPEG
+    find_package(JPEG QUIET)
+    
+    if(NOT JPEG_FOUND)
+        # Try manual detection for common paths (especially Homebrew on macOS)
+        find_path(JPEG_INCLUDE_DIR_MANUAL jpeglib.h
+            PATHS /opt/homebrew/include /usr/local/include
+            NO_DEFAULT_PATH
+        )
+        find_library(JPEG_LIBRARY_MANUAL jpeg
+            PATHS /opt/homebrew/lib /usr/local/lib
+            NO_DEFAULT_PATH
+        )
+        
+        if(JPEG_INCLUDE_DIR_MANUAL AND JPEG_LIBRARY_MANUAL)
+            set(JPEG_FOUND TRUE)
+            set(JPEG_INCLUDE_DIR ${JPEG_INCLUDE_DIR_MANUAL})
+            set(JPEG_LIBRARIES ${JPEG_LIBRARY_MANUAL})
+            message(STATUS "Found JPEG library (manual): ${JPEG_LIBRARIES}")
+            message(STATUS "JPEG include dir (manual): ${JPEG_INCLUDE_DIR}")
+        endif()
+    else()
+        message(STATUS "Found JPEG library: ${JPEG_LIBRARIES}")
+        message(STATUS "JPEG include dir: ${JPEG_INCLUDE_DIR}")
+    endif()
+    
+    if(JPEG_FOUND)
+        add_compile_definitions(SPPARKS_JPEG)
+        message(STATUS "JPEG support enabled")
+    else()
+        message(STATUS "JPEG library not found - disabling JPEG support")
+        message(STATUS "  To install: brew install jpeg (macOS) or apt-get install libjpeg-dev (Ubuntu)")
+        set(SPPARKS_ENABLE_JPEG OFF)
+    endif()
+endif()
+
+if(SPPARKS_ENABLE_PNG)
+    find_package(PNG)
+    if(PNG_FOUND)
+        add_compile_definitions(SPPARKS_PNG)
+    endif()
+endif()
+
+if(SPPARKS_ENABLE_HDF5)
+    # Add cmake module path for enhanced HDF5 finder
+    list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+    
+    find_package(HDF5Enhanced REQUIRED)
+    if(HDF5_FOUND)
+        add_compile_definitions(SPPARKS_HDF)
+        # Check if HDF5 is parallel (MPI-enabled)
+        if(HDF5_IS_PARALLEL AND SPPARKS_ENABLE_MPI)
+            message(STATUS "Found parallel HDF5 (MPI-enabled)")
+            add_compile_definitions(H5_HAVE_PARALLEL)
+        elseif(SPPARKS_ENABLE_MPI AND NOT HDF5_IS_PARALLEL)
+            message(WARNING "MPI is enabled but HDF5 is not parallel. Consider using parallel HDF5 for better performance.")
+        endif()
+    else()
+        message(FATAL_ERROR "HDF5 was requested but not found")
+    endif()
+endif()
+
+# Include helper modules
+include(cmake/MachineConfigs.cmake)
+include(cmake/PackageManager.cmake)
+
+# Apply machine configuration if specified  
+setup_machine_presets()
+auto_detect_machine()
+
+if(SPPARKS_MACHINE)
+    apply_machine_config("${SPPARKS_MACHINE}")
+endif()
+
+# Command line options should override machine config
+# (This happens automatically since CMake cache variables take precedence)
+
+# Configure MPI after machine configuration
+if(SPPARKS_ENABLE_MPI)
+    find_package(MPI REQUIRED)
+    if(MPI_CXX_FOUND)
+        add_compile_definitions(SPPARKS_MPI)
+    endif()
+else()
+    # Use MPI stubs for serial builds
+    set(MPI_STUB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/STUBS")
+    if(NOT EXISTS "${MPI_STUB_DIR}/libmpi.a")
+        message(STATUS "Building MPI stubs...")
+        execute_process(
+            COMMAND make clean
+            WORKING_DIRECTORY ${MPI_STUB_DIR}
+            RESULT_VARIABLE CLEAN_RESULT
+        )
+        execute_process(
+            COMMAND make
+            WORKING_DIRECTORY ${MPI_STUB_DIR}
+            RESULT_VARIABLE BUILD_RESULT
+        )
+        if(NOT BUILD_RESULT EQUAL 0)
+            message(FATAL_ERROR "Failed to build MPI stubs")
+        endif()
+    endif()
+    
+    # Create MPI stub library target
+    add_library(mpi_stubs STATIC IMPORTED)
+    set_target_properties(mpi_stubs PROPERTIES
+        IMPORTED_LOCATION "${MPI_STUB_DIR}/libmpi.a"
+        INTERFACE_INCLUDE_DIRECTORIES "${MPI_STUB_DIR}"
+    )
+    message(STATUS "Using MPI stubs from: ${MPI_STUB_DIR}/libmpi.a")
+    # Add to global include directories as fallback
+    include_directories("${MPI_STUB_DIR}")
+endif()
+
+# Include directories
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+
+# Source files
+set(SPPARKS_SOURCES
+    app.cpp
+    app_am_ellipsoid.cpp
+    app_chemistry.cpp
+    app_diffusion.cpp
+    app_diffusion_multiphase.cpp
+    app_erbium.cpp
+    app_ising.cpp
+    app_ising_single.cpp
+    app_lattice.cpp
+    app_membrane.cpp
+    app_off_lattice.cpp
+    app_phasefield_potts.cpp
+    app_potts.cpp
+    app_potts_am_bezier.cpp
+    app_potts_am_path_gen.cpp
+    app_potts_am_weld.cpp
+    app_potts_grad.cpp
+    app_potts_neigh.cpp
+    app_potts_neighonly.cpp
+    app_potts_pin.cpp
+    app_potts_quaternion.cpp
+    app_potts_strain.cpp
+    app_potts_strain_pin.cpp
+    app_potts_weld.cpp
+    app_potts_weld_jom.cpp
+    app_relax.cpp
+    app_sinter.cpp
+    app_sos.cpp
+    app_test_group.cpp
+    am_bezier.cpp
+    cluster.cpp
+    comm_lattice.cpp
+    comm_off_lattice.cpp
+    create_box.cpp
+    create_sites.cpp
+    diag.cpp
+    diag_array.cpp
+    diag_cluster.cpp
+    diag_diffusion.cpp
+    diag_energy.cpp
+    diag_erbium.cpp
+    diag_propensity.cpp
+    diag_sinter_density.cpp
+    diag_sinter_free_energy.cpp
+    diag_sinter_free_energy_pore.cpp
+    domain.cpp
+    dump.cpp
+    dump_sites.cpp
+    dump_text.cpp
+    dump_vtk.cpp
+    error.cpp
+    finish.cpp
+    fourth_order_bezier.cpp
+    groups.cpp
+    input.cpp
+    irregular.cpp
+    lattice.cpp
+    library.cpp
+    math_extra.cpp
+    memory.cpp
+    output.cpp
+    pair.cpp
+    pair_lj_cut.cpp
+    potential.cpp
+    potts_am_path_parser.cpp
+    random_mars.cpp
+    random_park.cpp
+    read_sites.cpp
+    region.cpp
+    region_block.cpp
+    region_cylinder.cpp
+    region_intersect.cpp
+    region_sphere.cpp
+    region_union.cpp
+    set.cpp
+    shell.cpp
+    solve.cpp
+    solve_group.cpp
+    solve_linear.cpp
+    solve_tree.cpp
+    spparks.cpp
+    timer.cpp
+    universe.cpp
+    variable.cpp
+)
+
+# Header files for style generation
+file(GLOB SPPARKS_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
+
+# Configure conditional sources and generate style headers
+include(cmake/ConditionalSources.cmake)
+configure_conditional_sources()
+
+# Generate style headers after all dependencies are resolved
+include(cmake/generate_styles.cmake)
+generate_style_headers()
+
+# Style headers will be added as dependencies later
+
+# Create library targets
+if(SPPARKS_BUILD_LIB OR NOT SPPARKS_BUILD_EXECUTABLE)
+    add_library(spparks ${SPPARKS_SOURCES})
+    set_target_properties(spparks PROPERTIES
+        OUTPUT_NAME "spparks"
+        VERSION ${PROJECT_VERSION}
+        SOVERSION ${PROJECT_VERSION_MAJOR}
+    )
+    
+    # Link dependencies to library
+    if(SPPARKS_ENABLE_MPI AND MPI_CXX_FOUND)
+        target_link_libraries(spparks PUBLIC MPI::MPI_CXX)
+    elseif(NOT SPPARKS_ENABLE_MPI)
+        target_link_libraries(spparks PUBLIC mpi_stubs)
+    endif()
+    
+    if(SPPARKS_ENABLE_JPEG AND JPEG_FOUND)
+        target_link_libraries(spparks PUBLIC ${JPEG_LIBRARIES})
+        target_include_directories(spparks PUBLIC ${JPEG_INCLUDE_DIR})
+    endif()
+    
+    if(SPPARKS_ENABLE_PNG AND PNG_FOUND)
+        target_link_libraries(spparks PUBLIC PNG::PNG)
+    endif()
+    
+    if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
+        target_link_libraries(spparks PUBLIC ${HDF5_LIBRARIES})
+        target_include_directories(spparks PUBLIC ${HDF5_INCLUDE_DIRS})
+        target_compile_definitions(spparks PUBLIC ${HDF5_DEFINITIONS})
+    endif()
+    
+    # Add GZIP support
+    if(SPPARKS_ENABLE_GZIP)
+        find_package(ZLIB)
+        if(ZLIB_FOUND)
+            target_link_libraries(spparks PUBLIC ZLIB::ZLIB)
+        endif()
+    endif()
+    
+    # Set include directories for library
+    target_include_directories(spparks PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+        $<INSTALL_INTERFACE:include>
+    )
+    
+    # Add dependency on style headers
+    if(TARGET style_headers)
+        add_dependencies(spparks style_headers)
+    endif()
+    
+    # Add alias for easier linking
+    add_library(SPPARKS::spparks ALIAS spparks)
+endif()
+
+# Create executable target
+if(SPPARKS_BUILD_EXECUTABLE)
+    add_executable(spk main.cpp)
+    
+    # Add dependency on style headers
+    if(TARGET style_headers)
+        add_dependencies(spk style_headers)
+    endif()
+    
+    if(TARGET spparks)
+        target_link_libraries(spk spparks)
+    else()
+        # Link sources directly if not building library
+        target_sources(spk PRIVATE ${SPPARKS_SOURCES})
+        
+        # Link dependencies to executable
+        if(SPPARKS_ENABLE_MPI AND MPI_CXX_FOUND)
+            target_link_libraries(spk MPI::MPI_CXX)
+        elseif(NOT SPPARKS_ENABLE_MPI)
+            target_link_libraries(spk mpi_stubs)
+        endif()
+        
+        if(SPPARKS_ENABLE_JPEG AND JPEG_FOUND)
+            target_link_libraries(spk ${JPEG_LIBRARIES})
+            target_include_directories(spk PRIVATE ${JPEG_INCLUDE_DIR})
+        endif()
+        
+        if(SPPARKS_ENABLE_PNG AND PNG_FOUND)
+            target_link_libraries(spk PNG::PNG)
+        endif()
+        
+        if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
+            target_link_libraries(spk ${HDF5_LIBRARIES})
+            target_include_directories(spk PRIVATE ${HDF5_INCLUDE_DIRS})
+            target_compile_definitions(spk PRIVATE ${HDF5_DEFINITIONS})
+        endif()
+        
+        if(SPPARKS_ENABLE_GZIP)
+            find_package(ZLIB)
+            if(ZLIB_FOUND)
+                target_link_libraries(spk ZLIB::ZLIB)
+            endif()
+        endif()
+    endif()
+endif()
+
+# Compiler flags
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        target_compile_options(spk PRIVATE -g -Wall -Wextra)
+        if(TARGET spparks)
+            target_compile_options(spparks PRIVATE -g -Wall -Wextra)
+        endif()
+    else()
+        target_compile_options(spk PRIVATE -O3)
+        if(TARGET spparks)
+            target_compile_options(spparks PRIVATE -O3)
+        endif()
+    endif()
+endif()
+
+# Installation
+if(SPPARKS_BUILD_LIB)
+    install(TARGETS spparks
+        EXPORT SpparksTargets
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+        RUNTIME DESTINATION bin
+    )
+    
+    install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/*.h
+        DESTINATION include/spparks
+    )
+endif()
+
+if(SPPARKS_BUILD_EXECUTABLE)
+    install(TARGETS spk
+        RUNTIME DESTINATION bin
+    )
+endif()
+
+# Package configuration
+include(CMakePackageConfigHelpers)
+if(SPPARKS_BUILD_LIB)
+    write_basic_package_version_file(
+        "${CMAKE_CURRENT_BINARY_DIR}/SpparksConfigVersion.cmake"
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY AnyNewerVersion
+    )
+    
+    export(EXPORT SpparksTargets
+        FILE "${CMAKE_CURRENT_BINARY_DIR}/SpparksTargets.cmake"
+        NAMESPACE Spparks::
+    )
+    
+    configure_file(cmake/SpparksConfig.cmake.in SpparksConfig.cmake @ONLY)
+    
+    install(EXPORT SpparksTargets
+        FILE SpparksTargets.cmake
+        NAMESPACE Spparks::
+        DESTINATION lib/cmake/spparks
+    )
+    
+    install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/SpparksConfig.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/SpparksConfigVersion.cmake"
+        DESTINATION lib/cmake/spparks
+    )
+endif()
+
+# Testing support
+enable_testing()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
+    add_subdirectory(tests)
+endif()
+
+# Print configuration summary
+message(STATUS "=== SPPARKS Configuration Summary ===")
+message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "Build executable: ${SPPARKS_BUILD_EXECUTABLE}")
+message(STATUS "Build library: ${SPPARKS_BUILD_LIB}")
+message(STATUS "MPI support: ${SPPARKS_ENABLE_MPI}")
+message(STATUS "GZIP support: ${SPPARKS_ENABLE_GZIP}")
+message(STATUS "JPEG support: ${SPPARKS_ENABLE_JPEG}")
+message(STATUS "PNG support: ${SPPARKS_ENABLE_PNG}")
+message(STATUS "HDF5 support: ${SPPARKS_ENABLE_HDF5}")
+if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
+    message(STATUS "HDF5 version: ${HDF5_VERSION}")
+    message(STATUS "HDF5 is parallel: ${HDF5_IS_PARALLEL}")
+endif()
+if(SPPARKS_SMALLSMALL)
+    message(STATUS "Integer types: 32-bit (SMALLSMALL)")
+elseif(SPPARKS_BIGBIG)
+    message(STATUS "Integer types: 64-bit tagint/bigint (BIGBIG)")
+else()
+    message(STATUS "Integer types: 64-bit bigint (SMALLBIG)")
+endif()
+message(STATUS "=====================================")

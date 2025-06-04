@@ -146,7 +146,7 @@ void DiagErbium::compute()
 void DiagErbium::stats(char *str)
 {
   for (int i = 0; i < nlist; i++) {
-    sprintf(str," %d",ivector[i]);
+    snprintf(str, 512, " %d",ivector[i]);
     str += strlen(str);
   }
 }
@@ -156,7 +156,7 @@ void DiagErbium::stats(char *str)
 void DiagErbium::stats_header(char *str)
 {
   for (int i = 0; i < nlist; i++) {
-    sprintf(str," %s",list[i]);
+    snprintf(str, 512, " %s",list[i]);
     str += strlen(str);
   }
 }

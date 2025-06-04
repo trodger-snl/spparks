@@ -791,13 +791,13 @@ void AppOffLattice::stats(char *strtmp)
   MPI_Allreduce(&naccept,&naccept_all,1,MPI_SPK_BIGINT,MPI_SUM,world);
 
   if (solve) {
-    sprintf(format,"%%10g %%10%s %%10d %%10d",&big[1]);
-    sprintf(strtmp,format,time,naccept_all,0,0);
+    snprintf(format, 64, "%%10g %%10%s %%10d %%10d",&big[1]);
+    snprintf(strtmp, 256, format,time,naccept_all,0,0);
   } else {
     bigint nattempt_all;
     MPI_Allreduce(&nattempt,&nattempt_all,1,MPI_SPK_BIGINT,MPI_SUM,world);
-    sprintf(format,"%%10g %%10%s %%10%s %%10d",&big[1],&big[1]);
-    sprintf(strtmp,format,time,naccept_all,nattempt_all-naccept_all,nsweeps);
+    snprintf(format, 64, "%%10g %%10%s %%10%s %%10d",&big[1],&big[1]);
+    snprintf(strtmp, 256, format,time,naccept_all,nattempt_all-naccept_all,nsweeps);
   }
 }
 
@@ -807,7 +807,7 @@ void AppOffLattice::stats(char *strtmp)
 
 void AppOffLattice::stats_header(char *strtmp)
 {
-  sprintf(strtmp,"%10s %10s %10s %10s","Time","Naccept","Nreject","Nsweeps");
+  snprintf(strtmp, 256, "%10s %10s %10s %10s","Time","Naccept","Nreject","Nsweeps");
 }
 
 /* ----------------------------------------------------------------------

@@ -106,16 +106,16 @@ void DiagSinterFreeEnergyPore::compute()
 
 void DiagSinterFreeEnergyPore::stats(char *strtmp)
 {
-//  sprintf(strtmp," %10.6lf %10g",density,interfacialFE);
-  sprintf(strtmp," %10.6lf", interfacialFE);
+//  snprintf(strtmp, 256, " %10.6lf %10g",density,interfacialFE);
+  snprintf(strtmp, 256, " %10.6lf", interfacialFE);
 }
 
 /* ---------------------------------------------------------------------- */
 
 void DiagSinterFreeEnergyPore::stats_header(char *strtmp)
 {
-//  sprintf(strtmp," %10s %10s","Density", "InterfFE");
-  sprintf(strtmp," %10s", "FE_psite");
+//  snprintf(strtmp, 256, " %10s %10s","Density", "InterfFE");
+  snprintf(strtmp, 256, " %10s", "FE_psite");
 }
 
 /* ---------------------------------------------------------------------- */

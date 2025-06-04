@@ -335,7 +335,7 @@ char *Variable::retrieve(char *name)
     str = data[ivar][index[ivar]];
   } else if (style[ivar] == LOOP || style[ivar] == ULOOP) {
     char *value = new char[16];
-    sprintf(value,"%d",index[ivar]+1);
+    snprintf(value, 128, "%d",index[ivar]+1);
     int n = strlen(value) + 1;
     if (data[ivar][0]) delete [] data[ivar][0];
     data[ivar][0] = new char[n];
@@ -345,7 +345,7 @@ char *Variable::retrieve(char *name)
   } else if (style[ivar] == EQUAL) {
     char result[32];
     double answer = evaluate(data[ivar][0]);
-    sprintf(result,"%.10g",answer);
+    snprintf(result, 32, "%.10g",answer);
     int n = strlen(result) + 1;
     if (data[ivar][1]) delete [] data[ivar][1];
     data[ivar][1] = new char[n];

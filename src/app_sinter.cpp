@@ -2508,7 +2508,7 @@ void AppSinter::consolidate_mass_center_distributed_grains( vector<int> & spins,
 
 void AppSinter::stats_header(char *strtmp)
 {
-  sprintf(strtmp,"%10s %12s %14s %10s %12s","Time","Naccept","Nreject","Nsweeps", "Vmade");
+  snprintf(strtmp, 256, "%10s %12s %14s %10s %12s","Time","Naccept","Nreject","Nsweeps", "Vmade");
 }
 
 
@@ -2527,12 +2527,12 @@ void AppSinter::stats(char *strtmp)
   MPI_Allreduce(&naccept_double,&naccept_double_all,1,MPI_DOUBLE,MPI_SUM,world);	
   MPI_Allreduce(&vacm,&vm_all,1,MPI_DOUBLE,MPI_SUM,world);
   
-  if (solve) sprintf(strtmp,"%g %g %g %d %g",time,naccept_double_all,0.0,0,vm_all);
+  if (solve) snprintf(strtmp, 256, "%g %g %g %d %g",time,naccept_double_all,0.0,0,vm_all);
   else {
     double nattempt_double = (double) nattempt;
     double nattempt_double_all;
     MPI_Allreduce(&nattempt_double,&nattempt_double_all,1,MPI_DOUBLE,MPI_SUM,world);
-    sprintf(strtmp,"%g %g %g %d %g",
+    snprintf(strtmp, 256, "%g %g %g %d %g",
 	    time,naccept_double_all,nattempt_double_all-naccept_double_all,nsweeps,vm_all);
   }
 

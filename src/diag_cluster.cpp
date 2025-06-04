@@ -662,8 +662,8 @@ void DiagCluster::dump_clusters(double time)
       if (99 < lroot+lnum+lsuf)
 	error->one(FLERR,"Diag style cluster dump file name too long");
       strcpy(filetmp,opendxroot);
-      sprintf(filetmp+lroot,"%05d",opendxcount);
-      sprintf(filetmp+lroot+lnum,"%s",".dx");
+      snprintf(filetmp+lroot, 64, "%05d",opendxcount);
+      snprintf(filetmp+lroot+lnum, 64, "%s",".dx");
       if (me == 0) {
 	fpdump = fopen(filetmp,"w");
 	if (!fpdump) error->one(FLERR,"Cannot open diag style cluster dump file");
@@ -809,13 +809,13 @@ void DiagCluster::free_clustlist()
 
 void DiagCluster::stats(char *strtmp)
 {
-  sprintf(strtmp," %10d %10g %10g",ncluster_reduced,vav,rav);
+  snprintf(strtmp, 256, " %10d %10g %10g",ncluster_reduced,vav,rav);
 }
 
 /* ---------------------------------------------------------------------- */
 
 void DiagCluster::stats_header(char *strtmp)
 {
-  sprintf(strtmp," %10s %10s %10s","Nclust","<N>","<R>");
+  snprintf(strtmp, 256, " %10s %10s %10s","Nclust","<N>","<R>");
 }
 

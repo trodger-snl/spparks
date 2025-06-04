@@ -227,11 +227,11 @@ void AppTestGroup::iterate()
 void AppTestGroup::stats(char *strtmp)
 {
   char *strpnt = strtmp;
-  sprintf(strpnt," %10g %10d",time,ncount);
+  snprintf(strpnt, 256, " %10g %10d", time, ncount);
   strpnt += strlen(strpnt);
 
   for (int m = 0; m < nevents; m++) {
-    sprintf(strpnt," %d",count[m]);
+    snprintf(strpnt, 32, " %d", count[m]);
     strpnt += strlen(strpnt);
   }
 }
@@ -242,7 +242,7 @@ void AppTestGroup::stats(char *strtmp)
 
 void AppTestGroup::stats_header(char *strtmp)
 {
-  sprintf(strtmp," %10s %10s %s","Time","Step","Reaction-Counts");
+  snprintf(strtmp, 256, " %10s %10s %s", "Time", "Step", "Reaction-Counts");
 }
 
 /* ----------------------------------------------------------------------

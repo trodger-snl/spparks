@@ -207,7 +207,7 @@ void DiagArray::compute()
 void DiagArray::stats(char *strtmp)
 {
   for (int i=0; i<nvals; i++) {
-    sprintf(strtmp," %10g",vals[i]);
+    snprintf(strtmp, 256, " %10g",vals[i]);
     strtmp += strlen(strtmp);
   }
 }
@@ -221,22 +221,22 @@ void DiagArray::stats_header(char *strtmp)
   for (int i=0; i<nvals; i++) {
     
     if (diag_method[i]==MEAN)
-      sprintf(strword,"%s","mean");
+      snprintf(strword, 8, "%s","mean");
     else if (diag_method[i]==SUM)
-      sprintf(strword,"%s","sum");
+      snprintf(strword, 8, "%s","sum");
     else if (diag_method[i]==MIN)
-      sprintf(strword,"%s","min");
+      snprintf(strword, 8, "%s","min");
     else if (diag_method[i]==MAX)
-      sprintf(strword,"%s","max");
+      snprintf(strword, 8, "%s","max");
     
     // shift index back to 1-based array
 
     if (index_double[i]) 
-      sprintf(strfinal,"%s(d%d)",strword,index[i]+1);
+      snprintf(strfinal, 32, "%s(d%d)",strword,index[i]+1);
     else
-      sprintf(strfinal,"%s(i%d)",strword,index[i]+1);
+      snprintf(strfinal, 32, "%s(i%d)",strword,index[i]+1);
     
-    sprintf(strtmp," %10s",strfinal);
+    snprintf(strtmp, 256, " %10s",strfinal);
     strtmp += strlen(strtmp);
   }
 }

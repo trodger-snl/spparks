@@ -88,7 +88,7 @@ Dump::Dump(SPPARKS *spk, int narg, char **arg) : Pointers(spk)
     MPI_Comm_split(world,me,0,&clustercomm);
     multiname = new char[strlen(filename) + 16];
     *ptr = '\0';
-    sprintf(multiname,"%s%d%s",filename,me,ptr+1);
+    snprintf(multiname, 256, "%s%d%s",filename,me,ptr+1);
     *ptr = '%';
   }
 
@@ -371,12 +371,12 @@ void Dump::openfile()
     char *ptr = strchr(filestar,'*');
     *ptr = '\0';
     if (padflag == 0)
-      sprintf(filecurrent,"%s%d%s",filestar,idump,ptr+1);
+      snprintf(filecurrent, 256, "%s%d%s",filestar,idump,ptr+1);
     else {
       char bif[8],pad[16];
       strcpy(bif,"%d");
-      sprintf(pad,"%%s%%0%d%s%%s",padflag,&bif[1]);
-      sprintf(filecurrent,pad,filestar,idump,ptr+1);
+      snprintf(pad, 16, "%%s%%0%d%s%%s",padflag,&bif[1]);
+      snprintf(filecurrent, 256, pad,filestar,idump,ptr+1);
     }
     *ptr = '*';
   }
@@ -387,7 +387,7 @@ void Dump::openfile()
     if (compressed) {
 #ifdef SPPARKS_GZIP
       char gzip[128];
-      sprintf(gzip,"gzip -6 > %s",filecurrent);
+      snprintf(gzip, 128, "gzip -6 > %s",filecurrent);
 #ifdef _WIN32
       fp = _popen(gzip,"wb");
 #else
@@ -678,7 +678,7 @@ void Dump::modify_params(int narg, char **arg)
       multiname = new char[strlen(filename) + 16];
       char *ptr = strchr(filename,'%');
       *ptr = '\0';
-      sprintf(multiname,"%s%d%s",filename,icluster,ptr+1);
+      snprintf(multiname, 256, "%s%d%s",filename,icluster,ptr+1);
       *ptr = '%';
       iarg += 2;
 
@@ -740,7 +740,7 @@ void Dump::modify_params(int narg, char **arg)
       multiname = new char[strlen(filename) + 16];
       char *ptr = strchr(filename,'%');
       *ptr = '\0';
-      sprintf(multiname,"%s%d%s",filename,icluster,ptr+1);
+      snprintf(multiname, 256, "%s%d%s",filename,icluster,ptr+1);
       *ptr = '%';
       iarg += 2;
 

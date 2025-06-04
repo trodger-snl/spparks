@@ -348,10 +348,10 @@ void Output::stats(int timeflag)
   strpnt += strlen(strpnt);
 
   if (timeflag) {
-    sprintf(strpnt," %10.3g",timer->elapsed(TIME_LOOP));
+    snprintf(strpnt, 128, " %10.3g",timer->elapsed(TIME_LOOP));
     strpnt += strlen(strpnt);
   } else {
-    sprintf(strpnt," %10.3g",0.0);
+    snprintf(strpnt, 128, " %10.3g",0.0);
     strpnt += strlen(strpnt);
   }
 
@@ -383,7 +383,7 @@ void Output::stats_header()
   app->stats_header(strpnt);
   strpnt += strlen(strpnt);
 
-  sprintf(strpnt," %10s","CPU");
+  snprintf(strpnt, 128, " %10s","CPU");
   strpnt += strlen(strpnt);
 
   for (int i = 0; i < ndiag; i++)

@@ -58,12 +58,12 @@ void DiagPropensity::compute()
 
 void DiagPropensity::stats(char *strtmp)
 {
-  sprintf(strtmp," %10g",propensity);
+  snprintf(strtmp, 256, " %10g",propensity);
 }
 
 /* ---------------------------------------------------------------------- */
 
 void DiagPropensity::stats_header(char *strtmp)
 {
-  sprintf(strtmp," %10s","Propnsty");
+  snprintf(strtmp, 256, " %10s","Propnsty");
 }

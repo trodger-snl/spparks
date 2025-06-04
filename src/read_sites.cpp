@@ -144,7 +144,7 @@ void ReadSites::command(int narg, char **arg)
 
     } else {
       char str[128];
-      sprintf(str,"Unknown identifier in data file: %s",keyword);
+      snprintf(str, 128, "Unknown identifier in data file: %s",keyword);
       error->all(FLERR,str);
     }
 
@@ -304,7 +304,7 @@ void ReadSites::header()
     if (strcmp(keyword,section_keywords[n]) == 0) break;
   if (n == NSECTIONS) {
     char str[128];
-    sprintf(str,"Unknown identifier in data file: %s",keyword);
+    snprintf(str, 128, "Unknown identifier in data file: %s",keyword);
     error->all(FLERR,str);
   }
 }
@@ -650,7 +650,7 @@ void ReadSites::open(char *file)
   else {
 #ifdef SPPARKS_GZIP
     char gunzip[128];
-    sprintf(gunzip,"gunzip -c %s",file);
+    snprintf(gunzip, 128, "gunzip -c %s",file);
     fp = popen(gunzip,"r");
 #else
     error->one(FLERR,"Cannot open gzipped file");
@@ -659,7 +659,7 @@ void ReadSites::open(char *file)
 
   if (fp == NULL) {
     char str[128];
-    sprintf(str,"Cannot open file %s",file);
+    snprintf(str, 128, "Cannot open file %s",file);
     error->one(FLERR,str);
   }
 }

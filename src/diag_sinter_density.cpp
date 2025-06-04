@@ -101,14 +101,14 @@ void DiagSinterDensity::compute()
 
 void DiagSinterDensity::stats(char *strtmp)
 {
-  sprintf(strtmp," %10.6lf",density);
+  snprintf(strtmp, 256, " %10.6lf",density);
 }
 
 /* ---------------------------------------------------------------------- */
 
 void DiagSinterDensity::stats_header(char *strtmp)
 {
-  sprintf(strtmp," %10s","Density");
+  snprintf(strtmp, 256, " %10s","Density");
 }
 
 /* ---------------------------------------------------------------------- */

@@ -205,11 +205,11 @@ void AppChemistry::iterate()
 void AppChemistry::stats(char *strtmp)
 {
   char *strpnt = strtmp;
-  sprintf(strpnt," %10g %10d",time,nevents);
+  snprintf(strpnt, 128, " %10g %10d",time,nevents);
   strpnt += strlen(strpnt);
 
   for (int m = 0; m < nspecies; m++) {
-    sprintf(strpnt," %d",pcount[m]);
+    snprintf(strpnt, 128, " %d",pcount[m]);
     strpnt += strlen(strpnt);
   }
 }
@@ -221,11 +221,11 @@ void AppChemistry::stats(char *strtmp)
 void AppChemistry::stats_header(char *strtmp)
 {
   char *strpnt = strtmp;
-  sprintf(strpnt," %10s %10s","Time","Step");
+  snprintf(strpnt, 128, " %10s %10s","Time","Step");
   strpnt += strlen(strpnt);
 
   for (int m = 0; m < nspecies; m++) {
-    sprintf(strpnt," %s",sname[m]);
+    snprintf(strpnt, 128, " %s",sname[m]);
     strpnt += strlen(strpnt);
   }
 }
@@ -239,7 +239,7 @@ void AppChemistry::set_count(int narg, char **arg)
   int ispecies = find_species(arg[0]);
   if (ispecies < 0) {
     char *str = new char[128];
-    sprintf(str,"Species ID %s does not exist",arg[0]);
+    snprintf(str, 512, "Species ID %s does not exist",arg[0]);
     error->all(FLERR,str);
   }
   pcount[ispecies] = atoi(arg[1]);
@@ -255,7 +255,7 @@ void AppChemistry::add_reaction(int narg, char **arg)
 
   if (find_reaction(arg[0]) >= 0) {
     char *str = new char[128];
-    sprintf(str,"Reaction ID %s already exists",arg[0]);
+    snprintf(str, 512, "Reaction ID %s already exists",arg[0]);
     error->all(FLERR,str);
   }
 
@@ -333,7 +333,7 @@ void AppChemistry::add_species(int narg, char **arg)
   for (int iarg = 0; iarg < narg; iarg++) {
     if (find_species(arg[iarg]) >= 0) {
       char *str = new char[128];
-      sprintf(str,"Species ID %s already exists",arg[iarg]);
+      snprintf(str, 512, "Species ID %s already exists",arg[iarg]);
       error->all(FLERR,str);
     }
     int nlen = strlen(arg[iarg]) + 1;

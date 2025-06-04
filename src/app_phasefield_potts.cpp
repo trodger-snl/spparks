@@ -513,8 +513,7 @@ void AppPhaseFieldPotts::app_update(double stoptime)
 
     if (localtime > (stoptime + 1e-6)) {
       char errorstr[80];
-      sprintf(errorstr,
-              "PF step time (%f) in excess of Potts step time (%f)",
+      snprintf(errorstr, 80, "PF step time (%f) in excess of Potts step time (%f)",
               stoptime,localtime);
       error->all(FLERR,errorstr);
     }
@@ -648,27 +647,27 @@ void AppPhaseFieldPotts::print_connectivity_map()
   strptr=str;
 
   if (dimension==1)
-    sprintf(strptr,"  +/-     x\n");
+    snprintf(strptr, 256, "  +/-     x\n");
   else if (dimension==2)
-    sprintf(strptr,"  +/-     x     y\n");
+    snprintf(strptr, 256, "  +/-     x     y\n");
   else
-    sprintf(strptr,"  +/-     x     y     z\n");
+    snprintf(strptr, 256, "  +/-     x     y     z\n");
   strptr += strlen(strptr);
 
   // cycle through the appropriate dimensions
 
   for (j=0; j<2; j++) {
     if (j==0)
-      sprintf(strptr,"    -");
+      snprintf(strptr, 256, "    -");
     else
-      sprintf(strptr,"    +");
+      snprintf(strptr, 256, "    +");
     strptr += strlen(strptr);
     
     for (i=0; i<dimension; i++) {
-      sprintf(strptr," %5d",cmap[2*i+j]);
+      snprintf(strptr, 256, " %5d",cmap[2*i+j]);
       strptr += strlen(strptr);
     }
-    sprintf(strptr,"\n");
+    snprintf(strptr, 256, "\n");
     strptr += strlen(strptr);
   }
     

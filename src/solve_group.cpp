@@ -87,9 +87,9 @@ SolveGroup *SolveGroup::clone()
   arg[3] = (char *) "ngroup";
   arg[4] = new char[16];
 
-  sprintf(arg[1],"%g",hi);
-  sprintf(arg[2],"%g",lo);
-  sprintf(arg[4],"%d",ngroups);
+  snprintf(arg[1], 64, "%g",hi);
+  snprintf(arg[2], 64, "%g",lo);
+  snprintf(arg[4], 64, "%d",ngroups);
 
   SolveGroup *ptr = new SolveGroup(spk,narg,arg);
 
@@ -243,10 +243,10 @@ void SolveGroup::round_check()
   MPI_Comm_rank(world,&me);
   if ((nlo || nhi) && me == 0) {
     char str[128];
-    sprintf(str,"%d propensities were reset to lo value, max lo = %g",
+    snprintf(str, 128, "%d propensities were reset to lo value, max lo = %g",
 	    nlo,lomaxall);
     error->warning(FLERR,str);
-    sprintf(str,"%d propensities were reset to hi value, max hi = %g",
+    snprintf(str, 128, "%d propensities were reset to hi value, max hi = %g",
 	    nhi,himaxall);
     error->warning(FLERR,str);
   }

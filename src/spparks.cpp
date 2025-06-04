@@ -152,7 +152,7 @@ SPPARKS::SPPARKS(int narg, char **arg, MPI_Comm communicator)
       else infile = fopen(arg[inflag],"r");
       if (infile == NULL) {
 	char str[128];
-	sprintf(str,"Cannot open input script %s",arg[inflag]);
+	snprintf(str, 128, "Cannot open input script %s",arg[inflag]);
 	error->one(FLERR,str);
       }
     }
@@ -175,14 +175,14 @@ SPPARKS::SPPARKS(int narg, char **arg, MPI_Comm communicator)
     if (me == 0) {
       if (screenflag == 0) {
 	char str[32];
-	sprintf(str,"screen.%d",universe->iworld);
+	snprintf(str, 32, "screen.%d",universe->iworld);
 	screen = fopen(str,"w");
 	if (screen == NULL) error->one(FLERR,"Cannot open screen file");
       } else if (strcmp(arg[screenflag],"none") == 0)
 	screen = NULL;
       else {
 	char str[128];
-	sprintf(str,"%s.%d",arg[screenflag],universe->iworld);
+	snprintf(str, 128, "%s.%d",arg[screenflag],universe->iworld);
 	screen = fopen(str,"w");
 	if (screen == NULL) error->one(FLERR,"Cannot open screen file");
       }
@@ -191,14 +191,14 @@ SPPARKS::SPPARKS(int narg, char **arg, MPI_Comm communicator)
     if (me == 0) {
       if (logflag == 0) {
 	char str[32];
-	sprintf(str,"log.spparks.%d",universe->iworld);
+	snprintf(str, 32, "log.spparks.%d",universe->iworld);
 	logfile = fopen(str,"w");
 	if (logfile == NULL) error->one(FLERR,"Cannot open logfile");
       } else if (strcmp(arg[logflag],"none") == 0)
 	logfile = NULL;
       else {
 	char str[128];
-	sprintf(str,"%s.%d",arg[logflag],universe->iworld);
+	snprintf(str, 128, "%s.%d",arg[logflag],universe->iworld);
 	logfile = fopen(str,"w");
 	if (logfile == NULL) error->one(FLERR,"Cannot open logfile");
       }
@@ -208,7 +208,7 @@ SPPARKS::SPPARKS(int narg, char **arg, MPI_Comm communicator)
       infile = fopen(arg[inflag],"r");
       if (infile == NULL) {
 	char str[128];
-	sprintf(str,"Cannot open input script %s",arg[inflag]);
+	snprintf(str, 128, "Cannot open input script %s",arg[inflag]);
 	error->one(FLERR,str);
       }
     } else infile = NULL;

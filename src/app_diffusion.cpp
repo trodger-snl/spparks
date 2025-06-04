@@ -148,7 +148,7 @@ void AppDiffusion::input_app(char *command, int narg, char **arg)
 {
   if (sites_exist == 0) {
     char str[128];
-    sprintf(str,"Cannot use %s command until sites exist",command);
+    snprintf(str, 128, "Cannot use %s command until sites exist",command);
     error->all(FLERR,str);
   }
 

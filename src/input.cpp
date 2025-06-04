@@ -159,7 +159,7 @@ void Input::file()
 
     if (n == MAXLINE) {
       char str[MAXLINE+32];
-      sprintf(str,"Input line too long: %s",line);
+      snprintf(str, 128, "Input line too long: %s",line);
       error->all(FLERR,str);
     }
 
@@ -184,7 +184,7 @@ void Input::file()
 
     if (execute_command()) {
       char str[MAXLINE];
-      sprintf(str,"Unknown command: %s",line);
+      snprintf(str, 128, "Unknown command: %s",line);
       error->all(FLERR,str);
     }
   }
@@ -207,7 +207,7 @@ void Input::file(const char *filename)
     infile = fopen(filename,"r");
     if (infile == NULL) {
       char str[128];
-      sprintf(str,"Cannot open input script %s",filename);
+      snprintf(str, 128, "Cannot open input script %s",filename);
       error->one(FLERR,str);
     }
     infiles[0] = infile;
@@ -246,7 +246,7 @@ char *Input::one(const char *single)
 
   if (execute_command()) {
     char str[MAXLINE];
-    sprintf(str,"Unknown command: %s",line);
+    snprintf(str, 128, "Unknown command: %s",line);
     error->all(FLERR,str);
   }
 
@@ -531,7 +531,7 @@ void Input::include()
     infile = fopen(arg[0],"r");
     if (infile == NULL) {
       char str[128];
-      sprintf(str,"Cannot open input script %s",arg[0]);
+      snprintf(str, 128, "Cannot open input script %s",arg[0]);
       error->one(FLERR,str);
     }
     infiles[nfile++] = infile;
@@ -554,7 +554,7 @@ void Input::jump()
     infile = fopen(arg[0],"r");
     if (infile == NULL) {
       char str[128];
-      sprintf(str,"Cannot open input script %s",arg[0]);
+      snprintf(str, 128, "Cannot open input script %s",arg[0]);
       error->one(FLERR,str);
     }
     infiles[nfile-1] = infile;
@@ -590,7 +590,7 @@ void Input::log()
       logfile = fopen(arg[0],"w");
       if (logfile == NULL) {
 	char str[128];
-	sprintf(str,"Cannot open logfile %s",arg[0]);
+	snprintf(str, 128, "Cannot open logfile %s",arg[0]);
 	error->one(FLERR,str);
       }
       fprintf(logfile,

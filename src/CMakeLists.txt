@@ -16,6 +16,31 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
+# Automatic CPU detection and parallel build optimization
+include(ProcessorCount)
+ProcessorCount(N)
+if(NOT N EQUAL 0)
+    # On Apple Silicon, use all available cores for compilation
+    if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+        message(STATUS "Apple Silicon detected: Using all ${N} cores for parallel compilation")
+        set(CMAKE_BUILD_PARALLEL_LEVEL ${N} CACHE STRING "Number of parallel jobs")
+        # Set make flags for parallel builds
+        set(CMAKE_MAKE_PROGRAM_ARGS "-j${N}" CACHE STRING "Make parallel arguments")
+    else()
+        # For other systems, use most cores but leave one free
+        math(EXPR PARALLEL_JOBS "${N} - 1")
+        if(PARALLEL_JOBS LESS 1)
+            set(PARALLEL_JOBS 1)
+        endif()
+        message(STATUS "Using ${PARALLEL_JOBS} of ${N} available cores for parallel compilation")
+        set(CMAKE_BUILD_PARALLEL_LEVEL ${PARALLEL_JOBS} CACHE STRING "Number of parallel jobs")
+        set(CMAKE_MAKE_PROGRAM_ARGS "-j${PARALLEL_JOBS}" CACHE STRING "Make parallel arguments")
+    endif()
+else()
+    message(WARNING "Could not detect CPU count, using single-threaded build")
+    set(CMAKE_BUILD_PARALLEL_LEVEL 1 CACHE STRING "Number of parallel jobs")
+endif()
+
 # Build options
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 option(SPPARKS_BUILD_EXECUTABLE "Build spparks executable" ON)

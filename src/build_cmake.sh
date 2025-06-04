@@ -18,6 +18,7 @@ ENABLE_HDF5="AUTO"
 ENABLE_JPEG="AUTO"
 CLEAN=false
 VERBOSE=false
+PARALLEL_JOBS="AUTO"
 
 # Function to show usage
 show_usage() {
@@ -40,6 +41,7 @@ Options:
     --shared                    Build shared libraries
     --lib                       Build as library only
     --package PKG               Enable package (can be used multiple times)
+    -j, --jobs N                Number of parallel build jobs (default: auto-detect)
     --clean                     Clean build directory before building
     -v, --verbose               Verbose output
     -h, --help                  Show this help
@@ -57,8 +59,8 @@ Machine configurations:
 Examples:
     $0 -m mac                           # Build for macOS (auto-enables JPEG if found)
     $0 -m mpi --package stitch          # Build with MPI and STITCH package
-    $0 -m mac_arm --hdf5                # Build for Apple Silicon with HDF5+JPEG
-    $0 --no-jpeg                        # Build without JPEG support
+    $0 -m mac_arm --hdf5                # Build for Apple Silicon with HDF5+JPEG (auto-detects all cores)
+    $0 --no-jpeg -j 8                  # Build without JPEG using 8 parallel jobs
     $0 --lib --shared                   # Build shared library
     $0 --clean -b Debug                 # Clean build in debug mode
 
@@ -118,6 +120,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --package)
             ENABLE_PACKAGES="$ENABLE_PACKAGES $2"
+            shift 2
+            ;;
+        -j|--jobs)
+            PARALLEL_JOBS="$2"
             shift 2
             ;;
         --clean)
@@ -204,9 +210,37 @@ cmake "${CMAKE_ARGS[@]}" "$SOURCE_DIR"
 # Build
 echo ""
 echo "Building SPPARKS..."
-MAKE_ARGS=()
+
+# Determine number of parallel build jobs
+if [ "$PARALLEL_JOBS" = "AUTO" ]; then
+    # Auto-detect CPU cores for parallel build
+    if command -v nproc >/dev/null 2>&1; then
+        # Linux
+        CORES=$(nproc)
+    elif command -v sysctl >/dev/null 2>&1; then
+        # macOS
+        CORES=$(sysctl -n hw.ncpu)
+    else
+        # Fallback
+        CORES=4
+    fi
+    
+    # On Apple Silicon, use all cores; otherwise leave one free
+    if [[ "$OSTYPE" == "darwin"* ]] && [[ "$(uname -m)" == "arm64" ]]; then
+        BUILD_JOBS=$CORES
+        echo "Apple Silicon detected: Using all $CORES cores for parallel build"
+    else
+        BUILD_JOBS=$((CORES > 1 ? CORES - 1 : 1))
+        echo "Using $BUILD_JOBS of $CORES available cores for parallel build"
+    fi
+else
+    BUILD_JOBS=$PARALLEL_JOBS
+    echo "Using manually specified $BUILD_JOBS parallel build jobs"
+fi
+
+MAKE_ARGS=("-j$BUILD_JOBS")
 if [ "$VERBOSE" = true ]; then
-    MAKE_ARGS+=("VERBOSE=1")
+    MAKE_ARGS+=("--verbose")
 fi
 
 cmake --build . "${MAKE_ARGS[@]}"

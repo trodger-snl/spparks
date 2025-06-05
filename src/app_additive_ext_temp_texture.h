@@ -21,10 +21,12 @@ AppStyle(additive_temperature_texture,AppAdditiveExtTempTexture)
 
 #include "app_potts.h"
 #include "temperatureQueues.h"
+#include "hdf5.h"
 #include <stdlib.h>
 #include <string>
 #include <map>
 #include <vector>
+#include <cmath>
 
 namespace SPPARKS_NS {
 
@@ -46,6 +48,9 @@ class AppAdditiveExtTempTexture : public AppPotts {
   void vec2euler(int, double *);
   void euler_init();
   virtual void reduced_temperature_hdf();
+  virtual void reduced_temperature_hdf_chunked();
+  void load_data_counts_array();
+  int xyz_to_local( double x, double y, double z );
   virtual void temperature_time_interpolate(int, double);
 	std::vector<std::vector<std::vector<int>>> convertTo3DArrayWithRange(std::vector<int>&,int,int,int,int,int,int);
 
@@ -112,6 +117,27 @@ class AppAdditiveExtTempTexture : public AppPotts {
   DoubleQueueContainer time_in;
   double priorTime;
   int t_active;
+
+  //Variables for chunked HDF5 reading
+  hid_t hdf5_file_id;
+  hid_t hdf5_temp_dataset;
+  hid_t hdf5_time_dataset;
+  hid_t hdf5_count_dataset;
+  double chunk_time_window;
+  double current_chunk_start_time;
+  double current_chunk_end_time;
+  bool hdf5_file_open;
+  std::vector<std::vector<std::vector<int>>> data_counts_array;
+  
+  // Cache time ranges to avoid re-reading time data
+  std::vector<std::vector<std::vector<std::vector<double>>>> cached_time_values;
+  std::vector<std::vector<std::vector<bool>>> time_cache_loaded;
+  
+  void load_next_chunk();
+  void close_hdf5_file();
+  bool needs_new_chunk(double simulation_time);
+  void initialize_time_cache();
+  void fill_missing_temperature_data();
 
 };
 

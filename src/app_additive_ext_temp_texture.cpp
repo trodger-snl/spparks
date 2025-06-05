@@ -54,6 +54,7 @@
 #include <random>
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include "math.h"
 #include "math_const.h"
 #include "app_additive_ext_temp_texture.h"
@@ -201,6 +202,13 @@ void AppAdditiveExtTempTexture::app_update(double dt)
 
   //Reset t_active to assume we don't have a melt pool right now
   t_active = 0;
+  
+  //Check if we need to load next chunk
+  if (hdf5_file_open && needs_new_chunk(time)) {
+    current_chunk_start_time = current_chunk_end_time;
+    current_chunk_end_time += chunk_time_window;
+    load_next_chunk();
+  }
     //iterate through all the sets
     for (int i=0; i<nlocal; i++) {    
       
@@ -233,6 +241,7 @@ void AppAdditiveExtTempTexture::app_update(double dt)
               site_event_rejection(i, ranapp);
               SolidD[i]--;
       }
+      
     }
     
     //Communicate changes
@@ -244,11 +253,24 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     // Check if all processors have t_active = 0. If so, fast forward our simulation time.
     if (global_t_active == 0) {
         double min_time = time_in.findAndSyncSmallestFrontValue(MPI_COMM_WORLD);
-        if (domain->me == 0) std::cout << "Fast fowarding to " << min_time << std::endl;
-        //If min time is past stop time, update to it. Otherwise, fast forward to min_time.
-        //We might want to fast forward to min_time - dt instead...
-        if(min_time > stoptime) time = stoptime;
-        else time = min_time - dt;
+        
+        //If min time is valid (not DBL_MAX), fast forward. Otherwise continue normally.
+        if(min_time < std::numeric_limits<double>::max() && min_time > time) {
+            if (domain->me == 0) std::cout << "Fast fowarding to " << min_time << std::endl;
+            //If min time is past stop time, update to it. Otherwise, fast forward to min_time.
+            //We might want to fast forward to min_time - dt instead...
+            if(min_time > stoptime) time = stoptime;
+            else time = min_time - dt;
+        }
+        else if(min_time >= std::numeric_limits<double>::max()) {
+            // All queues are empty - try loading next chunk
+            if (hdf5_file_open) {
+                current_chunk_start_time = current_chunk_end_time;
+                current_chunk_end_time += chunk_time_window;
+                if (domain->me == 0) std::cout << "Loading next chunk [" << current_chunk_start_time << ", " << current_chunk_end_time << ") due to empty queues" << std::endl;
+                load_next_chunk();
+            }
+        }
     }
 }
 
@@ -268,9 +290,22 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
 
   if (domain->me == 0) std::cout << "File path: " << temp_file_str << std::endl;
 
-  // Create a vector to hold the data counts
-  //We should be able to break this up the same way for MPI as the temperature data.
-  std::vector<int> data_counts(nlocal);
+  // Calculate the size using correct integer bounds  
+  int xlo = (int)domain->subxlo;
+  int xhi = (int)ceil(domain->subxhi);
+  int ylo = (int)domain->subylo;
+  int yhi = (int)ceil(domain->subyhi);
+  int zlo = (int)domain->subzlo;
+  int zhi = (int)ceil(domain->subzhi);
+  
+  int subdomain_x_size = xhi - xlo;
+  int subdomain_y_size = yhi - ylo;
+  int subdomain_z_size = zhi - zlo;
+  int hyperslab_size = subdomain_x_size * subdomain_y_size * subdomain_z_size;
+  
+  // Create a vector to hold the data counts with the correct hyperslab size
+  std::vector<int> data_counts(hyperslab_size);
+  
 
   // Open the HDF5 file in parallel mode
   hid_t plist_id = H5Pcreate(H5P_DATASET_XFER);
@@ -288,14 +323,12 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
   //Figure out which 
 
 
-  // Define the hyperslab for data_counts
-  hsize_t start_counts[3] = { (hsize_t)domain->subxlo, (hsize_t)domain->subylo, (hsize_t)domain->subzlo};
-  hsize_t count_counts[3] = { (hsize_t)(domain->subxhi - domain->subxlo), (hsize_t)(domain->subyhi - domain->subylo), (hsize_t)(domain->subzhi - domain->subzlo) };
+  // Define the hyperslab for data_counts using correct integer bounds
+  hsize_t start_counts[3] = { (hsize_t)xlo, (hsize_t)ylo, (hsize_t)zlo};
+  hsize_t count_counts[3] = { (hsize_t)subdomain_x_size, (hsize_t)subdomain_y_size, (hsize_t)subdomain_z_size };
+  
 
-  //std::cout << "Subdomain dimensions x " << domain->subxhi << " y " << domain->subyhi << " z " << domain->subzlo << std::endl;
 
-  // std::cout << "Hyperslab start: " << start_counts[0] << ", " << start_counts[1] << ", " << start_counts[2] << std::endl;
-  // std::cout << "Hyperslab count: " << count_counts[0] << ", " << count_counts[1] << ", " << count_counts[2]  << std::endl;
 
   //Create memory space
   hid_t memspace_count_id = H5Screate_simple(3, count_counts, NULL);
@@ -312,8 +345,14 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
   H5Sclose(filespace_id);
   H5Dclose(dataset_counts_id);
 
-  //convert 1D data to 3d array
-  auto data_counts_array = convertTo3DArrayWithRange(data_counts,(int)domain->subxlo,(int)domain->subxhi,(int)domain->subylo,(int)domain->subyhi,(int)domain->subzlo,(int)domain->subzhi);
+  //convert 1D data to 3d array using correct integer bounds
+  int bounds_xlo = (int)domain->subxlo;
+  int bounds_xhi = (int)ceil(domain->subxhi);
+  int bounds_ylo = (int)domain->subylo;
+  int bounds_yhi = (int)ceil(domain->subyhi);
+  int bounds_zlo = (int)domain->subzlo;
+  int bounds_zhi = (int)ceil(domain->subzhi);
+  auto data_counts_array = convertTo3DArrayWithRange(data_counts, bounds_xlo, bounds_xhi, bounds_ylo, bounds_yhi, bounds_zlo, bounds_zhi);
   if (domain->me == 0) std::cout << "Read in the data_count values" << std::endl;
 
   // Open the temperature and time datasets
@@ -408,7 +447,6 @@ void AppAdditiveExtTempTexture::temperature_time_interpolate(int site, double pr
   int y_loc = xyz[site][1] - (int)domain->subylo;
   int z_loc = xyz[site][2] - (int)domain->subzlo;
 
-  //std::cout << " x_loc " << x_loc << " y_loc " <<y_loc << " z_loc " << z_loc <<  std::endl;
 
   //If we're out of entires, set to room temperature.
   if (time_in(x_loc,y_loc,z_loc).empty()){ 
@@ -421,7 +459,6 @@ void AppAdditiveExtTempTexture::temperature_time_interpolate(int site, double pr
     return;
   }
 
-//  std::cout << " x_loc " << x_loc << " y_loc " <<y_loc << " z_loc " << z_loc <<  " time front " << time_in(x_loc,y_loc,z_loc).front() << std::endl;
   //If we've stepped past the current time, update the stored values
   if(time >= time_in(x_loc,y_loc,z_loc).front()) {
     priorTime = time_in(x_loc,y_loc,z_loc).front();
@@ -439,7 +476,7 @@ void AppAdditiveExtTempTexture::temperature_time_interpolate(int site, double pr
   }
 
   //If we're inbetween melt cycles, set temp to room temp
-  if((priorTemp < Ts && temp_in(x_loc,y_loc,z_loc).front() > Tl) || ((time_in(x_loc,y_loc,z_loc)).front() - priorTime) > 1) {
+  if((priorTemp < Ts && temp_in(x_loc,y_loc,z_loc).front() < Ts)) {
     T[site] = T_room;
   }
 
@@ -535,8 +572,12 @@ void AppAdditiveExtTempTexture::init_app()
   RandomPark random(3000);
 
   //Allocate our temperature and time data structures
-  temp_in.initialize((int)(domain->subxhi - domain->subxlo),(int)(domain->subyhi - domain->subylo),(int)(domain->subzhi - domain->subzlo));
-  time_in.initialize((int)(domain->subxhi - domain->subxlo),(int)(domain->subyhi - domain->subylo),(int)(domain->subzhi - domain->subzlo));
+  // Use ceiling to match the sizing of data_counts_array
+  int x_size = (int)ceil(domain->subxhi) - (int)domain->subxlo;
+  int y_size = (int)ceil(domain->subyhi) - (int)domain->subylo;
+  int z_size = (int)ceil(domain->subzhi) - (int)domain->subzlo;
+  temp_in.initialize(x_size, y_size, z_size);
+  time_in.initialize(x_size, y_size, z_size);
 
   dt_sweep = dt;
   time_index = 0;
@@ -647,7 +688,19 @@ void AppAdditiveExtTempTexture::init_app()
 
   
   //Read in our temperature values -- for now we're doing this all at once but might need to do in chunks.
-  reduced_temperature_hdf();
+  //Initialize chunked reading variables
+  chunk_time_window = 0.1; // Default 100ms time window per chunk
+  current_chunk_start_time = 0.0;
+  current_chunk_end_time = 0.0;
+  hdf5_file_open = false;
+  
+  if (domain->me == 0) {
+    std::cout << "Starting chunked HDF5 reading" << std::endl;
+    std::cout << "Using liquidus temperature Tl = " << Tl << " K" << std::endl;
+    std::cout << "Using solidus temperature Ts = " << Ts << " K" << std::endl;
+  }
+  reduced_temperature_hdf_chunked();
+  if (domain->me == 0) std::cout << "Chunked HDF5 reading completed" << std::endl;
 
 	this->app_update(0.0);
 }
@@ -799,11 +852,9 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
   	double dotValue = 0;
     double Tcool = Tl - T[i];
     
-//     fprintf(screen,"Made it to mushy_phase %d\n", i);
     //Our site should always be molten and below Tl
     //Check if it's eligible to nucleate
     if(nucleationFlags[spin[i]]) {
-//       fprintf(screen,"Trying to nucleate %d\n",i);
         //Can and will nucleate
         if(Tcool >= nucleationTemps[spin[i]]){
             activeFlag[i] = 3;
@@ -811,7 +862,6 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
             //Neighboring sites will be flipped during the next iterate_rejection call
             SolidD[i] = -nrefine-2;
             //Call nucleation particle flipper
-//             fprintf(screen,"Nucleating\n");
             naccept++;
             nucleation_particle_flipper(i, round(nucleationSizes[spin[i]]/pow(dx,3)), ranapp);
             return;
@@ -867,7 +917,6 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
         }
     }
     else {
-//       fprintf(screen,"Trying to directionally solidify %d\n",i);
         //Add the distance of the front travel. This is for 304L I think...
         int power = solid_front_length -1;
         for(int k = 0; k < solid_front_length; k++) {
@@ -876,7 +925,6 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
         }
         //Go through neighbor list and add them to possible switches
         for (int j = 0; j < numneigh[i]; j++) {
-//             fprintf(screen,"calculating neighbor distance, nieghDist %f, solidD %e\n",neighDist[j], SolidD[i]);
             if(neighDist[j] <= SolidD[i] && (activeFlag[neighbor[i][j]] == 1 || activeFlag[neighbor[i][j]] == 3)) {
                 //Calculate temp gradient/grain misorientation and store in "unique" array
                 //We should make this cumulative, so we can use a random number to sample it
@@ -887,13 +935,11 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
                 value = spin[neighbor[i][j]];
                 unique[nevent] = value;
                 nevent++;										
-//                 fprintf(screen,"Adding events to list, %d\n", nevent);
             }
         }
         //If no neighbor is eligible, return before changing anything. Will try next sweep.
         if (nevent == 0) return;
         
-//         fprintf(screen,"Epitaxialy growing\n");
         //I think we should use nevent -1 (there will be an extra event at the end)
         double dran = (uniqueDot[nevent - 1]*random->uniform());
         //if (iran >= nevent) iran = nevent-1;
@@ -1370,7 +1416,6 @@ std::vector<std::vector<std::vector<int>>> AppAdditiveExtTempTexture::convertTo3
 
     // Ensure the input vector has the correct size
 
-    //std::cout << "sizes " << inputVector.size() << " and " << xSize * ySize * zSize << std::endl;
     if (inputVector.size() != xSize * ySize * zSize) {
         throw std::invalid_argument("Input vector size does not match the specified dimensions.");
     }
@@ -1393,3 +1438,501 @@ std::vector<std::vector<std::vector<int>>> AppAdditiveExtTempTexture::convertTo3
     }
     return outputArray;
 }
+
+void AppAdditiveExtTempTexture::reduced_temperature_hdf_chunked(){
+  
+  if (domain->me == 0) std::cout << "Starting chunked HDF5 reading from: " << temp_file_str << std::endl;
+  if (domain->me == 0) std::cout << "Opening HDF5 file..." << std::endl;
+  
+  //Initialize chunked reading - open HDF5 file and datasets for reuse
+  hid_t fapl_id = H5Pcreate(H5P_FILE_ACCESS);
+  H5Pset_fclose_degree(fapl_id, H5F_CLOSE_STRONG);
+  hdf5_file_id = H5Fopen(temp_file_str.c_str(), H5F_ACC_RDONLY, fapl_id);
+  H5Pclose(fapl_id);
+  
+  if (hdf5_file_id < 0) {
+    error->all(FLERR,"Cannot open HDF5 file for chunked reading");
+  }
+  
+  //Open datasets for reuse
+  hdf5_count_dataset = H5Dopen(hdf5_file_id, "data_counts", H5P_DEFAULT);
+  hdf5_temp_dataset = H5Dopen(hdf5_file_id, "temperature", H5P_DEFAULT);
+  hdf5_time_dataset = H5Dopen(hdf5_file_id, "time", H5P_DEFAULT);
+  hdf5_file_open = true;
+  
+  if (domain->me == 0) std::cout << "Loading data counts array..." << std::endl;
+  //Read data_counts array once (small and needed for all chunks)
+  load_data_counts_array();
+  if (domain->me == 0) std::cout << "Data counts loaded, initializing time cache..." << std::endl;
+  
+  //Initialize time cache for better performance
+  initialize_time_cache();
+  if (domain->me == 0) std::cout << "Time cache initialized, loading first chunk..." << std::endl;
+  
+  //Load the first chunk
+  current_chunk_start_time = 0.0;
+  current_chunk_end_time = chunk_time_window;
+  load_next_chunk();
+  if (domain->me == 0) std::cout << "First chunk loaded successfully" << std::endl;
+  
+  if (domain->me == 0) std::cout << "Initial chunk loaded: [" << current_chunk_start_time << ", " << current_chunk_end_time << ")" << std::endl;
+}
+
+
+void AppAdditiveExtTempTexture::load_data_counts_array(){
+  
+  // Calculate the size using correct integer bounds  
+  int xlo = (int)domain->subxlo;
+  int xhi = (int)ceil(domain->subxhi);
+  int ylo = (int)domain->subylo;
+  int yhi = (int)ceil(domain->subyhi);
+  int zlo = (int)domain->subzlo;
+  int zhi = (int)ceil(domain->subzhi);
+  
+  int subdomain_x_size = xhi - xlo;
+  int subdomain_y_size = yhi - ylo;
+  int subdomain_z_size = zhi - zlo;
+  int hyperslab_size = subdomain_x_size * subdomain_y_size * subdomain_z_size;
+  
+  std::vector<int> data_counts(hyperslab_size);
+  
+  
+  // Setup parallel reading
+  hid_t plist_id = H5Pcreate(H5P_DATASET_XFER);
+  H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);
+  
+  // Define hyperslab for data_counts using correct integer bounds
+  hsize_t start_counts[3] = { (hsize_t)xlo, (hsize_t)ylo, (hsize_t)zlo};
+  hsize_t count_counts[3] = { (hsize_t)subdomain_x_size, (hsize_t)subdomain_y_size, (hsize_t)subdomain_z_size };
+  
+  hid_t memspace_count_id = H5Screate_simple(3, count_counts, NULL);
+  hid_t filespace_id = H5Dget_space(hdf5_count_dataset);
+  H5Sselect_hyperslab(filespace_id, H5S_SELECT_SET, start_counts, NULL, count_counts, NULL);
+  
+  hid_t data_type = H5Dget_type(hdf5_count_dataset);
+  H5Dread(hdf5_count_dataset, data_type, memspace_count_id, filespace_id, plist_id, data_counts.data());
+  
+  // Clean up
+  H5Sclose(filespace_id);
+  H5Sclose(memspace_count_id);
+  H5Tclose(data_type);
+  H5Pclose(plist_id);
+  
+  // Convert to 3D array using correct integer bounds
+  // Use ceiling for upper bounds to include all sites in this processor's domain
+  int xlo2 = (int)domain->subxlo;
+  int xhi2 = (int)ceil(domain->subxhi);
+  int ylo2 = (int)domain->subylo;
+  int yhi2 = (int)ceil(domain->subyhi);
+  int zlo2 = (int)domain->subzlo;
+  int zhi2 = (int)ceil(domain->subzhi);
+  
+  
+  data_counts_array = convertTo3DArrayWithRange(data_counts, xlo2, xhi2, ylo2, yhi2, zlo2, zhi2);
+  
+  if (domain->me == 0) std::cout << "Data counts array loaded" << std::endl;
+}
+
+void AppAdditiveExtTempTexture::load_next_chunk(){
+  
+  auto start_time = std::chrono::high_resolution_clock::now();
+  
+  // Clear existing data in queues
+  for (int x = 0; x < data_counts_array.size(); x++) {
+    for (int y = 0; y < data_counts_array[x].size(); y++) {
+      for (int z = 0; z < data_counts_array[x][y].size(); z++) {
+        // Clear the queues completely
+        while (!temp_in(x,y,z).empty()) temp_in(x,y,z).pop();
+        while (!time_in(x,y,z).empty()) time_in(x,y,z).pop();
+      }
+    }
+  }
+  
+  // Setup parallel reading (only for temperature data now)
+  hid_t plist_id = H5Pcreate(H5P_DATASET_XFER);
+  H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);
+  hid_t data_type_temp = H5Dget_type(hdf5_temp_dataset);
+  
+  // Load data for each local site using cached time data
+  for (int local_index = 0; local_index < nlocal; local_index++) {
+    
+    // Use consistent coordinate calculation matching the array sizing
+    int x_loc = (int)xyz[local_index][0] - (int)domain->subxlo;
+    int y_loc = (int)xyz[local_index][1] - (int)domain->subylo;
+    int z_loc = (int)xyz[local_index][2] - (int)domain->subzlo;
+    int x = (int)xyz[local_index][0];
+    int y = (int)xyz[local_index][1];
+    int z = (int)xyz[local_index][2];
+    
+    // Enhanced bounds checking for chunk loading
+    try {
+      if (x_loc < 0 || x_loc >= (int)data_counts_array.size() ||
+          y_loc < 0 || y_loc >= (int)data_counts_array[x_loc].size() ||
+          z_loc < 0 || z_loc >= (int)data_counts_array[x_loc][y_loc].size()) {
+        if (domain->me == 0) {
+          std::cout << "Chunk loading: index out of bounds for site " << local_index 
+                    << ": (" << x_loc << "," << y_loc << "," << z_loc << ") array_size(" 
+                    << data_counts_array.size() << "," 
+                    << (x_loc >= 0 && x_loc < (int)data_counts_array.size() ? data_counts_array[x_loc].size() : -1) << ","
+                    << (x_loc >= 0 && x_loc < (int)data_counts_array.size() && y_loc >= 0 && y_loc < (int)data_counts_array[x_loc].size() ? data_counts_array[x_loc][y_loc].size() : -1) << ")" << std::endl;
+        }
+        continue;
+      }
+    } catch (const std::exception& e) {
+      std::cout << "Exception in chunk loading bounds check: " << e.what() << " for site " << local_index 
+                << " coords(" << x_loc << "," << y_loc << "," << z_loc << ") on processor " << domain->me << std::endl;
+      continue;
+    }
+    
+    int valid_count;
+    try {
+      valid_count = data_counts_array[x_loc][y_loc][z_loc];
+    } catch (const std::exception& e) {
+      std::cout << "Exception accessing data_counts_array in load_next_chunk[" << x_loc << "][" << y_loc << "][" << z_loc 
+                << "]: " << e.what() << " on processor " << domain->me << std::endl;
+      continue;
+    }
+    
+    try {
+      if (valid_count > 0 && time_cache_loaded[x_loc][y_loc][z_loc]) {
+        
+        // Use cached time values to find the range we need
+        const std::vector<double>& time_values = cached_time_values[x_loc][y_loc][z_loc];
+      
+      // Find the index range that falls within our time window with buffer
+      // Include extra data before and after for interpolation
+      double buffer_time = chunk_time_window * 0.2; // 20% buffer on each side
+      double extended_start = current_chunk_start_time - buffer_time;
+      double extended_end = current_chunk_end_time + buffer_time;
+      
+      int start_idx = -1, end_idx = -1;
+      for (int k = 0; k < valid_count; ++k) {
+        if (time_values[k] >= extended_start && time_values[k] <= extended_end) {
+          if (start_idx == -1) start_idx = k;
+          end_idx = k;
+        }
+      }
+      
+      // Only read the needed temperature data if we found valid time indices
+      if (start_idx != -1 && end_idx != -1) {
+        int needed_count = end_idx - start_idx + 1;
+        std::vector<double> temp_values(needed_count);
+        
+        // Read only the needed slice of temperature data
+        hsize_t temp_start[4] = { (hsize_t)x, (hsize_t)y, (hsize_t)z, (hsize_t)start_idx};
+        hsize_t temp_count[4] = { 1, 1, 1, (hsize_t)needed_count};
+        
+        hid_t temperature_filespace_id = H5Dget_space(hdf5_temp_dataset);
+        H5Sselect_hyperslab(temperature_filespace_id, H5S_SELECT_SET, temp_start, NULL, temp_count, NULL);
+        hid_t temp_memspace_id = H5Screate_simple(4, temp_count, NULL);
+        H5Dread(hdf5_temp_dataset, data_type_temp, temp_memspace_id, temperature_filespace_id, plist_id, temp_values.data());
+        H5Sclose(temperature_filespace_id);
+        H5Sclose(temp_memspace_id);
+        
+        // Store the filtered values directly
+        for (int k = 0; k < needed_count; ++k) {
+          temp_in(x_loc,y_loc,z_loc).push(temp_values[k]);
+          time_in(x_loc,y_loc,z_loc).push(time_values[start_idx + k]);
+        }
+      }
+      } // closing brace for if (valid_count > 0 && time_cache_loaded[x_loc][y_loc][z_loc])
+    } catch (const std::exception& e) {
+      std::cout << "Exception in load_next_chunk cache access: " << e.what() 
+                << " for site " << local_index << " coords(" << x_loc << "," << y_loc << "," << z_loc 
+                << ") on processor " << domain->me << std::endl;
+      continue;
+    }
+  }
+  
+  // Clean up
+  H5Tclose(data_type_temp);
+  H5Pclose(plist_id);
+  
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+  
+  // Count how many sites got data loaded in this chunk
+  int sites_with_data = 0;
+  for (int x = 0; x < data_counts_array.size(); x++) {
+    for (int y = 0; y < data_counts_array[x].size(); y++) {
+      for (int z = 0; z < data_counts_array[x][y].size(); z++) {
+        if (!temp_in(x,y,z).empty()) sites_with_data++;
+      }
+    }
+  }
+  
+  if (domain->me == 0) {
+    std::cout << "Loaded chunk [" << current_chunk_start_time << ", " << current_chunk_end_time 
+              << ") in " << duration.count() << " ms, " << sites_with_data << " sites got data" << std::endl;
+  }
+}
+
+bool AppAdditiveExtTempTexture::needs_new_chunk(double simulation_time) {
+  
+  // Check if we are approaching the end of current chunk
+  double buffer_time = chunk_time_window * 0.1; // 10% buffer
+  return (simulation_time >= (current_chunk_end_time - buffer_time));
+}
+
+void AppAdditiveExtTempTexture::initialize_time_cache() {
+  
+  auto start_time = std::chrono::high_resolution_clock::now();
+  
+  // Initialize cache arrays with exact same dimensions as data_counts_array
+  // This ensures perfect index compatibility
+  int x_size = data_counts_array.size();
+  int y_size = (x_size > 0) ? data_counts_array[0].size() : 0;
+  int z_size = (y_size > 0) ? data_counts_array[0][0].size() : 0;
+  
+  if (domain->me == 0) {
+    std::cout << "Initializing cache arrays with dimensions: " << x_size << " x " << y_size << " x " << z_size << std::endl;
+    std::cout << "Subdomain: [" << domain->subxlo << "-" << domain->subxhi << ") x [" 
+              << domain->subylo << "-" << domain->subyhi << ") x [" 
+              << domain->subzlo << "-" << domain->subzhi << ")" << std::endl;
+  }
+  
+  cached_time_values.resize(x_size);
+  time_cache_loaded.resize(x_size);
+  
+  for (int x = 0; x < x_size; x++) {
+    cached_time_values[x].resize(y_size);
+    time_cache_loaded[x].resize(y_size);
+    for (int y = 0; y < y_size; y++) {
+      cached_time_values[x][y].resize(z_size);
+      time_cache_loaded[x][y].resize(z_size, false);
+    }
+  }
+  
+  // Setup parallel reading for time cache
+  hid_t plist_id = H5Pcreate(H5P_DATASET_XFER);
+  H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);
+  hid_t data_type_time = H5Dget_type(hdf5_time_dataset);
+  
+  // Track statistics for debugging
+  int sites_processed = 0;
+  int sites_with_data = 0;
+  int sites_skipped_bounds = 0;
+  int sites_no_data = 0;
+  
+  // Read time data for all local sites and cache it
+  for (int local_index = 0; local_index < nlocal; local_index++) {
+    
+    int x_loc = (int)xyz[local_index][0] - (int)domain->subxlo;
+    int y_loc = (int)xyz[local_index][1] - (int)domain->subylo;
+    int z_loc = (int)xyz[local_index][2] - (int)domain->subzlo;
+    int x = (int)xyz[local_index][0];
+    int y = (int)xyz[local_index][1];
+    int z = (int)xyz[local_index][2];
+    
+    sites_processed++;
+    
+    // Bounds checking to catch indexing issues
+    if (x_loc < 0 || x_loc >= (int)data_counts_array.size()) {
+      if (domain->me == 0) {
+        std::cout << "X index out of bounds for site " << local_index 
+                  << ": x_loc=" << x_loc << ", array x_size=" << data_counts_array.size() << std::endl;
+      }
+      sites_skipped_bounds++;
+      continue;
+    }
+    if (y_loc < 0 || y_loc >= (int)data_counts_array[x_loc].size()) {
+      if (domain->me == 0) {
+        std::cout << "Y index out of bounds for site " << local_index 
+                  << ": y_loc=" << y_loc << ", array y_size=" << data_counts_array[x_loc].size() << std::endl;
+      }
+      sites_skipped_bounds++;
+      continue;
+    }
+    if (z_loc < 0 || z_loc >= (int)data_counts_array[x_loc][y_loc].size()) {
+      if (domain->me == 0) {
+        std::cout << "Z index out of bounds for site " << local_index 
+                  << ": z_loc=" << z_loc << ", array z_size=" << data_counts_array[x_loc][y_loc].size() << std::endl;
+      }
+      sites_skipped_bounds++;
+      continue;
+    }
+    
+    int valid_count = data_counts_array[x_loc][y_loc][z_loc];
+    
+    if (valid_count > 0) {
+      sites_with_data++;
+      
+      // Cache all time values for this location
+      cached_time_values[x_loc][y_loc][z_loc].resize(valid_count);
+      
+      hsize_t start[4] = { (hsize_t)x, (hsize_t)y, (hsize_t)z, 0};
+      hsize_t count[4] = { 1, 1, 1, (hsize_t)valid_count};
+      
+      hid_t time_filespace_id = H5Dget_space(hdf5_time_dataset);
+      H5Sselect_hyperslab(time_filespace_id, H5S_SELECT_SET, start, NULL, count, NULL);
+      hid_t memspace_id = H5Screate_simple(4, count, NULL);
+      H5Dread(hdf5_time_dataset, data_type_time, memspace_id, time_filespace_id, plist_id, cached_time_values[x_loc][y_loc][z_loc].data());
+      H5Sclose(time_filespace_id);
+      H5Sclose(memspace_id);
+      
+      time_cache_loaded[x_loc][y_loc][z_loc] = true;
+    }
+    else {
+      sites_no_data++;
+      // Debug: Print locations of first few sites with no data
+      if (sites_no_data <= 10 && domain->me == 0) {
+        std::cout << "Site with no data: local_index=" << local_index 
+                  << " global_coords=(" << x << "," << y << "," << z << ")"
+                  << " local_coords=(" << x_loc << "," << y_loc << "," << z_loc << ")"
+                  << " valid_count=" << valid_count << std::endl;
+      }
+    }
+  }
+  
+  // Clean up
+  H5Tclose(data_type_time);
+  H5Pclose(plist_id);
+  
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+  
+  // Fill missing data by interpolating from neighbors
+  if (sites_no_data > 0) {
+    fill_missing_temperature_data();
+    if (domain->me == 0) {
+      std::cout << "Filled " << sites_no_data << " sites with missing data using spatial interpolation" << std::endl;
+    }
+  }
+  
+  if (domain->me == 0) {
+    std::cout << "Time cache initialization completed in " << duration.count() << " ms" << std::endl;
+    std::cout << "Sites processed: " << sites_processed << ", with data: " << sites_with_data 
+              << ", no data: " << sites_no_data << ", bounds errors: " << sites_skipped_bounds << std::endl;
+  }
+}
+
+void AppAdditiveExtTempTexture::fill_missing_temperature_data() {
+  
+  auto start_time = std::chrono::high_resolution_clock::now();
+  int filled_sites = 0;
+  
+  // Setup HDF5 reading for temperature data
+  hid_t plist_id = H5Pcreate(H5P_DATASET_XFER);
+  H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);
+  hid_t data_type_temp = H5Dget_type(hdf5_temp_dataset);
+  
+  // Find all sites with missing data and try to interpolate from neighbors
+  for (int local_index = 0; local_index < nlocal; local_index++) {
+    
+    int x_loc = (int)xyz[local_index][0] - (int)domain->subxlo;
+    int y_loc = (int)xyz[local_index][1] - (int)domain->subylo;
+    int z_loc = (int)xyz[local_index][2] - (int)domain->subzlo;
+    int x = (int)xyz[local_index][0];
+    int y = (int)xyz[local_index][1];
+    int z = (int)xyz[local_index][2];
+    
+    // Enhanced bounds checking with debug output
+    try {
+      if (x_loc < 0 || x_loc >= (int)data_counts_array.size() ||
+          y_loc < 0 || y_loc >= (int)data_counts_array[x_loc].size() ||
+          z_loc < 0 || z_loc >= (int)data_counts_array[x_loc][y_loc].size()) {
+        if (domain->me == 0 && local_index < 10) {
+          std::cout << "Bounds check failed: site " << local_index << " global(" << x << "," << y << "," << z 
+                    << ") local(" << x_loc << "," << y_loc << "," << z_loc << ") array_size(" 
+                    << data_counts_array.size() << "," 
+                    << (x_loc >= 0 && x_loc < (int)data_counts_array.size() ? data_counts_array[x_loc].size() : -1) << ","
+                    << (x_loc >= 0 && x_loc < (int)data_counts_array.size() && y_loc >= 0 && y_loc < (int)data_counts_array[x_loc].size() ? data_counts_array[x_loc][y_loc].size() : -1) << ")" << std::endl;
+        }
+        continue;
+      }
+    } catch (const std::exception& e) {
+      std::cout << "Exception in bounds checking: " << e.what() << " for site " << local_index 
+                << " coords(" << x_loc << "," << y_loc << "," << z_loc << ")" << std::endl;
+      continue;
+    }
+    
+    int valid_count;
+    try {
+      valid_count = data_counts_array[x_loc][y_loc][z_loc];
+    } catch (const std::exception& e) {
+      std::cout << "Exception accessing data_counts_array[" << x_loc << "][" << y_loc << "][" << z_loc 
+                << "]: " << e.what() << " on processor " << domain->me << std::endl;
+      continue;
+    }
+    
+    // Only process sites that have no data
+    if (valid_count == 0) {
+      
+      // Check 6 nearest neighbors (±1 in x, y, z directions)
+      int dx[] = {-1, 1, 0, 0, 0, 0};
+      int dy[] = {0, 0, -1, 1, 0, 0};
+      int dz[] = {0, 0, 0, 0, -1, 1};
+      
+      // Find first neighbor with data to copy from
+      for (int n = 0; n < 6; n++) {
+        int nx_loc = x_loc + dx[n];
+        int ny_loc = y_loc + dy[n];
+        int nz_loc = z_loc + dz[n];
+        int nx = x + dx[n];
+        int ny = y + dy[n];
+        int nz = z + dz[n];
+        
+        // Check bounds for neighbor
+        if (nx_loc >= 0 && nx_loc < (int)data_counts_array.size() &&
+            ny_loc >= 0 && ny_loc < (int)data_counts_array[nx_loc].size() &&
+            nz_loc >= 0 && nz_loc < (int)data_counts_array[nx_loc][ny_loc].size()) {
+          
+          // Check if neighbor has data
+          try {
+            if (time_cache_loaded[nx_loc][ny_loc][nz_loc] && 
+                !cached_time_values[nx_loc][ny_loc][nz_loc].empty()) {
+              
+              // Copy neighbor's time data
+              cached_time_values[x_loc][y_loc][z_loc] = cached_time_values[nx_loc][ny_loc][nz_loc];
+              time_cache_loaded[x_loc][y_loc][z_loc] = true;
+            
+              // Update data_counts_array to reflect that this site now has data
+              data_counts_array[x_loc][y_loc][z_loc] = cached_time_values[x_loc][y_loc][z_loc].size();
+              
+              filled_sites++;
+              
+              if (filled_sites <= 5 && domain->me == 0) {
+                std::cout << "Filled site (" << x_loc << "," << y_loc << "," << z_loc 
+                          << ") from neighbor (" << nx_loc << "," << ny_loc << "," << nz_loc 
+                          << ") with " << cached_time_values[x_loc][y_loc][z_loc].size() << " data points" << std::endl;
+              }
+              
+              break; // Found a neighbor, move to next missing site
+            }
+          } catch (const std::exception& e) {
+            std::cout << "Exception in spatial interpolation: " << e.what() 
+                      << " accessing cache[" << nx_loc << "][" << ny_loc << "][" << nz_loc << "] or [" 
+                      << x_loc << "][" << y_loc << "][" << z_loc << "] on processor " << domain->me << std::endl;
+            continue;
+          }
+        }
+      }
+    }
+  }
+  
+  // Clean up
+  H5Tclose(data_type_temp);
+  H5Pclose(plist_id);
+  
+  auto end_time = std::chrono::high_resolution_clock::now();
+  auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+  
+  if (domain->me == 0) {
+    std::cout << "Spatial interpolation filled " << filled_sites 
+              << " sites in " << duration.count() << " ms" << std::endl;
+  }
+}
+
+void AppAdditiveExtTempTexture::close_hdf5_file() {
+  
+  if (hdf5_file_open) {
+    H5Dclose(hdf5_count_dataset);
+    H5Dclose(hdf5_temp_dataset);
+    H5Dclose(hdf5_time_dataset);
+    H5Fclose(hdf5_file_id);
+    hdf5_file_open = false;
+    
+    if (domain->me == 0) std::cout << "HDF5 file closed" << std::endl;
+  }
+}
+

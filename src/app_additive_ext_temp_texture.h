@@ -33,7 +33,6 @@ class AppAdditiveExtTempTexture : public AppPotts {
   AppAdditiveExtTempTexture(class SPPARKS *, int, char **);
   virtual void grow_app();
   virtual void init_app();
-  virtual void temperature_hdf(int);
   virtual void site_event_rejection(int, class RandomPark *);
   virtual void app_update(double);
   virtual void nucleation_spins(class RandomPark *);

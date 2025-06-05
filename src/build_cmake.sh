@@ -280,7 +280,7 @@ cmake --build . "${MAKE_ARGS[@]}"
 
 echo ""
 echo "=== Build Complete ==="
-echo "Executable: $BUILD_DIR/spk"
+echo "Executable: $BUILD_DIR/spparks"
 if [ "$BUILD_LIB" = "ON" ]; then
     echo "Library: $BUILD_DIR/libspparks.*"
 fi

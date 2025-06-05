@@ -251,7 +251,7 @@ endif()
 # Include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
-# Source files
+# Source files (base list - conditional sources added below)
 set(SPPARKS_SOURCES
     app.cpp
     app_am_ellipsoid.cpp
@@ -339,10 +339,7 @@ set(SPPARKS_SOURCES
     variable.cpp
 )
 
-# Header files for style generation
-file(GLOB SPPARKS_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
-
-# Configure conditional sources and generate style headers
+# Configure conditional sources and generate style headers after all dependencies are resolved
 include(cmake/ConditionalSources.cmake)
 configure_conditional_sources()
 
@@ -350,12 +347,13 @@ configure_conditional_sources()
 include(cmake/generate_styles.cmake)
 generate_style_headers()
 
-# Style headers will be added as dependencies later
+# Header files for style generation
+file(GLOB SPPARKS_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
 
 # Create library targets
 if(SPPARKS_BUILD_LIB OR NOT SPPARKS_BUILD_EXECUTABLE)
-    add_library(spparks ${SPPARKS_SOURCES})
-    set_target_properties(spparks PROPERTIES
+    add_library(spparks_lib ${SPPARKS_SOURCES})
+    set_target_properties(spparks_lib PROPERTIES
         OUTPUT_NAME "spparks"
         VERSION ${PROJECT_VERSION}
         SOVERSION ${PROJECT_VERSION_MAJOR}
@@ -363,41 +361,57 @@ if(SPPARKS_BUILD_LIB OR NOT SPPARKS_BUILD_EXECUTABLE)
     
     # Link dependencies to library
     if(SPPARKS_ENABLE_MPI AND MPI_CXX_FOUND)
-        target_link_libraries(spparks PUBLIC MPI::MPI_CXX)
+        target_link_libraries(spparks_lib PUBLIC MPI::MPI_CXX)
     elseif(NOT SPPARKS_ENABLE_MPI)
-        target_link_libraries(spparks PUBLIC mpi_stubs)
+        target_link_libraries(spparks_lib PUBLIC mpi_stubs)
     endif()
     
     if(SPPARKS_ENABLE_JPEG AND JPEG_FOUND)
-        target_link_libraries(spparks PUBLIC ${JPEG_LIBRARIES})
-        target_include_directories(spparks PUBLIC ${JPEG_INCLUDE_DIR})
+        target_link_libraries(spparks_lib PUBLIC ${JPEG_LIBRARIES})
+        target_include_directories(spparks_lib PUBLIC ${JPEG_INCLUDE_DIR})
     endif()
     
     if(SPPARKS_ENABLE_PNG AND PNG_FOUND)
-        target_link_libraries(spparks PUBLIC PNG::PNG)
+        target_link_libraries(spparks_lib PUBLIC PNG::PNG)
     endif()
     
     if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
-        target_link_libraries(spparks PUBLIC ${HDF5_LIBRARIES})
-        target_include_directories(spparks PUBLIC ${HDF5_INCLUDE_DIRS})
-        target_compile_definitions(spparks PUBLIC ${HDF5_DEFINITIONS})
+        target_link_libraries(spparks_lib PUBLIC ${HDF5_LIBRARIES})
+        target_include_directories(spparks_lib PUBLIC ${HDF5_INCLUDE_DIRS})
+        target_compile_definitions(spparks_lib PUBLIC ${HDF5_DEFINITIONS})
     endif()
     
     # Add GZIP support
     if(SPPARKS_ENABLE_GZIP)
         find_package(ZLIB)
         if(ZLIB_FOUND)
-            target_link_libraries(spparks PUBLIC ZLIB::ZLIB)
+            target_link_libraries(spparks_lib PUBLIC ZLIB::ZLIB)
         endif()
     endif()
     
     # Set include directories for library
-    target_include_directories(spparks PUBLIC
+    target_include_directories(spparks_lib PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
         $<INSTALL_INTERFACE:include>
     )
     
     # Add dependency on style headers and validation
+    if(TARGET style_headers)
+        add_dependencies(spparks_lib style_headers)
+    endif()
+    if(TARGET validate_styles)
+        add_dependencies(spparks_lib validate_styles)
+    endif()
+    
+    # Add alias for easier linking
+    add_library(SPPARKS::spparks ALIAS spparks_lib)
+endif()
+
+# Create executable target
+if(SPPARKS_BUILD_EXECUTABLE)
+    add_executable(spparks main.cpp)
+    
+    # Add dependency on style headers and validation  
     if(TARGET style_headers)
         add_dependencies(spparks style_headers)
     endif()
@@ -405,54 +419,38 @@ if(SPPARKS_BUILD_LIB OR NOT SPPARKS_BUILD_EXECUTABLE)
         add_dependencies(spparks validate_styles)
     endif()
     
-    # Add alias for easier linking
-    add_library(SPPARKS::spparks ALIAS spparks)
-endif()
-
-# Create executable target
-if(SPPARKS_BUILD_EXECUTABLE)
-    add_executable(spk main.cpp)
-    
-    # Add dependency on style headers and validation  
-    if(TARGET style_headers)
-        add_dependencies(spk style_headers)
-    endif()
-    if(TARGET validate_styles)
-        add_dependencies(spk validate_styles)
-    endif()
-    
-    if(TARGET spparks)
-        target_link_libraries(spk spparks)
+    if(TARGET spparks_lib)
+        target_link_libraries(spparks spparks_lib)
     else()
         # Link sources directly if not building library
-        target_sources(spk PRIVATE ${SPPARKS_SOURCES})
+        target_sources(spparks PRIVATE ${SPPARKS_SOURCES})
         
         # Link dependencies to executable
         if(SPPARKS_ENABLE_MPI AND MPI_CXX_FOUND)
-            target_link_libraries(spk MPI::MPI_CXX)
+            target_link_libraries(spparks MPI::MPI_CXX)
         elseif(NOT SPPARKS_ENABLE_MPI)
-            target_link_libraries(spk mpi_stubs)
+            target_link_libraries(spparks mpi_stubs)
         endif()
         
         if(SPPARKS_ENABLE_JPEG AND JPEG_FOUND)
-            target_link_libraries(spk ${JPEG_LIBRARIES})
-            target_include_directories(spk PRIVATE ${JPEG_INCLUDE_DIR})
+            target_link_libraries(spparks ${JPEG_LIBRARIES})
+            target_include_directories(spparks PRIVATE ${JPEG_INCLUDE_DIR})
         endif()
         
         if(SPPARKS_ENABLE_PNG AND PNG_FOUND)
-            target_link_libraries(spk PNG::PNG)
+            target_link_libraries(spparks PNG::PNG)
         endif()
         
         if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
-            target_link_libraries(spk ${HDF5_LIBRARIES})
-            target_include_directories(spk PRIVATE ${HDF5_INCLUDE_DIRS})
-            target_compile_definitions(spk PRIVATE ${HDF5_DEFINITIONS})
+            target_link_libraries(spparks ${HDF5_LIBRARIES})
+            target_include_directories(spparks PRIVATE ${HDF5_INCLUDE_DIRS})
+            target_compile_definitions(spparks PRIVATE ${HDF5_DEFINITIONS})
         endif()
         
         if(SPPARKS_ENABLE_GZIP)
             find_package(ZLIB)
             if(ZLIB_FOUND)
-                target_link_libraries(spk ZLIB::ZLIB)
+                target_link_libraries(spparks ZLIB::ZLIB)
             endif()
         endif()
     endif()
@@ -461,21 +459,21 @@ endif()
 # Compiler flags
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        target_compile_options(spk PRIVATE -g -Wall -Wextra)
-        if(TARGET spparks)
-            target_compile_options(spparks PRIVATE -g -Wall -Wextra)
+        target_compile_options(spparks PRIVATE -g -Wall -Wextra)
+        if(TARGET spparks_lib)
+            target_compile_options(spparks_lib PRIVATE -g -Wall -Wextra)
         endif()
     else()
-        target_compile_options(spk PRIVATE -O3)
-        if(TARGET spparks)
-            target_compile_options(spparks PRIVATE -O3)
+        target_compile_options(spparks PRIVATE -O3)
+        if(TARGET spparks_lib)
+            target_compile_options(spparks_lib PRIVATE -O3)
         endif()
     endif()
 endif()
 
 # Installation
 if(SPPARKS_BUILD_LIB)
-    install(TARGETS spparks
+    install(TARGETS spparks_lib
         EXPORT SpparksTargets
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib
@@ -488,7 +486,7 @@ if(SPPARKS_BUILD_LIB)
 endif()
 
 if(SPPARKS_BUILD_EXECUTABLE)
-    install(TARGETS spk
+    install(TARGETS spparks
         RUNTIME DESTINATION bin
     )
 endif()

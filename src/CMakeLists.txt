@@ -397,9 +397,12 @@ if(SPPARKS_BUILD_LIB OR NOT SPPARKS_BUILD_EXECUTABLE)
         $<INSTALL_INTERFACE:include>
     )
     
-    # Add dependency on style headers
+    # Add dependency on style headers and validation
     if(TARGET style_headers)
         add_dependencies(spparks style_headers)
+    endif()
+    if(TARGET validate_styles)
+        add_dependencies(spparks validate_styles)
     endif()
     
     # Add alias for easier linking
@@ -410,9 +413,12 @@ endif()
 if(SPPARKS_BUILD_EXECUTABLE)
     add_executable(spk main.cpp)
     
-    # Add dependency on style headers
+    # Add dependency on style headers and validation  
     if(TARGET style_headers)
         add_dependencies(spk style_headers)
+    endif()
+    if(TARGET validate_styles)
+        add_dependencies(spk validate_styles)
     endif()
     
     if(TARGET spparks)

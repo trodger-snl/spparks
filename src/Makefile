@@ -17,7 +17,7 @@ SHLINK = libspparks.so
 OBJDIR =   Obj_$@
 OBJSHDIR = Obj_shared_$@
 
-SRC =	$(wildcard *.cpp)
+SRC =	$(filter-out test_%.cpp,$(wildcard *.cpp))
 INC =	$(wildcard *.h)
 OBJ = 	$(SRC:.cpp=.o)
 

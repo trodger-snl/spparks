@@ -20,11 +20,11 @@
    1. Introduce additional input variables:
     a) dx - lattice spacing (in m)
     b) dt - timestep (assume constant in seconds)
-    c) No - Max nucleation site density (in m^-3)
+    c) no - Max nucleation site density (in m^-3)
     d) k1 - kinetic parameter (in m^2/s)
     e) Q - activation energy (in J/mol)
-    f) Tc - critical undercooling (K)
-    g) Tsig - standard deviation of undercooling Gaussian
+    f) tc - critical undercooling (K)
+    g) tsig - standard deviation of undercooling Gaussian
    2. Introduce a check to see if we're in the mushy zone.
     a) If above T_l, make random & molten (as we do now)
     b) If between T_l and T_s, use a "nucleation" type rule
@@ -81,9 +81,9 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     error->all(FLERR,"Illegal app_style command");
 
     nspins = atoi(arg[1]);
-    temp_file_str = arg[2]; //The name of the temperature file
-    Tl = atof(arg[3]); //The material liquidus point
-    Ts = atof(arg[4]); //The materials solidus point
+    temp_file_string = arg[2]; //The name of the temperature file
+    tl = atof(arg[3]); //The material liquidus point
+    ts = atof(arg[4]); //The materials solidus point
     dx = atof(arg[5]); //The source lattice spacing ( in m)
     dt = atof(arg[6]); //The source timestep (in seconds)
     nrefine = atoi(arg[7]); //How many refinement MC steps to perform after a site solidifies
@@ -92,17 +92,17 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     ndouble = 9;
     allow_app_update = 1;
     ninteger = 2;
-    totalTime = 0;
+    total_time = 0;
     sites = unique = NULL;
 
     //Set default values    
-    Tl = 1723;
-    Ts = 1673;
-    No = 1e15;
-    Tc = 5;
-    Tsig = 3;
-    sizeNorm = pow(dx,3) * 2;
-    sizeSig = pow(dx,3);
+    tl = 1723;
+    ts = 1673;
+    no = 1e15;
+    tc = 5;
+    tsig = 3;
+    size_norm = pow(dx,3) * 2;
+    size_sig = pow(dx,3);
     solid_front_length = 4;
     //Let's put in default values for arrays
     solid_front_coeffs = new double[4];    
@@ -115,7 +115,7 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     c2 = 0.5;
     c3 = 2.5;
     time_step = dt;
-    T_room = 300;
+    t_room = 300;
     
     //add the double array
     recreate_arrays();  
@@ -129,44 +129,44 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
 {
   if (strcmp(command,"liquidus") == 0) {
     if (narg != 1) error->all(FLERR,"Illegal liquidus command");
-    Tl = atof(arg[0]);
-    if (Tl <= 0) 
+    tl = atof(arg[0]);
+    if (tl <= 0) 
       error->all(FLERR,"Illegal liquidus temperature");
   }
   else if (strcmp(command,"solidus") == 0) {
     if (narg != 1) error->all(FLERR,"Illegal solidus command");
-    Ts = atof(arg[0]);
-    if (Ts <= 0) 
+    ts = atof(arg[0]);
+    if (ts <= 0) 
       error->all(FLERR,"Illegal solidus temperature");
   }
   else if (strcmp(command,"nucleation_density") == 0) {
     if (narg != 1) error->all(FLERR,"Illegal nucleation density command");
-    No = atof(arg[0]);
-    if (No < 0) 
+    no = atof(arg[0]);
+    if (no < 0) 
       error->all(FLERR,"Illegal nucleation density");
   }
   else if (strcmp(command,"critical_undercooling") == 0) {
     if (narg != 1) error->all(FLERR,"Illegal critical_undercooling command");
-    Tc = atof(arg[0]);
-    if (Tc < 0) 
+    tc = atof(arg[0]);
+    if (tc < 0) 
       error->all(FLERR,"Illegal critical undercooling");
   }
   else if (strcmp(command,"undercooling_deviation") == 0) {
     if (narg != 1) error->all(FLERR,"Illegal undercooling_deviation command");
-    Tsig = atof(arg[0]);
-    if (Tsig < 0) 
+    tsig = atof(arg[0]);
+    if (tsig < 0) 
       error->all(FLERR,"Illegal undercooling standard deviation");
   }
   else if (strcmp(command,"mean_nuclei_volume") == 0) {
     if (narg !=1) error->all(FLERR,"Illegal mean_nuclei_volume command");
-    sizeNorm = atof(arg[0]);
-    if (sizeNorm < 0) 
+    size_norm = atof(arg[0]);
+    if (size_norm < 0) 
       error->all(FLERR,"Illegal mean nuclei volume");
   }
   else if (strcmp(command,"nuclei_volume_deviation") == 0) {
     if (narg != 1) error->all(FLERR,"Illegal nuclei_volume_deviation command");
-    sizeSig = atof(arg[0]);
-    if (sizeSig < 0) 
+    size_sig = atof(arg[0]);
+    if (size_sig < 0) 
       error->all(FLERR,"Illegal nuclei volume standard deviation");
   }
   else if (strcmp(command,"solid_front_vel") == 0) {
@@ -215,13 +215,13 @@ void AppAdditiveExtTempTexture::app_update(double dt)
       
       //Update the temperature at all the sites
       temperature_time_interpolate(i,T[i]);
-      if(T[i] > T_room) t_active = 1;
+      if(T[i] > t_room) t_active = 1;
   
       //Turn the sites on/off depending on the phase data and whether or not the
-      //site's temperature has gone above Tl
-      //We will also have an activeFlag value of 3 for something that's re-solidified
-      if( T[i] >= Tl) {
-          activeFlag[i] = 2;
+      //site's temperature has gone above tl
+      //We will also have an active_flag value of 3 for something that's re-solidified
+      if( T[i] >= tl) {
+          active_flag[i] = 2;
           spin[i] = (int) (nspins * ranapp->uniform());
           x1[i] = orientation_vectors[spin[i]*9];
           x2[i] = orientation_vectors[spin[i]*9+1];
@@ -229,17 +229,17 @@ void AppAdditiveExtTempTexture::app_update(double dt)
           y1[i] = orientation_vectors[spin[i]*9+3];
           y2[i] = orientation_vectors[spin[i]*9+4];
           y3[i] = orientation_vectors[spin[i]*9+5];
-          SolidD[i] = 0;
+          solid_d[i] = 0;
       }
       //If we're molten, call the mushy_phase function to figure out any phase change
-      else if (activeFlag[i] == 2 && T[i] <= Tl) {
+      else if (active_flag[i] == 2 && T[i] <= tl) {
           mushy_phase(i, ranapp);
 //             fprintf(screen,"Ran mushy_phase\n");
       } 
-      else if(SolidD[i] < 0 && SolidD[i] > -nrefine -1 && activeFlag[i] == 3)    {
-              MobilityOut[i] = 1;
+      else if(solid_d[i] < 0 && solid_d[i] > -nrefine -1 && active_flag[i] == 3)    {
+              mobility_out[i] = 1;
               site_event_rejection(i, ranapp);
-              SolidD[i]--;
+              solid_d[i]--;
       }
       
     }
@@ -284,11 +284,11 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
 
   //Setup file name
   // std::stringstream os;
-  // os << temp_file_str;
+  // os << temp_file_string;
   // const std::string tmp = os.str();
   // const char* cstr = tmp.c_str();
 
-  if (domain->me == 0) std::cout << "File path: " << temp_file_str << std::endl;
+  if (domain->me == 0) std::cout << "File path: " << temp_file_string << std::endl;
 
   // Calculate the size using correct integer bounds  
   int xlo = (int)domain->subxlo;
@@ -313,7 +313,7 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
 
   hid_t fapl_id = H5Pcreate(H5P_FILE_ACCESS);
   H5Pset_fclose_degree(fapl_id, H5F_CLOSE_STRONG);
-  hid_t file_id = H5Fopen(temp_file_str.c_str(), H5F_ACC_RDONLY, fapl_id);
+  hid_t file_id = H5Fopen(temp_file_string.c_str(), H5F_ACC_RDONLY, fapl_id);
 
   // Open the data_counts dataset
   hid_t dataset_counts_id = H5Dopen(file_id, "data_counts",H5P_DEFAULT);
@@ -352,7 +352,7 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf(){
   int bounds_yhi = (int)ceil(domain->subyhi);
   int bounds_zlo = (int)domain->subzlo;
   int bounds_zhi = (int)ceil(domain->subzhi);
-  auto data_counts_array = convertTo3DArrayWithRange(data_counts, bounds_xlo, bounds_xhi, bounds_ylo, bounds_yhi, bounds_zlo, bounds_zhi);
+  auto data_counts_array = convert_to_3d_array_with_range(data_counts, bounds_xlo, bounds_xhi, bounds_ylo, bounds_yhi, bounds_zlo, bounds_zhi);
   if (domain->me == 0) std::cout << "Read in the data_count values" << std::endl;
 
   // Open the temperature and time datasets
@@ -450,18 +450,18 @@ void AppAdditiveExtTempTexture::temperature_time_interpolate(int site, double pr
 
   //If we're out of entires, set to room temperature.
   if (time_in(x_loc,y_loc,z_loc).empty()){ 
-    T[site] = T_room;
+    T[site] = t_room;
     return;
   }
   //If we haven't encountered our first time value, set to default
-  else if(priorTime == 0 && time < time_in(x_loc,y_loc,z_loc).front()) {
-    T[site] = T_room;
+  else if(prior_time == 0 && time < time_in(x_loc,y_loc,z_loc).front()) {
+    T[site] = t_room;
     return;
   }
 
   //If we've stepped past the current time, update the stored values
   if(time >= time_in(x_loc,y_loc,z_loc).front()) {
-    priorTime = time_in(x_loc,y_loc,z_loc).front();
+    prior_time = time_in(x_loc,y_loc,z_loc).front();
     priorTemp = temp_in(x_loc,y_loc,z_loc).front();
 
     //Pop off old values
@@ -470,48 +470,48 @@ void AppAdditiveExtTempTexture::temperature_time_interpolate(int site, double pr
     
     //If we're out of entires, also set to room temperature.
     if (time_in(x_loc,y_loc,z_loc).empty()){ 
-      T[site] = T_room;
+      T[site] = t_room;
       return;
     }
   }
 
   //If we're inbetween melt cycles, set temp to room temp
-  if((priorTemp < Ts && temp_in(x_loc,y_loc,z_loc).front() < Ts)) {
-    T[site] = T_room;
+  if((priorTemp < ts && temp_in(x_loc,y_loc,z_loc).front() < ts)) {
+    T[site] = t_room;
   }
 
   //Do linear interpolation
   else {
-    T[site] = priorTemp + (temp_in(x_loc,y_loc,z_loc).front() - priorTemp)/(time_in(x_loc,y_loc,z_loc).front() - priorTime) * (time - priorTime);
+    T[site] = priorTemp + (temp_in(x_loc,y_loc,z_loc).front() - priorTemp)/(time_in(x_loc,y_loc,z_loc).front() - prior_time) * (time - prior_time);
   }
 }
 
 /* ----------------------------------------------------------------------
-   Nucleation site initializer. Find the volume of a voxel from dx^3 and Multiply by No.
+   Nucleation site initializer. Find the volume of a voxel from dx^3 and Multiply by no.
    This will be the average number of nucleation sites in the voxel. This is also the
    fraction of spins that we want to be able to nucleate new grains. If the value is greater
    than 1 (which we should avoid), allow all spins to nucleate. If not, call a random number
    between zero and one. If the number is less than the fraction, make true. If not, make false.
 ------------------------------------------------------------------------- */
 void AppAdditiveExtTempTexture::nucleation_spins(RandomPark *random) {
-    nucleationFlags = new int[nspins];
-    double nucleationFraction = dx * dx * dx * No;
+    nucleation_flags = new int[nspins];
+    double nucleationFraction = dx * dx * dx * no;
     
     //Make all spins nucleation sites. Should avoid this. Maybe return an error instead?
     if(nucleationFraction >= 1.0) {
-        fprintf(screen,"Nucleation fraction is greater than 1. Decrease No or increase mesh resolution. No = %f\n", nucleationFraction);
+        fprintf(screen,"Nucleation fraction is greater than 1. Decrease no or increase mesh resolution. no = %f\n", nucleationFraction);
         for (int i = 0; i < nspins; i++) {
-            nucleationFlags[i] = 1;
+            nucleation_flags[i] = 1;
         }
     }
     //Do a random number test and allow the spin to nucleate if less than
     else {
         for (int i = 0; i < nspins; i++) {
             if(random->uniform() <= nucleationFraction) {
-                nucleationFlags[i] = 1;
+                nucleation_flags[i] = 1;
             }
             else {
-                nucleationFlags[i] = 0;
+                nucleation_flags[i] = 0;
             }
         }
     }   
@@ -525,10 +525,10 @@ void AppAdditiveExtTempTexture::nucleation_spins(RandomPark *random) {
 void AppAdditiveExtTempTexture::grow_app()
 {
   spin = iarray[0];
-  activeFlag = iarray[1];
-  MobilityOut = darray[0];
+  active_flag = iarray[1];
+  mobility_out = darray[0];
   T = darray[1];
-  SolidD = darray[2];
+  solid_d = darray[2];
   //phi1 = darray[3];
   //Phi = darray[4];
   //phi2 = darray[5];
@@ -548,9 +548,9 @@ void AppAdditiveExtTempTexture::grow_app()
   		fully_periodic = 1;
   }
   else {
-  	xPeriod = 1- domain->xperiodic;
-  	yPeriod = 1- domain->yperiodic;
-  	zPeriod = 1- domain->zperiodic;
+  	x_period = 1- domain->xperiodic;
+  	y_period = 1- domain->yperiodic;
+  	z_period = 1- domain->zperiodic;
   }
 }
 
@@ -568,7 +568,7 @@ void AppAdditiveExtTempTexture::init_app()
   double sqrt3 = 1.7320508076;
   sites = new int[1 + maxneigh];
   unique = new int[1 + maxneigh];
-  uniqueDot = new double[1 + maxneigh];
+  unique_dot = new double[1 + maxneigh];
   RandomPark random(3000);
 
   //Allocate our temperature and time data structures
@@ -581,13 +581,13 @@ void AppAdditiveExtTempTexture::init_app()
 
   dt_sweep = dt;
   time_index = 0;
-  priorTime = 0;
+  prior_time = 0;
 
   orientation_vectors = new double[nspins * 9];
   spin_euler = new double[nspins * 3];
-  nucleationFlags = new int[nspins];
-  nucleationTemps = new double[nspins];
-	nucleationSizes = new double[nspins];
+  nucleation_flags = new int[nspins];
+  nucleation_temps = new double[nspins];
+	nucleation_sizes = new double[nspins];
 
 
   //Initialize orientations based on spins (which have hopefully been determined)...
@@ -622,55 +622,55 @@ void AppAdditiveExtTempTexture::init_app()
   MPI_Allreduce(&flag,&flagall,1,MPI_INT,MPI_SUM,world);
   if (flagall) error->all(FLERR,"One or more sites have invalid values");
   
-	//Initialize the nucleationFlags vector
+	//Initialize the nucleation_flags vector
 	if (domain->me==0) {
 		nucleation_spins(ranapp);    
 	}
 
-	MPI_Bcast(nucleationFlags,nspins, MPI_INT,0,world);
+	MPI_Bcast(nucleation_flags,nspins, MPI_INT,0,world);
 
-	//Initialize the nucleationTemps and nucleationSizes vectors
+	//Initialize the nucleation_temps and nucleation_sizes vectors
 	if (domain->me==0) {
 			nucleation_init();    
 	}
 
-	MPI_Bcast(nucleationTemps,nspins, MPI_DOUBLE,0,world);
-	MPI_Bcast(nucleationSizes,nspins, MPI_DOUBLE,0,world);
+	MPI_Bcast(nucleation_temps,nspins, MPI_DOUBLE,0,world);
+	MPI_Bcast(nucleation_sizes,nspins, MPI_DOUBLE,0,world);
 	
-	//Initialize the neighDist array need to fill with good values
-	neighDist = new double[26];
-	neighDist[0] = sqrt3 * dx;
-	neighDist[1] = sqrt2 * dx;
-	neighDist[2] = sqrt3 * dx;
-	neighDist[3] = sqrt2 * dx;
-	neighDist[4] = dx;
-	neighDist[5] = sqrt2 * dx;
-	neighDist[6] = sqrt3 * dx;
-	neighDist[7] = sqrt2 * dx;
-	neighDist[8] = sqrt3 * dx;
-	neighDist[9] =  sqrt2 * dx;
-	neighDist[10] = dx;
-	neighDist[11] =  sqrt2 * dx;
-	neighDist[12] = sqrt3 * dx;
-	neighDist[13] = sqrt3 * dx;
-	neighDist[14] =  sqrt2 * dx;
-	neighDist[15] = dx;
-	neighDist[16] =  sqrt2 * dx;
-	neighDist[17] = sqrt3 * dx;
-	neighDist[18] = sqrt2 * dx;
-	neighDist[19] = sqrt3 * dx;
-	neighDist[20] =  sqrt2 * dx;
-	neighDist[21] = dx;
-	neighDist[22] =  sqrt2 * dx;
-	neighDist[23] = sqrt3 * dx;
-	neighDist[24] = sqrt2 * dx;
-	neighDist[25] = sqrt3 * dx;
+	//Initialize the neigh_dist array need to fill with good values
+	neigh_dist = new double[26];
+	neigh_dist[0] = sqrt3 * dx;
+	neigh_dist[1] = sqrt2 * dx;
+	neigh_dist[2] = sqrt3 * dx;
+	neigh_dist[3] = sqrt2 * dx;
+	neigh_dist[4] = dx;
+	neigh_dist[5] = sqrt2 * dx;
+	neigh_dist[6] = sqrt3 * dx;
+	neigh_dist[7] = sqrt2 * dx;
+	neigh_dist[8] = sqrt3 * dx;
+	neigh_dist[9] =  sqrt2 * dx;
+	neigh_dist[10] = dx;
+	neigh_dist[11] =  sqrt2 * dx;
+	neigh_dist[12] = sqrt3 * dx;
+	neigh_dist[13] = sqrt3 * dx;
+	neigh_dist[14] =  sqrt2 * dx;
+	neigh_dist[15] = dx;
+	neigh_dist[16] =  sqrt2 * dx;
+	neigh_dist[17] = sqrt3 * dx;
+	neigh_dist[18] = sqrt2 * dx;
+	neigh_dist[19] = sqrt3 * dx;
+	neigh_dist[20] =  sqrt2 * dx;
+	neigh_dist[21] = dx;
+	neigh_dist[22] =  sqrt2 * dx;
+	neigh_dist[23] = sqrt3 * dx;
+	neigh_dist[24] = sqrt2 * dx;
+	neigh_dist[25] = sqrt3 * dx;
 
   //Check that our timestep is small enough	
   double max_front_vel = 0;
 	int power = solid_front_length -1;
 	for(int k = 0; k < solid_front_length; k++) {
-		max_front_vel = max_front_vel + solid_front_coeffs[k] * pow(Tl - Ts, power);
+		max_front_vel = max_front_vel + solid_front_coeffs[k] * pow(tl - ts, power);
 		power--;
 	}
 
@@ -696,8 +696,8 @@ void AppAdditiveExtTempTexture::init_app()
   
   if (domain->me == 0) {
     std::cout << "Starting chunked HDF5 reading" << std::endl;
-    std::cout << "Using liquidus temperature Tl = " << Tl << " K" << std::endl;
-    std::cout << "Using solidus temperature Ts = " << Ts << " K" << std::endl;
+    std::cout << "Using liquidus temperature tl = " << tl << " K" << std::endl;
+    std::cout << "Using solidus temperature ts = " << ts << " K" << std::endl;
   }
   reduced_temperature_hdf_chunked();
   if (domain->me == 0) std::cout << "Chunked HDF5 reading completed" << std::endl;
@@ -735,25 +735,25 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
 ------------------------------------------------------------------------- */
 
     //Assign the local mobility
-    Mobloc = MobilityOut[i];
+    Mobloc = mobility_out[i];
     
     int j,m,value;
     int nevent = 0;
     
     if((Mobloc < 0.0) || (Mobloc > 1.0001)) {
-        MobilityOut[i] = 0;
+        mobility_out[i] = 0;
         return;
     }
     
-    if(SolidD[i] < 0 && SolidD[i] > -nrefine -1) {
+    if(solid_d[i] < 0 && solid_d[i] > -nrefine -1) {
         //Go through neighbor list and add them to possible switches
         for (int j = 0; j < numneigh[i]; j++) {
-            if(activeFlag[neighbor[i][j]] == 3) {
+            if(active_flag[neighbor[i][j]] == 3) {
                 //Calculate temp gradient/grain misorientation and store in "unique" array
                 //We should make this cumulative, so we can use a random number to sample it
                 //Exclude gas or molten sites from the Potts neighbor tally
                 dotValue += melt_misorientation(neighbor[i][j],c1,c2,c3);
-                uniqueDot[nevent] = dotValue;
+                unique_dot[nevent] = dotValue;
                 value = spin[neighbor[i][j]];
                 unique[nevent] = value;
                 nevent++;										
@@ -762,11 +762,11 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
         //If no neighbor is eligible, return before changing anything. Will try next sweep.
         if (nevent == 0) return;
         //I think we should use nevent -1 (there will be an extra event at the end)
-        double dran = (uniqueDot[nevent - 1]*random->uniform());
+        double dran = (unique_dot[nevent - 1]*random->uniform());
         //if (iran >= nevent) iran = nevent-1;
         //Go through possible events and pick one
         for( int j = 0; j < nevent -1; j++) {
-            if(dran <= uniqueDot[j]) {
+            if(dran <= unique_dot[j]) {
                 spin[i] = unique[j];
                 efinal = site_energy(i);
             }
@@ -777,7 +777,7 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
       for (j = 0; j < numneigh[i]; j++) {
         value = spin[neighbor[i][j]];
         //Exclude gas, powder or molten sites from the Potts neighbor tally
-        if (value == spin[i] || value == nspins || activeFlag[neighbor[i][j]] != 3) continue;
+        if (value == spin[i] || value == nspins || active_flag[neighbor[i][j]] != 3) continue;
         for (m = 0; m < nevent; m++)
           if (value == unique[m]) break;
         if (m < nevent) continue;
@@ -835,12 +835,12 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
 
 /* ----------------------------------------------------------------------
    Perform evolution for sites in the mushy zone. There are several things that need to happen.
-   1. Determine if the site is solid or liquid (from activeFlag)
-   2. Determine if the site should nucleate a new grain (from nucleationFlags)
+   1. Determine if the site is solid or liquid (from active_flag)
+   2. Determine if the site should nucleate a new grain (from nucleation_flags)
    3. If our current site is liquid & can't nucleate, have it try to switch to a solid neighbor
       (with 4 calculated from the undercooling in someway, not temperature)
    4. If our current site is liquid & can nucleate, check if local undercooling is equal to its 
-      critical temp. If so, change the activeFlag value to solid. If not, see if there are any solid sites
+      critical temp. If so, change the active_flag value to solid. If not, see if there are any solid sites
       that should capture it.
    5. If our current site is solid, see if it should flip to a neighboring solid value (with
       mobility calculated from undercooling.)
@@ -850,20 +850,20 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
   	int nevent = 0;
   	int m,value;
   	double dotValue = 0;
-    double Tcool = Tl - T[i];
+    double Tcool = tl - T[i];
     
-    //Our site should always be molten and below Tl
+    //Our site should always be molten and below tl
     //Check if it's eligible to nucleate
-    if(nucleationFlags[spin[i]]) {
+    if(nucleation_flags[spin[i]]) {
         //Can and will nucleate
-        if(Tcool >= nucleationTemps[spin[i]]){
-            activeFlag[i] = 3;
+        if(Tcool >= nucleation_temps[spin[i]]){
+            active_flag[i] = 3;
             //Don't let nucleated site disappear during smoothing
             //Neighboring sites will be flipped during the next iterate_rejection call
-            SolidD[i] = -nrefine-2;
+            solid_d[i] = -nrefine-2;
             //Call nucleation particle flipper
             naccept++;
-            nucleation_particle_flipper(i, round(nucleationSizes[spin[i]]/pow(dx,3)), ranapp);
+            nucleation_particle_flipper(i, round(nucleation_sizes[spin[i]]/pow(dx,3)), ranapp);
             return;
         }
         //Can nucleate, but won't yet. Allow to if the solidification front gets captured.
@@ -872,18 +872,18 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
             //Try doing this with an arbitrary array
             int power = solid_front_length -1;
             for(int k = 0; k < solid_front_length; k++) {
-                SolidD[i] = SolidD[i] + solid_front_coeffs[k] * pow(Tcool, power) * time_step;
+                solid_d[i] = solid_d[i] + solid_front_coeffs[k] * pow(Tcool, power) * time_step;
                 power--;
             }
             //Go through neighbor list and add them to possible switches
             for (int j = 0; j < numneigh[i]; j++) {
-              if(neighDist[j] <= SolidD[i] && (activeFlag[neighbor[i][j]] == 1 || activeFlag[neighbor[i][j]] == 3)) {
+              if(neigh_dist[j] <= solid_d[i] && (active_flag[neighbor[i][j]] == 1 || active_flag[neighbor[i][j]] == 3)) {
                     //Calculate temp gradient/grain misorientation and store in "unique" array
                     //We should make this cumulative, so we can use a random number to sample it
                     //Exclude gas or molten sites from the Potts neighbor tally
-//                     if(neighDist[j] > SolidD[i]) continue;
+//                     if(neigh_dist[j] > solid_d[i]) continue;
                     dotValue += melt_misorientation(neighbor[i][j],c1,c2,c3);
-                    uniqueDot[nevent] =  dotValue;
+                    unique_dot[nevent] =  dotValue;
                     value = spin[neighbor[i][j]];
                     unique[nevent] = value;
                     nevent++;										
@@ -893,11 +893,11 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
             if (nevent == 0) return;
             fprintf(screen,"Epitaxialy growing instead of nucleating\n");
             //I think we should use nevent -1 (there will be an extra event at the end)
-            double dran = (uniqueDot[nevent - 1]*random->uniform());
+            double dran = (unique_dot[nevent - 1]*random->uniform());
             //if (iran >= nevent) iran = nevent-1;
             //Go through possible events and pick one
             for( int j = 0; j < nevent -1; j++) {
-                if(dran <= uniqueDot[j]) {
+                if(dran <= unique_dot[j]) {
                     spin[i] = unique[j];
  //                    phi1[i] = spin_euler[spin[i] * 3 -2];
 //                     Phi[i] = spin_euler[spin[i] * 3 -1];
@@ -908,8 +908,8 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
                     y1[i] = orientation_vectors[spin[i]*9+3];
                     y2[i] = orientation_vectors[spin[i]*9+4];
                     y3[i] = orientation_vectors[spin[i]*9+5];
-                    activeFlag[i] = 3;
-                    SolidD[i] = -1;
+                    active_flag[i] = 3;
+                    solid_d[i] = -1;
                     naccept++;
                     return;
                 }
@@ -920,18 +920,18 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
         //Add the distance of the front travel. This is for 304L I think...
         int power = solid_front_length -1;
         for(int k = 0; k < solid_front_length; k++) {
-            SolidD[i] = SolidD[i] + solid_front_coeffs[k] * pow(Tcool, power) * time_step;
+            solid_d[i] = solid_d[i] + solid_front_coeffs[k] * pow(Tcool, power) * time_step;
             power--;
         }
         //Go through neighbor list and add them to possible switches
         for (int j = 0; j < numneigh[i]; j++) {
-            if(neighDist[j] <= SolidD[i] && (activeFlag[neighbor[i][j]] == 1 || activeFlag[neighbor[i][j]] == 3)) {
+            if(neigh_dist[j] <= solid_d[i] && (active_flag[neighbor[i][j]] == 1 || active_flag[neighbor[i][j]] == 3)) {
                 //Calculate temp gradient/grain misorientation and store in "unique" array
                 //We should make this cumulative, so we can use a random number to sample it
                 //Exclude gas or molten sites from the Potts neighbor tally
-//                 if(neighDist[j] > SolidD[i]) continue;
+//                 if(neigh_dist[j] > solid_d[i]) continue;
                 dotValue += melt_misorientation(neighbor[i][j],c1,c2,c3);
-                uniqueDot[nevent] =  dotValue;
+                unique_dot[nevent] =  dotValue;
                 value = spin[neighbor[i][j]];
                 unique[nevent] = value;
                 nevent++;										
@@ -941,11 +941,11 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
         if (nevent == 0) return;
         
         //I think we should use nevent -1 (there will be an extra event at the end)
-        double dran = (uniqueDot[nevent - 1]*random->uniform());
+        double dran = (unique_dot[nevent - 1]*random->uniform());
         //if (iran >= nevent) iran = nevent-1;
         //Go through possible events and pick one
         for( int j = 0; j < nevent -1; j++) {
-            if(dran <= uniqueDot[j]) {
+            if(dran <= unique_dot[j]) {
                 spin[i] = unique[j];
  //                phi1[i] = spin_euler[spin[i] * 3 -2];
 //                 Phi[i] = spin_euler[spin[i] * 3 -1];
@@ -956,8 +956,8 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
                 y1[i] = orientation_vectors[spin[i]*9+3];
                 y2[i] = orientation_vectors[spin[i]*9+4];
                 y3[i] = orientation_vectors[spin[i]*9+5];
-                activeFlag[i] = 3;
-                SolidD[i] = -1;
+                active_flag[i] = 3;
+                solid_d[i] = -1;
                 naccept++;
                 return;
             }
@@ -990,7 +990,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
 
         
         for(int j = 0; j < numneigh[i]; j++) {
-            if(activeFlag[neighbor[i][j]] == 2) {
+            if(active_flag[neighbor[i][j]] == 2) {
                 int i_chosen = neighbor[i][j];
                 spin[i_chosen] = spin[i];
 //                 phi1[i_chosen] = spin_euler[spin[i] * 3 -2];
@@ -1002,8 +1002,8 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 y1[i_chosen] = orientation_vectors[spin[i]*9+3];
                 y2[i_chosen] = orientation_vectors[spin[i]*9+4];
                 y3[i_chosen] = orientation_vectors[spin[i]*9+5];
-                activeFlag[i_chosen] = 3;
-                SolidD[i_chosen] = -nrefine -3;
+                active_flag[i_chosen] = 3;
+                solid_d[i_chosen] = -nrefine -3;
                 nSites--;
                 naccept++;
             }
@@ -1018,7 +1018,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
         //Do 1st ones first (this isn't random yet)
         for(int j = 0; j < 6; j++) {
 
-            if(activeFlag[neighbor[i][nearest_neigh[j]]] == 2) {
+            if(active_flag[neighbor[i][nearest_neigh[j]]] == 2) {
                 int i_chosen = neighbor[i][nearest_neigh[j]];
                 spin[i_chosen] = spin[i];
 //                 phi1[i_chosen] = spin_euler[spin[i] * 3 -2];
@@ -1030,8 +1030,8 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 y1[i_chosen] = orientation_vectors[spin[i]*9+3];
                 y2[i_chosen] = orientation_vectors[spin[i]*9+4];
                 y3[i_chosen] = orientation_vectors[spin[i]*9+5];
-                activeFlag[i_chosen] = 3;
-                SolidD[i_chosen] = -nrefine -3;
+                active_flag[i_chosen] = 3;
+                solid_d[i_chosen] = -nrefine -3;
                 nSites--;
                 naccept++;
             }
@@ -1041,7 +1041,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
         }
         //Do 2nd shell
         for(int j = 0; j < 12; j++) {
-            if(activeFlag[neighbor[i][second_nearest[j]]] == 2) {
+            if(active_flag[neighbor[i][second_nearest[j]]] == 2) {
                 int i_chosen = neighbor[i][second_nearest[j]];
                 spin[i_chosen] = spin[i];
 //                 phi1[i_chosen] = spin_euler[spin[i] * 3 -2];
@@ -1053,8 +1053,8 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 y1[i_chosen] = orientation_vectors[spin[i]*9+3];
                 y2[i_chosen] = orientation_vectors[spin[i]*9+4];
                 y3[i_chosen] = orientation_vectors[spin[i]*9+5];             
-                activeFlag[i_chosen] = 3;
-                SolidD[i_chosen] = -nrefine -3;
+                active_flag[i_chosen] = 3;
+                solid_d[i_chosen] = -nrefine -3;
                 nSites--;
                 naccept++;
             }
@@ -1064,7 +1064,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
           }
         //Do 3rd shell    
         for(int j = 0; j < 8; j++) {
-            if(activeFlag[neighbor[i][third_nearest[j]]] ==2) {
+            if(active_flag[neighbor[i][third_nearest[j]]] ==2) {
                 int i_chosen = neighbor[i][third_nearest[j]];
                 spin[i_chosen] = spin[i];
 //                 phi1[i_chosen] = spin_euler[spin[i] * 3 -2];
@@ -1076,8 +1076,8 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 y1[i_chosen] = orientation_vectors[spin[i]*9+3];
                 y2[i_chosen] = orientation_vectors[spin[i]*9+4];
                 y3[i_chosen] = orientation_vectors[spin[i]*9+5];
-                activeFlag[i_chosen] = 3;
-                SolidD[i_chosen] = -nrefine -3;
+                active_flag[i_chosen] = 3;
+                solid_d[i_chosen] = -nrefine -3;
                 nSites--;
                 naccept++;
             }
@@ -1094,7 +1094,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
     //If we still haven't satisfied the particle size, pick a neighbor at random and solidify from there.
     //Build a list of same-particle neighbors and pick one randomly
     for(int j =0; j < numneigh[i]; j++) {
-        if(spin[neighbor[i][j]] == spin[i] && activeFlag[neighbor[i][j]] == 3) {
+        if(spin[neighbor[i][j]] == spin[i] && active_flag[neighbor[i][j]] == 3) {
             possible_neigh[nneigh] = j;
             nneigh++;
         }
@@ -1127,7 +1127,7 @@ void AppAdditiveExtTempTexture::normal_finder(int site, double *outV)
 	
 	//Do a special thing for the top of the melt pool
 	//This is just cheating and copying the value from the next lower layer, but it should be good enough.
-	if(activeFlag[neighbor[site][13]] < 1) {
+	if(active_flag[neighbor[site][13]] < 1) {
 		xDel = fabs(T[neighbor[site][4]] - T[neighbor[site][21]]);
 		yDel = fabs(T[neighbor[site][10]] - T[neighbor[site][15]]);
 		
@@ -1373,15 +1373,15 @@ void AppAdditiveExtTempTexture::euler_init() {
     This version will also initialize nucleii size (starting with a normal dist)
 ------------------------------------------------------------------------- */
 void AppAdditiveExtTempTexture::nucleation_init() {
-    std::normal_distribution<> dist_T{Tc,Tsig};
-    std::normal_distribution<> dist_S{sizeNorm,sizeSig};
+    std::normal_distribution<> dist_T{tc,tsig};
+    std::normal_distribution<> dist_S{size_norm,size_sig};
     std::random_device rd{};
     std::mt19937 gen{rd()};
     
     //Randomly assign a temperature to every spin
     for(int i = 0; i < nspins; i++) {
-        nucleationTemps[i] = dist_T(gen);
-        nucleationSizes[i] = dist_S(gen);
+        nucleation_temps[i] = dist_T(gen);
+        nucleation_sizes[i] = dist_S(gen);
     }
 }
 
@@ -1405,7 +1405,7 @@ void AppAdditiveExtTempTexture::nucleation_init() {
  * @throws std::invalid_argument If the size of the input vector does not match the expected
  *         number of elements in the 3D array based on the specified ranges.
  */
-std::vector<std::vector<std::vector<int>>> AppAdditiveExtTempTexture::convertTo3DArrayWithRange(std::vector<int>& inputVector, 
+std::vector<std::vector<std::vector<int>>> AppAdditiveExtTempTexture::convert_to_3d_array_with_range(std::vector<int>& inputVector, 
     int xStart, int xEnd, 
     int yStart, int yEnd, 
     int zStart, int zEnd) {
@@ -1441,13 +1441,13 @@ std::vector<std::vector<std::vector<int>>> AppAdditiveExtTempTexture::convertTo3
 
 void AppAdditiveExtTempTexture::reduced_temperature_hdf_chunked(){
   
-  if (domain->me == 0) std::cout << "Starting chunked HDF5 reading from: " << temp_file_str << std::endl;
+  if (domain->me == 0) std::cout << "Starting chunked HDF5 reading from: " << temp_file_string << std::endl;
   if (domain->me == 0) std::cout << "Opening HDF5 file..." << std::endl;
   
   //Initialize chunked reading - open HDF5 file and datasets for reuse
   hid_t fapl_id = H5Pcreate(H5P_FILE_ACCESS);
   H5Pset_fclose_degree(fapl_id, H5F_CLOSE_STRONG);
-  hdf5_file_id = H5Fopen(temp_file_str.c_str(), H5F_ACC_RDONLY, fapl_id);
+  hdf5_file_id = H5Fopen(temp_file_string.c_str(), H5F_ACC_RDONLY, fapl_id);
   H5Pclose(fapl_id);
   
   if (hdf5_file_id < 0) {
@@ -1528,7 +1528,7 @@ void AppAdditiveExtTempTexture::load_data_counts_array(){
   int zhi2 = (int)ceil(domain->subzhi);
   
   
-  data_counts_array = convertTo3DArrayWithRange(data_counts, xlo2, xhi2, ylo2, yhi2, zlo2, zhi2);
+  data_counts_array = convert_to_3d_array_with_range(data_counts, xlo2, xhi2, ylo2, yhi2, zlo2, zhi2);
   
   if (domain->me == 0) std::cout << "Data counts array loaded" << std::endl;
 }

@@ -52,44 +52,44 @@ class AppAdditiveExtTempTexture : public AppPotts {
   void load_data_counts_array();
   int xyz_to_local( double x, double y, double z );
   virtual void temperature_time_interpolate(int, double);
-	std::vector<std::vector<std::vector<int>>> convertTo3DArrayWithRange(std::vector<int>&,int,int,int,int,int,int);
+	std::vector<std::vector<std::vector<int>>> convert_to_3d_array_with_range(std::vector<int>&,int,int,int,int,int,int);
 
  protected:
 
-	double *MobilityOut;
-	double *SolidD;
-		double *neighDist;
+	double *mobility_out;
+	double *solid_d;
+		double *neigh_dist;
     int time_index;
     double dtFD;
  	//To help improve ease of visualization, lets introduce another integer array. It will be 0 every to begin with
  	//When its layer becomes "active" we'll switch it to 1. This will help visualization and image dumping.
- 	int *activeFlag;
+ 	int *active_flag;
  	double read_interval;
  	const double R = 8.314459848; //Define a constant gas constant
 	/// parameters for the thermal diffusion eq
 	double *T;
 	double time_step;
-	int totalTime; //Keep track of time for app_update
+	int total_time; //Keep track of time for app_update
    int line_count;
   	double *temp_in_array;
   	double *phase_in_array;
-	int xPeriod, yPeriod, zPeriod;
+	int x_period, y_period, z_period;
 	int nrefine;
 	//New inputs
 	double dt;
-	double No;
-	double Tc;
-	double Tsig;
+	double no;
+	double tc;
+	double tsig;
 	double dx;
-    double Mo; //Arrhenius pre-factor
- 	double Q; //Arrhenius exponential factor
- 	double Tl; //Liquidus point
- 	double Ts; //Solidus point
-  double T_room;
+    double mo; //Arrhenius pre-factor
+ 	double q; //Arrhenius exponential factor
+ 	double tl; //Liquidus point
+ 	double ts; //Solidus point
+  double t_room;
     // double *phi1;
     // double *Phi;
     // double *phi2;
-    double *uniqueDot;
+    double *unique_dot;
     double *spin_euler;
     double *x1, *x2, *x3;
     double *y1, *y2, *y3;
@@ -97,8 +97,8 @@ class AppAdditiveExtTempTexture : public AppPotts {
     
     
   //New stuff
-  double sizeNorm;
-	double sizeSig;
+  double size_norm;
+	double size_sig;
 	double *solid_front_coeffs;
 	int    solid_front_length;
 	//Texture parameters
@@ -107,15 +107,15 @@ class AppAdditiveExtTempTexture : public AppPotts {
  	int fully_periodic;
  	
  	//New MC model parameters
-	int *nucleationFlags;
-	double *nucleationTemps;
-	double *nucleationSizes;
-  std::string temp_file_str;
+	int *nucleation_flags;
+	double *nucleation_temps;
+	double *nucleation_sizes;
+  std::string temp_file_string;
 
   //Variables for reduced temperature files
   DoubleQueueContainer temp_in;
   DoubleQueueContainer time_in;
-  double priorTime;
+  double prior_time;
   int t_active;
 
   //Variables for chunked HDF5 reading

@@ -36,9 +36,7 @@ class AppAdditiveExtTempTexture : public AppPotts {
   virtual void site_event_rejection(int, class RandomPark *);
   virtual void app_update(double);
   virtual void nucleation_spins(class RandomPark *);
-  //virtual void nucleation_temps();
   virtual void  input_app(char *, int , char **);
-  //virtual double mushy_mobility(int, class RandomPark *);
   virtual void orientation_init(class RandomPark *);
   virtual void nucleation_init();
   virtual void nucleation_particle_flipper(int, int,class RandomPark *);
@@ -48,7 +46,6 @@ class AppAdditiveExtTempTexture : public AppPotts {
   void vec2euler(int, double *);
   void euler_init();
   virtual void reduced_temperature_hdf();
-  int xyz_to_local( double x, double y, double z );
   virtual void temperature_time_interpolate(int, double);
 	std::vector<std::vector<std::vector<int>>> convertTo3DArrayWithRange(std::vector<int>&,int,int,int,int,int,int);
 
@@ -84,14 +81,15 @@ class AppAdditiveExtTempTexture : public AppPotts {
  	double Tl; //Liquidus point
  	double Ts; //Solidus point
   double T_room;
-    double *phi1;
-    double *Phi;
-    double *phi2;
+    // double *phi1;
+    // double *Phi;
+    // double *phi2;
     double *uniqueDot;
     double *spin_euler;
     double *x1, *x2, *x3;
     double *y1, *y2, *y3;
     double *orientation_vectors;
+    
     
   //New stuff
   double sizeNorm;

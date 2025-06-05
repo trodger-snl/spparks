@@ -23,15 +23,12 @@ function(apply_machine_config MACHINE_NAME)
         # Apple Silicon Mac with MPI (matches Makefile.mac_arm)
         set(SPPARKS_ENABLE_MPI ON PARENT_SCOPE)
         
-        # Only set defaults if not already specified by user in cache
-        get_property(HDF5_IS_CACHE CACHE SPPARKS_ENABLE_HDF5 PROPERTY VALUE SET)
-        get_property(JPEG_IS_CACHE CACHE SPPARKS_ENABLE_JPEG PROPERTY VALUE SET)
-        
-        if(NOT HDF5_IS_CACHE)
-            set(SPPARKS_ENABLE_HDF5 ON PARENT_SCOPE)
+        # Force enable HDF5 and JPEG for mac_arm unless explicitly overridden by command line
+        if(NOT DEFINED CACHE{SPPARKS_ENABLE_HDF5} OR NOT CMAKE_ARGV MATCHES "SPPARKS_ENABLE_HDF5")
+            set(SPPARKS_ENABLE_HDF5 ON CACHE BOOL "Enable HDF5 support" FORCE)
         endif()
-        if(NOT JPEG_IS_CACHE)
-            set(SPPARKS_ENABLE_JPEG ON PARENT_SCOPE)
+        if(NOT DEFINED CACHE{SPPARKS_ENABLE_JPEG} OR NOT CMAKE_ARGV MATCHES "SPPARKS_ENABLE_JPEG")
+            set(SPPARKS_ENABLE_JPEG ON CACHE BOOL "Enable JPEG support" FORCE)
         endif()
         
         message(STATUS "mac_arm: Enabled HDF5 and JPEG support (if not overridden)")

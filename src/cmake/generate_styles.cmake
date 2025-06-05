@@ -170,7 +170,9 @@ function(generate_single_style_header CLASS_PATTERN FILE_PREFIX STYLE_NAME DEPEN
     endif()
 endfunction()
 
-# Create a script to regenerate styles (only include the generation function)
+# NOTE: Dynamic regenerate_styles.cmake generation removed to prevent race conditions
+# The regenerate_styles.cmake file is now a static file that handles style generation
+if(FALSE) # Disabled
 file(WRITE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_styles.cmake"
 "# Script to regenerate style headers
 function(generate_style_headers)
@@ -279,9 +281,11 @@ endfunction()
 # Execute the generation
 generate_style_headers()
 ")
+endif() # End disabled section
 
 # Add dependencies for style headers
 file(GLOB ALL_APP_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/app_*.h")
+file(GLOB ALL_COMMAND_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/create_*.h" "${CMAKE_CURRENT_SOURCE_DIR}/read_*.h" "${CMAKE_CURRENT_SOURCE_DIR}/set.h" "${CMAKE_CURRENT_SOURCE_DIR}/shell.h")
 file(GLOB ALL_DIAG_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/diag_*.h")
 file(GLOB ALL_DUMP_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/dump_*.h")
 file(GLOB ALL_PAIR_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/pair_*.h")
@@ -292,15 +296,38 @@ file(GLOB ALL_SOLVE_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/solve_*.h")
 add_custom_command(
     OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/style_app.h"
     DEPENDS ${ALL_APP_HEADERS} "${CMAKE_CURRENT_BINARY_DIR}/feature_status.cmake"
-    COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_styles.cmake"
+    COMMAND ${CMAKE_COMMAND} 
+        -DSTYLE_TYPE=app
+        -DCLASS_PATTERN=APP_CLASS
+        -DFILE_PREFIX=app_
+        -DDEPENDENCY_FILE=input
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_single_style.cmake"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Regenerating style_app.h based on features and headers"
 )
 
 add_custom_command(
+    OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/style_command.h"
+    DEPENDS ${ALL_COMMAND_HEADERS} "${CMAKE_CURRENT_BINARY_DIR}/feature_status.cmake"
+    COMMAND ${CMAKE_COMMAND}
+        -DSTYLE_TYPE=command
+        -DCLASS_PATTERN=COMMAND_CLASS
+        -DFILE_PREFIX=
+        -DDEPENDENCY_FILE=input
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_single_style.cmake"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Regenerating style_command.h based on features and headers"
+)
+
+add_custom_command(
     OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/style_diag.h"
     DEPENDS ${ALL_DIAG_HEADERS} "${CMAKE_CURRENT_BINARY_DIR}/feature_status.cmake"
-    COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_styles.cmake"
+    COMMAND ${CMAKE_COMMAND}
+        -DSTYLE_TYPE=diag
+        -DCLASS_PATTERN=DIAG_CLASS
+        -DFILE_PREFIX=diag_
+        -DDEPENDENCY_FILE=input
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_single_style.cmake"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Regenerating style_diag.h based on features and headers"
 )
@@ -308,7 +335,12 @@ add_custom_command(
 add_custom_command(
     OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/style_dump.h"
     DEPENDS ${ALL_DUMP_HEADERS} "${CMAKE_CURRENT_BINARY_DIR}/feature_status.cmake"
-    COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_styles.cmake"
+    COMMAND ${CMAKE_COMMAND}
+        -DSTYLE_TYPE=dump
+        -DCLASS_PATTERN=DUMP_CLASS
+        -DFILE_PREFIX=dump_
+        -DDEPENDENCY_FILE=output
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_single_style.cmake"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Regenerating style_dump.h based on features and headers"
 )
@@ -316,7 +348,12 @@ add_custom_command(
 add_custom_command(
     OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/style_pair.h"
     DEPENDS ${ALL_PAIR_HEADERS} "${CMAKE_CURRENT_BINARY_DIR}/feature_status.cmake"
-    COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_styles.cmake"
+    COMMAND ${CMAKE_COMMAND}
+        -DSTYLE_TYPE=pair
+        -DCLASS_PATTERN=PAIR_CLASS
+        -DFILE_PREFIX=pair_
+        -DDEPENDENCY_FILE=potential
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_single_style.cmake"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Regenerating style_pair.h based on features and headers"
 )
@@ -324,7 +361,12 @@ add_custom_command(
 add_custom_command(
     OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/style_region.h"
     DEPENDS ${ALL_REGION_HEADERS} "${CMAKE_CURRENT_BINARY_DIR}/feature_status.cmake"
-    COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_styles.cmake"
+    COMMAND ${CMAKE_COMMAND}
+        -DSTYLE_TYPE=region
+        -DCLASS_PATTERN=REGION_CLASS
+        -DFILE_PREFIX=region_
+        -DDEPENDENCY_FILE=domain
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_single_style.cmake"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Regenerating style_region.h based on features and headers"
 )
@@ -332,7 +374,12 @@ add_custom_command(
 add_custom_command(
     OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/style_solve.h"
     DEPENDS ${ALL_SOLVE_HEADERS} "${CMAKE_CURRENT_BINARY_DIR}/feature_status.cmake"
-    COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_styles.cmake"
+    COMMAND ${CMAKE_COMMAND}
+        -DSTYLE_TYPE=solve
+        -DCLASS_PATTERN=SOLVE_CLASS
+        -DFILE_PREFIX=solve_
+        -DDEPENDENCY_FILE=input
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_single_style.cmake"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Regenerating style_solve.h based on features and headers"
 )
@@ -409,17 +456,22 @@ add_custom_target(generate_styles
 add_custom_target(style_headers DEPENDS ${STYLE_HEADERS})
 
 # Add validation target that runs after style headers are generated
+# Validation target disabled to prevent script mode issues
+if(FALSE) # Disabled
 add_custom_target(validate_styles
     COMMAND ${CMAKE_COMMAND} -E echo "Validating style headers..."
     COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/validate_styles.cmake"
     DEPENDS style_headers
     COMMENT "Validating feature-dependent style headers"
 )
+endif() # End disabled section
 
-# Create validation script
+# Validation script generation disabled to prevent script mode issues
+if(FALSE) # Disabled
 file(WRITE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/validate_styles.cmake"
 "# Style header validation script
 include(\"${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_styles.cmake\")
 validate_style_headers()
 ")
+endif() # End disabled section
 

@@ -89,7 +89,6 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   double t_room;
   double *unique_dot;
   double *q0, *qx, *qy, *qz;
-  double *orientation_vectors;
   int *unique_neigh;
     
     

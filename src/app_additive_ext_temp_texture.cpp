@@ -77,8 +77,22 @@ using namespace MathConst;
 
 /* ---------------------------------------------------------------------- */
 
+static char** construct_parent_args(char **arg) {
+  static char* parent_args[3];
+  static char app_name[] = "additive_temperature_texture";
+  static char crystal_type[] = "cubic";
+  
+  parent_args[0] = app_name;
+  parent_args[1] = arg[1]; // nspins
+  parent_args[2] = crystal_type; // crystal structure
+  
+  return parent_args;
+}
+
+/* ---------------------------------------------------------------------- */
+
 AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, char **arg) :
-  AppPottsQuaternion(spk,narg,arg)
+  AppPottsQuaternion(spk,3,construct_parent_args(arg))
 {
 
     if (narg != 8  )
@@ -93,7 +107,7 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     nrefine = atoi(arg[7]); //How many refinement MC steps to perform after a site solidifies
     
     //I think we need all of these variables still!/  
-    ndouble = 7;
+    ndouble = 7; // Override parent's ndouble=4 to add mobility_out, T, solid_d
     allow_app_update = 1;
     ninteger = 2;
     total_time = 0;
@@ -120,7 +134,6 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     c3 = 2.5;
     time_step = dt;
     t_room = 300;
-    symmetries = CUBIC::get_symmetries(); //TODO Figure out how to assign symmetries in this child class.
     
     // Initialize bounds checking variables
     bounds_check_mode = 0; // Default to exact match
@@ -130,6 +143,18 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     
     //add the double array
     recreate_arrays();  
+}
+
+/* ----------------------------------------------------------------------
+   flip site to new state - handles both spin and quaternion
+------------------------------------------------------------------------- */
+
+void AppAdditiveExtTempTexture::flip_site(int i, const SiteState &s) {
+  spin[i] = s.spin;
+  q0[i] = s.q[0];
+  qx[i] = s.q[1];
+  qy[i] = s.q[2];
+  qz[i] = s.q[3];
 }
 
 /* ----------------------------------------------------------------------
@@ -575,11 +600,13 @@ void AppAdditiveExtTempTexture::init_app()
 {
   delete [] sites;
   delete [] unique;
+  delete [] unique_neigh;
   double sqrt2 = 1.4142135624;
   double sqrt3 = 1.7320508076;
   sites = new int[1 + maxneigh];
   unique = new int[1 + maxneigh];
   unique_dot = new double[1 + maxneigh];
+  unique_neigh = new int[1 + maxneigh];
   RandomPark random(3000);
 
   //Allocate our temperature and time data structures
@@ -799,9 +826,9 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
       if (nevent == 0) return;
       int iran = (int) (nevent*random->uniform());
       if (iran >= nevent) iran = nevent-1;
-      spin[i] = unique[iran];
-      SiteState s_new(unique[iran],{q0[unique_neigh[iran]],qx[unique_neigh[iran]],qy[unique_neigh[iran]],qz[unique_neigh[iran]]});
-      flip_site(i,s_new);
+      int neighran = unique_neigh[iran]; // Get neighbor index
+      SiteState s_new(unique[iran], {q0[neighran], qx[neighran], qy[neighran], qz[neighran]});
+      flip_site(i, s_new);
       efinal = site_energy(i);
 
 
@@ -810,17 +837,14 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
 
   if (efinal <= einitial) {
      if (random->uniform() > Mobloc){
-       spin[i] = oldstate;
-       flip_site(i,s_old);
+       flip_site(i, s_old);
      }
   }
   else if (temperature == 0.0) {
-    spin[i] = oldstate;
-    flip_site(i,s_old);
+    flip_site(i, s_old);
   } 
   else if (random->uniform() > Mobloc * exp((einitial-efinal)*t_inverse)) {
-    spin[i] = oldstate;
-    flip_site(i,s_old);
+    flip_site(i, s_old);
   }
 
 
@@ -909,15 +933,7 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
             for( int j = 0; j < nevent -1; j++) {
                 if(dran <= unique_dot[j]) {
                     spin[i] = unique[j];
- //                    phi1[i] = spin_euler[spin[i] * 3 -2];
-//                     Phi[i] = spin_euler[spin[i] * 3 -1];
-//                     phi2[i] = spin_euler[spin[i] *3];
-                    x1[i] = orientation_vectors[spin[i]*9];
-                    x2[i] = orientation_vectors[spin[i]*9+1];
-                    x3[i] = orientation_vectors[spin[i]*9+2];
-                    y1[i] = orientation_vectors[spin[i]*9+3];
-                    y2[i] = orientation_vectors[spin[i]*9+4];
-                    y3[i] = orientation_vectors[spin[i]*9+5];
+                    // Quaternion orientations are handled automatically via site selection
                     active_flag[i] = 3;
                     solid_d[i] = -1;
                     naccept++;
@@ -957,15 +973,7 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
         for( int j = 0; j < nevent -1; j++) {
             if(dran <= unique_dot[j]) {
                 spin[i] = unique[j];
- //                phi1[i] = spin_euler[spin[i] * 3 -2];
-//                 Phi[i] = spin_euler[spin[i] * 3 -1];
-//                 phi2[i] = spin_euler[spin[i] *3];
-                x1[i] = orientation_vectors[spin[i]*9];
-                x2[i] = orientation_vectors[spin[i]*9+1];
-                x3[i] = orientation_vectors[spin[i]*9+2];
-                y1[i] = orientation_vectors[spin[i]*9+3];
-                y2[i] = orientation_vectors[spin[i]*9+4];
-                y3[i] = orientation_vectors[spin[i]*9+5];
+                // Quaternion orientations are handled automatically via site selection
                 active_flag[i] = 3;
                 solid_d[i] = -1;
                 naccept++;
@@ -1002,7 +1010,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
         for(int j = 0; j < numneigh[i]; j++) {
             if(active_flag[neighbor[i][j]] == 2) {
                 int i_chosen = neighbor[i][j];
-                flip_site(i_chosen,s_in); //TODO need to make flip_site accessible or implement my own version
+                flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
                 solid_d[i_chosen] = -nrefine -3;
                 nSites--;
@@ -1021,7 +1029,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
 
             if(active_flag[neighbor[i][nearest_neigh[j]]] == 2) {
                 int i_chosen = neighbor[i][nearest_neigh[j]];
-                flip_site(i_chosen,s_in);
+                flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
                 solid_d[i_chosen] = -nrefine -3;
                 nSites--;
@@ -1035,7 +1043,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
         for(int j = 0; j < 12; j++) {
             if(active_flag[neighbor[i][second_nearest[j]]] == 2) {
                 int i_chosen = neighbor[i][second_nearest[j]];
-                flip_site(i_chosen,s_in);            
+                flip_site(i_chosen, s_in);            
                 active_flag[i_chosen] = 3;
                 solid_d[i_chosen] = -nrefine -3;
                 nSites--;
@@ -1050,7 +1058,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
             if(active_flag[neighbor[i][third_nearest[j]]] ==2) {
                 int i_chosen = neighbor[i][third_nearest[j]];
                 spin[i_chosen] = spin[i];
-                flip_site(i_chosen,s_in);
+                flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
                 solid_d[i_chosen] = -nrefine -3;
                 nSites--;
@@ -1328,20 +1336,20 @@ void AppAdditiveExtTempTexture::vec2euler(int spin_loc, double *eulers) {
   }
 }
 
-//Sets up the euler angle per spin mapping
-void AppAdditiveExtTempTexture::euler_init() {
-
-    double eulerLoc[3] = {0, 0 ,0};
-    int j = 1;
-    //Go through all spins and determine euler angles
-    for (int i = 0; i < nspins * 3; i = i + 3) {
-        vec2euler(j, eulerLoc);
-        spin_euler[i] = eulerLoc[0];
-        spin_euler[i +1]  = eulerLoc[1];
-        spin_euler[i + 2] = eulerLoc[2];
-        j++;
-    }
-}
+//Sets up the euler angle per spin mapping - NO LONGER NEEDED WITH QUATERNIONS
+// void AppAdditiveExtTempTexture::euler_init() {
+//
+//     double eulerLoc[3] = {0, 0 ,0};
+//     int j = 1;
+//     //Go through all spins and determine euler angles
+//     for (int i = 0; i < nspins * 3; i = i + 3) {
+//         vec2euler(j, eulerLoc);
+//         spin_euler[i] = eulerLoc[0];
+//         spin_euler[i +1]  = eulerLoc[1];
+//         spin_euler[i + 2] = eulerLoc[2];
+//         j++;
+//     }
+// }
 
 /* ----------------------------------------------------------------------
     The first version of this just initialized critical nucleation temperatures.

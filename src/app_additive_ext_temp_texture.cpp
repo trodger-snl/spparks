@@ -117,6 +117,12 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     time_step = dt;
     t_room = 300;
     
+    // Initialize bounds checking variables
+    bounds_check_mode = 0; // Default to exact match
+    bounds_validated = false;
+    hdf5_dims[0] = hdf5_dims[1] = hdf5_dims[2] = 0;
+    hdf5_origin[0] = hdf5_origin[1] = hdf5_origin[2] = 0.0;
+    
     //add the double array
     recreate_arrays();  
 }
@@ -189,6 +195,12 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
      c1 = atof(arg[0]);
      c2 = atof(arg[1]);
      c3 = atof(arg[2]);
+  }
+  else if (strcmp(command,"bounds_check_mode") == 0) {
+     if (narg != 1) error->all(FLERR,"Illegal bounds_check_mode command");
+     bounds_check_mode = atoi(arg[0]);
+     if (bounds_check_mode < 0 || bounds_check_mode > 1) 
+       error->all(FLERR,"Illegal bounds_check_mode value: must be 0 (exact) or 1 (subvolume)");
   }
   
   else error->all(FLERR,"Unrecognized command");
@@ -1460,6 +1472,12 @@ void AppAdditiveExtTempTexture::reduced_temperature_hdf_chunked(){
   hdf5_time_dataset = H5Dopen(hdf5_file_id, "time", H5P_DEFAULT);
   hdf5_file_open = true;
   
+  // Validate simulation bounds against HDF5 data BEFORE loading any data
+  if (!bounds_validated) {
+    if (domain->me == 0) std::cout << "Validating simulation bounds..." << std::endl;
+    validate_simulation_bounds();
+  }
+  
   if (domain->me == 0) std::cout << "Loading data counts array..." << std::endl;
   //Read data_counts array once (small and needed for all chunks)
   load_data_counts_array();
@@ -1934,5 +1952,163 @@ void AppAdditiveExtTempTexture::close_hdf5_file() {
     
     if (domain->me == 0) std::cout << "HDF5 file closed" << std::endl;
   }
+}
+
+/* ----------------------------------------------------------------------
+   Get HDF5 data dimensions from data_counts and origin from x0
+------------------------------------------------------------------------- */
+void AppAdditiveExtTempTexture::get_hdf5_dimensions() {
+  
+  if (!hdf5_file_open) {
+    error->all(FLERR,"HDF5 file must be open to get dimensions");
+  }
+  
+  // Get dataspace from data_counts dataset (3D: x,y,z)
+  hid_t dataspace = H5Dget_space(hdf5_count_dataset);
+  
+  // Get number of dimensions
+  int ndims = H5Sget_simple_extent_ndims(dataspace);
+  if (ndims != 3) {
+    H5Sclose(dataspace);
+    error->all(FLERR,"HDF5 data_counts dataset must have 3 dimensions (x,y,z)");
+  }
+  
+  // Get dimension sizes from data_counts
+  H5Sget_simple_extent_dims(dataspace, hdf5_dims, NULL);
+  H5Sclose(dataspace);
+  
+  // Read x0 origin data if it exists
+  // Check if x0 dataset exists
+  htri_t exists = H5Lexists(hdf5_file_id, "x0", H5P_DEFAULT);
+  if (exists > 0) {
+    // Open x0 dataset
+    hid_t x0_dataset = H5Dopen(hdf5_file_id, "x0", H5P_DEFAULT);
+    
+    // Get dataspace
+    hid_t x0_space = H5Dget_space(x0_dataset);
+    
+    // Get dimensions
+    hsize_t x0_dims[1];
+    int x0_ndims = H5Sget_simple_extent_dims(x0_space, x0_dims, NULL);
+    
+    if (x0_ndims == 1 && x0_dims[0] >= 3) {
+      // Read the origin values
+      double x0_data[3];
+      hid_t x0_type = H5Dget_type(x0_dataset);
+      H5Dread(x0_dataset, x0_type, H5S_ALL, H5S_ALL, H5P_DEFAULT, x0_data);
+      
+      // Store origin
+      hdf5_origin[0] = x0_data[0];
+      hdf5_origin[1] = x0_data[1];
+      hdf5_origin[2] = x0_data[2];
+      
+      H5Tclose(x0_type);
+    }
+    else {
+      if (domain->me == 0) {
+        std::cout << "Warning: x0 dataset exists but has unexpected dimensions. Using origin (0,0,0)." << std::endl;
+      }
+    }
+    
+    H5Sclose(x0_space);
+    H5Dclose(x0_dataset);
+  }
+  else {
+    if (domain->me == 0) {
+      std::cout << "Note: No x0 dataset found. Using origin (0,0,0)." << std::endl;
+    }
+  }
+  
+  if (domain->me == 0) {
+    std::cout << "HDF5 data dimensions (from data_counts): " << hdf5_dims[0] << " x " 
+              << hdf5_dims[1] << " x " << hdf5_dims[2] << std::endl;
+    std::cout << "HDF5 data origin (x0): (" << hdf5_origin[0] << ", " 
+              << hdf5_origin[1] << ", " << hdf5_origin[2] << ")" << std::endl;
+  }
+}
+
+/* ----------------------------------------------------------------------
+   Validate simulation bounds against HDF5 data dimensions
+------------------------------------------------------------------------- */
+void AppAdditiveExtTempTexture::validate_simulation_bounds() {
+  
+  // Get HDF5 dimensions first
+  get_hdf5_dimensions();
+  
+  // Get global simulation domain bounds
+  int sim_nx = (int)(domain->boxxhi - domain->boxxlo);
+  int sim_ny = (int)(domain->boxyhi - domain->boxylo);
+  int sim_nz = (int)(domain->boxzhi - domain->boxzlo);
+  
+  if (domain->me == 0) {
+    std::cout << "Simulation domain: size(" << sim_nx << " x " 
+              << sim_ny << " x " << sim_nz << ") at [" 
+              << domain->boxxlo << "," << domain->boxxhi << "] x ["
+              << domain->boxylo << "," << domain->boxyhi << "] x ["
+              << domain->boxzlo << "," << domain->boxzhi << "]" << std::endl;
+    std::cout << "HDF5 data: size(" << hdf5_dims[0] << " x " 
+              << hdf5_dims[1] << " x " << hdf5_dims[2] << ") with origin ("
+              << hdf5_origin[0] << "," << hdf5_origin[1] << "," << hdf5_origin[2] << ")" << std::endl;
+    std::cout << "Bounds check mode: " << (bounds_check_mode == 0 ? "exact match" : "subvolume") << std::endl;
+  }
+  
+  if (bounds_check_mode == 0) {
+    // Exact match mode - simulation and HDF5 dimensions must be identical
+    // For exact match, we expect the simulation to start at (0,0,0) matching HDF5 origin convention
+    if (sim_nx != (int)hdf5_dims[0] || sim_ny != (int)hdf5_dims[1] || sim_nz != (int)hdf5_dims[2]) {
+      std::ostringstream error_msg;
+      error_msg << "Simulation domain size (" << sim_nx << "x" << sim_ny << "x" << sim_nz 
+                << ") does not exactly match HDF5 data size (" 
+                << hdf5_dims[0] << "x" << hdf5_dims[1] << "x" << hdf5_dims[2] << "). "
+                << "Use bounds_check_mode 1 for subvolume mode or adjust domain size.";
+      error->all(FLERR,error_msg.str().c_str());
+    }
+    
+    // Warn if simulation doesn't start at origin
+    if ((domain->boxxlo != 0.0 || domain->boxylo != 0.0 || domain->boxzlo != 0.0) && domain->me == 0) {
+      std::cout << "Warning: In exact match mode, simulation domain should typically start at (0,0,0)" << std::endl;
+    }
+    
+    if (domain->me == 0) std::cout << "✓ Exact match validation passed" << std::endl;
+  }
+  else if (bounds_check_mode == 1) {
+    // Subvolume mode - simulation domain must fit within HDF5 data bounds
+    // Account for HDF5 origin offset
+    
+    // Calculate effective HDF5 bounds in simulation coordinate system
+    double hdf5_xlo = hdf5_origin[0];
+    double hdf5_xhi = hdf5_origin[0] + hdf5_dims[0];
+    double hdf5_ylo = hdf5_origin[1];
+    double hdf5_yhi = hdf5_origin[1] + hdf5_dims[1];
+    double hdf5_zlo = hdf5_origin[2];
+    double hdf5_zhi = hdf5_origin[2] + hdf5_dims[2];
+    
+    if (domain->me == 0) {
+      std::cout << "HDF5 effective bounds: [" << hdf5_xlo << "," << hdf5_xhi << "] x ["
+                << hdf5_ylo << "," << hdf5_yhi << "] x ["
+                << hdf5_zlo << "," << hdf5_zhi << "]" << std::endl;
+    }
+    
+    // Check if simulation domain is within HDF5 bounds
+    if (domain->boxxlo < hdf5_xlo || domain->boxxhi > hdf5_xhi ||
+        domain->boxylo < hdf5_ylo || domain->boxyhi > hdf5_yhi ||
+        domain->boxzlo < hdf5_zlo || domain->boxzhi > hdf5_zhi) {
+      std::ostringstream error_msg;
+      error_msg << "Simulation domain [" << domain->boxxlo << "," << domain->boxxhi << "] x ["
+                << domain->boxylo << "," << domain->boxyhi << "] x ["
+                << domain->boxzlo << "," << domain->boxzhi << "] "
+                << "is not contained within HDF5 data bounds ["
+                << hdf5_xlo << "," << hdf5_xhi << "] x ["
+                << hdf5_ylo << "," << hdf5_yhi << "] x ["
+                << hdf5_zlo << "," << hdf5_zhi << "]. "
+                << "Adjust simulation domain to fit within HDF5 data.";
+      error->all(FLERR,error_msg.str().c_str());
+    }
+    
+    if (domain->me == 0) std::cout << "✓ Subvolume validation passed" << std::endl;
+  }
+  
+  bounds_validated = true;
+  if (domain->me == 0) std::cout << "Bounds validation completed successfully" << std::endl;
 }
 

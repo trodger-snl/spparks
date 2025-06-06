@@ -133,11 +133,19 @@ class AppAdditiveExtTempTexture : public AppPotts {
   std::vector<std::vector<std::vector<std::vector<double>>>> cached_time_values;
   std::vector<std::vector<std::vector<bool>>> time_cache_loaded;
   
+  // HDF5 bounds checking variables
+  int bounds_check_mode; // 0 = exact match, 1 = subvolume
+  hsize_t hdf5_dims[3];  // HDF5 data dimensions from data_counts
+  double hdf5_origin[3]; // HDF5 data origin from x0 field
+  bool bounds_validated;
+  
   void load_next_chunk();
   void close_hdf5_file();
   bool needs_new_chunk(double simulation_time);
   void initialize_time_cache();
   void fill_missing_temperature_data();
+  void validate_simulation_bounds();
+  void get_hdf5_dimensions();
 
 };
 

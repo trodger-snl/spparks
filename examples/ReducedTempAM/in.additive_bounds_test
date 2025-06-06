@@ -1,0 +1,39 @@
+# SPPARKS bounds checking test
+# This example demonstrates the new bounds_check_mode feature
+
+app_style additive_temperature_texture 1000000 "/Users/Tron/spparks/examples/ReducedTempAM/ms_output_compressed.hdf5" 1623 1563 5e-6 3e-6 1 
+
+# Set bounds checking mode
+# 0 = exact match (default) - simulation domain must exactly match HDF5 data dimensions
+# 1 = subvolume mode - simulation domain must fit within HDF5 data bounds
+bounds_check_mode 0
+
+seed 56789
+
+dimension 3
+lattice sc/26n 1.0
+
+# Test with exact match (should work if HDF5 data is 200x200x198)
+region box block 0 200 0 200 0 198
+
+boundary n n n
+
+create_box box
+create_sites box 
+set site range 1 1000000
+set i2 value 1
+set d1 value 0
+set d2 value 300
+
+sector yes
+sweep random mask no
+
+# AM specific parameters
+liquidus 1623
+solidus 1563
+solid_front_vel 4 -1.0302e-7 1.0533e-4 2.2196e-3 0
+
+stats 1e-4
+
+# Run a few steps to test bounds validation
+run 10

@@ -1,0 +1,38 @@
+# SPPARKS bounds checking test - FAILURE case
+# This example demonstrates that bounds checking happens BEFORE loading data
+
+app_style additive_temperature_texture 1000000 "/Users/Tron/spparks/examples/ReducedTempAM/ms_output_compressed.hdf5" 1623 1563 5e-6 3e-6 1 
+
+# Set exact match mode
+bounds_check_mode 0
+
+seed 56789
+
+dimension 3
+lattice sc/26n 1.0
+
+# Test with WRONG dimensions (should fail before loading any temperature data)
+# This saves time by catching the error early
+region box block 0 150 0 150 0 100
+
+boundary n n n
+
+create_box box
+create_sites box 
+set site range 1 1000000
+set i2 value 1
+set d1 value 0
+set d2 value 300
+
+sector yes
+sweep random mask no
+
+# AM specific parameters
+liquidus 1623
+solidus 1563
+solid_front_vel 4 -1.0302e-7 1.0533e-4 2.2196e-3 0
+
+stats 1e-4
+
+# This run command should never be reached due to bounds validation failure
+run 10

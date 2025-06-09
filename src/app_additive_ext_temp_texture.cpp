@@ -95,19 +95,17 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
   AppPottsQuaternion(spk,3,construct_parent_args(arg))
 {
 
-    if (narg != 8  )
+    if (narg != 6  )
     error->all(FLERR,"Illegal app_style command");
 
     nspins = atoi(arg[1]);
     temp_file_string = arg[2]; //The name of the temperature file
-    tl = atof(arg[3]); //The material liquidus point
-    ts = atof(arg[4]); //The materials solidus point
-    dx = atof(arg[5]); //The source lattice spacing ( in m)
-    dt = atof(arg[6]); //The source timestep (in seconds)
-    nrefine = atoi(arg[7]); //How many refinement MC steps to perform after a site solidifies
+    dx = atof(arg[3]); //The source lattice spacing ( in m)
+    dt = atof(arg[4]); //The source timestep (in seconds)
+    nrefine = atoi(arg[5]); //How many refinement MC steps to perform after a site solidifies
     
-    //I think we need all of these variables still!/  
-    ndouble = 7; // Override parent's ndouble=4 to add mobility_out, T, solid_d
+    //I think we need all of these variables still!
+    ndouble = 7;
     allow_app_update = 1;
     ninteger = 2;
     total_time = 0;
@@ -259,9 +257,9 @@ void AppAdditiveExtTempTexture::app_update(double dt)
         if(T[i] > t_room) t_active = 1;
     
         //Turn the sites on/off depending on the phase data and whether or not the
-        //site's temperature has gone above tl
-        //We will also have an active_flag value of 3 for something that's re-solidified
-        if( T[i] >= tl) {
+        //site's temperature has gone above tl. Only do this when melting the first time, so we don't have to 
+        //do it over and over
+        if( (T[i] >= tl) && active_flag[i] != 2) {
             active_flag[i] = 2;
             spin[i] = (int) (nspins * ranapp->uniform());
             // Create random orientation as each site
@@ -575,10 +573,10 @@ void AppAdditiveExtTempTexture::grow_app()
   qy = darray[5];
   qz = darray[6];
 
-      if (nlocal_app < nlocal) {
-        nlocal_app = nlocal;
-                
-      }
+  if (nlocal_app < nlocal) {
+    nlocal_app = nlocal;
+            
+  }
   //Determine whether the domain is fully periodic, if not. Specify the periodicity of each boundary
   if(domain->nonperiodic == 0) {
   		fully_periodic = 1;
@@ -624,21 +622,6 @@ void AppAdditiveExtTempTexture::init_app()
   nucleation_flags = new int[nspins];
   nucleation_temps = new double[nspins];
 	nucleation_sizes = new double[nspins];
-
-
-  //Initialize orientations based on spins (which have hopefully been determined)...
-  // if (domain->me==0) {
-  // 	orientation_init(ranapp);    
-  // }
-
-
-  // MPI_Bcast(orientation_vectors,nspins*9, MPI_DOUBLE,0,world);
-  
-  // if(domain->me==0){
-  //   euler_init();
-  // }
-  
-//   MPI_Bcast(spin_euler, nspins*3, MPI_DOUBLE,0,world);
 
   int flag = 0;
 	int flagall;
@@ -884,6 +867,8 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
   	int m,value;
   	double dotValue = 0;
     double Tcool = tl - T[i];
+    SiteState s_old(spin[i], {q0[i], qx[i], qy[i], qz[i]});
+
     
     //Our site should always be molten and below tl
     //Check if it's eligible to nucleate
@@ -997,7 +982,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
     int third_nearest [ ] = {0,25,23,2,6,19,17,8};
     int nneigh = 0;
     int possible_neigh[26];
-    SiteState s_in(i,{q0[i], qx[i], qy[i], qz[i]});
+    SiteState s_in(spin[i],{q0[i], qx[i], qy[i], qz[i]});
 
     
 
@@ -1145,6 +1130,7 @@ double AppAdditiveExtTempTexture::melt_misorientation(int site, double c1, doubl
 	double dotMax;
 	double theta;
 	double mobOut;
+
 	
 	//Calculate the unit-vector surface norm (use voxel counting)
 	normal_finder(site, gradNorm);
@@ -1168,75 +1154,12 @@ double AppAdditiveExtTempTexture::melt_misorientation(int site, double c1, doubl
 	return mobOut;
 }
 
-/* ----------------------------------------------------------------------
-  Create the lookup table to link xtal orientation and spin. For starters, we'll align
-  all the spins in the same direction and that will be aligned with the xyz axes of the domain.
-  Each spin will have 9 double-values associated with it in the table...
-  
-  I think we should only do this once. Currently, we do this on all processors and each one
-  has its own random number scheme. This results in inconsistent results across proc boundaries
-------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::orientation_init(RandomPark *random)
-{
-	// Generate random quaternion orientations for each spin
-	// The quaternion arrays (q0, qx, qy, qz) are already allocated in the parent class
-	
-	for (int i = 1; i <= nspins; i++) {
-		// Generate random unit quaternion using Gaussian distribution method
-		double q[4];
-		double mag = 0.0;
-		
-		// Generate 4 random numbers from normal (Gaussian) distribution
-		// Make sure to generate non-trivial (non-zero) quaternion
-		while (mag < 1.0e-15) {
-			double sum_sq = 0.0;
-			for (int j = 0; j < 4; j++) {
-				// Box-Muller transform for Gaussian random numbers
-				static bool have_spare = false;
-				static double spare;
-				
-				if (have_spare) {
-					q[j] = spare;
-					have_spare = false;
-				} else {
-					double u1 = random->uniform();
-					double u2 = random->uniform();
-					double r = sqrt(-2.0 * log(u1));
-					double theta = 2.0 * M_PI * u2;
-					q[j] = r * cos(theta);
-					spare = r * sin(theta);
-					have_spare = true;
-				}
-				sum_sq += q[j] * q[j];
-			}
-			mag = sqrt(sum_sq);
-		}
-		
-		// Normalize the quaternion to make it a unit quaternion
-		double inv_mag = 1.0 / mag;
-		for (int j = 0; j < 4; j++) {
-			q[j] *= inv_mag;
-		}
-		
-		// Store quaternion components in spin arrays
-		// Note: quaternion arrays are indexed by site, not spin
-		// This function initializes the orientations by spin ID
-		// The actual site assignments happen elsewhere
-		// For now, we'll store these as reference orientations
-		// that get assigned to sites during nucleation
-		if (i < nspins) {
-			// These will be used as reference orientations for spin assignment
-			// The actual quaternion assignment to sites happens in nucleation functions
-		}
-	}
-}
-
-//Let's build a global array of euler angles (much like the vectors), so we dont have to
+//Let's build a global array of euler angles (much like the quaternions), so we dont have to
 //Do trig calculations over and over again.
 //Call at the beginning of the program
 //This function won't do any loops, just the pure math
 //Will need verification that I didn't get indices screwed up...
-void AppAdditiveExtTempTexture::vec2euler(int site_index, double *eulers) {
+void AppAdditiveExtTempTexture::quat2euler(int site_index, double *eulers) {
   // Convert quaternion to Euler angles
   // Input: site_index - index of the site whose quaternion orientation to convert
   // Output: eulers - array of 3 Euler angles [phi1, Phi, phi2]
@@ -1274,20 +1197,6 @@ void AppAdditiveExtTempTexture::vec2euler(int site_index, double *eulers) {
   }
 }
 
-//Sets up the euler angle per spin mapping - NO LONGER NEEDED WITH QUATERNIONS
-// void AppAdditiveExtTempTexture::euler_init() {
-//
-//     double eulerLoc[3] = {0, 0 ,0};
-//     int j = 1;
-//     //Go through all spins and determine euler angles
-//     for (int i = 0; i < nspins * 3; i = i + 3) {
-//         vec2euler(j, eulerLoc);
-//         spin_euler[i] = eulerLoc[0];
-//         spin_euler[i +1]  = eulerLoc[1];
-//         spin_euler[i + 2] = eulerLoc[2];
-//         j++;
-//     }
-// }
 
 /* ----------------------------------------------------------------------
     The first version of this just initialized critical nucleation temperatures.

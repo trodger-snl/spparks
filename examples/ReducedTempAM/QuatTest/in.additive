@@ -63,7 +63,7 @@ dump			2 image 2e-4 dumpgrain.*.jpg i1 i1 shape cube size 1000 1000 view 45 45 s
 dump_modify		2 thresh i2 > 1
 
 ############# Temp Image Dump ###############
-dump			3 image 2e-4 dumpheat.*.jpg d2 i1 shape cube size 1000 1000 view 0 0 sdiam 1.05 box no 0.01
+dump			3 image 2e-4 dumpheat.*.jpg d5 i1 shape cube size 1000 1000 view 0 0 sdiam 1.05 box no 0.01
 dump_modify		3 thresh i2 > 1 smap 300 2000 cf 0.05 2 min blue max red 
 
 

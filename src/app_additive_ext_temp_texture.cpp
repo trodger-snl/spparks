@@ -107,6 +107,7 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     //I think we need all of these variables still!
     ndouble = 7;
     allow_app_update = 1;
+    app_update_only = 1; //Skip solid-state growth for now.
     ninteger = 2;
     total_time = 0;
     sites = unique = NULL;

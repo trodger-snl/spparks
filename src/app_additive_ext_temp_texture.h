@@ -46,7 +46,6 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
 	double melt_misorientation(int, double, double, double);
   void quat2euler(int, double *);
   // void euler_init(); // NO LONGER NEEDED WITH QUATERNIONS
-  void flip_site(int site, const SiteState &s);
   virtual void reduced_temperature_hdf();
   virtual void reduced_temperature_hdf_chunked();
   void load_data_counts_array();
@@ -87,7 +86,6 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
  	double ts; //Solidus point
   double t_room;
   double *unique_dot;
-  double *q0, *qx, *qy, *qz;
   int *unique_neigh;
     
     

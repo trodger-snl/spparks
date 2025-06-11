@@ -50,6 +50,11 @@ public:
     array<double, 4> q;
   };
 
+protected:
+  // site orientation stored as quaternion
+  double *q0, *qx, *qy, *qz;
+  void flip_site(int site, const SiteState &s);
+
 private:
   // symmetries: expect 'cubic'(24) or 'hcp'(12)
   vector<double> symmetries;
@@ -58,12 +63,9 @@ private:
   // symmetries for that site can be looked up using this mapping.
   // map<key=integer,vector<double>> symmetries;
 
-  // site orientation stored as quaternion
-  double *q0, *qx, *qy, *qz;
   // Read-Shockley disorientation cutoff
   double theta_cut;
   int *unique_neigh;
-  void flip_site(int site, const SiteState &s);
 };
 
 } // namespace SPPARKS_NS

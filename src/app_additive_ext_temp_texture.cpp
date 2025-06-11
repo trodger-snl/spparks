@@ -144,18 +144,6 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
 }
 
 /* ----------------------------------------------------------------------
-   flip site to new state - handles both spin and quaternion
-------------------------------------------------------------------------- */
-
-void AppAdditiveExtTempTexture::flip_site(int i, const SiteState &s) {
-  spin[i] = s.spin;
-  q0[i] = s.q[0];
-  qx[i] = s.q[1];
-  qy[i] = s.q[2];
-  qz[i] = s.q[3];
-}
-
-/* ----------------------------------------------------------------------
    input script commands unique to this app
 ------------------------------------------------------------------------- */
 
@@ -563,15 +551,14 @@ void AppAdditiveExtTempTexture::nucleation_spins(RandomPark *random) {
 
 void AppAdditiveExtTempTexture::grow_app()
 {
-  spin = iarray[0];
+  // Call parent to set up quaternion arrays (q0, qx, qy, qz)
+  AppPottsQuaternion::grow_app();
+  
+  // Set up additional arrays for this class
   active_flag = iarray[1];
-  mobility_out = darray[0];
-  T = darray[1];
-  solid_d = darray[2];
-  q0 = darray[3];
-  qx = darray[4];
-  qy = darray[5];
-  qz = darray[6];
+  mobility_out = darray[4];
+  T = darray[5];
+  solid_d = darray[6];
 
   if (nlocal_app < nlocal) {
     nlocal_app = nlocal;
@@ -775,6 +762,7 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
                 unique_dot[nevent] = dotValue;
                 value = spin[neighbor[i][j]];
                 unique[nevent] = value;
+                unique_neigh[nevent] = neighbor[i][j];
                 nevent++;										
             }
         }
@@ -786,6 +774,7 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
         //Go through possible events and pick one
         for( int j = 0; j < nevent -1; j++) {
             if(dran <= unique_dot[j]) {
+
                 spin[i] = unique[j];
                 efinal = site_energy(i);
             }
@@ -904,6 +893,7 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
                     unique_dot[nevent] =  dotValue;
                     value = spin[neighbor[i][j]];
                     unique[nevent] = value;
+                    unique_neigh[nevent] = neighbor[i][j];
                     nevent++;										
                 }
             }
@@ -916,8 +906,9 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
             //Go through possible events and pick one
             for( int j = 0; j < nevent -1; j++) {
                 if(dran <= unique_dot[j]) {
-                    spin[i] = unique[j];
-                    // Quaternion orientations are handled automatically via site selection
+                    int neighran =unique_neigh[j];
+                    SiteState s1(unique[j],{q0[neighran],qx[neighran],qy[neighran],qz[neighran]});
+                    //spin[i] = unique[j];
                     active_flag[i] = 3;
                     solid_d[i] = -1;
                     naccept++;
@@ -944,6 +935,7 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
                 unique_dot[nevent] =  dotValue;
                 value = spin[neighbor[i][j]];
                 unique[nevent] = value;
+                unique_neigh[nevent] = neighbor[i][j];
                 nevent++;										
             }
         }
@@ -956,8 +948,8 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
         //Go through possible events and pick one
         for( int j = 0; j < nevent -1; j++) {
             if(dran <= unique_dot[j]) {
-                spin[i] = unique[j];
-                // Quaternion orientations are handled automatically via site selection
+                int neighran =unique_neigh[j];
+                SiteState s1(unique[j],{q0[neighran],qx[neighran],qy[neighran],qz[neighran]});
                 active_flag[i] = 3;
                 solid_d[i] = -1;
                 naccept++;

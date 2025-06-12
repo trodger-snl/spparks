@@ -42,6 +42,7 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   virtual void nucleation_init();
   virtual void nucleation_particle_flipper(int, int,class RandomPark *);
   virtual void mushy_phase(int, class RandomPark *);
+  void site_event_solidification(int, double, class RandomPark *);
   void normal_finder(int, double *);
 	double melt_misorientation(int, double, double, double);
   void quat2euler(int, double *);

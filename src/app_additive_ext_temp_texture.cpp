@@ -111,6 +111,9 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     ninteger = 2;
     total_time = 0;
     sites = unique = NULL;
+    nucleation_flags = NULL;
+    nucleation_temps = NULL;
+    nucleation_sizes = NULL;
 
     //Set default values    
     tl = 1723;
@@ -607,6 +610,9 @@ void AppAdditiveExtTempTexture::init_app()
   time_index = 0;
   prior_time = 0;
 
+  if (nucleation_flags) delete[] nucleation_flags;
+  if (nucleation_temps) delete[] nucleation_temps;
+  if (nucleation_sizes) delete[] nucleation_sizes;
   nucleation_flags = new int[nspins];
   nucleation_temps = new double[nspins];
 	nucleation_sizes = new double[nspins];
@@ -852,11 +858,7 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
 THIS NEEDS UPDATED TO INCLUDE TEXTURE
 ------------------------------------------------------------------------- */
 void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
-  	int nevent = 0;
-  	int m,value;
-  	double dotValue = 0;
     double Tcool = tl - T[i];
-    SiteState s_old(spin[i], {q0[i], qx[i], qy[i], qz[i]});
 
     
     //Our site should always be molten and below tl
@@ -875,91 +877,68 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
         }
         //Can nucleate, but won't yet. Allow to if the solidification front gets captured.
         else {
-            //Add the distance of the front travel. This is for 304L. Need to multiply by timestep to get distance
-            //Try doing this with an arbitrary array
-            int power = solid_front_length -1;
-            for(int k = 0; k < solid_front_length; k++) {
-                solid_d[i] = solid_d[i] + solid_front_coeffs[k] * pow(Tcool, power) * time_step;
-                power--;
-            }
-            //Go through neighbor list and add them to possible switches
-            for (int j = 0; j < numneigh[i]; j++) {
-              if(neigh_dist[j] <= solid_d[i] && (active_flag[neighbor[i][j]] == 1 || active_flag[neighbor[i][j]] == 3)) {
-                    //Calculate temp gradient/grain misorientation and store in "unique" array
-                    //We should make this cumulative, so we can use a random number to sample it
-                    //Exclude gas or molten sites from the Potts neighbor tally
-//                     if(neigh_dist[j] > solid_d[i]) continue;
-                    dotValue += melt_misorientation(neighbor[i][j],c1,c2,c3);
-                    unique_dot[nevent] =  dotValue;
-                    value = spin[neighbor[i][j]];
-                    unique[nevent] = value;
-                    unique_neigh[nevent] = neighbor[i][j];
-                    nevent++;										
-                }
-            }
-            //If no neighbor is eligible, return before changing anything. Will try next sweep.
-            if (nevent == 0) return;
             fprintf(screen,"Epitaxialy growing instead of nucleating\n");
-            //I think we should use nevent -1 (there will be an extra event at the end)
-            double dran = (unique_dot[nevent - 1]*random->uniform());
-            //if (iran >= nevent) iran = nevent-1;
-            //Go through possible events and pick one
-            for( int j = 0; j < nevent -1; j++) {
-                if(dran <= unique_dot[j]) {
-                    int neighran =unique_neigh[j];
-                    SiteState s1(unique[j],{q0[neighran],qx[neighran],qy[neighran],qz[neighran]});
-                    flip_site(i,s1);
-                    //spin[i] = unique[j];
-                    active_flag[i] = 3;
-                    solid_d[i] = -1;
-                    naccept++;
-                    return;
-                }
-            }
+            site_event_solidification(i, Tcool, random);
         }
     }
     else {
-        //Add the distance of the front travel. This is for 304L I think...
-        int power = solid_front_length -1;
-        for(int k = 0; k < solid_front_length; k++) {
-            solid_d[i] = solid_d[i] + solid_front_coeffs[k] * pow(Tcool, power) * time_step;
-            power--;
+        site_event_solidification(i, Tcool, random);
+    }
+}
+
+/* ----------------------------------------------------------------------
+   Perform solidification event for a site in the mushy zone.
+   This handles the common logic for both nucleation and non-nucleation paths.
+   Updates solid front distance and attempts epitaxial growth from neighboring sites.
+------------------------------------------------------------------------- */
+void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, RandomPark *random) {
+    int nevent = 0;
+    int value;
+    double dotValue = 0;
+    
+    //Add the distance of the front travel. This is for 304L. Need to multiply by timestep to get distance
+    //Try doing this with an arbitrary array
+    int power = solid_front_length - 1;
+    for(int k = 0; k < solid_front_length; k++) {
+        solid_d[i] = solid_d[i] + solid_front_coeffs[k] * pow(Tcool, power) * time_step;
+        power--;
+    }
+    
+    //Go through neighbor list and add them to possible switches
+    for (int j = 0; j < numneigh[i]; j++) {
+        if(neigh_dist[j] <= solid_d[i] && (active_flag[neighbor[i][j]] == 1 || active_flag[neighbor[i][j]] == 3)) {
+            //Calculate temp gradient/grain misorientation and store in "unique" array
+            //We should make this cumulative, so we can use a random number to sample it
+            //Exclude gas or molten sites from the Potts neighbor tally
+            dotValue += melt_misorientation(neighbor[i][j],c1,c2,c3);
+            unique_dot[nevent] = dotValue;
+            value = spin[neighbor[i][j]];
+            unique[nevent] = value;
+            unique_neigh[nevent] = neighbor[i][j];
+            nevent++;
         }
-        //Go through neighbor list and add them to possible switches
-        for (int j = 0; j < numneigh[i]; j++) {
-            if(neigh_dist[j] <= solid_d[i] && (active_flag[neighbor[i][j]] == 1 || active_flag[neighbor[i][j]] == 3)) {
-                //Calculate temp gradient/grain misorientation and store in "unique" array
-                //We should make this cumulative, so we can use a random number to sample it
-                //Exclude gas or molten sites from the Potts neighbor tally
-//                 if(neigh_dist[j] > solid_d[i]) continue;
-                dotValue += melt_misorientation(neighbor[i][j],c1,c2,c3);
-                unique_dot[nevent] =  dotValue;
-                value = spin[neighbor[i][j]];
-                unique[nevent] = value;
-                unique_neigh[nevent] = neighbor[i][j];
-                nevent++;										
-            }
-        }
-        //If no neighbor is eligible, return before changing anything. Will try next sweep.
-        if (nevent == 0) return;
-        
-        //I think we should use nevent -1 (there will be an extra event at the end)
-        double dran = (unique_dot[nevent - 1]*random->uniform());
-        //if (iran >= nevent) iran = nevent-1;
-        //Go through possible events and pick one
-        for( int j = 0; j < nevent -1; j++) {
-            if(dran <= unique_dot[j]) {
-                int neighran =unique_neigh[j];
-                SiteState s1(unique[j],{q0[neighran],qx[neighran],qy[neighran],qz[neighran]});
-                flip_site(i,s1);
-                active_flag[i] = 3;
-                solid_d[i] = -1;
-                naccept++;
-                return;
-            }
+    }
+    
+    //If no neighbor is eligible, return before changing anything. Will try next sweep.
+    if (nevent == 0) return;
+    
+    //I think we should use nevent -1 (there will be an extra event at the end)
+    double dran = (unique_dot[nevent - 1]*random->uniform());
+    //if (iran >= nevent) iran = nevent-1;
+    //Go through possible events and pick one
+    for( int j = 0; j < nevent - 1; j++) {
+        if(dran <= unique_dot[j]) {
+            int neighran = unique_neigh[j];
+            SiteState s1(unique[j],{q0[neighran],qx[neighran],qy[neighran],qz[neighran]});
+            flip_site(i,s1);
+            active_flag[i] = 3;
+            solid_d[i] = -1;
+            naccept++;
+            return;
         }
     }
 }
+
 /* ----------------------------------------------------------------------
     Only nucleating one site at a time introduce lattice size dependency. Here we will
     use a user-defined nucleation particle size and flip neighboring sites until that size is met

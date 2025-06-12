@@ -87,7 +87,6 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
  	double ts; // Solidus temperature
   double t_room;
   double *unique_dot;
-  int *unique_neigh;
     
     
   // Nucleation and growth parameters

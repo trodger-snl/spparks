@@ -877,7 +877,7 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
         }
         //Can nucleate, but won't yet. Allow to if the solidification front gets captured.
         else {
-            fprintf(screen,"Epitaxialy growing instead of nucleating\n");
+            // fprintf(screen,"Epitaxialy growing instead of nucleating\n");
             site_event_solidification(i, Tcool, random);
         }
     }

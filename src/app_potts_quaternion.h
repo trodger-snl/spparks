@@ -55,6 +55,9 @@ protected:
   double *q0, *qx, *qy, *qz;
   void flip_site(int site, const SiteState &s);
 
+protected:
+  int *unique_neigh;
+
 private:
   // symmetries: expect 'cubic'(24) or 'hcp'(12)
   vector<double> symmetries;
@@ -65,7 +68,6 @@ private:
 
   // Read-Shockley disorientation cutoff
   double theta_cut;
-  int *unique_neigh;
 };
 
 } // namespace SPPARKS_NS

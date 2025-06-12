@@ -111,6 +111,8 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     ninteger = 2;
     total_time = 0;
     sites = unique = NULL;
+    unique_dot = NULL;
+    neigh_dist = NULL;
     nucleation_flags = NULL;
     nucleation_temps = NULL;
     nucleation_sizes = NULL;
@@ -145,6 +147,24 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     
     //add the double array
     recreate_arrays();  
+}
+
+/* ---------------------------------------------------------------------- */
+
+AppAdditiveExtTempTexture::~AppAdditiveExtTempTexture()
+{
+  // Only delete arrays that are specific to this class
+  // Parent class destructors will handle sites, unique, unique_neigh
+  if (unique_dot) delete[] unique_dot;
+  if (neigh_dist) delete[] neigh_dist;
+  if (nucleation_flags) delete[] nucleation_flags;
+  if (nucleation_temps) delete[] nucleation_temps;
+  if (nucleation_sizes) delete[] nucleation_sizes;
+  if (solid_front_coeffs) delete[] solid_front_coeffs;
+  
+  if (hdf5_file_open) {
+    close_hdf5_file();
+  }
 }
 
 /* ----------------------------------------------------------------------
@@ -587,15 +607,18 @@ void AppAdditiveExtTempTexture::grow_app()
 
 void AppAdditiveExtTempTexture::init_app()
 {
-  delete [] sites;
-  delete [] unique;
-  delete [] unique_neigh;
+  // Call parent init_app to handle sites, unique, and unique_neigh
+  AppPottsQuaternion::init_app();
+  
+  // Clean up our own arrays
+  if (unique_dot) delete [] unique_dot;
+  if (neigh_dist) delete [] neigh_dist;
+  
+  // Allocate our own arrays
+  unique_dot = new double[1 + maxneigh];
+  
   double sqrt2 = 1.4142135624;
   double sqrt3 = 1.7320508076;
-  sites = new int[1 + maxneigh];
-  unique = new int[1 + maxneigh];
-  unique_dot = new double[1 + maxneigh];
-  unique_neigh = new int[1 + maxneigh];
   RandomPark random(3000);
 
   //Allocate our temperature and time data structures
@@ -1116,10 +1139,10 @@ double AppAdditiveExtTempTexture::melt_misorientation(int site, double c1, doubl
 	
 	// Use quaternion function to get cosine of minimum angle between
 	// crystal orientation and temperature gradient
-	dotMax = quaternion::get_cosine_of_minumum_angle_between_q_and_u(q_site, grad_vector);
+	theta = quaternion::get_cosine_of_minumum_angle_between_q_and_u(q_site, grad_vector);
 	
 	// Calculate angle from cosine
-	theta = acos(dotMax);
+	//theta = acos(dotMax);
 	
 	// Apply texture mobility model
 	mobOut = c1 + c2 * cos(c3 * theta);

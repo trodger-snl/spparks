@@ -17,7 +17,7 @@ lattice	 	 sc/26n 1.0
 region		 box block 0 200 0 200 0 198
 
 boundary 	 n n n
-processors        2 3 1
+#processors        2 3 1
 
 create_box	 box
 create_sites box 

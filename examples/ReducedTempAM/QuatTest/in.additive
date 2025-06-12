@@ -1,5 +1,5 @@
 # SPPARKS Potts tests on generic lattice		 
-app_style additive_temperature_texture 1000000 "/Users/Tron/spparks/examples/ReducedTempAM/ms_output_compressed.hdf5" 5e-6 3e-6 1 
+app_style additive_temperature_texture 1000000 "/Users/Tron/spparks/examples/ReducedTempAM/ms_output_compressed.hdf5" 5e-6 3e-6 2
 #  |————————————————————————————————————————
 #     nspins = atoi(arg[1]);
 #     temp_file_template = arg[2]; //The base name of the temperature files (will also have timestep #)
@@ -43,11 +43,11 @@ temperature	 0.0
 liquidus                1623 #Liquidus temperature in Kelvin
 solidus                 1563 #Solidus temperature in Kelvin
 solid_front_vel         4 -1.0302e-7 1.0533e-4 2.2196e-3 0 #Polynomial degree, coefficient value (from high power to low)
-# nucleation_density      1e14 #In number/m^3
-# critical_undercooling   5 #Undercooling where nucleation starts (in Kelvin)
-# undercooling_deviation  3 #Critical undercooling is sampled from normal distribution, this defines std dev.
-# mean_nuclei_volume      8.4375e-16 #In m^3, center of normal distribution
-# nuclei_volume_deviation 1.5625e-17 #In m^3, std dev of nuclei size distribution
+ nucleation_density      1e14 #In number/m^3
+ critical_undercooling   5 #Undercooling where nucleation starts (in Kelvin)
+ undercooling_deviation  3 #Critical undercooling is sampled from normal distribution, this defines std dev.
+ mean_nuclei_volume      8.4375e-16 #In m^3, center of normal distribution
+ nuclei_volume_deviation 1.5625e-17 #In m^3, std dev of nuclei size distribution
 
 ##############
 shell cd DumpFiles/
@@ -56,7 +56,7 @@ stats            1e-4
 
 ############# Text Dump #####################
 dump            1 text 1e-3 dump.additive8.* id i1 i2 d1 d2 d3 d4 d6 x y z
-dump_modify		1 thresh z < 6
+dump_modify		1 thresh i2 > 1
 
 ############# Grain Image Dump ##############
 dump			2 image 2e-4 dumpgrain.*.jpg i1 i1 shape cube size 1000 1000 view 45 45 sdiam 1.05 crange 1 1000000 box no 1 

@@ -723,7 +723,7 @@ void AppAdditiveExtTempTexture::init_app()
 void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
 {
   int oldstate = spin[i];
-  SiteState s_old(oldstate, {q0[i], qx[i], qy[i], qz[i]});
+  SiteState s_old(spin[i], {q0[i], qx[i], qy[i], qz[i]});
   double einitial = site_energy(i);
   double efinal = 0;
   double Mobloc = 0;
@@ -752,7 +752,7 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
         return;
     }
     
-    if(solid_d[i] < 0 && solid_d[i] > -nrefine -1) { //TODO Need to update this case.
+    if(solid_d[i] < 0 && solid_d[i] > -nrefine -1) {
         //Go through neighbor list and add them to possible switches
         for (int j = 0; j < numneigh[i]; j++) {
             if(active_flag[neighbor[i][j]] == 3) {
@@ -775,8 +775,9 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
         //Go through possible events and pick one
         for( int j = 0; j < nevent -1; j++) {
             if(dran <= unique_dot[j]) {
-
-                spin[i] = unique[j];
+              int neighran = unique_neigh[j];
+              SiteState s_new(unique[j], {q0[neighran], qx[neighran], qy[neighran], qz[neighran]});
+              flip_site(i, s_new);
                 efinal = site_energy(i);
             }
         }
@@ -787,7 +788,7 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
         value = spin[neighbor[i][j]];
         //Exclude gas, powder or molten sites from the Potts neighbor tally
         if (value == spin[i] || value == nspins || active_flag[neighbor[i][j]] != 3) continue;
-        for (m = 0; m < nevent; m++)
+        for (m = 0; m < nevent; m++) 
           if (value == unique[m]) break;
         if (m < nevent) continue;
         unique[nevent] = value;
@@ -802,8 +803,6 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
       SiteState s_new(unique[iran], {q0[neighran], qx[neighran], qy[neighran], qz[neighran]});
       flip_site(i, s_new);
       efinal = site_energy(i);
-
-
   }
   // accept or reject via Boltzmann criterion
 
@@ -832,7 +831,7 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
     if (einitial < 0.5*numneigh[i]) mask[i] = 1;
     if (spin[i] != oldstate)
       for (int j = 0; j < numneigh[i]; j++)
-	mask[neighbor[i][j]] = 0;
+	      mask[neighbor[i][j]] = 0;
   }
 
   
@@ -909,6 +908,7 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
                 if(dran <= unique_dot[j]) {
                     int neighran =unique_neigh[j];
                     SiteState s1(unique[j],{q0[neighran],qx[neighran],qy[neighran],qz[neighran]});
+                    flip_site(i,s1);
                     //spin[i] = unique[j];
                     active_flag[i] = 3;
                     solid_d[i] = -1;
@@ -951,6 +951,7 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
             if(dran <= unique_dot[j]) {
                 int neighran =unique_neigh[j];
                 SiteState s1(unique[j],{q0[neighran],qx[neighran],qy[neighran],qz[neighran]});
+                flip_site(i,s1);
                 active_flag[i] = 3;
                 solid_d[i] = -1;
                 naccept++;

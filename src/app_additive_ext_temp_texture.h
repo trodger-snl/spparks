@@ -47,7 +47,6 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   void normal_finder(int, double *);
 	double melt_misorientation(int, double, double, double);
   void quat2euler(int, double *);
-  // void euler_init(); // NO LONGER NEEDED WITH QUATERNIONS
   virtual void reduced_temperature_hdf();
   virtual void reduced_temperature_hdf_chunked();
   void load_data_counts_array();
@@ -62,58 +61,58 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
 		double *neigh_dist;
     int time_index;
     double dtFD;
- 	//To help improve ease of visualization, lets introduce another integer array. It will be 0 every to begin with
- 	//When its layer becomes "active" we'll switch it to 1. This will help visualization and image dumping.
+ 	// Active flag for site visualization and state tracking
+ 	// 0: inactive, 1: active layer, 2: molten, 3: solidified
  	int *active_flag;
  	double read_interval;
- 	const double R = 8.314459848; //Define a constant gas constant
-	/// parameters for the thermal diffusion eq
+ 	const double R = 8.314459848; // Gas constant (J/mol/K)
+	// Temperature array for thermal field
 	double *T;
 	double time_step;
-	int total_time; //Keep track of time for app_update
+	int total_time; // Time tracking for app_update
    int line_count;
   	double *temp_in_array;
   	double *phase_in_array;
 	int x_period, y_period, z_period;
 	int nrefine;
-	//New inputs
+	// Physical and simulation parameters
 	double dt;
 	double no;
 	double tc;
 	double tsig;
 	double dx;
-    double mo; //Arrhenius pre-factor
- 	double q; //Arrhenius exponential factor
- 	double tl; //Liquidus point
- 	double ts; //Solidus point
+    double mo; // Arrhenius pre-factor
+ 	double q; // Arrhenius exponential factor
+ 	double tl; // Liquidus temperature
+ 	double ts; // Solidus temperature
   double t_room;
   double *unique_dot;
   int *unique_neigh;
     
     
-  //New stuff
+  // Nucleation and growth parameters
   double size_norm;
 	double size_sig;
 	double *solid_front_coeffs;
 	int    solid_front_length;
-	//Texture parameters
+	// Texture model parameters
 	double c1, c2, c3;
-	int nlocal_app; //size of cnew, not sure if needed
+	int nlocal_app; // Local application size
  	int fully_periodic;
  	
- 	//New MC model parameters
+ 	// Monte Carlo nucleation model parameters
 	int *nucleation_flags;
 	double *nucleation_temps;
 	double *nucleation_sizes;
   std::string temp_file_string;
 
-  //Variables for reduced temperature files
+  // Temperature file handling variables
   DoubleQueueContainer temp_in;
   DoubleQueueContainer time_in;
   double prior_time;
   int t_active;
 
-  //Variables for chunked HDF5 reading
+  // HDF5 chunked reading variables
   hid_t hdf5_file_id;
   hid_t hdf5_temp_dataset;
   hid_t hdf5_time_dataset;

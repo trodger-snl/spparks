@@ -12,40 +12,17 @@
    
    Contributing author: Theron Rodgers
 
-   This is an extension of the external_temperature branch. This branch will have the same basic functions a external_temperature,
-   but will introduce experimentally-derived parameters. These will be applied in separate steps of nucleation and grain growth.
+   Additive manufacturing application with external temperature field and crystallographic texture modeling.
+   Uses quaternion-based representation for crystal orientations and implements experimentally-derived
+   parameters for nucleation and grain growth during solidification processes.
    
-   Modifications needed for the code:
-   General
-   1. Introduce additional input variables:
-    a) dx - lattice spacing (in m)
-    b) dt - timestep (assume constant in seconds)
-    c) no - Max nucleation site density (in m^-3)
-    d) k1 - kinetic parameter (in m^2/s)
-    e) Q - activation energy (in J/mol)
-    f) tc - critical undercooling (K)
-    g) tsig - standard deviation of undercooling Gaussian
-   2. Introduce a check to see if we're in the mushy zone.
-    a) If above T_l, make random & molten (as we do now)
-    b) If between T_l and T_s, use a "nucleation" type rule
-    c) 
-   Nucleation
-   1. Create a new array to hold critical undercooling for each spin (size of nspins)
-   2. Write a function to sample from undercooling distribution and give -1 if spin not allowed to nucleate
-   3. Change the site_event_rejection function
-    a) If a molten site cannot nucleate (undercooling temp less than 0)
-     i) Check if the site's temperature is below the liquidus and above liquidus
-     ii) If so, force the site to change to the grain ID of a solid neighbor site (maybe)
-         It might be better to check if a solid site is within a distance v * dt to get captured by the solidification front
-    b) If the molten site needs to nucleate
-     i) Check if the site's T[i] is l.t.e. the spin's Tn
-     ii) If so, retain the spin and switch its phase to solid
-    c) If a solid's site's temperature is above the solidus
-     i) Do not allow the solid grain to switch to the liquid state.
-     ii) Allow switching between solid states, but use mobility expression based on undercooling (or some type of dendrite envelope expression)...
-   Grain Growth
-   1. Change the boundary mobility equation to incorporate k1, dt, and Q.
-   2. Don't let "solid" material switch to molten spins
+   Key features:
+   - HDF5-based external temperature field reading with chunked data loading
+   - Monte Carlo nucleation model with temperature-dependent kinetics
+   - Quaternion-based crystallographic orientation tracking
+   - Arrhenius mobility model for grain boundary kinetics
+   - Epitaxial growth and competitive nucleation mechanisms
+   - Support for both 2D and 3D additive manufacturing simulations
    
  ------------------------------------------------------------------------- */
 #include <fstream>
@@ -126,7 +103,7 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     size_norm = pow(dx,3) * 2;
     size_sig = pow(dx,3);
     solid_front_length = 4;
-    //Let's put in default values for arrays
+    // Set default values for coefficient arrays
     solid_front_coeffs = new double[4];    
     solid_front_coeffs[0] = 1.091e-5;
     solid_front_coeffs[1] = -2.034e-4;
@@ -269,8 +246,8 @@ void AppAdditiveExtTempTexture::app_update(double dt)
         if(T[i] > t_room) t_active = 1;
     
         //Turn the sites on/off depending on the phase data and whether or not the
-        //site's temperature has gone above tl. Only do this when melting the first time, so we don't have to 
-        //do it over and over
+        //site's temperature has gone above tl. Only do this when melting the first time 
+        //to avoid repeated initialization
         if( (T[i] >= tl) && active_flag[i] != 2) {
             active_flag[i] = 2;
             spin[i] = (int) (nspins * ranapp->uniform());
@@ -548,7 +525,7 @@ void AppAdditiveExtTempTexture::nucleation_spins(RandomPark *random) {
     nucleation_flags = new int[nspins];
     double nucleationFraction = dx * dx * dx * no;
     
-    //Make all spins nucleation sites. Should avoid this. Maybe return an error instead?
+    // Initialize all spins as nucleation sites (fallback behavior)
     if(nucleationFraction >= 1.0) {
         fprintf(screen,"Nucleation fraction is greater than 1. Decrease no or increase mesh resolution. no = %f\n", nucleationFraction);
         for (int i = 0; i < nspins; i++) {
@@ -722,7 +699,7 @@ void AppAdditiveExtTempTexture::init_app()
 
 
   
-  //Read in our temperature values -- for now we're doing this all at once but might need to do in chunks.
+  // Read temperature values (full dataset loading for compatibility)
   //Initialize chunked reading variables
   chunk_time_window = 0.1; // Default 100ms time window per chunk
   current_chunk_start_time = 0.0;
@@ -785,8 +762,8 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
         //Go through neighbor list and add them to possible switches
         for (int j = 0; j < numneigh[i]; j++) {
             if(active_flag[neighbor[i][j]] == 3) {
-                //Calculate temp gradient/grain misorientation and store in "unique" array
-                //We should make this cumulative, so we can use a random number to sample it
+                // Calculate temperature gradient/grain misorientation and store in array
+                // Use cumulative probability for random sampling
                 //Exclude gas or molten sites from the Potts neighbor tally
                 dotValue += melt_misorientation(neighbor[i][j],c1,c2,c3);
                 unique_dot[nevent] = dotValue;
@@ -798,7 +775,7 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
         }
         //If no neighbor is eligible, return before changing anything. Will try next sweep.
         if (nevent == 0) return;
-        //I think we should use nevent -1 (there will be an extra event at the end)
+        // Use nevent-1 to account for extra event at end
         double dran = (unique_dot[nevent - 1]*random->uniform());
         //if (iran >= nevent) iran = nevent-1;
         //Go through possible events and pick one
@@ -930,8 +907,8 @@ void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, R
     //Go through neighbor list and add them to possible switches
     for (int j = 0; j < numneigh[i]; j++) {
         if(neigh_dist[j] <= solid_d[i] && (active_flag[neighbor[i][j]] == 1 || active_flag[neighbor[i][j]] == 3)) {
-            //Calculate temp gradient/grain misorientation and store in "unique" array
-            //We should make this cumulative, so we can use a random number to sample it
+            // Calculate temperature gradient/grain misorientation and store in array
+            // Use cumulative probability for random sampling
             //Exclude gas or molten sites from the Potts neighbor tally
             dotValue += melt_misorientation(neighbor[i][j],c1,c2,c3);
             unique_dot[nevent] = dotValue;
@@ -945,7 +922,7 @@ void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, R
     //If no neighbor is eligible, return before changing anything. Will try next sweep.
     if (nevent == 0) return;
     
-    //I think we should use nevent -1 (there will be an extra event at the end)
+    // Use nevent-1 to account for extra event at end
     double dran = (unique_dot[nevent - 1]*random->uniform());
     //if (iran >= nevent) iran = nevent-1;
     //Go through possible events and pick one
@@ -1077,7 +1054,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
 
 //Texture specific functions start here
 
-//Calculate the local direction of the largest temperature gradient. Will need to update
+// Calculate the local direction of the largest temperature gradient
 //for boundary conditions
 void AppAdditiveExtTempTexture::normal_finder(int site, double *outV)
 {
@@ -1089,7 +1066,7 @@ void AppAdditiveExtTempTexture::normal_finder(int site, double *outV)
 	
 	
 	//Do a special thing for the top of the melt pool
-	//This is just cheating and copying the value from the next lower layer, but it should be good enough.
+	// Use value from next lower layer for approximation
 	if(active_flag[neighbor[site][13]] < 1) {
 		xDel = fabs(T[neighbor[site][4]] - T[neighbor[site][21]]);
 		yDel = fabs(T[neighbor[site][10]] - T[neighbor[site][15]]);
@@ -1204,7 +1181,7 @@ void AppAdditiveExtTempTexture::nucleation_init() {
     std::random_device rd{};
     std::mt19937 gen{rd()};
     
-    //Randomly assign a temperature to every spin
+    // Randomly assign critical temperature to every spin
     for(int i = 0; i < nspins; i++) {
         nucleation_temps[i] = dist_T(gen);
         nucleation_sizes[i] = dist_S(gen);

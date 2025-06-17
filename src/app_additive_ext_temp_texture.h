@@ -58,6 +58,7 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
 
 	double *mobility_out;
 	double *solid_d;
+	double *melt_misorientation_out;
 		double *neigh_dist;
     int time_index;
     double dtFD;

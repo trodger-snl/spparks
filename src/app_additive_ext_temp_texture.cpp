@@ -82,7 +82,7 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     nrefine = atoi(arg[5]); //How many refinement MC steps to perform after a site solidifies
     
     //I think we need all of these variables still!
-    ndouble = 7;
+    ndouble = 8;
     allow_app_update = 1;
     app_update_only = 1; //Skip solid-state growth for now.
     ninteger = 2;
@@ -258,6 +258,7 @@ void AppAdditiveExtTempTexture::app_update(double dt)
             qy[i] = uq[2];
             qz[i] = uq[3];
             solid_d[i] = 0;
+            melt_misorientation_out[i] = 0;
         }
         //If we're molten, call the mushy_phase function to figure out any phase change
         else if (active_flag[i] == 2 && T[i] <= tl) {
@@ -560,6 +561,7 @@ void AppAdditiveExtTempTexture::grow_app()
   mobility_out = darray[4];
   T = darray[5];
   solid_d = darray[6];
+  melt_misorientation_out = darray[7];
 
   if (nlocal_app < nlocal) {
     nlocal_app = nlocal;
@@ -734,6 +736,7 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
   double efinal = 0;
   double Mobloc = 0;
   double dotValue = 0;
+  // std::cout << "Running site_event_rejection when I shouldn't!" << std::endl;
     
 /* ----------------------------------------------------------------------
    Define variables to identify melt travel distance, specific melt location,
@@ -765,7 +768,9 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
                 // Calculate temperature gradient/grain misorientation and store in array
                 // Use cumulative probability for random sampling
                 //Exclude gas or molten sites from the Potts neighbor tally
-                dotValue += melt_misorientation(neighbor[i][j],c1,c2,c3);
+                double melt_misori_val = melt_misorientation(neighbor[i][j],c1,c2,c3);
+                //melt_misorientation_out[i] = melt_misori_val;
+                dotValue += melt_misori_val;
                 unique_dot[nevent] = dotValue;
                 value = spin[neighbor[i][j]];
                 unique[nevent] = value;
@@ -782,6 +787,7 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
         for( int j = 0; j < nevent -1; j++) {
             if(dran <= unique_dot[j]) {
               int neighran = unique_neigh[j];
+              melt_misorientation_out[i] = melt_misorientation(neighran,c1,c2,c3);
               SiteState s_new(unique[j], {q0[neighran], qx[neighran], qy[neighran], qz[neighran]});
               flip_site(i, s_new);
                 efinal = site_energy(i);
@@ -815,13 +821,18 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
   if (efinal <= einitial) {
      if (random->uniform() > Mobloc){
        flip_site(i, s_old);
+       melt_misorientation_out[i] = 0;
      }
   }
   else if (temperature == 0.0) {
     flip_site(i, s_old);
+    melt_misorientation_out[i] = 0;
+
   } 
   else if (random->uniform() > Mobloc * exp((einitial-efinal)*t_inverse)) {
     flip_site(i, s_old);
+    melt_misorientation_out[i] = 0;
+
   }
 
 
@@ -906,11 +917,13 @@ void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, R
     
     //Go through neighbor list and add them to possible switches
     for (int j = 0; j < numneigh[i]; j++) {
-        if(neigh_dist[j] <= solid_d[i] && (active_flag[neighbor[i][j]] == 1 || active_flag[neighbor[i][j]] == 3)) {
+        if(neigh_dist[2] <= solid_d[i] && (active_flag[neighbor[i][j]] == 1 || active_flag[neighbor[i][j]] == 3)) {
             // Calculate temperature gradient/grain misorientation and store in array
             // Use cumulative probability for random sampling
             //Exclude gas or molten sites from the Potts neighbor tally
-            dotValue += melt_misorientation(neighbor[i][j],c1,c2,c3);
+            double melt_misori_val = melt_misorientation(neighbor[i][j],c1,c2,c3);
+            // melt_misorientation_out[i] = melt_misori_val;
+            dotValue += melt_misori_val;
             unique_dot[nevent] = dotValue;
             value = spin[neighbor[i][j]];
             unique[nevent] = value;
@@ -930,6 +943,7 @@ void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, R
         if(dran <= unique_dot[j]) {
             int neighran = unique_neigh[j];
             SiteState s1(unique[j],{q0[neighran],qx[neighran],qy[neighran],qz[neighran]});
+            melt_misorientation_out[i] = melt_misorientation(neighran,c1,c2,c3);
             flip_site(i,s1);
             active_flag[i] = 3;
             solid_d[i] = -1;
@@ -1014,7 +1028,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
         for(int j = 0; j < 8; j++) {
             if(active_flag[neighbor[i][third_nearest[j]]] ==2) {
                 int i_chosen = neighbor[i][third_nearest[j]];
-                spin[i_chosen] = spin[i];
+                //spin[i_chosen] = spin[i];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
                 solid_d[i_chosen] = -nrefine -3;
@@ -1055,39 +1069,321 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
 //Texture specific functions start here
 
 // Calculate the local direction of the largest temperature gradient
-//for boundary conditions
+// using weighted least squares with multiple neighbors for improved accuracy
 void AppAdditiveExtTempTexture::normal_finder(int site, double *outV)
 {
-
-	double xDel = 0;
-	double yDel = 0;
-	double zDel = 0;
-	int lower_site = 0;
+	// Debug statistics for comparing old vs new methods
+	static int debug_counter = 0;
+	static double bulk_angle_sum = 0.0;
+	static int bulk_count = 0;
+	static double boundary_angle_sum = 0.0;
+	static int boundary_count = 0;
+	static double melt_surface_angle_sum = 0.0;
+	static int melt_surface_count = 0;
 	
+	debug_counter++;
+	bool should_output = (debug_counter % 60000 == 0);
 	
-	//Do a special thing for the top of the melt pool
-	// Use value from next lower layer for approximation
-	if(active_flag[neighbor[site][13]] < 1) {
-		xDel = fabs(T[neighbor[site][4]] - T[neighbor[site][21]]);
-		yDel = fabs(T[neighbor[site][10]] - T[neighbor[site][15]]);
-		
-		lower_site = neighbor[site][12];
-		zDel = fabs(T[neighbor[lower_site][12]] - T[neighbor[lower_site][13]]);
+	// Initialize gradient components
+	double grad_x = 0, grad_y = 0, grad_z = 0;
+	
+	// Set up neighbor offset mapping for 3D cubic lattice (SC_26N)
+	// Order: i,j,k from -1 to 1 (excluding center at 0,0,0)
+	int offset_map[26][3] = {
+		{-1,-1,-1}, {-1,-1, 0}, {-1,-1, 1},  // i=-1, j=-1
+		{-1, 0,-1}, {-1, 0, 0}, {-1, 0, 1},  // i=-1, j=0 
+		{-1, 1,-1}, {-1, 1, 0}, {-1, 1, 1},  // i=-1, j=1
+		{ 0,-1,-1}, { 0,-1, 0}, { 0,-1, 1},  // i=0, j=-1
+		{ 0, 0,-1},             { 0, 0, 1},  // i=0, j=0 (skip center)
+		{ 0, 1,-1}, { 0, 1, 0}, { 0, 1, 1},  // i=0, j=1
+		{ 1,-1,-1}, { 1,-1, 0}, { 1,-1, 1},  // i=1, j=-1
+		{ 1, 0,-1}, { 1, 0, 0}, { 1, 0, 1},  // i=1, j=0
+		{ 1, 1,-1}, { 1, 1, 0}, { 1, 1, 1}   // i=1, j=1
+	};
+	
+	// Always calculate old 6-neighbor result for comparison
+	double old_result[3] = {0, 0, 0};
+	double grad_x_old = (T[neighbor[site][4]] - T[neighbor[site][21]]) / (2.0 * dx);
+	double grad_y_old = (T[neighbor[site][10]] - T[neighbor[site][15]]) / (2.0 * dx);
+	double grad_z_old = (T[neighbor[site][12]] - T[neighbor[site][13]]) / (2.0 * dx);
+	
+	double norm_old = sqrt(grad_x_old*grad_x_old + grad_y_old*grad_y_old + grad_z_old*grad_z_old);
+	if (norm_old > 1e-12) {
+		old_result[0] = fabs(grad_x_old)/norm_old;
+		old_result[1] = fabs(grad_y_old)/norm_old;
+		old_result[2] = fabs(grad_z_old)/norm_old;
 	}
-	else {
-		//Look at the 2 neighbors in + and - x directions
-		//Need to look up what neighbors are right (assume unit-lattice)
-		xDel = fabs(T[neighbor[site][4]] - T[neighbor[site][21]]);
-		yDel = fabs(T[neighbor[site][10]] - T[neighbor[site][15]]);
-		zDel = fabs(T[neighbor[site][12]] - T[neighbor[site][13]]);
-	}
-
+	
+	// Special case: top of melt pool where some neighbors are inactive
+	// Use only neighbors at or below current site's z-coordinate
+	bool is_melt_surface = (active_flag[neighbor[site][13]] <= 1);
+	
+	if (is_melt_surface) {
+		// Store old melt surface method result for comparison
+		double old_melt_result[3] = {0, 0, 0};
+		double xDel_old = fabs(T[neighbor[site][4]] - T[neighbor[site][21]]);
+		double yDel_old = fabs(T[neighbor[site][10]] - T[neighbor[site][15]]);
+		int lower_site = neighbor[site][12];
+		double zDel_old = fabs(T[neighbor[lower_site][12]] - T[neighbor[lower_site][13]]);
+		double norm_old_melt = sqrt(xDel_old*xDel_old + yDel_old*yDel_old + zDel_old*zDel_old);
+		if (norm_old_melt > 1e-12) {
+			old_melt_result[0] = xDel_old/norm_old_melt;
+			old_melt_result[1] = yDel_old/norm_old_melt;
+			old_melt_result[2] = zDel_old/norm_old_melt;
+		}
+		// Filter neighbors to only include those at or below current z-level
+		double site_z = xyz[site][2];
 		
-	//Now Normalize and return them
-	double norm = sqrt(xDel*xDel + yDel*yDel + zDel*zDel);
-	outV[0] = xDel/norm;
-	outV[1] = yDel/norm;
-	outV[2] = zDel/norm;
+		// Weighted least squares with z-filtered neighbors
+		double AtA[9] = {0}; // 3x3 matrix A^T * W * A
+		double Atb[3] = {0}; // 3x1 vector A^T * W * b
+		double T_center = T[site];
+		int valid_neighbors = 0;
+		
+		for (int n = 0; n < numneigh[site] && n < 26; n++) {
+			int neighbor_site = neighbor[site][n];
+			
+			// Skip invalid neighbors
+			if (neighbor_site < 0 || neighbor_site >= app->nlocal + app->nghost) continue;
+			
+			// Only use neighbors at or below current site's z-coordinate
+			if (xyz[neighbor_site][2] > site_z) continue;
+			
+			// Get neighbor offset coordinates
+			double dx_n = offset_map[n][0] * dx;
+			double dy_n = offset_map[n][1] * dx;
+			double dz_n = offset_map[n][2] * dx;
+			
+			// Temperature difference
+			double dT = T[neighbor_site] - T_center;
+			
+			// Distance and weight
+			double dist = sqrt(dx_n*dx_n + dy_n*dy_n + dz_n*dz_n);
+			double weight = 1.0 / (dist*dist + 1e-12);
+			
+			// Build weighted normal equations
+			AtA[0] += weight * dx_n * dx_n;  // AtA[0,0]
+			AtA[1] += weight * dx_n * dy_n;  // AtA[0,1]
+			AtA[2] += weight * dx_n * dz_n;  // AtA[0,2]
+			AtA[3] += weight * dy_n * dx_n;  // AtA[1,0] 
+			AtA[4] += weight * dy_n * dy_n;  // AtA[1,1]
+			AtA[5] += weight * dy_n * dz_n;  // AtA[1,2]
+			AtA[6] += weight * dz_n * dx_n;  // AtA[2,0]
+			AtA[7] += weight * dz_n * dy_n;  // AtA[2,1]
+			AtA[8] += weight * dz_n * dz_n;  // AtA[2,2]
+			
+			Atb[0] += weight * dx_n * dT;
+			Atb[1] += weight * dy_n * dT;
+			Atb[2] += weight * dz_n * dT;
+			
+			valid_neighbors++;
+		}
+		
+		// Solve if we have enough neighbors
+		if (valid_neighbors >= 3) {
+			double det = AtA[0]*(AtA[4]*AtA[8] - AtA[5]*AtA[7]) - 
+			             AtA[1]*(AtA[3]*AtA[8] - AtA[5]*AtA[6]) + 
+			             AtA[2]*(AtA[3]*AtA[7] - AtA[4]*AtA[6]);
+			
+			if (fabs(det) > 1e-12) {
+				// Compute gradient using Cramer's rule
+				grad_x = (Atb[0]*(AtA[4]*AtA[8] - AtA[5]*AtA[7]) - 
+				          AtA[1]*(Atb[1]*AtA[8] - AtA[5]*Atb[2]) + 
+				          AtA[2]*(Atb[1]*AtA[7] - AtA[4]*Atb[2])) / det;
+				          
+				grad_y = (AtA[0]*(Atb[1]*AtA[8] - AtA[5]*Atb[2]) - 
+				          Atb[0]*(AtA[3]*AtA[8] - AtA[5]*AtA[6]) + 
+				          AtA[2]*(AtA[3]*Atb[2] - Atb[1]*AtA[6])) / det;
+				          
+				grad_z = (AtA[0]*(AtA[4]*Atb[2] - Atb[1]*AtA[7]) - 
+				          AtA[1]*(AtA[3]*Atb[2] - Atb[1]*AtA[6]) + 
+				          Atb[0]*(AtA[3]*AtA[7] - AtA[4]*AtA[6])) / det;
+			} else {
+				// Matrix is singular, fall back to simple differences
+				grad_x = (T[neighbor[site][4]] - T[neighbor[site][21]]) / (2.0 * dx);
+				grad_y = (T[neighbor[site][10]] - T[neighbor[site][15]]) / (2.0 * dx);
+				grad_z = (T[neighbor[site][12]] - T_center) / dx; // Only downward gradient
+			}
+		} else {
+			// Too few neighbors, use simple finite differences
+			grad_x = (T[neighbor[site][4]] - T[neighbor[site][21]]) / (2.0 * dx);
+			grad_y = (T[neighbor[site][10]] - T[neighbor[site][15]]) / (2.0 * dx);
+			grad_z = (T[neighbor[site][12]] - T_center) / dx; // Only downward gradient
+		}
+		
+		// Normalize and return
+		double norm = sqrt(grad_x*grad_x + grad_y*grad_y + grad_z*grad_z);
+		if (norm > 1e-12) {
+			outV[0] = fabs(grad_x)/norm;
+			outV[1] = fabs(grad_y)/norm;
+			outV[2] = fabs(grad_z)/norm;
+		} else {
+			outV[0] = outV[1] = outV[2] = 0.0;
+		}
+		
+		// Compare old vs new melt surface methods for debugging
+		if (norm > 1e-12 && norm_old_melt > 1e-12) {
+			double dot_product = old_melt_result[0]*outV[0] + old_melt_result[1]*outV[1] + old_melt_result[2]*outV[2];
+			double old_norm = sqrt(old_melt_result[0]*old_melt_result[0] + old_melt_result[1]*old_melt_result[1] + old_melt_result[2]*old_melt_result[2]);
+			double new_norm = sqrt(outV[0]*outV[0] + outV[1]*outV[1] + outV[2]*outV[2]);
+			
+			if (old_norm > 1e-12 && new_norm > 1e-12) {
+				dot_product = dot_product / (old_norm * new_norm);
+				if (dot_product > 1.0) dot_product = 1.0;
+				if (dot_product < -1.0) dot_product = -1.0;
+				
+				double angle_rad = acos(dot_product);
+				double angle_deg = angle_rad * 180.0 / 3.14159265359;
+				
+				melt_surface_angle_sum += angle_deg;
+				melt_surface_count++;
+			}
+		}
+		return;
+	}
+	
+	// Use weighted least squares with all available neighbors
+	
+	// Weighted least squares matrices: A*grad = b
+	// A is 26x3 matrix of [dx dy dz] for each neighbor
+	// b is 26x1 vector of temperature differences
+	// weights based on inverse distance
+	double AtA[9] = {0}; // 3x3 matrix A^T * W * A
+	double Atb[3] = {0}; // 3x1 vector A^T * W * b
+	
+	double T_center = T[site];
+	
+	for (int n = 0; n < numneigh[site] && n < 26; n++) {
+		int neighbor_site = neighbor[site][n];
+		
+		// Skip invalid neighbors
+		if (neighbor_site < 0 || neighbor_site >= app->nlocal + app->nghost) continue;
+		
+		// Get neighbor offset coordinates
+		double dx_n = offset_map[n][0] * dx;  // x offset in physical units
+		double dy_n = offset_map[n][1] * dx;  // y offset 
+		double dz_n = offset_map[n][2] * dx;  // z offset
+		
+		// Temperature difference
+		double dT = T[neighbor_site] - T_center;
+		
+		// Distance and weight (inverse distance squared with small regularization)
+		double dist = sqrt(dx_n*dx_n + dy_n*dy_n + dz_n*dz_n);
+		double weight = 1.0 / (dist*dist + 1e-12);
+		
+		// Build weighted normal equations: AtA * grad = Atb
+		// A matrix row: [dx_n, dy_n, dz_n]
+		AtA[0] += weight * dx_n * dx_n;  // AtA[0,0]
+		AtA[1] += weight * dx_n * dy_n;  // AtA[0,1]
+		AtA[2] += weight * dx_n * dz_n;  // AtA[0,2]
+		AtA[3] += weight * dy_n * dx_n;  // AtA[1,0] 
+		AtA[4] += weight * dy_n * dy_n;  // AtA[1,1]
+		AtA[5] += weight * dy_n * dz_n;  // AtA[1,2]
+		AtA[6] += weight * dz_n * dx_n;  // AtA[2,0]
+		AtA[7] += weight * dz_n * dy_n;  // AtA[2,1]
+		AtA[8] += weight * dz_n * dz_n;  // AtA[2,2]
+		
+		Atb[0] += weight * dx_n * dT;    // Atb[0]
+		Atb[1] += weight * dy_n * dT;    // Atb[1] 
+		Atb[2] += weight * dz_n * dT;    // Atb[2]
+	}
+	
+	// Solve 3x3 system AtA * grad = Atb using Cramer's rule
+	double det = AtA[0]*(AtA[4]*AtA[8] - AtA[5]*AtA[7]) - 
+	             AtA[1]*(AtA[3]*AtA[8] - AtA[5]*AtA[6]) + 
+	             AtA[2]*(AtA[3]*AtA[7] - AtA[4]*AtA[6]);
+	
+	if (fabs(det) > 1e-12) {
+		// Compute gradient using Cramer's rule
+		grad_x = (Atb[0]*(AtA[4]*AtA[8] - AtA[5]*AtA[7]) - 
+		          AtA[1]*(Atb[1]*AtA[8] - AtA[5]*Atb[2]) + 
+		          AtA[2]*(Atb[1]*AtA[7] - AtA[4]*Atb[2])) / det;
+		          
+		grad_y = (AtA[0]*(Atb[1]*AtA[8] - AtA[5]*Atb[2]) - 
+		          Atb[0]*(AtA[3]*AtA[8] - AtA[5]*AtA[6]) + 
+		          AtA[2]*(AtA[3]*Atb[2] - Atb[1]*AtA[6])) / det;
+		          
+		grad_z = (AtA[0]*(AtA[4]*Atb[2] - Atb[1]*AtA[7]) - 
+		          AtA[1]*(AtA[3]*Atb[2] - Atb[1]*AtA[6]) + 
+		          Atb[0]*(AtA[3]*AtA[7] - AtA[4]*AtA[6])) / det;
+	} else {
+		// Fallback to simple finite differences if matrix is singular
+		grad_x = (T[neighbor[site][4]] - T[neighbor[site][21]]) / (2.0 * dx);
+		grad_y = (T[neighbor[site][10]] - T[neighbor[site][15]]) / (2.0 * dx);
+		grad_z = (T[neighbor[site][12]] - T[neighbor[site][13]]) / (2.0 * dx);
+	}
+	
+	// Normalize and return gradient direction
+	double norm = sqrt(grad_x*grad_x + grad_y*grad_y + grad_z*grad_z);
+	if (norm > 1e-12) {
+		outV[0] = fabs(grad_x)/norm;
+		outV[1] = fabs(grad_y)/norm;
+		outV[2] = fabs(grad_z)/norm;
+	} else {
+		outV[0] = outV[1] = outV[2] = 0.0;
+	}
+	
+	// Accumulate statistics for comparing old vs new methods
+	if (norm > 1e-12) {
+		// Calculate angle between old and new vectors
+		double dot_product = old_result[0]*outV[0] + old_result[1]*outV[1] + old_result[2]*outV[2];
+		double old_norm = sqrt(old_result[0]*old_result[0] + old_result[1]*old_result[1] + old_result[2]*old_result[2]);
+		double new_norm = sqrt(outV[0]*outV[0] + outV[1]*outV[1] + outV[2]*outV[2]);
+		
+		if (old_norm > 1e-12 && new_norm > 1e-12) {
+			// Clamp dot product to [-1,1] to avoid numerical issues with acos
+			dot_product = dot_product / (old_norm * new_norm);
+			if (dot_product > 1.0) dot_product = 1.0;
+			if (dot_product < -1.0) dot_product = -1.0;
+			
+			double angle_rad = acos(dot_product);
+			double angle_deg = angle_rad * 180.0 / 3.14159265359;
+			
+			// Determine if this is a boundary site (has fewer than 26 neighbors)
+			bool is_boundary = (numneigh[site] < 26);
+			
+			if (is_boundary) {
+				boundary_angle_sum += angle_deg;
+				boundary_count++;
+			} else {
+				bulk_angle_sum += angle_deg;
+				bulk_count++;
+			}
+		}
+	}
+	
+	// Output statistics every 60000 calls
+	if (should_output) {
+		std::cout << "NORMAL_FINDER STATS [Calls " << (debug_counter-59999) << "-" << debug_counter << "]:\n";
+		if (bulk_count > 0) {
+			double avg_bulk = bulk_angle_sum / bulk_count;
+			std::cout << "  Bulk sites: " << bulk_count << " samples, average angle: " << avg_bulk << " degrees\n";
+		} else {
+			std::cout << "  Bulk sites: 0 samples\n";
+		}
+		if (boundary_count > 0) {
+			double avg_boundary = boundary_angle_sum / boundary_count;
+			std::cout << "  Boundary sites: " << boundary_count << " samples, average angle: " << avg_boundary << " degrees\n";
+		} else {
+			std::cout << "  Boundary sites: 0 samples\n";
+		}
+		if (melt_surface_count > 0) {
+			double avg_melt_surface = melt_surface_angle_sum / melt_surface_count;
+			std::cout << "  Melt surface sites: " << melt_surface_count << " samples, average angle: " << avg_melt_surface << " degrees\n";
+			std::cout << "    (Old: crude finite differences vs New: z-filtered weighted least squares)\n";
+		} else {
+			std::cout << "  Melt surface sites: 0 samples\n";
+		}
+		std::cout << std::endl;
+		
+		// Reset counters for next interval
+		bulk_angle_sum = 0.0;
+		bulk_count = 0;
+		boundary_angle_sum = 0.0;
+		boundary_count = 0;
+		melt_surface_angle_sum = 0.0;
+		melt_surface_count = 0;
+	}
 }
 
 /* ----------------------------------------------------------------------
@@ -1116,10 +1412,10 @@ double AppAdditiveExtTempTexture::melt_misorientation(int site, double c1, doubl
 	
 	// Use quaternion function to get cosine of minimum angle between
 	// crystal orientation and temperature gradient
-	theta = quaternion::get_cosine_of_minumum_angle_between_q_and_u(q_site, grad_vector);
+	dotMax = quaternion::get_cosine_of_minumum_angle_between_q_and_u(q_site, grad_vector);
 	
 	// Calculate angle from cosine
-	//theta = acos(dotMax);
+	theta = acos(dotMax);
 	
 	// Apply texture mobility model
 	mobOut = c1 + c2 * cos(c3 * theta);

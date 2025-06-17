@@ -45,7 +45,7 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   virtual void mushy_phase(int, class RandomPark *);
   virtual double site_energy(int);
   void site_event_solidification(int, double, class RandomPark *);
-  void normal_finder(int, double *);
+  std::vector<double> normal_finder(int);
 	double melt_misorientation(int, double, double, double);
   void apply_misorientation(int, double, class RandomPark *);
   void quat2euler(int, double *);

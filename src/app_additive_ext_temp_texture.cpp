@@ -1021,14 +1021,12 @@ void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, R
 void AppAdditiveExtTempTexture::apply_misorientation(int i, double Tcool, RandomPark *ranapp) {
     if(max_misorient <= 0) return;
     
-    double gradNorm[3] = {0,0,0};
     // Exponential function: grows slowly initially, then rapidly in last ~10%
     double normalized_temp = Tcool / t_cool_max;
     double mis_angle = max_misorient * (exp(misorient_alpha * normalized_temp) - 1.0) / (exp(misorient_alpha) - 1.0) * MY_PI/180;
 
     //Calculate the unit-vector surface norm (use voxel counting)
-    normal_finder(i, gradNorm);
-    vector<double> grad_out = {gradNorm[0],gradNorm[1],gradNorm[2]};
+    vector<double> grad_out = normal_finder(i);
 
     // Create quaternion vector from site's orientation
     vector<double> q_site = {q0[i], qx[i], qy[i], qz[i]};
@@ -1042,8 +1040,6 @@ void AppAdditiveExtTempTexture::apply_misorientation(int i, double Tcool, Random
         q_site[3] /= q_mag;
     }
 
-    // Create gradient normal vector
-    vector<double> grad_vector = {gradNorm[0], gradNorm[1], gradNorm[2]};
     vector<double> q_new = quaternion::rotate_q_towards_u(q_site,grad_out, mis_angle);
 
     q0[i] = q_new[0];
@@ -1181,7 +1177,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
 
 // Calculate the local direction of the largest temperature gradient
 // using weighted least squares with multiple neighbors for improved accuracy
-void AppAdditiveExtTempTexture::normal_finder(int site, double *outV)
+std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
 {
 	// Debug statistics for comparing old vs new methods (only if debugging enabled)
 	static int debug_counter = 0;
@@ -1334,19 +1330,20 @@ void AppAdditiveExtTempTexture::normal_finder(int site, double *outV)
 		
 		// Normalize and return
 		double norm = sqrt(grad_x*grad_x + grad_y*grad_y + grad_z*grad_z);
+		std::vector<double> result(3);
 		if (norm > 1e-12) {
-			outV[0] = fabs(grad_x)/norm;
-			outV[1] = fabs(grad_y)/norm;
-			outV[2] = fabs(grad_z)/norm;
+			result[0] = fabs(grad_x)/norm;
+			result[1] = fabs(grad_y)/norm;
+			result[2] = fabs(grad_z)/norm;
 		} else {
-			outV[0] = outV[1] = outV[2] = 0.0;
+			result[0] = result[1] = result[2] = 0.0;
 		}
 		
 		// Compare old vs new melt surface methods for debugging
 		if (should_debug && norm > 1e-12 && norm_old_melt > 1e-12) {
-			double dot_product = old_melt_result[0]*outV[0] + old_melt_result[1]*outV[1] + old_melt_result[2]*outV[2];
+			double dot_product = old_melt_result[0]*result[0] + old_melt_result[1]*result[1] + old_melt_result[2]*result[2];
 			double old_norm = sqrt(old_melt_result[0]*old_melt_result[0] + old_melt_result[1]*old_melt_result[1] + old_melt_result[2]*old_melt_result[2]);
-			double new_norm = sqrt(outV[0]*outV[0] + outV[1]*outV[1] + outV[2]*outV[2]);
+			double new_norm = sqrt(result[0]*result[0] + result[1]*result[1] + result[2]*result[2]);
 			
 			if (old_norm > 1e-12 && new_norm > 1e-12) {
 				dot_product = dot_product / (old_norm * new_norm);
@@ -1360,7 +1357,7 @@ void AppAdditiveExtTempTexture::normal_finder(int site, double *outV)
 				melt_surface_count++;
 			}
 		}
-		return;
+		return result;
 	}
 	
 	// Use weighted least squares with all available neighbors
@@ -1436,20 +1433,21 @@ void AppAdditiveExtTempTexture::normal_finder(int site, double *outV)
 	
 	// Normalize and return gradient direction
 	double norm = sqrt(grad_x*grad_x + grad_y*grad_y + grad_z*grad_z);
+	std::vector<double> result(3);
 	if (norm > 1e-12) {
-		outV[0] = fabs(grad_x)/norm;
-		outV[1] = fabs(grad_y)/norm;
-		outV[2] = fabs(grad_z)/norm;
+		result[0] = fabs(grad_x)/norm;
+		result[1] = fabs(grad_y)/norm;
+		result[2] = fabs(grad_z)/norm;
 	} else {
-		outV[0] = outV[1] = outV[2] = 0.0;
+		result[0] = result[1] = result[2] = 0.0;
 	}
 	
 	// Accumulate statistics for comparing old vs new methods
 	if (should_debug && norm > 1e-12) {
 		// Calculate angle between old and new vectors
-		double dot_product = old_result[0]*outV[0] + old_result[1]*outV[1] + old_result[2]*outV[2];
+		double dot_product = old_result[0]*result[0] + old_result[1]*result[1] + old_result[2]*result[2];
 		double old_norm = sqrt(old_result[0]*old_result[0] + old_result[1]*old_result[1] + old_result[2]*old_result[2]);
-		double new_norm = sqrt(outV[0]*outV[0] + outV[1]*outV[1] + outV[2]*outV[2]);
+		double new_norm = sqrt(result[0]*result[0] + result[1]*result[1] + result[2]*result[2]);
 		
 		if (old_norm > 1e-12 && new_norm > 1e-12) {
 			// Clamp dot product to [-1,1] to avoid numerical issues with acos
@@ -1505,6 +1503,8 @@ void AppAdditiveExtTempTexture::normal_finder(int site, double *outV)
 		melt_surface_angle_sum = 0.0;
 		melt_surface_count = 0;
 	}
+	
+	return result;
 }
 
 /* ----------------------------------------------------------------------
@@ -1516,20 +1516,15 @@ void AppAdditiveExtTempTexture::normal_finder(int site, double *outV)
 ------------------------------------------------------------------------- */
 double AppAdditiveExtTempTexture::melt_misorientation(int site, double c1, double c2, double c3)
 {
-	double gradNorm[3] = {0,0,0};
 	double dotMax;
 	double theta;
 	double mobOut;
 
-	
 	//Calculate the unit-vector surface norm (use voxel counting)
-	normal_finder(site, gradNorm);
+	vector<double> grad_vector = normal_finder(site);
 	
 	// Create quaternion vector from site's orientation
 	vector<double> q_site = {q0[site], qx[site], qy[site], qz[site]};
-	
-	// Create gradient normal vector
-	vector<double> grad_vector = {gradNorm[0], gradNorm[1], gradNorm[2]};
 	
 	// Use quaternion function to get cosine of minimum angle between
 	// crystal orientation and temperature gradient

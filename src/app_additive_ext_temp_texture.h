@@ -43,6 +43,7 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   virtual void nucleation_init();
   virtual void nucleation_particle_flipper(int, int,class RandomPark *);
   virtual void mushy_phase(int, class RandomPark *);
+  virtual double site_energy(int);
   void site_event_solidification(int, double, class RandomPark *);
   void normal_finder(int, double *);
 	double melt_misorientation(int, double, double, double);
@@ -99,6 +100,9 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
 	double c1, c2, c3;
 	int nlocal_app; // Local application size
  	int fully_periodic;
+ 	
+ 	// Debug parameters
+ 	int normal_finder_debug; // Flag to enable/disable normal_finder debugging
  	
  	// Monte Carlo nucleation model parameters
 	int *nucleation_flags;

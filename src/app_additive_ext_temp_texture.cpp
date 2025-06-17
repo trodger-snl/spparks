@@ -116,6 +116,9 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     time_step = dt;
     t_room = 300;
     
+    // Debug defaults
+    normal_finder_debug = 0; // Off by default
+    
     // Initialize bounds checking variables
     bounds_check_mode = 0; // Default to exact match
     bounds_validated = false;
@@ -218,6 +221,12 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
      bounds_check_mode = atoi(arg[0]);
      if (bounds_check_mode < 0 || bounds_check_mode > 1) 
        error->all(FLERR,"Illegal bounds_check_mode value: must be 0 (exact) or 1 (subvolume)");
+  }
+  else if (strcmp(command,"normal_finder_debug") == 0) {
+     if (narg != 1) error->all(FLERR,"Illegal normal_finder_debug command");
+     normal_finder_debug = atoi(arg[0]);
+     if (normal_finder_debug < 0 || normal_finder_debug > 1) 
+       error->all(FLERR,"Illegal normal_finder_debug value: must be 0 (off) or 1 (on)");
   }
   
   else error->all(FLERR,"Unrecognized command");
@@ -721,6 +730,47 @@ void AppAdditiveExtTempTexture::init_app()
 
 
 /* ----------------------------------------------------------------------
+   Override parent site_energy to only calculate energy for solidified sites
+   and exclude non-solidified neighbors from energy calculation
+------------------------------------------------------------------------- */
+
+double AppAdditiveExtTempTexture::site_energy(int i) {
+  // Condition 1: If active_flag != 3 (not solidified), return zero energy
+  if (active_flag[i] != 3) {
+    return 0.0;
+  }
+  
+  // Same algorithm as parent class but with active_flag filtering
+  double energy = 0.0;
+  vector<double> qi{q0[i], qx[i], qy[i], qz[i]};
+  
+  for (int j = 0; j < numneigh[i]; j++) {
+    int nj = neighbor[i][j];
+    
+    // Condition 2: Exclude neighbors with active_flag != 3
+    if (active_flag[nj] != 3) {
+      continue;
+    }
+    
+    vector<double> qj{q0[nj], qx[nj], qy[nj], qz[nj]};
+    double di = disorientation::compute_disorientation(symmetries, qi, qj);
+    double ratio = di / theta_cut;
+
+    // Read-Shockley equation logic (same as parent)
+    if (ratio <= 0)
+      continue;
+    else if (ratio < 1.0)
+      energy += ratio * (1 - log(ratio));
+    else
+      energy += 1.0;
+  }
+  
+  // Each site carries half the grain boundary energy
+  // Neighbor sites carry the other half
+  return 0.5 * energy;
+}
+
+/* ----------------------------------------------------------------------
    rKMC method
    perform a site event with no null bin rejection
    flip to random neighbor spin without null bin
@@ -1072,7 +1122,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
 // using weighted least squares with multiple neighbors for improved accuracy
 void AppAdditiveExtTempTexture::normal_finder(int site, double *outV)
 {
-	// Debug statistics for comparing old vs new methods
+	// Debug statistics for comparing old vs new methods (only if debugging enabled)
 	static int debug_counter = 0;
 	static double bulk_angle_sum = 0.0;
 	static int bulk_count = 0;
@@ -1081,8 +1131,13 @@ void AppAdditiveExtTempTexture::normal_finder(int site, double *outV)
 	static double melt_surface_angle_sum = 0.0;
 	static int melt_surface_count = 0;
 	
-	debug_counter++;
-	bool should_output = (debug_counter % 60000 == 0);
+	bool should_debug = (normal_finder_debug == 1);
+	bool should_output = false;
+	
+	if (should_debug) {
+		debug_counter++;
+		should_output = (debug_counter % 60000 == 0);
+	}
 	
 	// Initialize gradient components
 	double grad_x = 0, grad_y = 0, grad_z = 0;
@@ -1101,17 +1156,19 @@ void AppAdditiveExtTempTexture::normal_finder(int site, double *outV)
 		{ 1, 1,-1}, { 1, 1, 0}, { 1, 1, 1}   // i=1, j=1
 	};
 	
-	// Always calculate old 6-neighbor result for comparison
+	// Calculate old 6-neighbor result for comparison (only if debugging enabled)
 	double old_result[3] = {0, 0, 0};
-	double grad_x_old = (T[neighbor[site][4]] - T[neighbor[site][21]]) / (2.0 * dx);
-	double grad_y_old = (T[neighbor[site][10]] - T[neighbor[site][15]]) / (2.0 * dx);
-	double grad_z_old = (T[neighbor[site][12]] - T[neighbor[site][13]]) / (2.0 * dx);
-	
-	double norm_old = sqrt(grad_x_old*grad_x_old + grad_y_old*grad_y_old + grad_z_old*grad_z_old);
-	if (norm_old > 1e-12) {
-		old_result[0] = fabs(grad_x_old)/norm_old;
-		old_result[1] = fabs(grad_y_old)/norm_old;
-		old_result[2] = fabs(grad_z_old)/norm_old;
+	if (should_debug) {
+		double grad_x_old = (T[neighbor[site][4]] - T[neighbor[site][21]]) / (2.0 * dx);
+		double grad_y_old = (T[neighbor[site][10]] - T[neighbor[site][15]]) / (2.0 * dx);
+		double grad_z_old = (T[neighbor[site][12]] - T[neighbor[site][13]]) / (2.0 * dx);
+		
+		double norm_old = sqrt(grad_x_old*grad_x_old + grad_y_old*grad_y_old + grad_z_old*grad_z_old);
+		if (norm_old > 1e-12) {
+			old_result[0] = fabs(grad_x_old)/norm_old;
+			old_result[1] = fabs(grad_y_old)/norm_old;
+			old_result[2] = fabs(grad_z_old)/norm_old;
+		}
 	}
 	
 	// Special case: top of melt pool where some neighbors are inactive
@@ -1119,17 +1176,20 @@ void AppAdditiveExtTempTexture::normal_finder(int site, double *outV)
 	bool is_melt_surface = (active_flag[neighbor[site][13]] <= 1);
 	
 	if (is_melt_surface) {
-		// Store old melt surface method result for comparison
+		// Store old melt surface method result for comparison (only if debugging enabled)
 		double old_melt_result[3] = {0, 0, 0};
-		double xDel_old = fabs(T[neighbor[site][4]] - T[neighbor[site][21]]);
-		double yDel_old = fabs(T[neighbor[site][10]] - T[neighbor[site][15]]);
-		int lower_site = neighbor[site][12];
-		double zDel_old = fabs(T[neighbor[lower_site][12]] - T[neighbor[lower_site][13]]);
-		double norm_old_melt = sqrt(xDel_old*xDel_old + yDel_old*yDel_old + zDel_old*zDel_old);
-		if (norm_old_melt > 1e-12) {
-			old_melt_result[0] = xDel_old/norm_old_melt;
-			old_melt_result[1] = yDel_old/norm_old_melt;
-			old_melt_result[2] = zDel_old/norm_old_melt;
+		double norm_old_melt = 0.0;
+		if (should_debug) {
+			double xDel_old = fabs(T[neighbor[site][4]] - T[neighbor[site][21]]);
+			double yDel_old = fabs(T[neighbor[site][10]] - T[neighbor[site][15]]);
+			int lower_site = neighbor[site][12];
+			double zDel_old = fabs(T[neighbor[lower_site][12]] - T[neighbor[lower_site][13]]);
+			norm_old_melt = sqrt(xDel_old*xDel_old + yDel_old*yDel_old + zDel_old*zDel_old);
+			if (norm_old_melt > 1e-12) {
+				old_melt_result[0] = xDel_old/norm_old_melt;
+				old_melt_result[1] = yDel_old/norm_old_melt;
+				old_melt_result[2] = zDel_old/norm_old_melt;
+			}
 		}
 		// Filter neighbors to only include those at or below current z-level
 		double site_z = xyz[site][2];
@@ -1222,7 +1282,7 @@ void AppAdditiveExtTempTexture::normal_finder(int site, double *outV)
 		}
 		
 		// Compare old vs new melt surface methods for debugging
-		if (norm > 1e-12 && norm_old_melt > 1e-12) {
+		if (should_debug && norm > 1e-12 && norm_old_melt > 1e-12) {
 			double dot_product = old_melt_result[0]*outV[0] + old_melt_result[1]*outV[1] + old_melt_result[2]*outV[2];
 			double old_norm = sqrt(old_melt_result[0]*old_melt_result[0] + old_melt_result[1]*old_melt_result[1] + old_melt_result[2]*old_melt_result[2]);
 			double new_norm = sqrt(outV[0]*outV[0] + outV[1]*outV[1] + outV[2]*outV[2]);
@@ -1324,7 +1384,7 @@ void AppAdditiveExtTempTexture::normal_finder(int site, double *outV)
 	}
 	
 	// Accumulate statistics for comparing old vs new methods
-	if (norm > 1e-12) {
+	if (should_debug && norm > 1e-12) {
 		// Calculate angle between old and new vectors
 		double dot_product = old_result[0]*outV[0] + old_result[1]*outV[1] + old_result[2]*outV[2];
 		double old_norm = sqrt(old_result[0]*old_result[0] + old_result[1]*old_result[1] + old_result[2]*old_result[2]);

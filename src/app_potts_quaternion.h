@@ -58,16 +58,17 @@ protected:
 protected:
   int *unique_neigh;
 
-private:
   // symmetries: expect 'cubic'(24) or 'hcp'(12)
   vector<double> symmetries;
+  
+  // Read-Shockley disorientation cutoff
+  double theta_cut;
+
+private:
   // Possible extension to handle multiple phases/symmetry types.
   // Each site carries a key for the symmetry type: integer;
   // symmetries for that site can be looked up using this mapping.
   // map<key=integer,vector<double>> symmetries;
-
-  // Read-Shockley disorientation cutoff
-  double theta_cut;
 };
 
 } // namespace SPPARKS_NS

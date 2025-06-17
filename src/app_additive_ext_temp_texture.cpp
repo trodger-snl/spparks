@@ -97,6 +97,7 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     //Set default values    
     tl = 1723;
     ts = 1673;
+    t_cool_max = tl - ts;
     no = 1e15;
     tc = 5;
     tsig = 3;
@@ -115,6 +116,9 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     c3 = 2.5;
     time_step = dt;
     t_room = 300;
+    max_misorient = 0;
+    mis_thresh = 10.0 * MY_PI / 180.0; // Default 10 degrees converted to radians
+    misorient_alpha = 5.0; // Default exponential steepness parameter
     
     // Debug defaults
     normal_finder_debug = 0; // Off by default
@@ -228,6 +232,21 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
      if (normal_finder_debug < 0 || normal_finder_debug > 1) 
        error->all(FLERR,"Illegal normal_finder_debug value: must be 0 (off) or 1 (on)");
   }
+  else if (strcmp(command,"misorientation_function") == 0) {
+     if (narg != 2 && narg != 3) error->all(FLERR,"Illegal misorientation_function command");
+     max_misorient = atof(arg[0]);
+     mis_thresh = atof(arg[1]) * MY_PI / 180.0; // Convert from degrees to radians
+     if (narg == 3) {
+       misorient_alpha = atof(arg[2]);
+       if (misorient_alpha <= 0)
+         error->all(FLERR,"Illegal misorientation_function alpha value: must be greater than 0");
+     }
+     if (max_misorient < 0) 
+       error->all(FLERR,"Illegal misorientation_function maximum value: must be greater than 0");
+     if (mis_thresh < 0)
+       error->all(FLERR,"Illegal misorientation_function threshold value: must be greater than 0");
+  }
+
   
   else error->all(FLERR,"Unrecognized command");
 }
@@ -689,6 +708,8 @@ void AppAdditiveExtTempTexture::init_app()
 	neigh_dist[24] = sqrt2 * dx;
 	neigh_dist[25] = sqrt3 * dx;
 
+  t_cool_max = tl - ts;
+
   //Check that our timestep is small enough	
   double max_front_vel = 0;
 	int power = solid_front_length -1;
@@ -787,18 +808,6 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
   double Mobloc = 0;
   double dotValue = 0;
   // std::cout << "Running site_event_rejection when I shouldn't!" << std::endl;
-    
-/* ----------------------------------------------------------------------
-   Define variables to identify melt travel distance, specific melt location,
-   and the height of each layer as a function of time after additive 
-   manufacturing process starts.
-   
-   The melt travel pattern depends on the value of direction_switch: 0 = scan
-   in x and y directions, 1 = scan in x direction only, 2 = scan in y direction only.
-   For x & y scans, odd layers are x-oriented and even layers are y-oriented.
-   For all patterns, odd passes will travel in the postive direction of the specified
-   variable and even passes will travel in the negative direction.
-------------------------------------------------------------------------- */
 
     //Assign the local mobility
     Mobloc = mobility_out[i];
@@ -837,10 +846,10 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
         for( int j = 0; j < nevent -1; j++) {
             if(dran <= unique_dot[j]) {
               int neighran = unique_neigh[j];
-              melt_misorientation_out[i] = melt_misorientation(neighran,c1,c2,c3);
+              // melt_misorientation_out[i] = melt_misorientation(neighran,c1,c2,c3);
               SiteState s_new(unique[j], {q0[neighran], qx[neighran], qy[neighran], qz[neighran]});
               flip_site(i, s_new);
-                efinal = site_energy(i);
+              efinal = site_energy(i);
             }
         }
     }
@@ -871,17 +880,17 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
   if (efinal <= einitial) {
      if (random->uniform() > Mobloc){
        flip_site(i, s_old);
-       melt_misorientation_out[i] = 0;
+      //  melt_misorientation_out[i] = 0;
      }
   }
   else if (temperature == 0.0) {
     flip_site(i, s_old);
-    melt_misorientation_out[i] = 0;
+    // melt_misorientation_out[i] = 0;
 
   } 
   else if (random->uniform() > Mobloc * exp((einitial-efinal)*t_inverse)) {
     flip_site(i, s_old);
-    melt_misorientation_out[i] = 0;
+    // melt_misorientation_out[i] = 0;
 
   }
 
@@ -993,13 +1002,65 @@ void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, R
         if(dran <= unique_dot[j]) {
             int neighran = unique_neigh[j];
             SiteState s1(unique[j],{q0[neighran],qx[neighran],qy[neighran],qz[neighran]});
-            melt_misorientation_out[i] = melt_misorientation(neighran,c1,c2,c3);
+            // melt_misorientation_out[i] = melt_misorientation(neighran,c1,c2,c3);
             flip_site(i,s1);
             active_flag[i] = 3;
             solid_d[i] = -1;
             naccept++;
+
+            // Apply misorientation based on temperature gradient
+            apply_misorientation(i, Tcool, ranapp);
             return;
         }
+    }
+}
+
+/* ----------------------------------------------------------------------
+    Apply misorientation based on temperature gradient and cooling rate
+------------------------------------------------------------------------- */
+void AppAdditiveExtTempTexture::apply_misorientation(int i, double Tcool, RandomPark *ranapp) {
+    if(max_misorient <= 0) return;
+    
+    double gradNorm[3] = {0,0,0};
+    // Exponential function: grows slowly initially, then rapidly in last ~10%
+    double normalized_temp = Tcool / t_cool_max;
+    double mis_angle = max_misorient * (exp(misorient_alpha * normalized_temp) - 1.0) / (exp(misorient_alpha) - 1.0) * MY_PI/180;
+
+    //Calculate the unit-vector surface norm (use voxel counting)
+    normal_finder(i, gradNorm);
+    vector<double> grad_out = {gradNorm[0],gradNorm[1],gradNorm[2]};
+
+    // Create quaternion vector from site's orientation
+    vector<double> q_site = {q0[i], qx[i], qy[i], qz[i]};
+    
+    // Normalize quaternion to ensure it's a unit quaternion
+    double q_mag = sqrt(q_site[0]*q_site[0] + q_site[1]*q_site[1] + q_site[2]*q_site[2] + q_site[3]*q_site[3]);
+    if (q_mag > 1e-15) {
+        q_site[0] /= q_mag;
+        q_site[1] /= q_mag;
+        q_site[2] /= q_mag;
+        q_site[3] /= q_mag;
+    }
+
+    // Create gradient normal vector
+    vector<double> grad_vector = {gradNorm[0], gradNorm[1], gradNorm[2]};
+    vector<double> q_new = quaternion::rotate_q_towards_u(q_site,grad_out, mis_angle);
+
+    q0[i] = q_new[0];
+    qx[i] = q_new[1];
+    qy[i] = q_new[2];
+    qz[i] = q_new[3];
+
+    // Compute direct quaternion rotation angle (without symmetry considerations)
+    double dot_product = q_site[0]*q_new[0] + q_site[1]*q_new[1] + q_site[2]*q_new[2] + q_site[3]*q_new[3];
+    // Handle both positive and negative dot products (quaternion double cover)
+    dot_product = std::abs(dot_product);
+    // Clamp to avoid numerical issues
+    dot_product = std::min(1.0, dot_product);
+    double direct_angle = 2.0 * acos(dot_product);
+    
+    if(direct_angle >= mis_thresh) {
+        spin[i] = (int) (nspins * ranapp->uniform()); //If greater than misorientation threshold, make new grain
     }
 }
 

@@ -47,6 +47,7 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   void site_event_solidification(int, double, class RandomPark *);
   void normal_finder(int, double *);
 	double melt_misorientation(int, double, double, double);
+  void apply_misorientation(int, double, class RandomPark *);
   void quat2euler(int, double *);
   virtual void reduced_temperature_hdf();
   virtual void reduced_temperature_hdf_chunked();
@@ -100,6 +101,10 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
 	double c1, c2, c3;
 	int nlocal_app; // Local application size
  	int fully_periodic;
+  double max_misorient;
+  double t_cool_max;
+  double mis_thresh;
+  double misorient_alpha;
  	
  	// Debug parameters
  	int normal_finder_debug; // Flag to enable/disable normal_finder debugging

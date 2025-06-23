@@ -128,6 +128,13 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     bounds_validated = false;
     hdf5_dims[0] = hdf5_dims[1] = hdf5_dims[2] = 0;
     hdf5_origin[0] = hdf5_origin[1] = hdf5_origin[2] = 0.0;
+
+    // Read temperature values (full dataset loading for compatibility)
+    //Initialize chunked reading variables
+    chunk_time_window = 0.1; // Default 100ms time window per chunk
+    current_chunk_start_time = 0.0;
+    current_chunk_end_time = 0.0;
+    hdf5_file_open = false;
     
     //add the double array
     recreate_arrays();  
@@ -246,7 +253,12 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
      if (mis_thresh < 0)
        error->all(FLERR,"Illegal misorientation_function threshold value: must be greater than 0");
   }
-
+  else if (strcmp(command,"chunk_time_window") == 0) {
+     if (narg != 1) error->all(FLERR,"Illegal chunk_time_window command");
+     chunk_time_window = atof(arg[0]);
+     if (normal_finder_debug < 0) 
+       error->all(FLERR,"Illegal chunk_time_window value: must be < 0");
+  }
   
   else error->all(FLERR,"Unrecognized command");
 }
@@ -728,15 +740,6 @@ void AppAdditiveExtTempTexture::init_app()
       fprintf(screen,"Maximum allowable timestep is %e\n", dx/max_front_vel);
     }
   }
-
-
-  
-  // Read temperature values (full dataset loading for compatibility)
-  //Initialize chunked reading variables
-  chunk_time_window = 0.1; // Default 100ms time window per chunk
-  current_chunk_start_time = 0.0;
-  current_chunk_end_time = 0.0;
-  hdf5_file_open = false;
   
   if (domain->me == 0) {
     std::cout << "Starting chunked HDF5 reading" << std::endl;
@@ -768,8 +771,8 @@ double AppAdditiveExtTempTexture::site_energy(int i) {
   for (int j = 0; j < numneigh[i]; j++) {
     int nj = neighbor[i][j];
     
-    // Condition 2: Exclude neighbors with active_flag != 3
-    if (active_flag[nj] != 3) {
+    // Condition 2: Exclude neighbors with active_flag != 3 or 1
+    if (active_flag[nj] != 3 || active_flag[nj] != 1) {
       continue;
     }
     
@@ -823,7 +826,7 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
     if(solid_d[i] < 0 && solid_d[i] > -nrefine -1) {
         //Go through neighbor list and add them to possible switches
         for (int j = 0; j < numneigh[i]; j++) {
-            if(active_flag[neighbor[i][j]] == 3) {
+            if(active_flag[neighbor[i][j]] == 3 || active_flag[neighbor[i][j]] == 1) {
                 // Calculate temperature gradient/grain misorientation and store in array
                 // Use cumulative probability for random sampling
                 //Exclude gas or molten sites from the Potts neighbor tally
@@ -945,7 +948,7 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
             nucleation_particle_flipper(i, round(nucleation_sizes[spin[i]]/pow(dx,3)), ranapp);
             return;
         }
-        //Can nucleate, but won't yet. Allow to if the solidification front gets captured.
+        //Can nucleate, but won't yet. Allow to solidify if the solidification front captures it first.
         else {
             // fprintf(screen,"Epitaxialy growing instead of nucleating\n");
             site_event_solidification(i, Tcool, random);
@@ -965,32 +968,44 @@ void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, R
     int nevent = 0;
     int value;
     double dotValue = 0;
-    
-    //Add the distance of the front travel. This is for 304L. Need to multiply by timestep to get distance
-    //Try doing this with an arbitrary array
-    int power = solid_front_length - 1;
-    for(int k = 0; k < solid_front_length; k++) {
-        solid_d[i] = solid_d[i] + solid_front_coeffs[k] * pow(Tcool, power) * time_step;
-        power--;
-    }
-    
-    //Go through neighbor list and add them to possible switches
-    for (int j = 0; j < numneigh[i]; j++) {
-        if(neigh_dist[2] <= solid_d[i] && (active_flag[neighbor[i][j]] == 1 || active_flag[neighbor[i][j]] == 3)) {
-            // Calculate temperature gradient/grain misorientation and store in array
-            // Use cumulative probability for random sampling
-            //Exclude gas or molten sites from the Potts neighbor tally
-            double melt_misori_val = melt_misorientation(neighbor[i][j],c1,c2,c3);
-            // melt_misorientation_out[i] = melt_misori_val;
-            dotValue += melt_misori_val;
-            unique_dot[nevent] = dotValue;
-            value = spin[neighbor[i][j]];
-            unique[nevent] = value;
-            unique_neigh[nevent] = neighbor[i][j];
-            nevent++;
+    int solidNeigh = 0;
+
+    //Add the distance of the front travel. Need to multiply by timestep to get distance
+    //Only start growing if we're on the boundary or have a solid neighbor
+    if (numneigh[i] < 26) solidNeigh = 1;
+    else {
+      for (int j = 0; j < numneigh[i]; j++) {
+        if(active_flag[neighbor[i][j]] == 3 || active_flag[neighbor[i][j]] == 1) {
+          solidNeigh = 1;
+          break;
         }
+      }
     }
+
+    if(solidNeigh == 1) {
+      int power = solid_front_length - 1;
+      for(int k = 0; k < solid_front_length; k++) {
+          solid_d[i] = solid_d[i] + solid_front_coeffs[k] * pow(Tcool, power) * time_step;
+          power--;
+      }
     
+      //Go through neighbor list and add them to possible switches
+      for (int j = 0; j < numneigh[i]; j++) {
+          if(neigh_dist[2] <= solid_d[i] && (active_flag[neighbor[i][j]] == 1 || active_flag[neighbor[i][j]] == 3)) {
+              // Calculate temperature gradient/grain misorientation and store in array
+              // Use cumulative probability for random sampling
+              //Exclude gas or molten sites from the Potts neighbor tally
+              double melt_misori_val = melt_misorientation(neighbor[i][j],c1,c2,c3);
+              // melt_misorientation_out[i] = melt_misori_val;
+              dotValue += melt_misori_val;
+              unique_dot[nevent] = dotValue;
+              value = spin[neighbor[i][j]];
+              unique[nevent] = value;
+              unique_neigh[nevent] = neighbor[i][j];
+              nevent++;
+          }
+      }
+    }
     //If no neighbor is eligible, return before changing anything. Will try next sweep.
     if (nevent == 0) return;
     
@@ -1102,11 +1117,40 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
     }
     else {
         //Go through neighbors and nucleate liquid ones
-        //Do 1st ones first (this isn't random yet)
+        //Create shuffled indices for each shell
+        std::vector<int> shell1_indices(6);
+        std::vector<int> shell2_indices(12);
+        std::vector<int> shell3_indices(8);
+        
+        // Initialize index arrays
+        for(int j = 0; j < 6; j++) shell1_indices[j] = j;
+        for(int j = 0; j < 12; j++) shell2_indices[j] = j;
+        for(int j = 0; j < 8; j++) shell3_indices[j] = j;
+        
+        // Shuffle each shell's indices using Fisher-Yates algorithm
+        // Shell 1 (nearest neighbors)
+        for(int j = 5; j > 0; j--) {
+            int k = (int)(random->uniform() * (j + 1));
+            std::swap(shell1_indices[j], shell1_indices[k]);
+        }
+        
+        // Shell 2 (second nearest)
+        for(int j = 11; j > 0; j--) {
+            int k = (int)(random->uniform() * (j + 1));
+            std::swap(shell2_indices[j], shell2_indices[k]);
+        }
+        
+        // Shell 3 (third nearest)
+        for(int j = 7; j > 0; j--) {
+            int k = (int)(random->uniform() * (j + 1));
+            std::swap(shell3_indices[j], shell3_indices[k]);
+        }
+        
+        //Do 1st shell in randomized order
         for(int j = 0; j < 6; j++) {
-
-            if(active_flag[neighbor[i][nearest_neigh[j]]] == 2) {
-                int i_chosen = neighbor[i][nearest_neigh[j]];
+            int idx = shell1_indices[j];
+            if(active_flag[neighbor[i][nearest_neigh[idx]]] == 2) {
+                int i_chosen = neighbor[i][nearest_neigh[idx]];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
                 solid_d[i_chosen] = -nrefine -3;
@@ -1117,10 +1161,11 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 return;
             }
         }
-        //Do 2nd shell
+        //Do 2nd shell in randomized order
         for(int j = 0; j < 12; j++) {
-            if(active_flag[neighbor[i][second_nearest[j]]] == 2) {
-                int i_chosen = neighbor[i][second_nearest[j]];
+            int idx = shell2_indices[j];
+            if(active_flag[neighbor[i][second_nearest[idx]]] == 2) {
+                int i_chosen = neighbor[i][second_nearest[idx]];
                 flip_site(i_chosen, s_in);            
                 active_flag[i_chosen] = 3;
                 solid_d[i_chosen] = -nrefine -3;
@@ -1131,10 +1176,11 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 return;
             }      
           }
-        //Do 3rd shell    
+        //Do 3rd shell in randomized order   
         for(int j = 0; j < 8; j++) {
-            if(active_flag[neighbor[i][third_nearest[j]]] ==2) {
-                int i_chosen = neighbor[i][third_nearest[j]];
+            int idx = shell3_indices[j];
+            if(active_flag[neighbor[i][third_nearest[idx]]] ==2) {
+                int i_chosen = neighbor[i][third_nearest[idx]];
                 //spin[i_chosen] = spin[i];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;

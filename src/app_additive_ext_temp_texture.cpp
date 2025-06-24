@@ -47,6 +47,7 @@
 #include "potts_quaternion/hcp_symmetries.h"
 #include "potts_quaternion/quaternion.h"
 #include "temperature_source_rosenthal.h"
+#include "temperature_source_hdf5_unstructured.h"
 
 
 using namespace SPPARKS_NS;
@@ -83,7 +84,7 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     nrefine = atoi(arg[5]); //How many refinement MC steps to perform after a site solidifies
     
     //I think we need all of these variables still!
-    ndouble = 10;
+    ndouble = 9;
     allow_app_update = 1;
     app_update_only = 1; //Skip solid-state growth for now.
     ninteger = 2;
@@ -285,6 +286,30 @@ void AppAdditiveExtTempTexture::app_update(double dt)
   //Reset t_active to assume we don't have a melt pool right now
   t_active = 0;
   
+  // Fast-forward capability for modular temperature source
+  if (use_temperature_source && temperature_source) {
+    // Check if we can fast-forward through low temperature periods
+    HDF5UnstructuredTemperatureSource* hdf5_source = 
+      dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+    
+    if (hdf5_source && hdf5_source->all_temperatures_below_threshold(time)) {
+      // Find next time when temperatures are above threshold
+      double next_active_time = hdf5_source->find_next_active_time(time, time + 0.1);  // Search up to 0.1s ahead
+      
+      if (next_active_time > time) {
+        double time_skip = next_active_time - time;
+        if (domain->me == 0 && time_skip > 1e-6) {  // Only report significant time skips
+          double threshold = hdf5_source->get_fast_forward_threshold();
+          std::cout << "Fast-forward: Skipping " << time_skip << " seconds from time " 
+                    << time << " to " << next_active_time << " (all temperatures < " << threshold << "K)" << std::endl;
+        }
+        
+        // Update simulation time
+        time = next_active_time;
+      }
+    }
+  }
+  
   // Update temperature using modular source or legacy HDF5 system
   if (use_temperature_source) {
     // Use new modular temperature source system
@@ -331,7 +356,7 @@ void AppAdditiveExtTempTexture::app_update(double dt)
         qy[i] = uq[2];
         qz[i] = uq[3];
         solid_d[i] = 0;
-        melt_misorientation_out[i] = 0;
+        //melt_misorientation_out[i] = 0;
         G[i] = 0;
         V[i] = 0;
     }
@@ -634,9 +659,9 @@ void AppAdditiveExtTempTexture::grow_app()
   mobility_out = darray[4];
   T = darray[5];
   solid_d = darray[6];
-  melt_misorientation_out = darray[7];
-  G = darray[8];
-  V = darray[9];
+  //melt_misorientation_out = darray[7];
+  G = darray[7];
+  V = darray[8];
 
   if (nlocal_app < nlocal) {
     nlocal_app = nlocal;
@@ -776,13 +801,22 @@ void AppAdditiveExtTempTexture::init_app()
     }
   }
   
-  if (domain->me == 0) {
-    std::cout << "Starting chunked HDF5 reading" << std::endl;
-    std::cout << "Using liquidus temperature tl = " << tl << " K" << std::endl;
-    std::cout << "Using solidus temperature ts = " << ts << " K" << std::endl;
+  // Only initialize legacy HDF5 system if not using modular temperature source
+  if (!use_temperature_source) {
+    if (domain->me == 0) {
+      std::cout << "Starting chunked HDF5 reading" << std::endl;
+      std::cout << "Using liquidus temperature tl = " << tl << " K" << std::endl;
+      std::cout << "Using solidus temperature ts = " << ts << " K" << std::endl;
+    }
+    reduced_temperature_hdf_chunked();
+    if (domain->me == 0) std::cout << "Chunked HDF5 reading completed" << std::endl;
+  } else {
+    if (domain->me == 0) {
+      std::cout << "Using modular temperature source - skipping legacy HDF5 initialization" << std::endl;
+      std::cout << "Using liquidus temperature tl = " << tl << " K" << std::endl;
+      std::cout << "Using solidus temperature ts = " << ts << " K" << std::endl;
+    }
   }
-  reduced_temperature_hdf_chunked();
-  if (domain->me == 0) std::cout << "Chunked HDF5 reading completed" << std::endl;
 
 	this->app_update(0.0);
 }
@@ -2531,11 +2565,31 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
   
   // Update temperature array for all local sites
   for (int i = 0; i < nlocal; i++) {
-    // Get site coordinates and pass to temperature source
-    double x = xyz[i][0];
-    double y = xyz[i][1];
-    double z = xyz[i][2];
-    T[i] = temperature_source->get_temperature_at_xyz_and_time(x, y, z, simulation_time);
+    // Get site coordinates in lattice units
+    double x_lattice = xyz[i][0];
+    double y_lattice = xyz[i][1];
+    double z_lattice = xyz[i][2];
+    
+    // Convert to physical coordinates (meters) using dx from temperature source
+    // For HDF5 unstructured source, dx is the lattice spacing in meters
+    HDF5UnstructuredTemperatureSource* hdf5_source = 
+      dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+    
+    double x_physical, y_physical, z_physical;
+    if (hdf5_source) {
+      // HDF5 source expects physical coordinates in meters
+      double dx = hdf5_source->get_dx();
+      x_physical = x_lattice * dx;
+      y_physical = y_lattice * dx;
+      z_physical = z_lattice * dx;
+    } else {
+      // Other temperature sources might expect lattice coordinates
+      x_physical = x_lattice;
+      y_physical = y_lattice;
+      z_physical = z_lattice;
+    }
+    
+    T[i] = temperature_source->get_temperature_at_xyz_and_time(x_physical, y_physical, z_physical, simulation_time);
   }
 }
 

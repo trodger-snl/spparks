@@ -75,15 +75,15 @@ void HDF5UnstructuredTemperatureSource::parse_arguments(const std::vector<std::s
     error->all(FLERR,"HDF5 unstructured temperature source requires lattice to be defined");
   }
   
-  // Get domain bounds
-  x0[0] = domain->boxxlo;
-  x0[1] = domain->boxylo;
-  x0[2] = domain->boxzlo;
+  // Use subdomain bounds for this processor instead of global bounds
+  x0[0] = domain->subxlo;
+  x0[1] = domain->subylo;
+  x0[2] = domain->subzlo;
   
-  // Calculate grid dimensions from domain bounds and thermal data spacing
-  size[0] = static_cast<unsigned>(std::round((domain->boxxhi - domain->boxxlo) / dx)) + 1;
-  size[1] = static_cast<unsigned>(std::round((domain->boxyhi - domain->boxylo) / dx)) + 1;
-  size[2] = static_cast<unsigned>(std::round((domain->boxzhi - domain->boxzlo) / dx)) + 1;
+  // Calculate grid dimensions from processor subdomain bounds
+  size[0] = static_cast<unsigned>(std::round((domain->subxhi - domain->subxlo) / dx)) + 1;
+  size[1] = static_cast<unsigned>(std::round((domain->subyhi - domain->subylo) / dx)) + 1;
+  size[2] = static_cast<unsigned>(std::round((domain->subzhi - domain->subzlo) / dx)) + 1;
   
   if (dx <= 0.0) {
     error->all(FLERR,"Thermal data grid spacing dx must be positive");
@@ -98,7 +98,18 @@ void HDF5UnstructuredTemperatureSource::parse_arguments(const std::vector<std::s
 
 void HDF5UnstructuredTemperatureSource::open_hdf5_file()
 {
-  file_id = H5Fopen(filename.c_str(), H5F_ACC_RDONLY, H5P_DEFAULT);
+  // Create parallel file access property list
+  hid_t fapl_id = H5Pcreate(H5P_FILE_ACCESS);
+  H5Pset_fclose_degree(fapl_id, H5F_CLOSE_STRONG);
+  
+#ifdef SPPARKS_MPI
+  // Set up parallel HDF5 access if MPI is available
+  H5Pset_fapl_mpio(fapl_id, world, MPI_INFO_NULL);
+#endif
+  
+  file_id = H5Fopen(filename.c_str(), H5F_ACC_RDONLY, fapl_id);
+  H5Pclose(fapl_id);
+  
   if (file_id < 0) {
     std::string msg = "Cannot open HDF5 file: " + filename;
     error->all(FLERR, msg.c_str());
@@ -119,9 +130,17 @@ void HDF5UnstructuredTemperatureSource::read_layer_times()
   H5Sget_simple_extent_dims(space_id, dims, NULL);
   
   layer_times.resize(dims[0]);
-  herr_t status = H5Dread(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, 
-                         H5P_DEFAULT, layer_times.data());
   
+  // Create parallel data transfer property list
+  hid_t plist_id = H5Pcreate(H5P_DATASET_XFER);
+#ifdef SPPARKS_MPI  
+  H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);
+#endif
+  
+  herr_t status = H5Dread(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, 
+                         plist_id, layer_times.data());
+  
+  H5Pclose(plist_id);
   H5Sclose(space_id);
   H5Dclose(dataset_id);
   
@@ -134,6 +153,7 @@ void HDF5UnstructuredTemperatureSource::read_layer_times()
 
 void HDF5UnstructuredTemperatureSource::setup_grid_bbox()
 {
+  // Grid bbox represents this processor's subdomain bounds
   grid_bbox = {
     x0[0], x0[1], x0[2],
     x0[0] + dx * (size[0] - 1),
@@ -158,12 +178,12 @@ double HDF5UnstructuredTemperatureSource::get_temperature_at_xyz_and_time(double
     current_time = time;
   }
   
-  // Convert physical coordinates to grid indices
+  // Convert physical coordinates to local grid indices within this processor's subdomain
   int i = static_cast<int>(std::round((x - x0[0]) / dx));
   int j = static_cast<int>(std::round((y - x0[1]) / dx));
   int k = static_cast<int>(std::round((z - x0[2]) / dx));
   
-  // Check bounds
+  // Check bounds against local subdomain size
   if (i < 0 || i >= static_cast<int>(size[0]) ||
       j < 0 || j >= static_cast<int>(size[1]) ||
       k < 0 || k >= static_cast<int>(size[2])) {
@@ -311,7 +331,15 @@ void HDF5UnstructuredTemperatureSource::read_chunk_info(hid_t group_id, std::vec
   H5Sget_simple_extent_dims(bbox_space, bbox_dims, NULL);
   
   std::vector<double> bbox_data(bbox_dims[0] * bbox_dims[1]);
-  herr_t status = H5Dread(bbox_dataset, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, bbox_data.data());
+  
+  // Create parallel data transfer property list
+  hid_t plist_id = H5Pcreate(H5P_DATASET_XFER);
+#ifdef SPPARKS_MPI  
+  H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);
+#endif
+  
+  herr_t status = H5Dread(bbox_dataset, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, plist_id, bbox_data.data());
+  H5Pclose(plist_id);
   H5Sclose(bbox_space);
   H5Dclose(bbox_dataset);
   
@@ -328,10 +356,11 @@ void HDF5UnstructuredTemperatureSource::read_chunk_info(hid_t group_id, std::vec
     }
   }
   
-  // Find overlapping chunks
+  // Find overlapping chunks using expanded bounding box for better boundary handling
   overlapping_chunks.clear();
+  std::vector<double> expanded_bbox = get_expanded_bbox(1.1); // 10% expansion
   for (size_t c = 0; c < bboxes.size(); c++) {
-    if (do_boxes_overlap(bboxes[c], grid_bbox)) {
+    if (do_boxes_overlap(bboxes[c], expanded_bbox)) {
       overlapping_chunks.push_back(c);
     }
   }
@@ -647,9 +676,17 @@ void HDF5UnstructuredTemperatureSource::read_hdf5_dataset_1d(
   H5Sget_simple_extent_dims(space_id, dims, NULL);
   
   data.resize(dims[0]);
-  herr_t status = H5Dread(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, 
-                         H5P_DEFAULT, data.data());
   
+  // Create parallel data transfer property list
+  hid_t plist_id = H5Pcreate(H5P_DATASET_XFER);
+#ifdef SPPARKS_MPI  
+  H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);
+#endif
+  
+  herr_t status = H5Dread(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, 
+                         plist_id, data.data());
+  
+  H5Pclose(plist_id);
   H5Sclose(space_id);
   H5Dclose(dataset_id);
   
@@ -675,9 +712,17 @@ void HDF5UnstructuredTemperatureSource::read_hdf5_dataset_1d(
   H5Sget_simple_extent_dims(space_id, dims, NULL);
   
   data.resize(dims[0]);
-  herr_t status = H5Dread(dataset_id, H5T_NATIVE_UINT, H5S_ALL, H5S_ALL, 
-                         H5P_DEFAULT, data.data());
   
+  // Create parallel data transfer property list
+  hid_t plist_id = H5Pcreate(H5P_DATASET_XFER);
+#ifdef SPPARKS_MPI  
+  H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);
+#endif
+  
+  herr_t status = H5Dread(dataset_id, H5T_NATIVE_UINT, H5S_ALL, H5S_ALL, 
+                         plist_id, data.data());
+  
+  H5Pclose(plist_id);
   H5Sclose(space_id);
   H5Dclose(dataset_id);
   
@@ -716,6 +761,12 @@ void HDF5UnstructuredTemperatureSource::read_hdf5_dataset_2d(
   hsize_t mem_dims[2] = {total_rows, total_cols};
   hid_t mem_space = H5Screate_simple(2, mem_dims, NULL);
   
+  // Create parallel data transfer property list
+  hid_t plist_id = H5Pcreate(H5P_DATASET_XFER);
+#ifdef SPPARKS_MPI  
+  H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);
+#endif
+  
   // Read data using hyperslab selections
   size_t offset = 0;
   for (const auto &slice : row_slices) {
@@ -727,7 +778,7 @@ void HDF5UnstructuredTemperatureSource::read_hdf5_dataset_2d(
     H5Sselect_hyperslab(mem_space, H5S_SELECT_SET, mem_start, NULL, count, NULL);
     
     herr_t status = H5Dread(dataset_id, H5T_NATIVE_DOUBLE, mem_space, file_space, 
-                           H5P_DEFAULT, data.data());
+                           plist_id, data.data());
     if (status < 0) {
       H5Sclose(mem_space);
       H5Sclose(file_space);
@@ -739,6 +790,7 @@ void HDF5UnstructuredTemperatureSource::read_hdf5_dataset_2d(
     offset += count[0];
   }
   
+  H5Pclose(plist_id);
   H5Sclose(mem_space);
   H5Sclose(file_space);
   H5Dclose(dataset_id);
@@ -773,6 +825,12 @@ void HDF5UnstructuredTemperatureSource::read_hdf5_dataset_2d(
   hsize_t mem_dims[2] = {total_rows, total_cols};
   hid_t mem_space = H5Screate_simple(2, mem_dims, NULL);
   
+  // Create parallel data transfer property list
+  hid_t plist_id = H5Pcreate(H5P_DATASET_XFER);
+#ifdef SPPARKS_MPI  
+  H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);
+#endif
+  
   // Read data using hyperslab selections
   size_t offset = 0;
   for (const auto &slice : row_slices) {
@@ -784,7 +842,7 @@ void HDF5UnstructuredTemperatureSource::read_hdf5_dataset_2d(
     H5Sselect_hyperslab(mem_space, H5S_SELECT_SET, mem_start, NULL, count, NULL);
     
     herr_t status = H5Dread(dataset_id, H5T_NATIVE_UINT, mem_space, file_space, 
-                           H5P_DEFAULT, data.data());
+                           plist_id, data.data());
     if (status < 0) {
       H5Sclose(mem_space);
       H5Sclose(file_space);
@@ -796,6 +854,7 @@ void HDF5UnstructuredTemperatureSource::read_hdf5_dataset_2d(
     offset += count[0];
   }
   
+  H5Pclose(plist_id);
   H5Sclose(mem_space);
   H5Sclose(file_space);
   H5Dclose(dataset_id);
@@ -827,6 +886,12 @@ void HDF5UnstructuredTemperatureSource::read_hdf5_hyperslab_1d(
   hsize_t mem_dims[1] = {total_size};
   hid_t mem_space = H5Screate_simple(1, mem_dims, NULL);
   
+  // Create parallel data transfer property list
+  hid_t plist_id = H5Pcreate(H5P_DATASET_XFER);
+#ifdef SPPARKS_MPI  
+  H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);
+#endif
+  
   // Read data using hyperslab selections
   size_t offset = 0;
   for (const auto &slice : row_slices) {
@@ -838,7 +903,7 @@ void HDF5UnstructuredTemperatureSource::read_hdf5_hyperslab_1d(
     H5Sselect_hyperslab(mem_space, H5S_SELECT_SET, mem_start, NULL, count, NULL);
     
     herr_t status = H5Dread(dataset_id, H5T_NATIVE_DOUBLE, mem_space, file_space, 
-                           H5P_DEFAULT, data.data());
+                           plist_id, data.data());
     if (status < 0) {
       H5Sclose(mem_space);
       H5Sclose(file_space);
@@ -850,6 +915,7 @@ void HDF5UnstructuredTemperatureSource::read_hdf5_hyperslab_1d(
     offset += count[0];
   }
   
+  H5Pclose(plist_id);
   H5Sclose(mem_space);
   H5Sclose(file_space);
   H5Dclose(dataset_id);
@@ -881,6 +947,12 @@ void HDF5UnstructuredTemperatureSource::read_hdf5_hyperslab_1d(
   hsize_t mem_dims[1] = {total_size};
   hid_t mem_space = H5Screate_simple(1, mem_dims, NULL);
   
+  // Create parallel data transfer property list
+  hid_t plist_id = H5Pcreate(H5P_DATASET_XFER);
+#ifdef SPPARKS_MPI  
+  H5Pset_dxpl_mpio(plist_id, H5FD_MPIO_INDEPENDENT);
+#endif
+  
   // Read data using hyperslab selections
   size_t offset = 0;
   for (const auto &slice : row_slices) {
@@ -892,7 +964,7 @@ void HDF5UnstructuredTemperatureSource::read_hdf5_hyperslab_1d(
     H5Sselect_hyperslab(mem_space, H5S_SELECT_SET, mem_start, NULL, count, NULL);
     
     herr_t status = H5Dread(dataset_id, H5T_NATIVE_UINT, mem_space, file_space, 
-                           H5P_DEFAULT, data.data());
+                           plist_id, data.data());
     if (status < 0) {
       H5Sclose(mem_space);
       H5Sclose(file_space);
@@ -904,7 +976,41 @@ void HDF5UnstructuredTemperatureSource::read_hdf5_hyperslab_1d(
     offset += count[0];
   }
   
+  H5Pclose(plist_id);
   H5Sclose(mem_space);
   H5Sclose(file_space);
   H5Dclose(dataset_id);
+}
+/* ---------------------------------------------------------------------- */
+
+bool HDF5UnstructuredTemperatureSource::is_point_near_boundary(
+  const std::array<double, 3> &pt) const
+{
+  // Check if point is within one grid spacing of the subdomain boundary
+  double tolerance = dx;
+  
+  return (pt[0] - x0[0] < tolerance) || (x0[0] + dx * (size[0] - 1) - pt[0] < tolerance) ||
+         (pt[1] - x0[1] < tolerance) || (x0[1] + dx * (size[1] - 1) - pt[1] < tolerance) ||
+         (pt[2] - x0[2] < tolerance) || (x0[2] + dx * (size[2] - 1) - pt[2] < tolerance);
+}
+
+/* ---------------------------------------------------------------------- */
+
+std::vector<double> HDF5UnstructuredTemperatureSource::get_expanded_bbox(double expansion_factor) const
+{
+  std::vector<double> expanded_bbox = grid_bbox;
+  
+  // Expand bounding box by the given factor
+  double dx_expand = (expanded_bbox[3] - expanded_bbox[0]) * (expansion_factor - 1.0) * 0.5;
+  double dy_expand = (expanded_bbox[4] - expanded_bbox[1]) * (expansion_factor - 1.0) * 0.5;
+  double dz_expand = (expanded_bbox[5] - expanded_bbox[2]) * (expansion_factor - 1.0) * 0.5;
+  
+  expanded_bbox[0] -= dx_expand;  // xmin
+  expanded_bbox[1] -= dy_expand;  // ymin
+  expanded_bbox[2] -= dz_expand;  // zmin
+  expanded_bbox[3] += dx_expand;  // xmax
+  expanded_bbox[4] += dy_expand;  // ymax
+  expanded_bbox[5] += dz_expand;  // zmax
+  
+  return expanded_bbox;
 }

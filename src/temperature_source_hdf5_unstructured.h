@@ -150,6 +150,8 @@ private:
   bool do_boxes_overlap(const std::vector<double> &b1, const std::vector<double> &b2) const;
   bool point_in_bbox(const std::array<double, 3> &pt, const std::vector<double> &bbox) const;
   double interpolate_nodal_temperature(unsigned node_idx, double time) const;
+  bool is_point_near_boundary(const std::array<double, 3> &pt) const;
+  std::vector<double> get_expanded_bbox(double expansion_factor = 1.1) const;
   
   // HDF5 reading utilities
   void read_hdf5_dataset_1d(hid_t group_id, const char* dataset_name, std::vector<double> &data);

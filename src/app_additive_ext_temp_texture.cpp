@@ -82,7 +82,7 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     nrefine = atoi(arg[5]); //How many refinement MC steps to perform after a site solidifies
     
     //I think we need all of these variables still!
-    ndouble = 8;
+    ndouble = 10;
     allow_app_update = 1;
     app_update_only = 1; //Skip solid-state growth for now.
     ninteger = 2;
@@ -299,6 +299,8 @@ void AppAdditiveExtTempTexture::app_update(double dt)
             qz[i] = uq[3];
             solid_d[i] = 0;
             melt_misorientation_out[i] = 0;
+            G[i] = 0;
+            V[i] = 0;
         }
         //If we're molten, call the mushy_phase function to figure out any phase change
         else if (active_flag[i] == 2 && T[i] <= tl) {
@@ -602,6 +604,8 @@ void AppAdditiveExtTempTexture::grow_app()
   T = darray[5];
   solid_d = darray[6];
   melt_misorientation_out = darray[7];
+  G = darray[8];
+  V = darray[9];
 
   if (nlocal_app < nlocal) {
     nlocal_app = nlocal;
@@ -943,6 +947,17 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
             //Don't let nucleated site disappear during smoothing
             //Neighboring sites will be flipped during the next iterate_rejection call
             solid_d[i] = -nrefine-2;
+
+            std::vector<double> solid_G(3);
+            solid_G = normal_finder(i); //Update gradient
+            G[i] = sqrt(pow(solid_G[0],2) + pow(solid_G[1],2) + pow(solid_G[2],2));
+
+            int power = solid_front_length - 1;
+            for(int k = 0; k < solid_front_length; k++) {
+                V[i] = V[i] + solid_front_coeffs[k] * pow(Tcool, power); //Update solidification rate
+                power--;
+            }
+
             //Call nucleation particle flipper
             naccept++;
             nucleation_particle_flipper(i, round(nucleation_sizes[spin[i]]/pow(dx,3)), ranapp);
@@ -1021,6 +1036,16 @@ void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, R
             flip_site(i,s1);
             active_flag[i] = 3;
             solid_d[i] = -1;
+            
+            std::vector<double> solid_G(3);
+            solid_G = normal_finder(i); //Update gradient
+            G[i] = sqrt(pow(solid_G[0],2) + pow(solid_G[1],2) + pow(solid_G[2],2));
+
+            int power = solid_front_length - 1;
+            for(int k = 0; k < solid_front_length; k++) {
+               V[i] = V[i] + solid_front_coeffs[k] * pow(Tcool, power); //Update solidification rate
+                power--;
+            }
             naccept++;
 
             // Apply misorientation based on temperature gradient
@@ -1106,6 +1131,8 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
                 solid_d[i_chosen] = -nrefine -3;
+                G[i_chosen] = G[i];
+                V[i_chosen] = V[i];
                 nSites--;
                 naccept++;
             }
@@ -1154,6 +1181,8 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
                 solid_d[i_chosen] = -nrefine -3;
+                G[i_chosen] = G[i];
+                V[i_chosen] = V[i];
                 nSites--;
                 naccept++;
             }
@@ -1169,6 +1198,8 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 flip_site(i_chosen, s_in);            
                 active_flag[i_chosen] = 3;
                 solid_d[i_chosen] = -nrefine -3;
+                G[i_chosen] = G[i];
+                V[i_chosen] = V[i];
                 nSites--;
                 naccept++;
             }
@@ -1185,6 +1216,8 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
                 solid_d[i_chosen] = -nrefine -3;
+                G[i_chosen] = G[i];
+                V[i_chosen] = V[i];
                 nSites--;
                 naccept++;
             }

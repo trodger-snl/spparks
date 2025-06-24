@@ -71,6 +71,8 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
  	const double R = 8.314459848; // Gas constant (J/mol/K)
 	// Temperature array for thermal field
 	double *T;
+  double *G; //Temperature gradient at solidification
+  double *V; //Solidification rate at solidification.
 	double time_step;
 	int total_time; // Time tracking for app_update
    int line_count;

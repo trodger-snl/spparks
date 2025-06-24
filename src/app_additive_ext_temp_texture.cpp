@@ -46,6 +46,7 @@
 #include "potts_quaternion/disorientation.h"
 #include "potts_quaternion/hcp_symmetries.h"
 #include "potts_quaternion/quaternion.h"
+#include "temperature_source_rosenthal.h"
 
 
 using namespace SPPARKS_NS;
@@ -135,6 +136,10 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     current_chunk_start_time = 0.0;
     current_chunk_end_time = 0.0;
     hdf5_file_open = false;
+    
+    // Initialize modular temperature source system
+    temperature_source = nullptr;
+    use_temperature_source = false;  // Default to legacy HDF5 system for backward compatibility
     
     //add the double array
     recreate_arrays();  
@@ -260,6 +265,14 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
        error->all(FLERR,"Illegal chunk_time_window value: must be < 0");
   }
   
+  // Modular temperature source commands
+  else if (strcmp(command,"setup_temperature_source") == 0) {
+    setup_temperature_source_cmd(narg, arg);
+  }
+  else if (strcmp(command,"scan_path") == 0) {
+    setup_scan_path_cmd(narg, arg);
+  }
+  
   else error->all(FLERR,"Unrecognized command");
 }
 
@@ -272,12 +285,23 @@ void AppAdditiveExtTempTexture::app_update(double dt)
   //Reset t_active to assume we don't have a melt pool right now
   t_active = 0;
   
-  //Check if we need to load next chunk
-  if (hdf5_file_open && needs_new_chunk(time)) {
-    current_chunk_start_time = current_chunk_end_time;
-    current_chunk_end_time += chunk_time_window;
-    load_next_chunk();
-  }
+  // Update temperature using modular source or legacy HDF5 system
+  if (use_temperature_source) {
+    // Use new modular temperature source system
+    update_temperature_from_source(time);
+    
+    // Check for active sites
+    for (int i = 0; i < nlocal; i++) {
+      if (T[i] > t_room) t_active = 1;
+    }
+  } else {
+    // Use legacy HDF5 system
+    //Check if we need to load next chunk
+    if (hdf5_file_open && needs_new_chunk(time)) {
+      current_chunk_start_time = current_chunk_end_time;
+      current_chunk_end_time += chunk_time_window;
+      load_next_chunk();
+    }
     //iterate through all the sets
     for (int i=0; i<nlocal; i++) {    
             
@@ -285,38 +309,45 @@ void AppAdditiveExtTempTexture::app_update(double dt)
         temperature_time_interpolate(i,T[i]);
         if(T[i] > t_room) t_active = 1;
     
-        //Turn the sites on/off depending on the phase data and whether or not the
-        //site's temperature has gone above tl. Only do this when melting the first time 
-        //to avoid repeated initialization
-        if( (T[i] >= tl) && active_flag[i] != 2) {
-            active_flag[i] = 2;
-            spin[i] = (int) (nspins * ranapp->uniform());
-            // Create random orientation as each site
-            vector<double> uq = quaternion::generate_random_unit_quaternions(1);
-            q0[i] = uq[0];
-            qx[i] = uq[1];
-            qy[i] = uq[2];
-            qz[i] = uq[3];
-            solid_d[i] = 0;
-            melt_misorientation_out[i] = 0;
-            G[i] = 0;
-            V[i] = 0;
-        }
-        //If we're molten, call the mushy_phase function to figure out any phase change
-        else if (active_flag[i] == 2 && T[i] <= tl) {
-            mushy_phase(i, ranapp);
-//             fprintf(screen,"Ran mushy_phase\n");
-      } 
-      else if(solid_d[i] < 0 && solid_d[i] > -nrefine -1 && active_flag[i] == 3)    {
-              mobility_out[i] = 1;
-              site_event_rejection(i, ranapp);
-              solid_d[i]--;
-      }
       
     }
+  } // End legacy HDF5 system block
+  
+  // Common processing for both temperature systems
+  
+  //iterate through all the sites for phase transitions (applies to both systems)
+  for (int i=0; i<nlocal; i++) {    
     
-    //Communicate changes
-    comm->all();
+    //Turn the sites on/off depending on the phase data and whether or not the
+    //site's temperature has gone above tl. Only do this when melting the first time 
+    //to avoid repeated initialization
+    if( (T[i] >= tl) && active_flag[i] != 2) {
+        active_flag[i] = 2;
+        spin[i] = (int) (nspins * ranapp->uniform());
+        // Create random orientation as each site
+        vector<double> uq = quaternion::generate_random_unit_quaternions(1);
+        q0[i] = uq[0];
+        qx[i] = uq[1];
+        qy[i] = uq[2];
+        qz[i] = uq[3];
+        solid_d[i] = 0;
+        melt_misorientation_out[i] = 0;
+        G[i] = 0;
+        V[i] = 0;
+    }
+    //If we're molten, call the mushy_phase function to figure out any phase change
+    else if (active_flag[i] == 2 && T[i] <= tl) {
+        mushy_phase(i, ranapp);
+    } 
+    else if(solid_d[i] < 0 && solid_d[i] > -nrefine -1 && active_flag[i] == 3)    {
+            mobility_out[i] = 1;
+            site_event_rejection(i, ranapp);
+            solid_d[i]--;
+    }
+  }
+    
+  //Communicate changes
+  comm->all();
     // Use MPI_Allreduce to check if t_active is 0 on all processors
     int global_t_active;
     MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
@@ -2392,5 +2423,119 @@ void AppAdditiveExtTempTexture::validate_simulation_bounds() {
   
   bounds_validated = true;
   if (domain->me == 0) std::cout << "Bounds validation completed successfully" << std::endl;
+}
+
+/* ----------------------------------------------------------------------
+   Setup modular temperature source command
+   Format: setup_temperature_source type [arguments...]
+------------------------------------------------------------------------- */
+
+void AppAdditiveExtTempTexture::setup_temperature_source_cmd(int narg, char **arg)
+{
+  if (narg < 1) {
+    error->all(FLERR,"Illegal setup_temperature_source command: must specify type");
+  }
+  
+  std::string source_type = arg[0];
+  std::vector<std::string> source_args;
+  
+  // Convert remaining arguments to string vector
+  for (int i = 1; i < narg; i++) {
+    source_args.push_back(std::string(arg[i]));
+  }
+  
+  // Create temperature source using factory
+  temperature_source = SPPARKS_NS::create_temperature_source(source_type, spk);
+  if (!temperature_source) {
+    error->all(FLERR,"Failed to create temperature source");
+  }
+  
+  // Setup the temperature source with provided arguments
+  temperature_source->setup_temperature_source(source_args);
+  
+  // Enable the new temperature source system
+  use_temperature_source = true;
+  
+  if (domain->me == 0) {
+    std::cout << "Modular temperature source (" << source_type << ") enabled" << std::endl;
+  }
+}
+
+/* ----------------------------------------------------------------------
+   Setup scan path command for temperature sources that support it
+   Format: scan_path type [parameters...]
+------------------------------------------------------------------------- */
+
+void AppAdditiveExtTempTexture::setup_scan_path_cmd(int narg, char **arg)
+{
+  if (!use_temperature_source || !temperature_source) {
+    error->all(FLERR,"scan_path command requires setup_temperature_source to be called first");
+  }
+  
+  if (narg < 1) {
+    error->all(FLERR,"Illegal scan_path command: must specify type");
+  }
+  
+  // Try to cast to RosenthalTemperatureSource (only source that currently supports scan paths)
+  auto rosenthal_source = dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
+  if (!rosenthal_source) {
+    error->all(FLERR,"scan_path command only supported for Rosenthal temperature source");
+  }
+  
+  std::string path_type_str = arg[0];
+  std::vector<double> path_params;
+  
+  // Convert remaining arguments to double vector
+  for (int i = 1; i < narg; i++) {
+    try {
+      path_params.push_back(std::stod(arg[i]));
+    } catch (const std::exception &e) {
+      error->all(FLERR,"Invalid numeric argument in scan_path command");
+    }
+  }
+  
+  // Map string to enum
+  ScanPathType path_type;
+  if (path_type_str == "linear") {
+    path_type = LINEAR;
+  } else if (path_type_str == "serpentine") {
+    path_type = SERPENTINE;
+  } else if (path_type_str == "spiral") {
+    path_type = SPIRAL;
+  } else if (path_type_str == "custom") {
+    path_type = CUSTOM;
+  } else {
+    error->all(FLERR,"Unknown scan path type in scan_path command");
+  }
+  
+  // Setup scan path
+  rosenthal_source->setup_scan_path(path_type, path_params);
+  
+  if (domain->me == 0) {
+    std::cout << "Scan path (" << path_type_str << ") configured" << std::endl;
+  }
+}
+
+/* ----------------------------------------------------------------------
+   Update temperature from modular source
+------------------------------------------------------------------------- */
+
+void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation_time)
+{
+  if (!use_temperature_source || !temperature_source) {
+    return; // Fall back to legacy HDF5 system
+  }
+  
+  // Update temperature source (may load new data)
+  temperature_source->update_temperatures(dt, simulation_time);
+  
+  // Update temperature array for all local sites
+  for (int i = 0; i < nlocal; i++) {
+    // Get site coordinates and pass to temperature source
+    double x = xyz[i][0];
+    double y = xyz[i][1];
+    double z = xyz[i][2];
+    T[i] = temperature_source->get_temperature_at_xyz_and_time(x, y, z, simulation_time);
+  }
 }
 

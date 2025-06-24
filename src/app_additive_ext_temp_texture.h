@@ -21,12 +21,14 @@ AppStyle(additive_temperature_texture,AppAdditiveExtTempTexture)
 
 #include "app_potts_quaternion.h"
 #include "temperatureQueues.h"
+#include "temperature_source.h"
 #include "hdf5.h"
 #include <stdlib.h>
 #include <string>
 #include <map>
 #include <vector>
 #include <cmath>
+#include <memory>
 
 namespace SPPARKS_NS {
 
@@ -49,6 +51,13 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
 	double melt_misorientation(int, double, double, double);
   void apply_misorientation(int, double, class RandomPark *);
   void quat2euler(int, double *);
+  
+  // Modular temperature source methods
+  void setup_temperature_source_cmd(int narg, char **arg);
+  void setup_scan_path_cmd(int narg, char **arg);
+  void update_temperature_from_source(double simulation_time);
+  
+  // Legacy HDF5 temperature methods
   virtual void reduced_temperature_hdf();
   virtual void reduced_temperature_hdf_chunked();
   void load_data_counts_array();
@@ -117,7 +126,11 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
 	double *nucleation_sizes;
   std::string temp_file_string;
 
-  // Temperature file handling variables
+  // Modular temperature source interface
+  std::unique_ptr<TemperatureSource> temperature_source;
+  bool use_temperature_source;  // Flag to enable new modular system
+  
+  // Temperature file handling variables (legacy HDF5 system)
   DoubleQueueContainer temp_in;
   DoubleQueueContainer time_in;
   double prior_time;

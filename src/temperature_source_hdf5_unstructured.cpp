@@ -52,10 +52,9 @@ void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vect
   read_layer_times();
   setup_grid_bbox();
   
-  // Pre-allocate interpolation arrays
+  // Pre-allocate interpolation cache
   unsigned total_sites = size[0] * size[1] * size[2];
-  node_ids.resize(total_sites);
-  weights.resize(total_sites);
+  interpolation_cache.resize(total_sites);
   
   source_initialized = true;
 }
@@ -173,24 +172,21 @@ double HDF5UnstructuredTemperatureSource::get_temperature_at_xyz_and_time(double
   
   unsigned flat_idx = i * size[1] * size[2] + j * size[2] + k;
   
-  // Check if we have valid interpolation data for this point
-  if (node_ids[flat_idx][0] == std::numeric_limits<unsigned>::max()) {
+  // Check if we have valid cached interpolation data for this site
+  const auto &cached_data = interpolation_cache[flat_idx];
+  if (!cached_data.valid) {
     return ambient_temperature;
   }
   
-  // Interpolate temperature using barycentric coordinates
-  std::array<double, NODES_PER_ELEM> nodal_temps;
-  const auto &wts = weights[flat_idx];
-  
+  // Use cached interpolation data for fast temperature lookup
+  double temperature = 0.0;
   for (unsigned n = 0; n < NODES_PER_ELEM; n++) {
-    unsigned node_idx = node_ids[flat_idx][n];
-    nodal_temps[n] = interpolate_nodal_temperature(node_idx, time);
+    unsigned node_idx = cached_data.node_ids[n];
+    double nodal_temp = interpolate_nodal_temperature(node_idx, time);
+    temperature += cached_data.weights[n] * nodal_temp;
   }
   
-  // Barycentric interpolation: T = T0 + w1*(T1-T0) + w2*(T2-T0) + w3*(T3-T0)
-  return nodal_temps[0] + wts[0] * (nodal_temps[1] - nodal_temps[0]) +
-         wts[1] * (nodal_temps[2] - nodal_temps[0]) +
-         wts[2] * (nodal_temps[3] - nodal_temps[0]);
+  return temperature;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -388,8 +384,7 @@ void HDF5UnstructuredTemperatureSource::cleanup()
   data_counts.clear();
   times.clear();
   temperatures.clear();
-  node_ids.clear();
-  weights.clear();
+  interpolation_cache.clear();
   elem_node.clear();
   node_coords.clear();
   chunk_bboxes.clear();
@@ -478,16 +473,15 @@ void HDF5UnstructuredTemperatureSource::compute_interpolation_weights()
   
   elem_bboxes = build_elem_bounding_boxes(overlapping_chunks);
   
-  // Compute interpolation weights for each grid point
+  // Pre-compute and cache interpolation data for each grid point
   for (unsigned i = 0; i < size[0]; i++) {
     for (unsigned j = 0; j < size[1]; j++) {
       for (unsigned k = 0; k < size[2]; k++) {
         unsigned flat_idx = i * size[1] * size[2] + j * size[2] + k;
         std::array<double, 3> pt{x0[0] + i * dx, x0[1] + j * dx, x0[2] + k * dx};
         
-        auto result = find_element_point_is_in(overlapping_chunks, pt);
-        node_ids[flat_idx] = result.first;
-        weights[flat_idx] = result.second;
+        // Find element and compute barycentric weights
+        interpolation_cache[flat_idx] = find_element_and_compute_weights(overlapping_chunks, pt);
       }
     }
   }
@@ -524,16 +518,14 @@ std::vector<std::vector<double>> HDF5UnstructuredTemperatureSource::build_elem_b
 
 /* ---------------------------------------------------------------------- */
 
-std::pair<std::array<unsigned, 4>, std::array<double, 3>> 
-HDF5UnstructuredTemperatureSource::find_element_point_is_in(
+HDF5UnstructuredTemperatureSource::InterpolationData 
+HDF5UnstructuredTemperatureSource::find_element_and_compute_weights(
   const std::vector<unsigned> &overlapping_chunks,
   const std::array<double, 3> &pt) const
 {
-  std::array<unsigned, 4> node_ids_result;
-  std::array<double, 3> par_coords;
+  InterpolationData result;
   
   constexpr double tol = 1e-14;
-  constexpr unsigned invalid_id = std::numeric_limits<unsigned>::max();
   
   // Find possible chunks that contain the point
   std::vector<unsigned> possible_chunks;
@@ -551,28 +543,35 @@ HDF5UnstructuredTemperatureSource::find_element_point_is_in(
         // Get element node coordinates
         std::vector<std::vector<double>> tet_coords(4, std::vector<double>(DIM));
         for (unsigned n = 0; n < NODES_PER_ELEM; n++) {
-          node_ids_result[n] = elem_node(e, n) + node_offsets[c_idx];
+          result.node_ids[n] = elem_node(e, n) + node_offsets[c_idx];
           for (unsigned d = 0; d < DIM; d++) {
-            tet_coords[n][d] = node_coords(node_ids_result[n], d);
+            tet_coords[n][d] = node_coords(result.node_ids[n], d);
           }
         }
         
         // Compute parametric coordinates
-        par_coords = get_parametric_coordinates_of_point(tet_coords, pt);
+        std::array<double, 3> par_coords = get_parametric_coordinates_of_point(tet_coords, pt);
         
         // Check if point is inside tetrahedron
         if (par_coords[0] > -tol && par_coords[1] > -tol && par_coords[2] > -tol &&
             1.0 - par_coords[0] - par_coords[1] - par_coords[2] > -tol) {
-          return std::make_pair(node_ids_result, par_coords);
+          
+          // Convert parametric coordinates to barycentric weights
+          // For tetrahedron: w0 = 1 - w1 - w2 - w3, where w1,w2,w3 are parametric coords
+          result.weights[0] = 1.0 - par_coords[0] - par_coords[1] - par_coords[2]; // w0
+          result.weights[1] = par_coords[0]; // w1
+          result.weights[2] = par_coords[1]; // w2
+          result.weights[3] = par_coords[2]; // w3
+          result.valid = true;
+          
+          return result;
         }
       }
     }
   }
   
-  // Point not found in any element
-  node_ids_result.fill(invalid_id);
-  par_coords.fill(0.0);
-  return std::make_pair(node_ids_result, par_coords);
+  // Point not found in any element - result already initialized as invalid
+  return result;
 }
 
 /* ---------------------------------------------------------------------- */

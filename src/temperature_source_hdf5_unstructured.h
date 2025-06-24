@@ -90,12 +90,23 @@ private:
   unsigned active_layer;
   double current_time;
   
+  // Interpolation cache structure
+  struct InterpolationData {
+    std::array<unsigned, 4> node_ids;    // Node IDs for tetrahedral interpolation
+    std::array<double, 4> weights;       // Barycentric weights [w0, w1, w2, w3] where w0 = 1-w1-w2-w3
+    bool valid;                          // True if site has valid interpolation data
+    
+    InterpolationData() : valid(false) {
+      node_ids.fill(std::numeric_limits<unsigned>::max());
+      weights.fill(0.0);
+    }
+  };
+  
   // Current layer data
   std::vector<unsigned> data_counts;           // Number of time points per node
   array2D<double> times;                       // Time data for each node
   array2D<double> temperatures;                // Temperature data for each node
-  std::vector<std::array<unsigned, 4>> node_ids;    // Node IDs for interpolation
-  std::vector<std::array<double, 3>> weights;       // Barycentric weights
+  std::vector<InterpolationData> interpolation_cache;  // Pre-computed interpolation data per SPPARKS site
   
   // Mesh data for current layer
   array2D<unsigned> elem_node;                 // Element-to-node connectivity
@@ -128,7 +139,7 @@ private:
   // Spatial interpolation
   std::vector<std::vector<double>> build_elem_bounding_boxes(
     const std::vector<unsigned> &overlapping_chunks) const;
-  std::pair<std::array<unsigned, 4>, std::array<double, 3>> find_element_point_is_in(
+  InterpolationData find_element_and_compute_weights(
     const std::vector<unsigned> &overlapping_chunks,
     const std::array<double, 3> &pt) const;
   std::array<double, 3> get_parametric_coordinates_of_point(

@@ -15,33 +15,57 @@
 #define SPK_TEMPERATURE_SOURCE_HDF5_UNSTRUCTURED_H
 
 #include "temperature_source.h"
-#include "hdf5.h"
+#include <memory>
+#include <array>
 #include <vector>
 #include <string>
-#include <array>
-#include <memory>
-#include <unordered_map>
+
+namespace HighFive {
+  class File;
+}
 
 namespace SPPARKS_NS {
 
 /* ----------------------------------------------------------------------
-   HDF5 Unstructured temperature source
+   HDF5-based unstructured mesh temperature field source
    
-   Reads unstructured mesh temperature data from HDF5 files with support for:
-   - Multi-layer additive manufacturing simulation data
-   - Tetrahedral element interpolation
-   - Temporal interpolation between time points
-   - On-demand layer loading for memory efficiency
+   Reads pre-computed temperature field data from HDF5 files containing
+   unstructured tetrahedral mesh data with:
+   - Layer-based temporal organization
+   - Chunk-based spatial organization for efficient parallel access
+   - Node-based temperature time series
+   - Tetrahedral element connectivity
+   - MPI-parallel data access with subdomain filtering
    
-   This class adapts the functionality from resourcesfornewformat/fAM_Read_Reduced_Output.*
-   to work with SPPARKS' modular temperature source architecture using standard HDF5 C API.
+   Data format matches reduced thermal output from external AM solvers.
 ------------------------------------------------------------------------- */
 
-class HDF5UnstructuredTemperatureSource : public TemperatureSource {
- public:
-  static constexpr unsigned NODES_PER_ELEM = 4;
-  static constexpr unsigned DIM = 3;
+// Helper class for 2D array storage (from reference implementation)
+template <typename T>
+class Array2D {
+public:
+  Array2D() {}
+  Array2D(unsigned ncols_, std::vector<T>&& data_) : 
+    ncols(ncols_), data(std::move(data_)) {
+    if (data.size() % ncols != 0) 
+      throw std::runtime_error("Data size must be multiple of number of columns");
+    nrows = data.size() / ncols;
+  }
+
+  const T& operator()(unsigned i, unsigned j) const { return data[i*ncols + j]; }
+  T& operator()(unsigned i, unsigned j) { return data[i*ncols + j]; }
   
+  auto row_iterator(unsigned i) { return data.begin() + i*ncols; }
+  const auto row_iterator(unsigned i) const { return data.begin() + i*ncols; }
+
+private:
+  unsigned ncols;
+  unsigned nrows;
+  std::vector<T> data;
+};
+
+class HDF5UnstructuredTemperatureSource : public TemperatureSource {
+public:
   HDF5UnstructuredTemperatureSource(class SPPARKS *);
   virtual ~HDF5UnstructuredTemperatureSource();
 
@@ -54,114 +78,85 @@ class HDF5UnstructuredTemperatureSource : public TemperatureSource {
   virtual std::string get_source_type() const override { return "hdf5_unstructured"; }
   virtual void print_source_info() const override;
 
-  // Additional methods for fast-forward optimization
+  // Constants from reference implementation
+  static constexpr unsigned NODES_PER_ELEM = 4;  // Tetrahedral elements
+  static constexpr unsigned DIM = 3;             // 3D space
+
+  // Fast-forward capability methods
   bool all_temperatures_below_threshold(double time);
+  bool has_significant_thermal_activity(double time);
+  bool has_significant_thermal_activity_hdf5_nodes(double time);
   double find_next_active_time(double start_time, double end_time);
   double find_next_active_time_sequential(double start_time, double end_time);
-  double get_fast_forward_threshold() const { return fast_forward_threshold_; }
-  double get_dx() const { return dx_; }
+  double get_fast_forward_threshold() const { return threshold_temp; }
+  double get_dx() const { return dx; }
 
-  // Thermal window detection methods
-  std::pair<double, double> find_thermal_window();
-  bool has_temperatures_above_threshold_at_time(double time);
-  std::vector<double> get_active_time_points();
+  // Site-based temperature access optimized for lattice
+  virtual double get_temperature_at_site(int site_index, double time) override;
 
- private:
-  // 2D array template for efficient data storage
-  template <typename T>
-  class Array2D {
-   public:
-    Array2D() : ncols_(0), nrows_(0) {}
-    Array2D(unsigned ncols, std::vector<T>&& data) : ncols_(ncols), data_(std::move(data)) {
-      if (data_.size() % ncols != 0) {
-        throw std::runtime_error("Data size must be multiple of number of columns");
-      }
-      nrows_ = data_.size() / ncols;
-    }
-    
-    const T& operator()(unsigned i, unsigned j) const { return data_[i * ncols_ + j]; }
-    T& operator()(unsigned i, unsigned j) { return data_[i * ncols_ + j]; }
-    
-    unsigned rows() const { return nrows_; }
-    unsigned cols() const { return ncols_; }
-    
-    // Get iterator to start of row i
-    auto row_iterator(unsigned i) { return data_.begin() + i * ncols_; }
-    
-   private:
-    unsigned ncols_, nrows_;
-    std::vector<T> data_;
-  };
+private:
+  // File and coordinate parameters
+  std::string filename;
+  double dx;  // Grid spacing in meters
+  double threshold_temp;  // Threshold temperature for fast-forward (K)
+  double default_temp;    // Default/ambient temperature (K)
+  int bounds_check_mode;  // 0 = exact, 1 = subvolume
 
-  // HDF5 file parameters
-  std::string filename_;
-  std::array<double, 3> x0_;  // SPPARKS domain origin
-  std::array<unsigned, 3> size_;  // SPPARKS domain size in voxels
-  double dx_;  // SPPARKS lattice spacing
-  double fast_forward_threshold_;  // Temperature threshold for fast-forward optimization
-  bool enable_thermal_window_;  // Whether to run thermal window pre-calculation
   
   // HDF5 file handle
-  hid_t file_id_;
-  bool file_open_;
+  std::shared_ptr<HighFive::File> file;
   
   // Layer management
-  std::vector<double> layer_times_;
-  std::vector<unsigned> data_counts_;
-  unsigned active_layer_;
-  double current_time_;
+  std::vector<double> layerTimes;
+  double current_time;
+  unsigned active_layer;
   
-  // Current layer data
-  Array2D<double> times_;
-  Array2D<double> temperatures_;
-  std::vector<std::array<unsigned, 4>> node_ids_;
-  std::vector<std::array<double, 3>> weights_;
-  std::unordered_map<unsigned, unsigned> global_to_local_node_map_;  // Maps global node ID to local Array2D row index
+  // Data storage for current layer
+  std::vector<unsigned> dataCounts;
+  Array2D<double> times;
+  Array2D<double> temperatures;
+  Array2D<unsigned> elemNode;
+  Array2D<double> nodeCoords;
   
-  // Private helper methods
-  void parse_setup_arguments(const std::vector<std::string> &args);
-  void open_hdf5_file();
-  void close_hdf5_file();
-  void read_layer_times();
-  void load_layer(unsigned layer_idx);
-  unsigned get_active_layer(double time) const;
+  // Chunk data for spatial queries
+  std::vector<std::vector<double>> chunk_bboxes;
+  std::vector<unsigned> selected_chunks;
+  std::vector<unsigned> node_offsets;
+  std::vector<unsigned> elem_offsets;
+  std::vector<std::vector<double>> elem_bboxes;
   
-  // Geometric calculations
+  // Helper methods from reference implementation
+  void load_layer(unsigned layerIdx);
+  
+  // Anonymous namespace functions (now as private methods)
   std::array<double, 3> get_parametric_coordinates_of_point(
     const std::vector<std::vector<double>>& tet_coords, 
-    const std::array<double, 3>& pt
-  ) const;
+    const std::array<double, 3>& pt) const;
   
-  bool do_boxes_overlap(const std::vector<double>& b1, const std::vector<double>& b2) const;
-  bool point_in_bbox(const std::array<double, 3>& pt, const std::vector<double>& bbox) const;
+  unsigned get_active_layer(double t) const;
   
-  std::pair<std::array<unsigned, 4>, std::array<double, 3>> find_element_point_is_in(
-    const std::vector<unsigned>& selected_chunks,
-    const std::vector<std::vector<double>>& chunk_bboxes,
-    const std::vector<unsigned>& node_offsets,
-    const std::vector<unsigned>& elem_offsets,
-    const Array2D<unsigned>& elem_node,
-    const Array2D<double>& node_coords,
-    const std::vector<std::vector<double>>& elem_bboxes,
-    const std::array<double, 3>& pt
-  ) const;
+  bool do_boxes_overlap(const std::vector<double>& b1, 
+                       const std::vector<double>& b2) const;
+  
+  bool point_in_bbox(const std::array<double, 3>& pt, 
+                    const std::vector<double>& bbox) const;
+  
+  std::pair<std::array<unsigned, 4>, std::array<double, 3>> 
+  find_element_point_is_in(const std::vector<unsigned>& selectedChunks,
+                          const std::vector<std::vector<double>>& chunkBboxes,
+                          const std::vector<unsigned>& nodeOffsets,
+                          const std::vector<unsigned>& elemOffsets,
+                          const Array2D<unsigned>& elemNode,
+                          const Array2D<double>& nodeCoords,
+                          const std::vector<std::vector<double>>& elemBboxes,
+                          const std::array<double, 3>& pt) const;
   
   std::vector<std::vector<double>> build_elem_bounding_boxes(
-    unsigned n_chunks,
-    const std::vector<unsigned>& node_offsets,
-    const std::vector<unsigned>& elem_offsets,
-    const Array2D<unsigned>& elem_node,
-    const Array2D<double>& node_coords
-  ) const;
-  
-  // HDF5 helper functions
-  void read_dataset_1d(hid_t group_id, const char* dataset_name, std::vector<double>& data);
-  void read_dataset_1d(hid_t group_id, const char* dataset_name, std::vector<unsigned>& data);
-  void read_dataset_2d(hid_t group_id, const char* dataset_name, std::vector<std::vector<double>>& data);
-  void read_partial_dataset_2d(hid_t group_id, const char* dataset_name, 
-                               const std::vector<std::array<size_t, 2>>& row_slices,
-                               const std::array<size_t, 2>& col_slice,
-                               std::vector<double>& data);
+    unsigned nChunks,
+    const std::vector<unsigned>& nodeOffsets,
+    const std::vector<unsigned>& elemOffsets,
+    const Array2D<unsigned>& elemNode,
+    const Array2D<double>& nodeCoords) const;
 };
 
 }

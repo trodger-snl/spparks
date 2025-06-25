@@ -299,16 +299,14 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     HDF5UnstructuredTemperatureSource* hdf5_source = 
       dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
     
-    if (hdf5_source && hdf5_source->all_temperatures_below_threshold(time)) {
+    // Fast-forward enabled with HDF5-node-based thermal activity detection
+    // But disable fast-forward in the very early simulation time to ensure thermal events are captured
+    if (hdf5_source && time > 2e-5 && !hdf5_source->has_significant_thermal_activity_hdf5_nodes(time)) {
       // Choose search method based on window size to avoid missing thermal events
       double next_active_time;
-      if (fast_forward_search_window > 0.2) {
-        // Large search windows: use safer sequential sampling to avoid missing thermal events
-        next_active_time = hdf5_source->find_next_active_time_sequential(time, time + fast_forward_search_window);
-      } else {
-        // Small search windows: binary search is safe and faster
-        next_active_time = hdf5_source->find_next_active_time(time, time + fast_forward_search_window);
-      }
+      // Always use sequential search for better thermal event detection
+      // especially important for capturing cooling phases in additive manufacturing
+      next_active_time = hdf5_source->find_next_active_time_sequential(time, time + fast_forward_search_window);
       
       if (next_active_time > time) {
         double time_skip = next_active_time - time;

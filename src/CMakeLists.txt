@@ -102,6 +102,7 @@ option(SPPARKS_ENABLE_GZIP "Enable GZIP support" ON)
 option(SPPARKS_ENABLE_JPEG "Enable JPEG support" ON)
 option(SPPARKS_ENABLE_PNG "Enable PNG support" OFF)
 option(SPPARKS_ENABLE_HDF5 "Enable HDF5 support" OFF)
+option(SPPARKS_ENABLE_HIGHFIVE "Enable HighFive C++ HDF5 wrapper" OFF)
 option(SPPARKS_UNORDERED_MAP "Use unordered_map" OFF)
 
 # Performance options
@@ -194,6 +195,55 @@ if(SPPARKS_ENABLE_HDF5)
     else()
         message(FATAL_ERROR "HDF5 was requested but not found")
     endif()
+endif()
+
+if(SPPARKS_ENABLE_HIGHFIVE)
+    # Ensure HDF5 is also enabled for HighFive
+    if(NOT SPPARKS_ENABLE_HDF5)
+        message(STATUS "HighFive requires HDF5 - enabling HDF5 automatically")
+        set(SPPARKS_ENABLE_HDF5 ON CACHE BOOL "Enable HDF5 support" FORCE)
+        
+        # Add cmake module path for enhanced HDF5 finder
+        list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+        
+        find_package(HDF5Enhanced REQUIRED)
+        if(HDF5_FOUND)
+            add_compile_definitions(SPPARKS_HDF)
+            # Check if HDF5 is parallel (MPI-enabled)
+            if(HDF5_IS_PARALLEL AND SPPARKS_ENABLE_MPI)
+                message(STATUS "Found parallel HDF5 (MPI-enabled)")
+                add_compile_definitions(H5_HAVE_PARALLEL)
+            elseif(SPPARKS_ENABLE_MPI AND NOT HDF5_IS_PARALLEL)
+                message(WARNING "MPI is enabled but HDF5 is not parallel. Consider using parallel HDF5 for better performance.")
+            endif()
+        else()
+            message(FATAL_ERROR "HDF5 was requested but not found")
+        endif()
+    endif()
+    
+    # Fetch HighFive using FetchContent
+    include(FetchContent)
+    
+    FetchContent_Declare(
+        HighFive
+        GIT_REPOSITORY https://github.com/BlueBrain/HighFive.git
+        GIT_TAG        v2.9.0  # Use latest stable version
+        GIT_SHALLOW    TRUE
+    )
+    
+    # Configure HighFive options
+    set(HIGHFIVE_EXAMPLES OFF CACHE BOOL "Enable HighFive examples")
+    set(HIGHFIVE_UNIT_TESTS OFF CACHE BOOL "Enable HighFive unit tests")
+    set(HIGHFIVE_USE_BOOST OFF CACHE BOOL "Enable Boost support in HighFive")
+    set(HIGHFIVE_USE_EIGEN OFF CACHE BOOL "Enable Eigen support in HighFive")
+    set(HIGHFIVE_USE_XTENSOR OFF CACHE BOOL "Enable xtensor support in HighFive")
+    set(HIGHFIVE_USE_OPENCV OFF CACHE BOOL "Enable OpenCV support in HighFive")
+    
+    # Make HighFive available
+    FetchContent_MakeAvailable(HighFive)
+    
+    add_compile_definitions(SPPARKS_HIGHFIVE)
+    message(STATUS "HighFive C++ HDF5 wrapper enabled")
 endif()
 
 # Include helper modules
@@ -381,6 +431,10 @@ if(SPPARKS_BUILD_LIB OR NOT SPPARKS_BUILD_EXECUTABLE)
         target_compile_definitions(spparks_lib PUBLIC ${HDF5_DEFINITIONS})
     endif()
     
+    if(SPPARKS_ENABLE_HIGHFIVE)
+        target_link_libraries(spparks_lib PUBLIC HighFive)
+    endif()
+    
     # Add GZIP support
     if(SPPARKS_ENABLE_GZIP)
         find_package(ZLIB)
@@ -445,6 +499,10 @@ if(SPPARKS_BUILD_EXECUTABLE)
             target_link_libraries(spparks ${HDF5_LIBRARIES})
             target_include_directories(spparks PRIVATE ${HDF5_INCLUDE_DIRS})
             target_compile_definitions(spparks PRIVATE ${HDF5_DEFINITIONS})
+        endif()
+        
+        if(SPPARKS_ENABLE_HIGHFIVE)
+            target_link_libraries(spparks HighFive)
         endif()
         
         if(SPPARKS_ENABLE_GZIP)
@@ -540,6 +598,7 @@ if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
     message(STATUS "HDF5 version: ${HDF5_VERSION}")
     message(STATUS "HDF5 is parallel: ${HDF5_IS_PARALLEL}")
 endif()
+message(STATUS "HighFive support: ${SPPARKS_ENABLE_HIGHFIVE}")
 if(SPPARKS_SMALLSMALL)
     message(STATUS "Integer types: 32-bit (SMALLSMALL)")
 elseif(SPPARKS_BIGBIG)

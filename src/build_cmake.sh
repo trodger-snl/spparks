@@ -15,6 +15,7 @@ ENABLE_PACKAGES=""
 SHARED_LIBS="OFF"
 BUILD_LIB="OFF"
 ENABLE_HDF5="AUTO"
+ENABLE_HIGHFIVE="AUTO"
 ENABLE_JPEG="AUTO"
 CLEAN=false
 VERBOSE=false
@@ -38,6 +39,8 @@ Options:
     --no-mpi                    Disable MPI support
     --hdf5                      Enable HDF5 support
     --no-hdf5                   Disable HDF5 support
+    --highfive                  Enable HighFive C++ HDF5 wrapper
+    --no-highfive               Disable HighFive C++ HDF5 wrapper
     --jpeg                      Enable JPEG support
     --no-jpeg                   Disable JPEG support
     --shared                    Build shared libraries
@@ -108,6 +111,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-hdf5)
             ENABLE_HDF5="OFF"
+            shift
+            ;;
+        --highfive)
+            ENABLE_HIGHFIVE="ON"
+            shift
+            ;;
+        --no-highfive)
+            ENABLE_HIGHFIVE="OFF"
             shift
             ;;
         --jpeg)
@@ -210,6 +221,10 @@ fi
 
 if [ "$ENABLE_HDF5" != "AUTO" ]; then
     CMAKE_ARGS+=("-DSPPARKS_ENABLE_HDF5=$ENABLE_HDF5")
+fi
+
+if [ "$ENABLE_HIGHFIVE" != "AUTO" ]; then
+    CMAKE_ARGS+=("-DSPPARKS_ENABLE_HIGHFIVE=$ENABLE_HIGHFIVE")
 fi
 
 if [ "$ENABLE_JPEG" != "AUTO" ]; then

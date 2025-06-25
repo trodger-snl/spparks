@@ -120,11 +120,6 @@ double HDF5UnstructuredTemperatureSource::get_temperature_at_xyz_and_time(
     return default_temp;
   }
   
-  // Quick check: if all nodes are cold, skip interpolation
-  if (all_nodes_below_threshold(nodeIndices, time)) {
-    return default_temp;
-  }
-  
   // Get temperatures at the four tetrahedral nodes
   std::array<double, NODES_PER_ELEM> nodalVals;
   for (unsigned n = 0; n < NODES_PER_ELEM; n++) {
@@ -870,47 +865,6 @@ bool HDF5UnstructuredTemperatureSource::has_significant_thermal_activity_hdf5_no
 
 /* ---------------------------------------------------------------------- */
 
-bool HDF5UnstructuredTemperatureSource::all_nodes_below_threshold(
-  const std::array<unsigned, 4>& nodeIndices, 
-  double time) const
-{
-  // Check if all 4 tetrahedral nodes are below threshold temperature
-  // This allows us to skip interpolation for cold elements
-  
-  for (unsigned n = 0; n < NODES_PER_ELEM; n++) {
-    const unsigned nodeIdx = nodeIndices[n];
-    
-    const auto timeIter = times.row_iterator(nodeIdx);
-    const auto tempIter = temperatures.row_iterator(nodeIdx);
-    
-    // Check time bounds
-    if (time < *timeIter || time > timeIter[dataCounts[nodeIdx] - 1]) {
-      // Outside time range - assume cold
-      continue;
-    }
-    
-    // Linear interpolation in time for this node
-    auto lower = std::lower_bound(timeIter, timeIter + dataCounts[nodeIdx], time);
-    auto idx = std::distance(timeIter, lower);
-    idx = (idx == 0) ? 1 : idx;
-    
-    double nodeTemp = tempIter[idx-1] + 
-                      (tempIter[idx] - tempIter[idx-1]) / 
-                      (timeIter[idx] - timeIter[idx-1]) * 
-                      (time - timeIter[idx-1]);
-    
-    // If any node is above threshold, element is not cold
-    if (nodeTemp >= threshold_temp) {
-      return false;
-    }
-  }
-  
-  // All nodes are below threshold
-  return true;
-}
-
-/* ---------------------------------------------------------------------- */
-
 double HDF5UnstructuredTemperatureSource::get_temperature_at_site(int site_index, double time)
 {
   if (!source_initialized) {
@@ -939,11 +893,6 @@ double HDF5UnstructuredTemperatureSource::get_temperature_at_site(int site_index
   
   if (!cache.valid) {
     return default_temp;  // Site not in any element
-  }
-  
-  // Quick check: if all nodes are cold, skip interpolation
-  if (all_nodes_below_threshold(cache.nodeIndices, time)) {
-    return default_temp;
   }
   
   // Get temperatures at the four tetrahedral nodes

@@ -167,10 +167,6 @@ private:
     const Array2D<unsigned>& elemNode,
     const Array2D<double>& nodeCoords) const;
   
-  // Check if all nodes of an element are below threshold temperature
-  bool all_nodes_below_threshold(
-    const std::array<unsigned, 4>& nodeIndices, 
-    double time) const;
   
   // Element cache management
   mutable std::vector<ElementCache> site_element_cache;

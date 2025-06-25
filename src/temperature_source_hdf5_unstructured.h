@@ -93,6 +93,15 @@ public:
 
   // Site-based temperature access optimized for lattice
   virtual double get_temperature_at_site(int site_index, double time) override;
+  
+  // Element cache for performance optimization
+  struct ElementCache {
+    std::array<unsigned, 4> nodeIndices;
+    std::array<double, 3> weights;
+    bool valid;
+    
+    ElementCache() : nodeIndices{0,0,0,0}, weights{0.0,0.0,0.0}, valid(false) {}
+  };
 
 private:
   // File and coordinate parameters
@@ -157,6 +166,21 @@ private:
     const std::vector<unsigned>& elemOffsets,
     const Array2D<unsigned>& elemNode,
     const Array2D<double>& nodeCoords) const;
+  
+  // Check if all nodes of an element are below threshold temperature
+  bool all_nodes_below_threshold(
+    const std::array<unsigned, 4>& nodeIndices, 
+    double time) const;
+  
+  // Element cache management
+  mutable std::vector<ElementCache> site_element_cache;
+  mutable bool cache_valid;
+  
+  // Build element cache for all sites
+  void build_site_element_cache() const;
+  
+  // Get cached element for a site
+  const ElementCache& get_cached_element(int site_index) const;
 };
 
 }

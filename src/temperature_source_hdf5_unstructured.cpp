@@ -30,7 +30,8 @@ using namespace SPPARKS_NS;
 HDF5UnstructuredTemperatureSource::HDF5UnstructuredTemperatureSource(SPPARKS *spk) : 
   TemperatureSource(spk),
   current_time(std::numeric_limits<double>::lowest()),
-  active_layer(std::numeric_limits<unsigned>::max())
+  active_layer(std::numeric_limits<unsigned>::max()),
+  cache_valid(false)
 {
   source_initialized = false;
 }
@@ -116,6 +117,11 @@ double HDF5UnstructuredTemperatureSource::get_temperature_at_xyz_and_time(
   
   // Check if point was found in any element
   if (nodeIndices[0] == std::numeric_limits<unsigned>::max()) {
+    return default_temp;
+  }
+  
+  // Quick check: if all nodes are cold, skip interpolation
+  if (all_nodes_below_threshold(nodeIndices, time)) {
     return default_temp;
   }
   
@@ -554,23 +560,6 @@ std::vector<std::vector<double>> HDF5UnstructuredTemperatureSource::build_elem_b
 
 /* ---------------------------------------------------------------------- */
 
-double HDF5UnstructuredTemperatureSource::get_temperature_at_site(int site_index, double time)
-{
-  // Get the app and access site coordinates
-  if (!app) {
-    error->all(FLERR, "App not available for site coordinate lookup");
-  }
-  
-  // Get coordinates from the app's xyz array
-  double x = app->xyz[site_index][0];
-  double y = app->xyz[site_index][1]; 
-  double z = app->xyz[site_index][2];
-  
-  return get_temperature_at_xyz_and_time(x, y, z, time);
-}
-
-/* ---------------------------------------------------------------------- */
-
 bool HDF5UnstructuredTemperatureSource::all_temperatures_below_threshold(double time)
 {
   if (!app) {
@@ -579,7 +568,11 @@ bool HDF5UnstructuredTemperatureSource::all_temperatures_below_threshold(double 
   
   // Check temperatures at all local sites
   for (int i = 0; i < app->nlocal; i++) {
-    double temp = get_temperature_at_site(i, time);
+    // Get site coordinates in physical units
+    double x = app->xyz[i][0] * dx;
+    double y = app->xyz[i][1] * dx; 
+    double z = app->xyz[i][2] * dx;
+    double temp = get_temperature_at_xyz_and_time(x, y, z, time);
     if (temp >= threshold_temp) {
       return false;
     }
@@ -619,10 +612,15 @@ bool HDF5UnstructuredTemperatureSource::has_significant_thermal_activity(double 
   int sample_step = std::max(1, app->nlocal / 1000);  // Sample ~1000 sites max
   
   for (int i = 0; i < app->nlocal; i += sample_step) {
-    double temp_now = get_temperature_at_site(i, time);
-    double temp_short = get_temperature_at_site(i, time + dt_short);
-    double temp_medium = get_temperature_at_site(i, time + dt_medium);
-    double temp_long = get_temperature_at_site(i, time + dt_long);
+    // Get site coordinates in physical units
+    double x = app->xyz[i][0] * dx;
+    double y = app->xyz[i][1] * dx;
+    double z = app->xyz[i][2] * dx;
+    
+    double temp_now = get_temperature_at_xyz_and_time(x, y, z, time);
+    double temp_short = get_temperature_at_xyz_and_time(x, y, z, time + dt_short);
+    double temp_medium = get_temperature_at_xyz_and_time(x, y, z, time + dt_medium);
+    double temp_long = get_temperature_at_xyz_and_time(x, y, z, time + dt_long);
     
     // Current temperature classification
     if (temp_now >= threshold_temp) {
@@ -868,6 +866,164 @@ bool HDF5UnstructuredTemperatureSource::has_significant_thermal_activity_hdf5_no
   }
   
   return (global_activity > 0);
+}
+
+/* ---------------------------------------------------------------------- */
+
+bool HDF5UnstructuredTemperatureSource::all_nodes_below_threshold(
+  const std::array<unsigned, 4>& nodeIndices, 
+  double time) const
+{
+  // Check if all 4 tetrahedral nodes are below threshold temperature
+  // This allows us to skip interpolation for cold elements
+  
+  for (unsigned n = 0; n < NODES_PER_ELEM; n++) {
+    const unsigned nodeIdx = nodeIndices[n];
+    
+    const auto timeIter = times.row_iterator(nodeIdx);
+    const auto tempIter = temperatures.row_iterator(nodeIdx);
+    
+    // Check time bounds
+    if (time < *timeIter || time > timeIter[dataCounts[nodeIdx] - 1]) {
+      // Outside time range - assume cold
+      continue;
+    }
+    
+    // Linear interpolation in time for this node
+    auto lower = std::lower_bound(timeIter, timeIter + dataCounts[nodeIdx], time);
+    auto idx = std::distance(timeIter, lower);
+    idx = (idx == 0) ? 1 : idx;
+    
+    double nodeTemp = tempIter[idx-1] + 
+                      (tempIter[idx] - tempIter[idx-1]) / 
+                      (timeIter[idx] - timeIter[idx-1]) * 
+                      (time - timeIter[idx-1]);
+    
+    // If any node is above threshold, element is not cold
+    if (nodeTemp >= threshold_temp) {
+      return false;
+    }
+  }
+  
+  // All nodes are below threshold
+  return true;
+}
+
+/* ---------------------------------------------------------------------- */
+
+double HDF5UnstructuredTemperatureSource::get_temperature_at_site(int site_index, double time)
+{
+  if (!source_initialized) {
+    error->all(FLERR, "Temperature source not initialized");
+  }
+  
+  // Check if we need to load new layer data
+  constexpr double tol = 5.0 * std::numeric_limits<double>::epsilon();
+  if (std::fabs(time - current_time) / (std::fabs(time) + tol) > tol) {
+    auto currentLayer = get_active_layer(time);
+    if (currentLayer != active_layer) {
+      load_layer(currentLayer);
+      active_layer = currentLayer;
+      cache_valid = false;  // Invalidate cache when layer changes
+    }
+    current_time = time;
+  }
+  
+  // Build cache if needed
+  if (!cache_valid) {
+    build_site_element_cache();
+  }
+  
+  // Get cached element for this site
+  const ElementCache& cache = get_cached_element(site_index);
+  
+  if (!cache.valid) {
+    return default_temp;  // Site not in any element
+  }
+  
+  // Quick check: if all nodes are cold, skip interpolation
+  if (all_nodes_below_threshold(cache.nodeIndices, time)) {
+    return default_temp;
+  }
+  
+  // Get temperatures at the four tetrahedral nodes
+  std::array<double, NODES_PER_ELEM> nodalVals;
+  for (unsigned n = 0; n < NODES_PER_ELEM; n++) {
+    const unsigned nodeIdx = cache.nodeIndices[n];
+    
+    const auto timeIter = times.row_iterator(nodeIdx);
+    const auto tempIter = temperatures.row_iterator(nodeIdx);
+    
+    // Check time bounds
+    if (time < *timeIter || time > timeIter[dataCounts[nodeIdx] - 1]) {
+      return default_temp;
+    }
+    
+    // Linear interpolation in time
+    auto lower = std::lower_bound(timeIter, timeIter + dataCounts[nodeIdx], time);
+    auto idx = std::distance(timeIter, lower);
+    idx = (idx == 0) ? 1 : idx;
+    
+    nodalVals[n] = tempIter[idx-1] + 
+                   (tempIter[idx] - tempIter[idx-1]) / 
+                   (timeIter[idx] - timeIter[idx-1]) * 
+                   (time - timeIter[idx-1]);
+  }
+  
+  // Tetrahedral interpolation using cached barycentric coordinates
+  return nodalVals[0] + 
+         cache.weights[0] * (nodalVals[1] - nodalVals[0]) + 
+         cache.weights[1] * (nodalVals[2] - nodalVals[0]) + 
+         cache.weights[2] * (nodalVals[3] - nodalVals[0]);
+}
+
+/* ---------------------------------------------------------------------- */
+
+void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
+{
+  // Get total number of sites from app
+  int nlocal = app->nlocal;
+  
+  // Resize cache to match number of local sites
+  site_element_cache.resize(nlocal);
+  
+  // For each site, find its containing element and cache the result
+  for (int i = 0; i < nlocal; i++) {
+    // Get site coordinates 
+    double x = app->xyz[i][0] * dx;  // Convert lattice to physical
+    double y = app->xyz[i][1] * dx;
+    double z = app->xyz[i][2] * dx;
+    
+    std::array<double, 3> pt{x, y, z};
+    
+    // Find element containing this point
+    auto result = find_element_point_is_in(selected_chunks, chunk_bboxes, 
+                                          node_offsets, elem_offsets, 
+                                          elemNode, nodeCoords, 
+                                          elem_bboxes, pt);
+    
+    // Store in cache
+    site_element_cache[i].nodeIndices = result.first;
+    site_element_cache[i].weights = result.second;
+    site_element_cache[i].valid = (result.first[0] != std::numeric_limits<unsigned>::max());
+  }
+  
+  cache_valid = true;
+  
+  if (universe->me == 0) {
+    fprintf(screen, "  Built element cache for %d sites\n", nlocal);
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+
+const HDF5UnstructuredTemperatureSource::ElementCache& 
+HDF5UnstructuredTemperatureSource::get_cached_element(int site_index) const
+{
+  if (site_index < 0 || site_index >= static_cast<int>(site_element_cache.size())) {
+    error->all(FLERR, "Invalid site index in get_cached_element");
+  }
+  return site_element_cache[site_index];
 }
 
 /* ---------------------------------------------------------------------- */

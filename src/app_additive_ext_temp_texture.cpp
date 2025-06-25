@@ -2601,7 +2601,12 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
       z_physical = z_lattice;
     }
     
-    T[i] = temperature_source->get_temperature_at_xyz_and_time(x_physical, y_physical, z_physical, simulation_time);
+    // Use site-based temperature access for HDF5 unstructured source (uses caching)
+    if (hdf5_source) {
+      T[i] = temperature_source->get_temperature_at_site(i, simulation_time);
+    } else {
+      T[i] = temperature_source->get_temperature_at_xyz_and_time(x_physical, y_physical, z_physical, simulation_time);
+    }
   }
 }
 

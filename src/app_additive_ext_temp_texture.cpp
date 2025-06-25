@@ -141,6 +141,7 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     // Initialize modular temperature source system
     temperature_source = nullptr;
     use_temperature_source = false;  // Default to legacy HDF5 system for backward compatibility
+    fast_forward_search_window = 0.1;  // Default 100ms search window
     
     //add the double array
     recreate_arrays();  
@@ -262,8 +263,14 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
   else if (strcmp(command,"chunk_time_window") == 0) {
      if (narg != 1) error->all(FLERR,"Illegal chunk_time_window command");
      chunk_time_window = atof(arg[0]);
-     if (normal_finder_debug < 0) 
-       error->all(FLERR,"Illegal chunk_time_window value: must be < 0");
+     if (chunk_time_window < 0) 
+       error->all(FLERR,"Illegal chunk_time_window value: must be >= 0");
+  }
+  else if (strcmp(command,"fast_forward_search_window") == 0) {
+     if (narg != 1) error->all(FLERR,"Illegal fast_forward_search_window command");
+     fast_forward_search_window = atof(arg[0]);
+     if (fast_forward_search_window <= 0.0)
+       error->all(FLERR,"Illegal fast_forward_search_window value: must be > 0");
   }
   
   // Modular temperature source commands
@@ -293,8 +300,15 @@ void AppAdditiveExtTempTexture::app_update(double dt)
       dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
     
     if (hdf5_source && hdf5_source->all_temperatures_below_threshold(time)) {
-      // Find next time when temperatures are above threshold
-      double next_active_time = hdf5_source->find_next_active_time(time, time + 0.1);  // Search up to 0.1s ahead
+      // Choose search method based on window size to avoid missing thermal events
+      double next_active_time;
+      if (fast_forward_search_window > 0.2) {
+        // Large search windows: use safer sequential sampling to avoid missing thermal events
+        next_active_time = hdf5_source->find_next_active_time_sequential(time, time + fast_forward_search_window);
+      } else {
+        // Small search windows: binary search is safe and faster
+        next_active_time = hdf5_source->find_next_active_time(time, time + fast_forward_search_window);
+      }
       
       if (next_active_time > time) {
         double time_skip = next_active_time - time;

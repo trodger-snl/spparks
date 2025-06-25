@@ -129,6 +129,7 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   // Modular temperature source interface
   std::unique_ptr<TemperatureSource> temperature_source;
   bool use_temperature_source;  // Flag to enable new modular system
+  double fast_forward_search_window;  // Search window for fast-forward (default 0.1s)
   
   // Temperature file handling variables (legacy HDF5 system)
   DoubleQueueContainer temp_in;

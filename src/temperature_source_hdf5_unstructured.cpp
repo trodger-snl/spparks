@@ -363,6 +363,9 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   elem_bboxes = build_elem_bounding_boxes(overlappingChunks.size(), 
                                          nodeOffsets, elemOffsets, 
                                          elemNode, nodeCoords);
+  
+  // Compute thermal intervals for efficient time queries
+  compute_thermal_intervals_for_layer(layerIdx, threshold_temp);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1042,4 +1045,170 @@ double HDF5UnstructuredTemperatureSource::find_next_active_time_sequential(doubl
   }
   
   return end_time;
+}
+
+/* ---------------------------------------------------------------------- */
+
+double HDF5UnstructuredTemperatureSource::get_next_time_with_temperature(double current_time, double threshold_temp)
+{
+  if (layerTimes.empty()) {
+    if (universe->me == 0) std::cout << "DEBUG get_next_time: layerTimes empty" << std::endl;
+    return current_time;
+  }
+  
+  // Find current layer
+  unsigned current_layer = get_active_layer(current_time);
+  
+  // Check if we have thermal intervals computed for this layer
+  if (current_layer >= layer_thermal_intervals.size()) {
+    if (universe->me == 0) std::cout << "DEBUG get_next_time: current_layer " << current_layer 
+                                    << " >= layer_thermal_intervals.size() " << layer_thermal_intervals.size() << std::endl;
+    return current_time;
+  }
+  
+  if (universe->me == 0) {
+    std::cout << "DEBUG get_next_time: current_time=" << current_time << " current_layer=" << current_layer 
+              << " intervals_in_layer=" << layer_thermal_intervals[current_layer].size() << std::endl;
+  }
+  
+  // Check remaining intervals in current layer
+  for (const auto& interval : layer_thermal_intervals[current_layer]) {
+    if (universe->me == 0) {
+      std::cout << "DEBUG get_next_time: checking interval [" << interval.start_time << ", " << interval.end_time << "]" << std::endl;
+    }
+    if (interval.start_time > current_time) {
+      if (universe->me == 0) std::cout << "DEBUG get_next_time: found next time " << interval.start_time << std::endl;
+      return interval.start_time;
+    }
+  }
+  
+  // Check subsequent layers
+  if (universe->me == 0) {
+    std::cout << "DEBUG get_next_time: checking subsequent layers, total layers=" << layerTimes.size() 
+              << " thermal_intervals_size=" << layer_thermal_intervals.size() << std::endl;
+  }
+  
+  for (unsigned layer = current_layer + 1; layer < layerTimes.size(); layer++) {
+    if (universe->me == 0) {
+      std::cout << "DEBUG get_next_time: checking layer " << layer << " layer_time=" << layerTimes[layer] << std::endl;
+    }
+    
+    // If we haven't computed thermal intervals for this layer yet, we should advance to it
+    // The layer loading will happen when we reach its time
+    if (layer >= layer_thermal_intervals.size() || layer_thermal_intervals[layer].empty()) {
+      if (universe->me == 0) {
+        std::cout << "DEBUG get_next_time: advancing to next layer " << layer << " at time " << layerTimes[layer] << std::endl;
+      }
+      return layerTimes[layer];
+    }
+    
+    // If this layer has thermal intervals, return the first one
+    if (!layer_thermal_intervals[layer].empty()) {
+      if (universe->me == 0) std::cout << "DEBUG get_next_time: found next layer " << layer 
+                                      << " with time " << layer_thermal_intervals[layer][0].start_time << std::endl;
+      return layer_thermal_intervals[layer][0].start_time;
+    }
+  }
+  
+  // No more thermal activity found
+  if (universe->me == 0) std::cout << "DEBUG get_next_time: no more thermal activity found" << std::endl;
+  return std::numeric_limits<double>::max();
+}
+
+/* ---------------------------------------------------------------------- */
+
+void HDF5UnstructuredTemperatureSource::compute_thermal_intervals_for_layer(unsigned layerIdx, double threshold_temp)
+{
+  // Ensure layer_thermal_intervals is large enough
+  if (layerIdx >= layer_thermal_intervals.size()) {
+    layer_thermal_intervals.resize(layerIdx + 1);
+  }
+  
+  std::vector<ThermalInterval> intervals;
+  
+  // For each node in the loaded chunks
+  for (size_t node_idx = 0; node_idx < dataCounts.size(); node_idx++) {
+    // Check if node is within SPPARKS domain
+    double x = nodeCoords(node_idx, 0);
+    double y = nodeCoords(node_idx, 1); 
+    double z = nodeCoords(node_idx, 2);
+    
+    if (!is_point_in_spparks_domain(x, y, z)) continue;
+    
+    // Scan temperature time series for this node
+    double first_hot_time = -1.0;
+    double last_hot_time = -1.0;
+    
+    for (unsigned t = 0; t < dataCounts[node_idx]; t++) {
+      double temp = temperatures(node_idx, t);
+      double time = times(node_idx, t);
+      
+      if (temp > threshold_temp) {
+        if (first_hot_time < 0) first_hot_time = time;
+        last_hot_time = time;
+      }
+    }
+    
+    // Add interval if we found thermal activity
+    if (first_hot_time >= 0) {
+      intervals.emplace_back(first_hot_time, last_hot_time);
+    }
+  }
+  
+  // Merge overlapping intervals and store
+  layer_thermal_intervals[layerIdx] = merge_overlapping_intervals(intervals);
+  
+  if (universe->me == 0 && !layer_thermal_intervals[layerIdx].empty()) {
+    fprintf(screen, "  Layer %u: Found %zu thermal intervals\n", 
+            layerIdx, layer_thermal_intervals[layerIdx].size());
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+
+std::vector<HDF5UnstructuredTemperatureSource::ThermalInterval> 
+HDF5UnstructuredTemperatureSource::merge_overlapping_intervals(const std::vector<ThermalInterval>& intervals) const
+{
+  if (intervals.empty()) return {};
+  
+  auto sorted_intervals = intervals;
+  std::sort(sorted_intervals.begin(), sorted_intervals.end(), 
+            [](const ThermalInterval& a, const ThermalInterval& b) {
+              return a.start_time < b.start_time;
+            });
+  
+  std::vector<ThermalInterval> merged;
+  merged.push_back(sorted_intervals[0]);
+  
+  for (size_t i = 1; i < sorted_intervals.size(); i++) {
+    ThermalInterval& last = merged.back();
+    const ThermalInterval& current = sorted_intervals[i];
+    
+    if (current.start_time <= last.end_time) {
+      // Overlapping - merge them
+      last.end_time = std::max(last.end_time, current.end_time);
+    } else {
+      // Non-overlapping - add new interval
+      merged.push_back(current);
+    }
+  }
+  
+  return merged;
+}
+
+/* ---------------------------------------------------------------------- */
+
+bool HDF5UnstructuredTemperatureSource::is_point_in_spparks_domain(double x, double y, double z) const
+{
+  // Convert SPPARKS domain bounds from lattice units to physical coordinates (meters)
+  double x_min = domain->boxxlo * dx;
+  double x_max = domain->boxxhi * dx;
+  double y_min = domain->boxylo * dx;
+  double y_max = domain->boxyhi * dx;
+  double z_min = domain->boxzlo * dx;
+  double z_max = domain->boxzhi * dx;
+  
+  return (x >= x_min && x <= x_max &&
+          y >= y_min && y <= y_max &&
+          z >= z_min && z <= z_max);
 }

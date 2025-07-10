@@ -54,6 +54,10 @@ class TemperatureSource : protected Pointers {
   virtual void validate_setup() {}
   virtual std::string get_source_type() const = 0;
   virtual void print_source_info() const {}
+  
+  // Time query interface for efficient fast forward
+  virtual bool supports_time_queries() const { return false; }
+  virtual double get_next_time_with_temperature(double current_time, double threshold_temp) { return current_time; }
 
  protected:
   // Common data members accessible to derived classes

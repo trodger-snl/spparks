@@ -90,6 +90,18 @@ public:
   double find_next_active_time_sequential(double start_time, double end_time);
   double get_fast_forward_threshold() const { return threshold_temp; }
   double get_dx() const { return dx; }
+  
+  // Time query interface implementation
+  virtual bool supports_time_queries() const override { return true; }
+  virtual double get_next_time_with_temperature(double current_time, double threshold_temp) override;
+  
+  // Thermal interval data structure
+  struct ThermalInterval {
+    double start_time;
+    double end_time;
+    
+    ThermalInterval(double start, double end) : start_time(start), end_time(end) {}
+  };
 
   // Site-based temperature access optimized for lattice
   virtual double get_temperature_at_site(int site_index, double time) override;
@@ -167,6 +179,12 @@ private:
     const Array2D<unsigned>& elemNode,
     const Array2D<double>& nodeCoords) const;
   
+  // Thermal interval management for efficient time queries
+  std::vector<std::vector<ThermalInterval>> layer_thermal_intervals;
+  
+  void compute_thermal_intervals_for_layer(unsigned layerIdx, double threshold_temp);
+  std::vector<ThermalInterval> merge_overlapping_intervals(const std::vector<ThermalInterval>& intervals) const;
+  bool is_point_in_spparks_domain(double x, double y, double z) const;
   
   // Element cache management
   mutable std::vector<ElementCache> site_element_cache;

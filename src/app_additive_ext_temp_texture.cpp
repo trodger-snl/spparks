@@ -293,45 +293,52 @@ void AppAdditiveExtTempTexture::app_update(double dt)
   //Reset t_active to assume we don't have a melt pool right now
   t_active = 0;
   
-  // Fast-forward capability for modular temperature source
-  if (use_temperature_source && temperature_source) {
-    // Check if we can fast-forward through low temperature periods
-    HDF5UnstructuredTemperatureSource* hdf5_source = 
-      dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-    
-    // Fast-forward enabled with HDF5-node-based thermal activity detection
-    // But disable fast-forward in the very early simulation time to ensure thermal events are captured
-    if (hdf5_source && time > 2e-5 && !hdf5_source->has_significant_thermal_activity_hdf5_nodes(time)) {
-      // Choose search method based on window size to avoid missing thermal events
-      double next_active_time;
-      // Always use sequential search for better thermal event detection
-      // especially important for capturing cooling phases in additive manufacturing
-      next_active_time = hdf5_source->find_next_active_time_sequential(time, time + fast_forward_search_window);
-      
-      if (next_active_time > time) {
-        double time_skip = next_active_time - time;
-        if (domain->me == 0 && time_skip > 1e-6) {  // Only report significant time skips
-          double threshold = hdf5_source->get_fast_forward_threshold();
-          std::cout << "Fast-forward: Skipping " << time_skip << " seconds from time " 
-                    << time << " to " << next_active_time << " (all temperatures < " << threshold << "K)" << std::endl;
-        }
-        
-        // Update simulation time
-        time = next_active_time;
-      }
-    }
-  }
-  
-  // Update temperature using modular source or legacy HDF5 system
+  // Update temperature first to get current temperatures
   if (use_temperature_source) {
     // Use new modular temperature source system
     update_temperature_from_source(time);
     
-    // Check for active sites
-    for (int i = 0; i < nlocal; i++) {
-      if (T[i] > t_room) t_active = 1;
+    // Check for active sites using temperature source's threshold
+    double fast_forward_threshold = t_room; // Default to t_room
+    
+    // If using HDF5 temperature source, use its threshold
+    HDF5UnstructuredTemperatureSource* hdf5_source = 
+      dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+    if (hdf5_source) {
+      fast_forward_threshold = hdf5_source->get_fast_forward_threshold();
     }
-  } else {
+    
+    for (int i = 0; i < nlocal; i++) {
+      if (T[i] > fast_forward_threshold) t_active = 1;
+    }
+    
+    // Use MPI_Allreduce to check if t_active is 0 on all processors
+    int global_t_active;
+    MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    
+    
+    // If no active sites and temperature source supports time queries, fast forward
+    if (global_t_active == 0 && time > 1e-6 && temperature_source->supports_time_queries()) {
+      double next_thermal_time = temperature_source->get_next_time_with_temperature(time, fast_forward_threshold);
+      
+      if (next_thermal_time > time && next_thermal_time < std::numeric_limits<double>::max()) {
+        double time_skip = next_thermal_time - time;
+        if (domain->me == 0 && time_skip > 1e-6) {  // Only report significant time skips
+          std::cout << "Fast-forward: Skipping " << time_skip << " seconds from time " 
+                    << time << " to " << next_thermal_time << " (all temperatures < " << fast_forward_threshold << "K)" << std::endl;
+        }
+        
+        // Update simulation time
+        time = next_thermal_time;
+        
+        // Update temperatures at new time
+        update_temperature_from_source(time);
+      }
+    }
+  }
+  
+  // Legacy HDF5 system (when not using modular temperature source)
+  if (!use_temperature_source) {
     // Use legacy HDF5 system
     //Check if we need to load next chunk
     if (hdf5_file_open && needs_new_chunk(time)) {

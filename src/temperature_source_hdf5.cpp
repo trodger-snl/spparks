@@ -11,6 +11,18 @@
    See the README file in the top-level SPPARKS directory.
 ------------------------------------------------------------------------- */
 
+/* ----------------------------------------------------------------------
+   WARNING: This temperature source is UNTESTED with the current modular
+   temperature source system and is unlikely to work in its current state.
+   
+   Only temperature_source_hdf5_unstructured.cpp has been tested and 
+   validated with the modular system. Use of this temperature source
+   may result in compilation errors or runtime failures.
+   
+   For working temperature sources, use:
+   - hdf5_unstructured (tested and validated)
+------------------------------------------------------------------------- */
+
 #include "temperature_source_hdf5.h"
 #include "app_additive_ext_temp_texture.h"
 #include "domain.h"

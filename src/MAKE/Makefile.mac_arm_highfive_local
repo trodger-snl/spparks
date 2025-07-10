@@ -1,0 +1,106 @@
+# mac_arm_highfive_local = Mac with Apple Silicon, MPI, HDF5-MPI, and local HighFive
+
+SHELL = /bin/sh
+
+# ---------------------------------------------------------------------
+# compiler/linker settings
+# specify flags and libraries needed for your compiler
+
+CC =		mpic++
+CCFLAGS =	 -std=c++17 -MMD -O2
+SHFLAGS =	-fPIC
+DEPFLAGS =	-M
+
+LINK =		mpic++
+LINKFLAGS =	 -std=c++17 -O2
+LIB =	  	
+SIZE =		size
+
+ARCHIVE =	ar
+ARFLAGS =	-rc
+SHLIBFLAGS =	-shared
+
+# ---------------------------------------------------------------------
+# SPPARKS-specific settings
+# specify settings for SPPARKS features you will use
+
+# SPPARKS ifdef options, see doc/Section_start.html
+
+SPK_INC =	-DSPPARKS_GZIP -DSPPARKS_UNORDERED_MAP -DSPPARKS_JPEG -DSPPARKS_HDF -DSPPARKS_HIGHFIVE
+
+
+
+# MPI library, can be src/STUBS dummy lib
+# INC = path for mpi.h, MPI compiler settings
+# PATH = path for MPI library
+# LIB = name of MPI library
+
+MPI_INC =       -DOMPI_SKIP_MPICXX
+MPI_PATH = 
+MPI_LIB =	
+
+# JPEG library, only needed if -DLAMMPS_JPEG listed with LMP_INC
+# INC = path for jpeglib.h
+# PATH = path for JPEG library
+# LIB = name of JPEG library
+
+JPG_INC =  -I/opt/homebrew/include
+JPG_PATH = 	-L/opt/homebrew/lib
+JPG_LIB =	-ljpeg
+
+# HDF5-MPI library from Homebrew
+HDF_INC = -I/opt/homebrew/opt/hdf5-mpi/include
+HDF_PATH = -L/opt/homebrew/opt/hdf5-mpi/lib
+HDF_LIB = -lhdf5
+
+# HighFive C++ wrapper - using local installation
+# This points to the locally installed HighFive headers
+HIGHFIVE_INC = -I../../external/highfive/include
+HIGHFIVE_PATH = 
+HIGHFIVE_LIB = 
+
+# ---------------------------------------------------------------------
+# build rules and dependencies
+# no need to edit this section
+
+include	Makefile.package.settings
+include	Makefile.package
+
+EXTRA_INC = $(SPK_INC) $(PKG_INC) $(MPI_INC) $(JPG_INC) $(PKG_SYSINC) $(HDF_INC) $(HIGHFIVE_INC)
+EXTRA_PATH = $(PKG_PATH) $(MPI_PATH) $(JPG_PATH) $(PKG_SYSPATH) $(HDF_PATH) $(HIGHFIVE_PATH)
+EXTRA_LIB = $(PKG_LIB) $(MPI_LIB) $(JPG_LIB) $(PKG_SYSLIB) $(HDF_LIB) $(HIGHFIVE_LIB)
+EXTRA_CPP_DEPENDS = $(PKG_CPP_DEPENDS)
+EXTRA_LINK_DEPENDS = $(PKG_LINK_DEPENDS)
+
+# Path to src files
+
+vpath %.cpp ..
+vpath %.h ..
+
+# Link target
+
+$(EXE):	$(OBJ)
+	$(LINK) $(LINKFLAGS) $(EXTRA_PATH) $(OBJ) $(EXTRA_LIB) $(LIB) -o $(EXE)
+	$(SIZE) $(EXE)
+
+# Library targets
+
+lib:	$(OBJ)
+	$(ARCHIVE) $(ARFLAGS) $(EXE) $(OBJ)
+
+shlib:	$(OBJ)
+	$(CC) $(CCFLAGS) $(SHFLAGS) $(SHLIBFLAGS) $(EXTRA_PATH) -o $(EXE) \
+        $(OBJ) $(EXTRA_LIB) $(LIB)
+
+# Compilation rules
+
+%.o:%.cpp
+	$(CC) $(CCFLAGS) $(SHFLAGS) $(EXTRA_INC) -c $<
+
+%.d:%.cpp
+	$(CC) $(CCFLAGS) $(EXTRA_INC) $(DEPFLAGS) $< > $@
+
+# Individual dependencies
+
+DEPENDS = $(OBJ:.o=.d)
+include $(DEPENDS)

@@ -391,10 +391,15 @@ void AppAdditiveExtTempTexture::app_update(double dt)
   }
     
   //Communicate changes
+  timer->stamp();
   comm->all();
+  timer->stamp(TIME_COMM);
+  
     // Use MPI_Allreduce to check if t_active is 0 on all processors
     int global_t_active;
+    timer->stamp();
     MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    timer->stamp(TIME_COMM);
 
     // Check if all processors have t_active = 0. If so, fast forward our simulation time.
     if (global_t_active == 0) {
@@ -418,6 +423,8 @@ void AppAdditiveExtTempTexture::app_update(double dt)
             }
         }
     }
+    
+    timer->stamp(TIME_UPDATE);
 }
 
 /* ----------------------------------------------------------------------
@@ -640,6 +647,8 @@ void AppAdditiveExtTempTexture::temperature_time_interpolate(int site, double pr
    between zero and one. If the number is less than the fraction, make true. If not, make false.
 ------------------------------------------------------------------------- */
 void AppAdditiveExtTempTexture::nucleation_spins(RandomPark *random) {
+    timer->stamp();
+    
     nucleation_flags = new int[nspins];
     double nucleationFraction = dx * dx * dx * no;
     
@@ -661,6 +670,8 @@ void AppAdditiveExtTempTexture::nucleation_spins(RandomPark *random) {
             }
         }
     }   
+    
+    timer->stamp(TIME_APP);
 }
 
 
@@ -752,7 +763,9 @@ void AppAdditiveExtTempTexture::init_app()
       qz[i] = uq[3];
     }
 
+  timer->stamp();
   MPI_Allreduce(&flag,&flagall,1,MPI_INT,MPI_SUM,world);
+  timer->stamp(TIME_COMM);
   if (flagall) error->all(FLERR,"One or more sites have invalid values");
   
 	//Initialize the nucleation_flags vector
@@ -760,15 +773,19 @@ void AppAdditiveExtTempTexture::init_app()
 		nucleation_spins(ranapp);    
 	}
 
+	timer->stamp();
 	MPI_Bcast(nucleation_flags,nspins, MPI_INT,0,world);
+	timer->stamp(TIME_COMM);
 
 	//Initialize the nucleation_temps and nucleation_sizes vectors
 	if (domain->me==0) {
 			nucleation_init();    
 	}
 
+	timer->stamp();
 	MPI_Bcast(nucleation_temps,nspins, MPI_DOUBLE,0,world);
 	MPI_Bcast(nucleation_sizes,nspins, MPI_DOUBLE,0,world);
+	timer->stamp(TIME_COMM);
 	
 	//Initialize the neigh_dist array need to fill with good values
 	neigh_dist = new double[26];
@@ -847,8 +864,11 @@ void AppAdditiveExtTempTexture::init_app()
 ------------------------------------------------------------------------- */
 
 double AppAdditiveExtTempTexture::site_energy(int i) {
+  timer->stamp();
+  
   // Condition 1: If active_flag != 3 (not solidified), return zero energy
   if (active_flag[i] != 3) {
+    timer->stamp(TIME_SOLVE);
     return 0.0;
   }
   
@@ -879,6 +899,7 @@ double AppAdditiveExtTempTexture::site_energy(int i) {
   
   // Each site carries half the grain boundary energy
   // Neighbor sites carry the other half
+  timer->stamp(TIME_SOLVE);
   return 0.5 * energy;
 }
 
@@ -892,6 +913,8 @@ double AppAdditiveExtTempTexture::site_energy(int i) {
 
 void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
 {
+  timer->stamp();
+  
   int oldstate = spin[i];
   SiteState s_old(spin[i], {q0[i], qx[i], qy[i], qz[i]});
   double einitial = site_energy(i);
@@ -1001,8 +1024,7 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
 	      mask[neighbor[i][j]] = 0;
   }
 
-  
-
+  timer->stamp(TIME_SOLVE);
 }
 
 /* ----------------------------------------------------------------------
@@ -1818,6 +1840,7 @@ std::vector<std::vector<std::vector<int>>> AppAdditiveExtTempTexture::convert_to
 }
 
 void AppAdditiveExtTempTexture::reduced_temperature_hdf_chunked(){
+  timer->stamp();
   
   if (domain->me == 0) std::cout << "Starting chunked HDF5 reading from: " << temp_file_string << std::endl;
   if (domain->me == 0) std::cout << "Opening HDF5 file..." << std::endl;
@@ -1915,9 +1938,12 @@ void AppAdditiveExtTempTexture::load_data_counts_array(){
   data_counts_array = convert_to_3d_array_with_range(data_counts, xlo2, xhi2, ylo2, yhi2, zlo2, zhi2);
   
   if (domain->me == 0) std::cout << "Data counts array loaded" << std::endl;
+  
+  timer->stamp(TIME_APP);
 }
 
 void AppAdditiveExtTempTexture::load_next_chunk(){
+  timer->stamp();
   
   auto start_time = std::chrono::high_resolution_clock::now();
   
@@ -2049,6 +2075,8 @@ void AppAdditiveExtTempTexture::load_next_chunk(){
     std::cout << "Loaded chunk [" << current_chunk_start_time << ", " << current_chunk_end_time 
               << ") in " << duration.count() << " ms, " << sites_with_data << " sites got data" << std::endl;
   }
+  
+  timer->stamp(TIME_APP);
 }
 
 bool AppAdditiveExtTempTexture::needs_new_chunk(double simulation_time) {
@@ -2575,7 +2603,10 @@ void AppAdditiveExtTempTexture::setup_scan_path_cmd(int narg, char **arg)
 
 void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation_time)
 {
+  timer->stamp();
+  
   if (!use_temperature_source || !temperature_source) {
+    timer->stamp(TIME_APP);
     return; // Fall back to legacy HDF5 system
   }
   
@@ -2615,5 +2646,7 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
       T[i] = temperature_source->get_temperature_at_xyz_and_time(x_physical, y_physical, z_physical, simulation_time);
     }
   }
+  
+  timer->stamp(TIME_APP);
 }
 

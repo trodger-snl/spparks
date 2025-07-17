@@ -50,7 +50,9 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   std::vector<double> normal_finder(int);
 	double melt_misorientation(int, double, double, double);
   void apply_misorientation(int, double, class RandomPark *);
-  void quat2euler(int, double *);
+  std::vector<double> get_average_neighbor_quaternion(int site, int target_spin);
+  void smooth_site(int site);
+  double site_energy_smooth(int site);
   
   // Modular temperature source methods
   void setup_temperature_source_cmd(int narg, char **arg);

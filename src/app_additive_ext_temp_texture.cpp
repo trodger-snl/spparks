@@ -383,9 +383,10 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     else if (active_flag[i] == 2 && T[i] <= tl) {
         mushy_phase(i, ranapp);
     } 
+    //Call smoothing
     else if(solid_d[i] < 0 && solid_d[i] > -nrefine -1 && active_flag[i] == 3)    {
             mobility_out[i] = 1;
-            site_event_rejection(i, ranapp);
+            smooth_site(i);
             solid_d[i]--;
     }
   }
@@ -1706,6 +1707,96 @@ std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
 }
 
 /* ----------------------------------------------------------------------
+   Find all neighbors with a given spin value and return their average quaternion
+   
+   This function searches through all neighbors of a site, finds those with
+   the specified spin value, and computes the average of their quaternion
+   orientations. Includes dot product check to ensure all quaternions are
+   in the same hemisphere before averaging.
+   
+   Inputs: 
+     site - the site index to check neighbors of
+     target_spin - the spin value to search for in neighbors
+   
+   Returns:
+     std::vector<double> containing [q0, qx, qy, qz] - the average quaternion
+     If no neighbors with target_spin are found, returns [1,0,0,0] identity quaternion
+     If quaternions are in different hemispheres, returns empty vector to indicate error
+------------------------------------------------------------------------- */
+std::vector<double> AppAdditiveExtTempTexture::get_average_neighbor_quaternion(int site, int target_spin)
+{
+    // Initialize storage for first quaternion as reference
+    double ref_q0 = 0.0, ref_qx = 0.0, ref_qy = 0.0, ref_qz = 0.0;
+    bool first_found = false;
+    
+    // Initialize sums
+    double sum_q0 = 0.0, sum_qx = 0.0, sum_qy = 0.0, sum_qz = 0.0;
+    int count = 0;
+    
+    // Check all neighbors
+    for (int j = 0; j < numneigh[site]; j++) {
+        int neighbor_site = neighbor[site][j];
+        
+        // Check if this neighbor has the target spin
+        if (spin[neighbor_site] == target_spin) {
+            // Get this neighbor's quaternion
+            double nq0 = q0[neighbor_site];
+            double nqx = qx[neighbor_site];
+            double nqy = qy[neighbor_site];
+            double nqz = qz[neighbor_site];
+            
+            if (!first_found) {
+                // Store first quaternion as reference
+                ref_q0 = nq0;
+                ref_qx = nqx;
+                ref_qy = nqy;
+                ref_qz = nqz;
+                first_found = true;
+            } else {
+                // Check dot product with reference quaternion
+                double dot = ref_q0*nq0 + ref_qx*nqx + ref_qy*nqy + ref_qz*nqz;
+                
+                // If dot product is negative, quaternions are in opposite hemispheres
+                if (dot < 0.0) {
+                    // Return empty vector to indicate error
+                    error->warning(FLERR, "get_average_neighbor_quaternion: Quaternions in different hemispheres detected");
+                    return std::vector<double>();  // Empty vector indicates error
+                }
+            }
+            
+            // Add this neighbor's quaternion to the sum
+            sum_q0 += nq0;
+            sum_qx += nqx;
+            sum_qy += nqy;
+            sum_qz += nqz;
+            count++;
+        }
+    }
+    
+    // If no neighbors with target spin found, return identity quaternion
+    if (count == 0) {
+        return std::vector<double>{1.0, 0.0, 0.0, 0.0};
+    }
+    
+    // Compute average
+    double avg_q0 = sum_q0 / count;
+    double avg_qx = sum_qx / count;
+    double avg_qy = sum_qy / count;
+    double avg_qz = sum_qz / count;
+    
+    // Normalize the average quaternion to ensure unit length
+    double norm = sqrt(avg_q0*avg_q0 + avg_qx*avg_qx + avg_qy*avg_qy + avg_qz*avg_qz);
+    if (norm > 0.0) {
+        avg_q0 /= norm;
+        avg_qx /= norm;
+        avg_qy /= norm;
+        avg_qz /= norm;
+    }
+    
+    return std::vector<double>{avg_q0, avg_qx, avg_qy, avg_qz};
+}
+
+/* ----------------------------------------------------------------------
    Figure out the dot product between the temperature gradient and the x'tal orientation.
    We'll use this to change the Q-value at the lattice site...
 
@@ -1738,49 +1829,85 @@ double AppAdditiveExtTempTexture::melt_misorientation(int site, double c1, doubl
 	return mobOut;
 }
 
-//Let's build a global array of euler angles (much like the quaternions), so we dont have to
-//Do trig calculations over and over again.
-//Call at the beginning of the program
-//This function won't do any loops, just the pure math
-//Will need verification that I didn't get indices screwed up...
-void AppAdditiveExtTempTexture::quat2euler(int site_index, double *eulers) {
-  // Convert quaternion to Euler angles
-  // Input: site_index - index of the site whose quaternion orientation to convert
-  // Output: eulers - array of 3 Euler angles [phi1, Phi, phi2]
-  
-  // Get quaternion components for this site
-  vector<double> q = {q0[site_index], qx[site_index], qy[site_index], qz[site_index]};
-  
-  // Convert quaternion to rotation matrix using quaternion utility
-  vector<double> rotation_matrix = quaternion::to_rotation_matrix(q);
-  
-  // Extract rotation matrix elements (row-major format)
-  // Matrix format: [[r11, r12, r13], [r21, r22, r23], [r31, r32, r33]]
-  double r11 = rotation_matrix[0]; double r12 = rotation_matrix[1]; double r13 = rotation_matrix[2];
-  double r21 = rotation_matrix[3]; double r22 = rotation_matrix[4]; double r23 = rotation_matrix[5];
-  double r31 = rotation_matrix[6]; double r32 = rotation_matrix[7]; double r33 = rotation_matrix[8];
-  
-  // Convert rotation matrix to Euler angles using ZXZ convention
-  // This matches the original algorithm's approach
-  
-  // Handle special case where r33 is close to ±1
-  if (abs(r33) < 1.000001 && abs(r33) > 0.999999) {
-    eulers[0] = atan2(r12, r11);
-    eulers[1] = MY_PI/2.0 * (1 - r33);
-    eulers[2] = 0;
-    return;
+/* ----------------------------------------------------------------------
+   This function is called after a site is solidified and nsmooth > 0. Its purpose is to smooth grain boundaries.
+   It does this by using the traditional Potts model without including grain orientations. Quaternions are handled
+   by switching the site to the average quaternion value of neighbors with the selected spin/grain ID.
+
+   Inputs: lattice site :: site
+   Outputs: None
+------------------------------------------------------------------------- */
+void AppAdditiveExtTempTexture::smooth_site(int i) {
+
+  //Adapt code from potts_neigh_only site_event_rejection.
+  int oldstate = spin[i];
+  double einitial = site_energy_smooth(i);
+
+  // events = spin flips to neighboring site different than self
+
+  int j,m,value;
+  int nevent = 0;
+
+  for (j = 0; j < numneigh[i]; j++) {
+    value = spin[neighbor[i][j]];
+    if (value == spin[i]) continue;
+    for (m = 0; m < nevent; m++)
+      if (value == unique[m]) break;
+    if (m < nevent) continue;
+    unique[nevent++] = value;
   }
-  // General case
-  else {
-    double ksi = 1.0 / sqrt(1.0 - r33 * r33);
-    
-    eulers[0] = atan2(r31 * ksi, -r32 * ksi);
-    eulers[1] = acos(r33);
-    eulers[2] = atan2(r13 * ksi, r23 * ksi);
-    return;
+
+  if (nevent == 0) return;
+  int iran = (int) (nevent*ranapp->uniform());
+  if (iran >= nevent) iran = nevent-1;
+  spin[i] = unique[iran];
+  double efinal = site_energy_smooth(i);
+
+  // accept or reject via Boltzmann criterion
+
+  if (efinal <= einitial) {
+  } else if (temperature == 0.0) {
+    spin[i] = oldstate;
+  } else if (ranapp->uniform() > exp((einitial-efinal)*t_inverse)) {
+    spin[i] = oldstate;
+  }
+
+  //If the spin flips successfully, also change the rest of the values
+  if (spin[i] != oldstate) {
+
+    vector<double> q_new = get_average_neighbor_quaternion(i, spin[i]);
+    q0[i] = q_new[0];
+    qx[i] = q_new[1];
+    qy[i] = q_new[2];
+    qz[i] = q_new[3];
+    naccept++;
+  }
+  // set mask if site could not have changed
+  // if site changed, unset mask of sites with affected propensity
+  // OK to change mask of ghost sites since never used
+
+  if (Lmask) {
+    if (einitial < 0.5*numneigh[i]) mask[i] = 1;
+    if (spin[i] != oldstate)
+      for (int j = 0; j < numneigh[i]; j++)
+	mask[neighbor[i][j]] = 0;
   }
 }
 
+/* ----------------------------------------------------------------------
+   compute energy of site using only spin values (for boundary smoothing after solidification)
+------------------------------------------------------------------------- */
+
+double AppAdditiveExtTempTexture::site_energy_smooth(int i)
+{
+  int isite = spin[i];
+  int eng = 0;
+  for (int j = 0; j < numneigh[i]; j++) {
+    if(active_flag[i] != 3) continue; //Only include solid sites in energy total
+    if (isite != spin[neighbor[i][j]]) eng++;
+  }
+  return (double) eng;
+}
 
 /* ----------------------------------------------------------------------
     The first version of this just initialized critical nucleation temperatures.

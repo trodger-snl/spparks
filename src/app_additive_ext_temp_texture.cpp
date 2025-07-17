@@ -716,8 +716,15 @@ void AppAdditiveExtTempTexture::grow_app()
 
 void AppAdditiveExtTempTexture::init_app()
 {
-  // Call parent init_app to handle sites, unique, and unique_neigh
-  AppPottsQuaternion::init_app();
+  // Duplicate parent's array allocation logic without quaternion randomization
+  delete[] sites;
+  delete[] unique;
+  delete[] unique_neigh;
+  sites = new int[1 + maxneigh];
+  unique = new int[1 + maxneigh];
+  unique_neigh = new int[1 + maxneigh];
+  
+  dt_sweep = 1.0 / maxneigh;
   
   // Clean up our own arrays
   if (unique_dot) delete [] unique_dot;
@@ -755,12 +762,15 @@ void AppAdditiveExtTempTexture::init_app()
 			if (spin[i] < 1 || spin[i] > nspins) {
 				flag = 1;
 			}
-      // Create random orientation as each site
-      vector<double> uq = quaternion::generate_random_unit_quaternions(1);
-      q0[i] = uq[0];
-      qx[i] = uq[1];
-      qy[i] = uq[2];
-      qz[i] = uq[3];
+      if (active_flag[i] != 3) { 
+        // Create random orientation at each site that wasn't read as solid from input file
+        vector<double> uq = quaternion::generate_random_unit_quaternions(1);
+        // std::cout << "Generating new quaternions" << std::endl;
+        q0[i] = uq[0];
+        qx[i] = uq[1];
+        qy[i] = uq[2];
+        qz[i] = uq[3];
+      }
     }
 
   timer->stamp();
@@ -1054,9 +1064,9 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
             //Neighboring sites will be flipped during the next iterate_rejection call
             solid_d[i] = -nrefine-2;
 
-            std::vector<double> solid_G(3);
+            std::vector<double> solid_G(4);  // Now returns [norm_x, norm_y, norm_z, magnitude]
             solid_G = normal_finder(i); //Update gradient
-            G[i] = sqrt(pow(solid_G[0],2) + pow(solid_G[1],2) + pow(solid_G[2],2));
+            G[i] = solid_G[3];  // Use the actual gradient magnitude directly
 
             int power = solid_front_length - 1;
             for(int k = 0; k < solid_front_length; k++) {
@@ -1143,9 +1153,9 @@ void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, R
             active_flag[i] = 3;
             solid_d[i] = -1;
             
-            std::vector<double> solid_G(3);
+            std::vector<double> solid_G(4);  // Now returns [norm_x, norm_y, norm_z, magnitude]
             solid_G = normal_finder(i); //Update gradient
-            G[i] = sqrt(pow(solid_G[0],2) + pow(solid_G[1],2) + pow(solid_G[2],2));
+            G[i] = solid_G[3];  // Use the actual gradient magnitude directly
 
             int power = solid_front_length - 1;
             for(int k = 0; k < solid_front_length; k++) {
@@ -1172,7 +1182,8 @@ void AppAdditiveExtTempTexture::apply_misorientation(int i, double Tcool, Random
     double mis_angle = max_misorient * (exp(misorient_alpha * normalized_temp) - 1.0) / (exp(misorient_alpha) - 1.0) * MY_PI/180;
 
     //Calculate the unit-vector surface norm (use voxel counting)
-    vector<double> grad_out = normal_finder(i);
+    vector<double> grad_full = normal_finder(i);  // Returns [norm_x, norm_y, norm_z, magnitude]
+    vector<double> grad_out = {grad_full[0], grad_full[1], grad_full[2]};  // Extract direction only
 
     // Create quaternion vector from site's orientation
     vector<double> q_site = {q0[i], qx[i], qy[i], qz[i]};
@@ -1513,15 +1524,16 @@ std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
 			grad_z = (T[neighbor[site][12]] - T_center) / dx; // Only downward gradient
 		}
 		
-		// Normalize and return
+		// Normalize and return (with magnitude as 4th element)
 		double norm = sqrt(grad_x*grad_x + grad_y*grad_y + grad_z*grad_z);
-		std::vector<double> result(3);
+		std::vector<double> result(4);  // 4 elements: [norm_x, norm_y, norm_z, magnitude]
 		if (norm > 1e-12) {
 			result[0] = fabs(grad_x)/norm;
 			result[1] = fabs(grad_y)/norm;
 			result[2] = fabs(grad_z)/norm;
+			result[3] = norm;  // Store the actual gradient magnitude
 		} else {
-			result[0] = result[1] = result[2] = 0.0;
+			result[0] = result[1] = result[2] = result[3] = 0.0;
 		}
 		
 		// Compare old vs new melt surface methods for debugging
@@ -1616,15 +1628,16 @@ std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
 		grad_z = (T[neighbor[site][12]] - T[neighbor[site][13]]) / (2.0 * dx);
 	}
 	
-	// Normalize and return gradient direction
+	// Normalize and return gradient direction (with magnitude as 4th element)
 	double norm = sqrt(grad_x*grad_x + grad_y*grad_y + grad_z*grad_z);
-	std::vector<double> result(3);
+	std::vector<double> result(4);  // 4 elements: [norm_x, norm_y, norm_z, magnitude]
 	if (norm > 1e-12) {
 		result[0] = fabs(grad_x)/norm;
 		result[1] = fabs(grad_y)/norm;
 		result[2] = fabs(grad_z)/norm;
+		result[3] = norm;  // Store the actual gradient magnitude
 	} else {
-		result[0] = result[1] = result[2] = 0.0;
+		result[0] = result[1] = result[2] = result[3] = 0.0;
 	}
 	
 	// Accumulate statistics for comparing old vs new methods
@@ -1706,7 +1719,8 @@ double AppAdditiveExtTempTexture::melt_misorientation(int site, double c1, doubl
 	double mobOut;
 
 	//Calculate the unit-vector surface norm (use voxel counting)
-	vector<double> grad_vector = normal_finder(site);
+	vector<double> grad_full = normal_finder(site);  // Returns [norm_x, norm_y, norm_z, magnitude]
+	vector<double> grad_vector = {grad_full[0], grad_full[1], grad_full[2]};  // Extract direction only
 	
 	// Create quaternion vector from site's orientation
 	vector<double> q_site = {q0[site], qx[site], qy[site], qz[site]};

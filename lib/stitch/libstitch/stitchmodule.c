@@ -560,21 +560,21 @@ static PyObject * stitch_read_block_wrapper (PyObject * self, PyObject * args)
             state_descr = PyArray_DescrFromType (NPY_INT32);
             state_ret = PyArray_NewFromDescr (&PyArray_Type, state_descr, nd, nyp_new_dims, NULL, NULL, flags, NULL);
             state_i32 = (int32_t *) PyArray_DATA ((PyArrayObject *) state_ret);
-            assert (state);
+            assert (state_i32);
             break;
 
         case STITCH_INT64:
             state_descr = PyArray_DescrFromType (NPY_INT64);
             state_ret = PyArray_NewFromDescr (&PyArray_Type, state_descr, nd, nyp_new_dims, NULL, NULL, flags, NULL);
             state_i64 = (int64_t *) PyArray_DATA ((PyArrayObject *) state_ret);
-            assert (state);
+            assert (state_i64);
             break;
 
         case STITCH_FLOAT64:
             state_descr = PyArray_DescrFromType (NPY_FLOAT64);
             state_ret = PyArray_NewFromDescr (&PyArray_Type, state_descr, nd, nyp_new_dims, NULL, NULL, flags, NULL);
             state_f64 = (double *) PyArray_DATA ((PyArrayObject *) state_ret);
-            assert (state);
+            assert (state_f64);
             break;
 
         case STITCH_NO_TYPE:

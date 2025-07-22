@@ -22,7 +22,6 @@ AppStyle(additive_temperature_texture,AppAdditiveExtTempTexture)
 #include "app_potts_quaternion.h"
 #include "temperatureQueues.h"
 #include "temperature_source.h"
-#include "hdf5.h"
 #include <stdlib.h>
 #include <string>
 #include <map>
@@ -59,12 +58,7 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   void setup_scan_path_cmd(int narg, char **arg);
   void update_temperature_from_source(double simulation_time);
   
-  // Legacy HDF5 temperature methods
-  virtual void reduced_temperature_hdf();
-  virtual void reduced_temperature_hdf_chunked();
-  void load_data_counts_array();
   int xyz_to_local( double x, double y, double z );
-  virtual void temperature_time_interpolate(int, double);
 	std::vector<std::vector<std::vector<int>>> convert_to_3d_array_with_range(std::vector<int>&,int,int,int,int,int,int);
 
  protected:
@@ -133,40 +127,7 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   bool use_temperature_source;  // Flag to enable new modular system
   double fast_forward_search_window;  // Search window for fast-forward (default 0.1s)
   
-  // Temperature file handling variables (legacy HDF5 system)
-  DoubleQueueContainer temp_in;
-  DoubleQueueContainer time_in;
-  double prior_time;
   int t_active;
-
-  // HDF5 chunked reading variables
-  hid_t hdf5_file_id;
-  hid_t hdf5_temp_dataset;
-  hid_t hdf5_time_dataset;
-  hid_t hdf5_count_dataset;
-  double chunk_time_window;
-  double current_chunk_start_time;
-  double current_chunk_end_time;
-  bool hdf5_file_open;
-  std::vector<std::vector<std::vector<int>>> data_counts_array;
-  
-  // Cache time ranges to avoid re-reading time data
-  std::vector<std::vector<std::vector<std::vector<double>>>> cached_time_values;
-  std::vector<std::vector<std::vector<bool>>> time_cache_loaded;
-  
-  // HDF5 bounds checking variables
-  int bounds_check_mode; // 0 = exact match, 1 = subvolume
-  hsize_t hdf5_dims[3];  // HDF5 data dimensions from data_counts
-  double hdf5_origin[3]; // HDF5 data origin from x0 field
-  bool bounds_validated;
-  
-  void load_next_chunk();
-  void close_hdf5_file();
-  bool needs_new_chunk(double simulation_time);
-  void initialize_time_cache();
-  void fill_missing_temperature_data();
-  void validate_simulation_bounds();
-  void get_hdf5_dimensions();
 
 };
 

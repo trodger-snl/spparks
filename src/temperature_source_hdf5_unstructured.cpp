@@ -680,7 +680,9 @@ unsigned HDF5UnstructuredTemperatureSource::get_active_layer(double t) const
   auto idx = std::distance(layerTimes.begin(), lower);
   unsigned layer_idx = (idx == 0) ? 0 : idx - 1;
 
-  // Debug output when layer changes
+  // Commented out to reduce runtime output spam
+  // Uncomment below for detailed layer switching debug information
+  /*
   if (universe->me == 0 && (std::abs(t - last_t) > 1e-10 || layer_idx != last_layer)) {
     fprintf(screen, "Layer determination: time=%.6e s -> layer %u (range: %.6e to %.6e s)\n",
             t, layer_idx,
@@ -689,6 +691,7 @@ unsigned HDF5UnstructuredTemperatureSource::get_active_layer(double t) const
     last_t = t;
     last_layer = layer_idx;
   }
+  */
 
   return layer_idx;
 }

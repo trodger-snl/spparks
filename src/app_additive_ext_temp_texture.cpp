@@ -123,9 +123,18 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     
     // Debug defaults
     normal_finder_debug = 0; // Off by default
-    
+
+    // Void generation defaults
+    enable_voids = 0;              // Disabled by default
+    void_density = 0.0;            // No voids by default
+    void_pore_fraction = -1.0;     // -1.0 means not specified
+    void_radius_mean = 75.0;       // 75 micrometers
+    void_radius_std = 25.0;        // 25 micrometers
+    void_radius_min = 0.0;         // 0 micrometers
+    void_radius_max = 150.0;       // 150 micrometers
+
     // Initialize bounds checking variables
-    
+
     // Initialize modular temperature source system
     temperature_source = nullptr;
     use_temperature_source = true;  // Always use modular temperature system
@@ -244,7 +253,44 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
      if (fast_forward_search_window <= 0.0)
        error->all(FLERR,"Illegal fast_forward_search_window value: must be > 0");
   }
-  
+
+  // Void generation commands
+  else if (strcmp(command,"void_density") == 0) {
+    if (narg != 1) error->all(FLERR,"Illegal void_density command");
+    if (void_pore_fraction > 0.0)
+      error->all(FLERR,"Cannot specify both void_density and void_pore_fraction");
+    void_density = atof(arg[0]);
+    if (void_density < 0.0)
+      error->all(FLERR,"Illegal void_density value: must be >= 0");
+    enable_voids = (void_density > 0.0) ? 1 : 0;
+  }
+  else if (strcmp(command,"void_pore_fraction") == 0) {
+    if (narg != 1) error->all(FLERR,"Illegal void_pore_fraction command");
+    if (void_density > 0.0)
+      error->all(FLERR,"Cannot specify both void_density and void_pore_fraction");
+    void_pore_fraction = atof(arg[0]);
+    if (void_pore_fraction < 0.0 || void_pore_fraction >= 1.0)
+      error->all(FLERR,"Illegal void_pore_fraction value: must be in range [0.0, 1.0)");
+    if (void_pore_fraction > 0.3 && domain->me == 0)
+      fprintf(screen,"Warning: void_pore_fraction = %.3f is unrealistically high (>30%%)\n", void_pore_fraction);
+    enable_voids = (void_pore_fraction > 0.0) ? 1 : 0;
+  }
+  else if (strcmp(command,"void_size_distribution") == 0) {
+    if (narg != 4) error->all(FLERR,"Illegal void_size_distribution command");
+    void_radius_mean = atof(arg[0]);
+    void_radius_std = atof(arg[1]);
+    void_radius_min = atof(arg[2]);
+    void_radius_max = atof(arg[3]);
+    if (void_radius_mean <= 0.0)
+      error->all(FLERR,"Illegal void_size_distribution: mean must be > 0");
+    if (void_radius_std < 0.0)
+      error->all(FLERR,"Illegal void_size_distribution: std must be >= 0");
+    if (void_radius_min < 0.0)
+      error->all(FLERR,"Illegal void_size_distribution: min must be >= 0");
+    if (void_radius_max <= void_radius_min)
+      error->all(FLERR,"Illegal void_size_distribution: max must be > min");
+  }
+
   // Modular temperature source commands
   else if (strcmp(command,"setup_temperature_source") == 0) {
     setup_temperature_source_cmd(narg, arg);
@@ -252,7 +298,7 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
   else if (strcmp(command,"scan_path") == 0) {
     setup_scan_path_cmd(narg, arg);
   }
-  
+
   else error->all(FLERR,"Unrecognized command");
 }
 
@@ -312,10 +358,12 @@ void AppAdditiveExtTempTexture::app_update(double dt)
   // Common processing for both temperature systems
   
   //iterate through all the sites for phase transitions (applies to both systems)
-  for (int i=0; i<nlocal; i++) {    
-    
+  for (int i=0; i<nlocal; i++) {
+    // Skip void sites - they never change state
+    if (active_flag[i] == 5) continue;
+
     //Turn the sites on/off depending on the phase data and whether or not the
-    //site's temperature has gone above tl. Only do this when melting the first time 
+    //site's temperature has gone above tl. Only do this when melting the first time
     //to avoid repeated initialization
     if( (T[i] >= tl) && active_flag[i] != 2) {
         active_flag[i] = 2;
@@ -443,6 +491,7 @@ void AppAdditiveExtTempTexture::init_app()
   sites = new int[1 + maxneigh];
   unique = new int[1 + maxneigh];
   unique_neigh = new int[1 + maxneigh];
+  int invalid_count = 0;
   
   dt_sweep = 1.0 / maxneigh;
   
@@ -469,8 +518,9 @@ void AppAdditiveExtTempTexture::init_app()
   int flag = 0;
 	int flagall;
     for (int i = 0; i < nlocal; i++) {
-			if (spin[i] < 1 || spin[i] > nspins) {
+			if (spin[i] < 0 || spin[i] > nspins) {
 				flag = 1;
+        fprintf(screen,"Bad spin %i\n",spin[i]);
 			}
       if (active_flag[i] != 3) { 
         // Create random orientation at each site that wasn't read as solid from input file
@@ -564,6 +614,11 @@ void AppAdditiveExtTempTexture::init_app()
     std::cout << "Using solidus temperature ts = " << ts << " K" << std::endl;
   }
 
+  // Generate voids if enabled
+  if (enable_voids) {
+    generate_voids(ranapp);
+  }
+
 	this->app_update(0.0);
 }
 
@@ -575,7 +630,13 @@ void AppAdditiveExtTempTexture::init_app()
 
 double AppAdditiveExtTempTexture::site_energy(int i) {
   timer->stamp();
-  
+
+  // Voids have no energy
+  if (active_flag[i] == 5) {
+    timer->stamp(TIME_SOLVE);
+    return 0.0;
+  }
+
   // Condition 1: If active_flag != 3 (not solidified), return zero energy
   if (active_flag[i] != 3) {
     timer->stamp(TIME_SOLVE);
@@ -588,9 +649,9 @@ double AppAdditiveExtTempTexture::site_energy(int i) {
   
   for (int j = 0; j < numneigh[i]; j++) {
     int nj = neighbor[i][j];
-    
-    // Condition 2: Exclude neighbors with active_flag != 3 or 1
-    if (active_flag[nj] != 3 || active_flag[nj] != 1) {
+
+    // Exclude void neighbors and non-solidified neighbors
+    if (active_flag[nj] == 5 || (active_flag[nj] != 3 && active_flag[nj] != 1)) {
       continue;
     }
     
@@ -624,7 +685,13 @@ double AppAdditiveExtTempTexture::site_energy(int i) {
 void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
 {
   timer->stamp();
-  
+
+  // Skip void sites - they never participate in Monte Carlo events
+  if (active_flag[i] == 5) {
+    timer->stamp(TIME_SOLVE);
+    return;
+  }
+
   int oldstate = spin[i];
   SiteState s_old(spin[i], {q0[i], qx[i], qy[i], qz[i]});
   double einitial = site_energy(i);
@@ -647,6 +714,8 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
     if(solid_d[i] < 0 && solid_d[i] > -nrefine -1) {
         //Go through neighbor list and add them to possible switches
         for (int j = 0; j < numneigh[i]; j++) {
+            // Exclude void neighbors
+            if(active_flag[neighbor[i][j]] == 5) continue;
             if(active_flag[neighbor[i][j]] == 3 || active_flag[neighbor[i][j]] == 1) {
                 // Calculate temperature gradient/grain misorientation and store in array
                 // Use cumulative probability for random sampling
@@ -751,9 +820,12 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
 THIS NEEDS UPDATED TO INCLUDE TEXTURE
 ------------------------------------------------------------------------- */
 void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
+    // Skip void sites - they never change state
+    if (active_flag[i] == 5) return;
+
     double Tcool = tl - T[i];
 
-    
+
     //Our site should always be molten and below tl
     //Check if it's eligible to nucleate
     if(nucleation_flags[spin[i]]) {
@@ -806,6 +878,8 @@ void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, R
     if (numneigh[i] < 26) solidNeigh = 1;
     else {
       for (int j = 0; j < numneigh[i]; j++) {
+        // Exclude void neighbors
+        if(active_flag[neighbor[i][j]] == 5) continue;
         if(active_flag[neighbor[i][j]] == 3 || active_flag[neighbor[i][j]] == 1) {
           solidNeigh = 1;
           break;
@@ -822,6 +896,8 @@ void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, R
     
       //Go through neighbor list and add them to possible switches
       for (int j = 0; j < numneigh[i]; j++) {
+          // Exclude void neighbors
+          if(active_flag[neighbor[i][j]] == 5) continue;
           if(neigh_dist[2] <= solid_d[i] && (active_flag[neighbor[i][j]] == 1 || active_flag[neighbor[i][j]] == 3)) {
               // Calculate temperature gradient/grain misorientation and store in array
               // Use cumulative probability for random sampling
@@ -1051,6 +1127,8 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
     //If we still haven't satisfied the particle size, pick a neighbor at random and solidify from there.
     //Build a list of same-particle neighbors and pick one randomly
     for(int j =0; j < numneigh[i]; j++) {
+        // Exclude void neighbors
+        if(active_flag[neighbor[i][j]] == 5) continue;
         if(spin[neighbor[i][j]] == spin[i] && active_flag[neighbor[i][j]] == 3) {
             possible_neigh[nneigh] = j;
             nneigh++;
@@ -1407,20 +1485,39 @@ std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
 
 /* ----------------------------------------------------------------------
    Find all neighbors with a given spin value and return their average quaternion
-   
+
    This function searches through all neighbors of a site, finds those with
    the specified spin value, and computes the average of their quaternion
-   orientations. Includes dot product check to ensure all quaternions are
-   in the same hemisphere before averaging.
-   
-   Inputs: 
+   orientations.
+
+   AVERAGING METHOD: Uses simple arithmetic averaging with hemisphere alignment.
+   This is a simplified approach that is computationally efficient but has
+   limitations compared to more sophisticated methods like Markley's algorithm
+   (eigenvalue-based averaging).
+
+   APPLICABILITY: Simple averaging is acceptable when:
+   - Quaternions being averaged differ by < 10 degrees (typical for same-grain neighbors)
+   - Computational efficiency is important
+   - Use case: post-solidification smoothing within the same grain
+
+   LIMITATIONS: For quaternions with large angular differences (> 10 degrees),
+   simple averaging can introduce errors up to ~5 degrees. For higher accuracy
+   requirements, consider implementing Markley's algorithm (2007) which uses
+   eigenvalue decomposition of a 4x4 accumulator matrix.
+
+   Reference: https://stackoverflow.com/questions/12374087/average-of-multiple-quaternions
+
+   Inputs:
      site - the site index to check neighbors of
      target_spin - the spin value to search for in neighbors
-   
+
    Returns:
      std::vector<double> containing [q0, qx, qy, qz] - the average quaternion
-     If no neighbors with target_spin are found, returns [1,0,0,0] identity quaternion
-     If quaternions are in different hemispheres, returns empty vector to indicate error
+
+   ERROR HANDLING:
+     If no neighbors with target_spin are found, this is an error condition
+     (function should only be called when such neighbors exist) and will
+     terminate the simulation with an error message.
 ------------------------------------------------------------------------- */
 std::vector<double> AppAdditiveExtTempTexture::get_average_neighbor_quaternion(int site, int target_spin)
 {
@@ -1451,30 +1548,45 @@ std::vector<double> AppAdditiveExtTempTexture::get_average_neighbor_quaternion(i
                 ref_qy = nqy;
                 ref_qz = nqz;
                 first_found = true;
+
+                // Add first quaternion to sum
+                sum_q0 += nq0;
+                sum_qx += nqx;
+                sum_qy += nqy;
+                sum_qz += nqz;
+                count++;
             } else {
                 // Check dot product with reference quaternion
                 double dot = ref_q0*nq0 + ref_qx*nqx + ref_qy*nqy + ref_qz*nqz;
-                
-                // If dot product is negative, quaternions are in opposite hemispheres
+
+                // If dot product is negative, flip the quaternion to same hemisphere
+                // q and -q represent the same orientation, so this is valid
                 if (dot < 0.0) {
-                    // Return empty vector to indicate error
-                    error->warning(FLERR, "get_average_neighbor_quaternion: Quaternions in different hemispheres detected");
-                    return std::vector<double>();  // Empty vector indicates error
+                    nq0 = -nq0;
+                    nqx = -nqx;
+                    nqy = -nqy;
+                    nqz = -nqz;
                 }
+
+                // Add this neighbor's quaternion to the sum (possibly flipped)
+                sum_q0 += nq0;
+                sum_qx += nqx;
+                sum_qy += nqy;
+                sum_qz += nqz;
+                count++;
             }
-            
-            // Add this neighbor's quaternion to the sum
-            sum_q0 += nq0;
-            sum_qx += nqx;
-            sum_qy += nqy;
-            sum_qz += nqz;
-            count++;
         }
     }
     
-    // If no neighbors with target spin found, return identity quaternion
+    // If no neighbors with target spin found, this is an error
+    // This function should only be called when such neighbors exist
     if (count == 0) {
-        return std::vector<double>{1.0, 0.0, 0.0, 0.0};
+        char error_msg[256];
+        snprintf(error_msg, sizeof(error_msg),
+                "get_average_neighbor_quaternion: No neighbors found with target spin %d at site %d. "
+                "This function should only be called when neighbors with the target spin exist.",
+                target_spin, site);
+        error->all(FLERR, error_msg);
     }
     
     // Compute average
@@ -1617,12 +1729,228 @@ void AppAdditiveExtTempTexture::nucleation_init() {
     std::normal_distribution<> dist_S{size_norm,size_sig};
     std::random_device rd{};
     std::mt19937 gen{rd()};
-    
+
     // Randomly assign critical temperature to every spin
     for(int i = 0; i < nspins; i++) {
         nucleation_temps[i] = dist_T(gen);
         nucleation_sizes[i] = dist_S(gen);
     }
+}
+
+/* ----------------------------------------------------------------------
+   Generate spherical voids in the domain based on volumetric density
+   and size distribution. Voids are represented by activeFlag = 5.
+   Generation happens on rank 0, then void list is broadcast to all ranks.
+------------------------------------------------------------------------- */
+void AppAdditiveExtTempTexture::generate_voids(RandomPark *random) {
+    timer->stamp();
+
+    if (!enable_voids) {
+        timer->stamp(TIME_APP);
+        return;
+    }
+
+    // Calculate domain volume and number of voids
+    double domain_volume = 0.0;
+    int num_voids = 0;
+
+    if (domain->me == 0) {
+        // Get global domain bounds
+        double xlen = domain->boxxhi - domain->boxxlo;
+        double ylen = domain->boxyhi - domain->boxylo;
+        double zlen = domain->boxzhi - domain->boxzlo;
+        domain_volume = xlen * ylen * zlen;  // in m^3
+
+        // If pore fraction was specified, calculate void_density from it
+        if (void_pore_fraction > 0.0) {
+            double r_mean_m = void_radius_mean * 1e-6;  // Convert μm to m
+            double avg_void_volume = (4.0/3.0) * M_PI * pow(r_mean_m, 3);
+            void_density = void_pore_fraction / avg_void_volume;
+
+            fprintf(screen, "Target pore fraction: %.4f (%.2f%%)\n",
+                    void_pore_fraction, void_pore_fraction * 100.0);
+            fprintf(screen, "Calculated void density: %.3e voids/m^3\n", void_density);
+        }
+
+        // Calculate expected number of voids
+        num_voids = static_cast<int>(void_density * domain_volume + 0.5);
+
+        if (num_voids > 0) {
+            fprintf(screen, "Generating %d voids in domain volume %.3e m^3\n",
+                    num_voids, domain_volume);
+            fprintf(screen, "Void size distribution: mean=%.1f um, std=%.1f um, min=%.1f um, max=%.1f um\n",
+                    void_radius_mean, void_radius_std, void_radius_min, void_radius_max);
+        }
+    }
+
+    // Broadcast number of voids to all ranks
+    MPI_Bcast(&num_voids, 1, MPI_INT, 0, world);
+
+    if (num_voids == 0) {
+        timer->stamp(TIME_APP);
+        return;
+    }
+
+    // Generate voids on rank 0
+    if (domain->me == 0) {
+        voids.clear();
+        voids.reserve(num_voids);
+
+        // Setup random number generator for Gaussian distribution
+        std::random_device rd{};
+        std::mt19937 gen{rd()};
+        std::normal_distribution<double> radius_dist(void_radius_mean, void_radius_std);
+
+        // Convert micrometers to meters for radius bounds
+        double r_min_m = void_radius_min * 1e-6;
+        double r_max_m = void_radius_max * 1e-6;
+
+        int max_placement_attempts = 1000;
+        int successful_placements = 0;
+        int total_attempts = 0;
+
+        for (int ivoid = 0; ivoid < num_voids; ivoid++) {
+            bool placed = false;
+            int attempts = 0;
+
+            while (!placed && attempts < max_placement_attempts) {
+                attempts++;
+                total_attempts++;
+
+                // Sample radius from truncated Gaussian (convert um to m)
+                double radius_m;
+                do {
+                    radius_m = radius_dist(gen) * 1e-6;
+                } while (radius_m < r_min_m || radius_m > r_max_m);
+
+                // Pick random center location in domain
+                double x = domain->boxxlo + random->uniform() * (domain->boxxhi - domain->boxxlo);
+                double y = domain->boxylo + random->uniform() * (domain->boxyhi - domain->boxylo);
+                double z = domain->boxzlo + random->uniform() * (domain->boxzhi - domain->boxzlo);
+
+                // Check for collision with existing voids
+                bool collides = false;
+                for (const auto& existing_void : voids) {
+                    double dx_v = x - existing_void.x;
+                    double dy_v = y - existing_void.y;
+                    double dz_v = z - existing_void.z;
+                    double dist = sqrt(dx_v*dx_v + dy_v*dy_v + dz_v*dz_v);
+                    double min_dist = radius_m + existing_void.radius;
+
+                    if (dist < min_dist) {
+                        collides = true;
+                        break;
+                    }
+                }
+
+                if (!collides) {
+                    voids.emplace_back(x, y, z, radius_m);
+                    placed = true;
+                    successful_placements++;
+                }
+            }
+
+            if (!placed) {
+                fprintf(screen, "Warning: Could not place void %d after %d attempts\n",
+                        ivoid, max_placement_attempts);
+            }
+        }
+
+        fprintf(screen, "Successfully placed %d/%d voids (total attempts: %d)\n",
+                successful_placements, num_voids, total_attempts);
+    }
+
+    // Broadcast void count (may be less than num_voids if placements failed)
+    int actual_void_count = voids.size();
+    MPI_Bcast(&actual_void_count, 1, MPI_INT, 0, world);
+
+    // Prepare void data for broadcast (x, y, z, radius for each void)
+    std::vector<double> void_data;
+    if (domain->me == 0) {
+        void_data.resize(actual_void_count * 4);
+        for (int i = 0; i < actual_void_count; i++) {
+            void_data[i*4 + 0] = voids[i].x;
+            void_data[i*4 + 1] = voids[i].y;
+            void_data[i*4 + 2] = voids[i].z;
+            void_data[i*4 + 3] = voids[i].radius;
+        }
+    } else {
+        void_data.resize(actual_void_count * 4);
+    }
+
+    // Broadcast void data to all ranks
+    if (actual_void_count > 0) {
+        MPI_Bcast(void_data.data(), actual_void_count * 4, MPI_DOUBLE, 0, world);
+
+        // Reconstruct void list on other ranks
+        if (domain->me != 0) {
+            voids.clear();
+            voids.reserve(actual_void_count);
+            for (int i = 0; i < actual_void_count; i++) {
+                voids.emplace_back(void_data[i*4 + 0], void_data[i*4 + 1],
+                                   void_data[i*4 + 2], void_data[i*4 + 3]);
+            }
+        }
+    }
+
+    // Each rank sets activeFlag = 5 for sites within voids
+    int sites_in_voids = 0;
+    for (int i = 0; i < nlocal; i++) {
+        // Get site coordinates
+        double site_x = xyz[i][0];
+        double site_y = xyz[i][1];
+        double site_z = xyz[i][2];
+
+        // Check if site is inside any void
+        for (const auto& void_obj : voids) {
+            double dx_s = site_x - void_obj.x;
+            double dy_s = site_y - void_obj.y;
+            double dz_s = site_z - void_obj.z;
+            double dist_sq = dx_s*dx_s + dy_s*dy_s + dz_s*dz_s;
+
+            if (dist_sq <= void_obj.radius * void_obj.radius) {
+                // Site is inside this void
+                active_flag[i] = 5;
+                sites_in_voids++;
+                break;  // No need to check other voids
+            }
+        }
+    }
+
+    // Report statistics
+    int global_sites_in_voids = 0;
+    MPI_Reduce(&sites_in_voids, &global_sites_in_voids, 1, MPI_INT, MPI_SUM, 0, world);
+
+    if (domain->me == 0 && actual_void_count > 0) {
+        fprintf(screen, "Total sites marked as voids: %d\n", global_sites_in_voids);
+
+        // Post-generation verification: calculate actual pore fraction
+        double total_void_volume = 0.0;
+        for (const auto& v : voids) {
+            total_void_volume += (4.0/3.0) * M_PI * pow(v.radius, 3);
+        }
+
+        double xlen = domain->boxxhi - domain->boxxlo;
+        double ylen = domain->boxyhi - domain->boxylo;
+        double zlen = domain->boxzhi - domain->boxzlo;
+        double domain_vol = xlen * ylen * zlen;
+
+        double actual_pore_fraction = total_void_volume / domain_vol;
+
+        fprintf(screen, "\nVoid generation verification:\n");
+        fprintf(screen, "  Actual pore fraction: %.4f (%.2f%%)\n",
+                actual_pore_fraction, actual_pore_fraction * 100.0);
+
+        if (void_pore_fraction > 0.0) {
+            double error_pct = 100.0 * (actual_pore_fraction - void_pore_fraction) / void_pore_fraction;
+            fprintf(screen, "  Target pore fraction: %.4f (%.2f%%)\n",
+                    void_pore_fraction, void_pore_fraction * 100.0);
+            fprintf(screen, "  Relative error: %.2f%%\n", error_pct);
+        }
+        fprintf(screen, "\n");
+    }
+
+    timer->stamp(TIME_APP);
 }
 
 /**

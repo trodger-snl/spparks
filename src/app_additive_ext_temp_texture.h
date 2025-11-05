@@ -52,16 +52,27 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   std::vector<double> get_average_neighbor_quaternion(int site, int target_spin);
   void smooth_site(int site);
   double site_energy_smooth(int site);
-  
+
   // Modular temperature source methods
   void setup_temperature_source_cmd(int narg, char **arg);
   void setup_scan_path_cmd(int narg, char **arg);
   void update_temperature_from_source(double simulation_time);
-  
+
+  // Void generation methods
+  void generate_voids(class RandomPark *);
+
   int xyz_to_local( double x, double y, double z );
 	std::vector<std::vector<std::vector<int>>> convert_to_3d_array_with_range(std::vector<int>&,int,int,int,int,int,int);
 
  protected:
+	// Void structure for tracking spherical voids
+	struct Void {
+		double x, y, z;  // Center coordinates
+		double radius;   // Radius in meters
+
+		Void(double x_, double y_, double z_, double r_)
+			: x(x_), y(y_), z(z_), radius(r_) {}
+	};
 
 	double *mobility_out;
 	double *solid_d;
@@ -70,7 +81,7 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
     int time_index;
     double dtFD;
  	// Active flag for site visualization and state tracking
- 	// 0: inactive, 1: active layer, 2: molten, 3: solidified
+ 	// 0: inactive, 1: active layer, 2: molten, 3: solidified, 5: void
  	int *active_flag;
  	double read_interval;
  	const double R = 8.314459848; // Gas constant (J/mol/K)
@@ -121,6 +132,16 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
 	double *nucleation_temps;
 	double *nucleation_sizes;
   std::string temp_file_string;
+
+  // Void generation parameters
+  double void_density;           // Voids per cubic meter
+  double void_pore_fraction;     // Volumetric pore fraction (0.0 to 1.0)
+  double void_radius_mean;       // Mean radius in micrometers
+  double void_radius_std;        // Standard deviation in micrometers
+  double void_radius_min;        // Minimum radius in micrometers
+  double void_radius_max;        // Maximum radius in micrometers
+  int enable_voids;              // Flag to enable void generation (0=off, 1=on)
+  std::vector<Void> voids;       // List of generated voids for collision detection
 
   // Modular temperature source interface
   std::unique_ptr<TemperatureSource> temperature_source;

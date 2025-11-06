@@ -1,0 +1,146 @@
+# Spack Environment Configuration for SPPARKS
+#
+# This file defines a portable environment for building SPPARKS across
+# different platforms (macOS ARM, Linux x86).
+#
+# Quick Start:
+#   spack env create spparks-dev spack.yaml
+#   spack env activate spparks-dev
+#   spack install
+#
+# See README_SPACK.md for detailed instructions.
+
+spack:
+  # Package specifications
+  # These are abstract specs that work across platforms
+  specs:
+    # MPI implementation - OpenMPI with C++ bindings
+    - openmpi@4.1:+cxx
+
+    # HDF5 with parallel support, high-level API, and compression
+    - hdf5@1.12:+mpi+hl+szip ^openmpi
+
+    # HighFive C++ wrapper for HDF5
+    # Note: If using CMake FetchContent for HighFive, this may not be needed
+    - highfive@2.8: ^hdf5+mpi
+
+    # Image libraries
+    - libjpeg
+    - libpng
+
+    # Compression library (provides gzip functionality)
+    - zlib
+
+    # Build tools
+    - cmake@3.20:
+    - gmake
+
+  # Package-level configuration
+  packages:
+    all:
+      # Compiler preference
+      # macOS: apple-clang or gcc from Homebrew
+      # Linux: gcc (system or Spack-provided)
+      compiler: [gcc@11:, gcc@10:, apple-clang@14:, clang@15:]
+
+      # Target optimization
+      # Spack auto-detects: m1/m2 for ARM, x86_64_v3 for Intel/AMD
+      # Set explicitly if needed: target: [x86_64_v3]
+
+    # Ensure OpenMPI is used consistently across all MPI-dependent packages
+    mpi:
+      require: [openmpi@4.1:]
+
+    # HDF5 must always be parallel with high-level API
+    hdf5:
+      require: +mpi+hl
+      variants: +szip
+
+    # CMake: Allow newer versions
+    cmake:
+      version: [3.20:]
+
+  # Concretization settings
+  concretizer:
+    # Unify: ensure single version of each package across environment
+    # This prevents multiple versions of OpenMPI, HDF5, etc.
+    unify: true
+
+    # Reuse: speed up builds by reusing existing Spack installations
+    reuse: true
+
+  # View: create a merged directory tree with all dependencies
+  # This simplifies CMAKE_PREFIX_PATH configuration
+  view:
+    default:
+      root: ./view
+      link: all
+      projections:
+        all: "{name}/{version}"
+
+  # Module file generation (optional)
+  # Generates environment-modules compatible files in user space
+  # No admin permissions required
+  modules:
+    default:
+      enable: [tcl]
+      roots:
+        tcl: $spack_env/modules
+
+      tcl:
+        # Use 7-character hash in module names for uniqueness
+        hash_length: 7
+
+        # Hide compiler and low-level dependencies from module list
+        hide_implicits: true
+
+        # Default configuration for all packages
+        all:
+          # Automatically load direct dependencies
+          autoload: direct
+
+          # Set package root environment variable
+          environment:
+            set:
+              '{name}_ROOT': '{prefix}'
+
+          # Prevent loading multiple versions
+          conflict:
+            - '{name}'
+
+        # MPI-specific environment variables
+        openmpi:
+          environment:
+            set:
+              MPICC: '{prefix}/bin/mpicc'
+              MPICXX: '{prefix}/bin/mpicxx'
+              MPIFORT: '{prefix}/bin/mpifort'
+              MPI_ROOT: '{prefix}'
+
+        # HDF5-specific environment variables
+        hdf5:
+          environment:
+            set:
+              HDF5_ROOT: '{prefix}'
+              HDF5_DIR: '{prefix}'
+
+  # Environment variables
+  # These are automatically set when the environment is activated
+  env_vars:
+    set:
+      # Mark this as the SPPARKS development environment
+      SPPARKS_ENV: $SPACK_ENV
+
+    prepend_path:
+      # CMAKE_PREFIX_PATH: Help CMake find all dependencies
+      CMAKE_PREFIX_PATH: $SPACK_ENV/.spack-env/view
+
+      # PKG_CONFIG_PATH: Help pkg-config find libraries
+      PKG_CONFIG_PATH: $SPACK_ENV/.spack-env/view/lib/pkgconfig
+
+      # PATH: Access to MPI compilers and tools
+      PATH: $SPACK_ENV/.spack-env/view/bin
+
+      # Library paths (usually not needed with proper RPATH)
+      LD_LIBRARY_PATH: $SPACK_ENV/.spack-env/view/lib
+      DYLD_LIBRARY_PATH: $SPACK_ENV/.spack-env/view/lib

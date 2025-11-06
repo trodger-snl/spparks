@@ -103,6 +103,7 @@ option(SPPARKS_ENABLE_JPEG "Enable JPEG support" ON)
 option(SPPARKS_ENABLE_PNG "Enable PNG support" OFF)
 option(SPPARKS_ENABLE_HDF5 "Enable HDF5 support" OFF)
 option(SPPARKS_ENABLE_HIGHFIVE "Enable HighFive C++ HDF5 wrapper" OFF)
+option(SPPARKS_USE_EXTERNAL_HIGHFIVE "Use system-provided HighFive instead of FetchContent" OFF)
 option(SPPARKS_UNORDERED_MAP "Use unordered_map" OFF)
 
 # Performance options
@@ -202,10 +203,10 @@ if(SPPARKS_ENABLE_HIGHFIVE)
     if(NOT SPPARKS_ENABLE_HDF5)
         message(STATUS "HighFive requires HDF5 - enabling HDF5 automatically")
         set(SPPARKS_ENABLE_HDF5 ON CACHE BOOL "Enable HDF5 support" FORCE)
-        
+
         # Add cmake module path for enhanced HDF5 finder
         list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-        
+
         find_package(HDF5Enhanced REQUIRED)
         if(HDF5_FOUND)
             add_compile_definitions(SPPARKS_HDF)
@@ -220,28 +221,42 @@ if(SPPARKS_ENABLE_HIGHFIVE)
             message(FATAL_ERROR "HDF5 was requested but not found")
         endif()
     endif()
-    
-    # Fetch HighFive using FetchContent
-    include(FetchContent)
-    
-    FetchContent_Declare(
-        HighFive
-        GIT_REPOSITORY https://github.com/BlueBrain/HighFive.git
-        GIT_TAG        v2.9.0  # Use latest stable version
-        GIT_SHALLOW    TRUE
-    )
-    
-    # Configure HighFive options
-    set(HIGHFIVE_EXAMPLES OFF CACHE BOOL "Enable HighFive examples")
-    set(HIGHFIVE_UNIT_TESTS OFF CACHE BOOL "Enable HighFive unit tests")
-    set(HIGHFIVE_USE_BOOST OFF CACHE BOOL "Enable Boost support in HighFive")
-    set(HIGHFIVE_USE_EIGEN OFF CACHE BOOL "Enable Eigen support in HighFive")
-    set(HIGHFIVE_USE_XTENSOR OFF CACHE BOOL "Enable xtensor support in HighFive")
-    set(HIGHFIVE_USE_OPENCV OFF CACHE BOOL "Enable OpenCV support in HighFive")
-    
-    # Make HighFive available
-    FetchContent_MakeAvailable(HighFive)
-    
+
+    # Use external HighFive or fetch from source
+    if(SPPARKS_USE_EXTERNAL_HIGHFIVE)
+        # Try to find system-provided HighFive (e.g., from Spack, Homebrew, or system package manager)
+        find_package(HighFive QUIET CONFIG)
+
+        if(HighFive_FOUND)
+            message(STATUS "Using system-provided HighFive")
+        else()
+            message(FATAL_ERROR "SPPARKS_USE_EXTERNAL_HIGHFIVE is ON but HighFive was not found. "
+                               "Please install HighFive or set SPPARKS_USE_EXTERNAL_HIGHFIVE=OFF to use FetchContent.")
+        endif()
+    else()
+        # Fetch HighFive using FetchContent
+        message(STATUS "Fetching HighFive from GitHub")
+        include(FetchContent)
+
+        FetchContent_Declare(
+            HighFive
+            GIT_REPOSITORY https://github.com/BlueBrain/HighFive.git
+            GIT_TAG        v2.9.0  # Use latest stable version
+            GIT_SHALLOW    TRUE
+        )
+
+        # Configure HighFive options
+        set(HIGHFIVE_EXAMPLES OFF CACHE BOOL "Enable HighFive examples")
+        set(HIGHFIVE_UNIT_TESTS OFF CACHE BOOL "Enable HighFive unit tests")
+        set(HIGHFIVE_USE_BOOST OFF CACHE BOOL "Enable Boost support in HighFive")
+        set(HIGHFIVE_USE_EIGEN OFF CACHE BOOL "Enable Eigen support in HighFive")
+        set(HIGHFIVE_USE_XTENSOR OFF CACHE BOOL "Enable xtensor support in HighFive")
+        set(HIGHFIVE_USE_OPENCV OFF CACHE BOOL "Enable OpenCV support in HighFive")
+
+        # Make HighFive available
+        FetchContent_MakeAvailable(HighFive)
+    endif()
+
     add_compile_definitions(SPPARKS_HIGHFIVE)
     message(STATUS "HighFive C++ HDF5 wrapper enabled")
 endif()

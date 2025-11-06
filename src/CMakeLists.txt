@@ -408,6 +408,12 @@ set(SPPARKS_SOURCES
 include(cmake/ConditionalSources.cmake)
 configure_conditional_sources()
 
+# Add package-specific sources
+if(SPPARKS_PACKAGE_STITCH)
+    list(APPEND SPPARKS_SOURCES dump_stitch.cpp)
+    message(STATUS "Added dump_stitch.cpp to sources")
+endif()
+
 # Generate style headers after all dependencies are resolved
 include(cmake/generate_styles.cmake)
 generate_style_headers()
@@ -449,7 +455,14 @@ if(SPPARKS_BUILD_LIB OR NOT SPPARKS_BUILD_EXECUTABLE)
     if(SPPARKS_ENABLE_HIGHFIVE)
         target_link_libraries(spparks_lib PUBLIC HighFive)
     endif()
-    
+
+    # Add STITCH package support
+    if(SPPARKS_PACKAGE_STITCH AND STITCH_LIBRARY)
+        target_link_libraries(spparks_lib PUBLIC ${STITCH_LIBRARY})
+        target_include_directories(spparks_lib PUBLIC ${STITCH_INCLUDE_DIR})
+        target_compile_definitions(spparks_lib PUBLIC STITCH_PARALLEL SPK_STITCH)
+    endif()
+
     # Add GZIP support
     if(SPPARKS_ENABLE_GZIP)
         find_package(ZLIB)
@@ -519,7 +532,14 @@ if(SPPARKS_BUILD_EXECUTABLE)
         if(SPPARKS_ENABLE_HIGHFIVE)
             target_link_libraries(spparks HighFive)
         endif()
-        
+
+        # Add STITCH package support
+        if(SPPARKS_PACKAGE_STITCH AND STITCH_LIBRARY)
+            target_link_libraries(spparks ${STITCH_LIBRARY})
+            target_include_directories(spparks PRIVATE ${STITCH_INCLUDE_DIR})
+            target_compile_definitions(spparks PRIVATE STITCH_PARALLEL SPK_STITCH)
+        endif()
+
         if(SPPARKS_ENABLE_GZIP)
             find_package(ZLIB)
             if(ZLIB_FOUND)

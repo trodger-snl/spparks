@@ -33,28 +33,29 @@ endfunction()
 # Function to install a package
 function(install_package PACKAGE_NAME)
     string(TOUPPER "${PACKAGE_NAME}" PKG_UPPER)
-    
+
     if(NOT "${PACKAGE_NAME}" IN_LIST SPPARKS_AVAILABLE_PACKAGES)
         message(FATAL_ERROR "Package '${PACKAGE_NAME}' does not exist")
     endif()
-    
+
+    # Package-specific installation logic (always run to ensure libraries are built)
+    if(PACKAGE_NAME STREQUAL "stitch")
+        install_stitch_package()
+        # Variables are set as CACHE variables in install_stitch_package(), so no need to propagate
+    endif()
+
     if(SPPARKS_PACKAGE_${PKG_UPPER})
         message(STATUS "Package '${PACKAGE_NAME}' is already installed")
         return()
     endif()
-    
+
     message(STATUS "Installing package '${PACKAGE_NAME}'...")
-    
-    # Package-specific installation logic
-    if(PACKAGE_NAME STREQUAL "stitch")
-        install_stitch_package()
-    endif()
-    
+
     # Mark package as installed
     set(SPPARKS_PACKAGE_${PKG_UPPER} ON PARENT_SCOPE)
     set(SPPARKS_PACKAGE_${PKG_UPPER} ON CACHE BOOL "Package ${PACKAGE_NAME} is installed")
     save_package_status()
-    
+
     message(STATUS "Package '${PACKAGE_NAME}' installed successfully")
 endfunction()
 
@@ -89,30 +90,145 @@ endfunction()
 # STITCH package installation
 function(install_stitch_package)
     set(STITCH_DIR "${CMAKE_CURRENT_SOURCE_DIR}/STITCH")
-    
+    set(STITCH_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../lib/stitch")
+    set(STITCH_BUILD_DIR "${STITCH_LIB_DIR}/libstitch")
+
     if(NOT EXISTS "${STITCH_DIR}")
         message(FATAL_ERROR "STITCH package directory not found")
     endif()
-    
-    # Copy STITCH files to source directory
+
+    # Step 1: Build the stitch library if needed
+    message(STATUS "Checking for STITCH library...")
+
+    if(NOT EXISTS "${STITCH_BUILD_DIR}")
+        message(FATAL_ERROR "STITCH library directory not found at ${STITCH_BUILD_DIR}")
+    endif()
+
+    # Check if library exists
+    set(STITCH_LIB_PATH "${STITCH_BUILD_DIR}/libstitch.a")
+
+    if(NOT EXISTS "${STITCH_LIB_PATH}")
+        message(STATUS "STITCH library not found, building it now...")
+        message(STATUS "Building STITCH library in ${STITCH_BUILD_DIR}")
+
+        # Build the library using the existing Makefile
+        execute_process(
+            COMMAND make stitch.lib
+            WORKING_DIRECTORY "${STITCH_BUILD_DIR}"
+            RESULT_VARIABLE BUILD_RESULT
+            OUTPUT_VARIABLE BUILD_OUTPUT
+            ERROR_VARIABLE BUILD_ERROR
+        )
+
+        if(NOT BUILD_RESULT EQUAL 0)
+            message(FATAL_ERROR
+                "Failed to build STITCH library.\n"
+                "Working directory: ${STITCH_BUILD_DIR}\n"
+                "Error output:\n${BUILD_ERROR}\n${BUILD_OUTPUT}\n"
+                "Try building manually:\n"
+                "  cd ${STITCH_BUILD_DIR}\n"
+                "  make stitch.lib"
+            )
+        endif()
+
+        # Verify library was created
+        if(NOT EXISTS "${STITCH_LIB_PATH}")
+            message(FATAL_ERROR
+                "STITCH library build appeared to succeed but ${STITCH_LIB_PATH} not found"
+            )
+        endif()
+
+        message(STATUS "STITCH library built successfully")
+    else()
+        message(STATUS "STITCH library found at ${STITCH_LIB_PATH}")
+    endif()
+
+    # Step 2: Create symlinks if they don't exist
+    set(LIBLINK_PATH "${STITCH_LIB_DIR}/liblink")
+    set(INCLUDELINK_PATH "${STITCH_LIB_DIR}/includelink")
+
+    if(NOT EXISTS "${LIBLINK_PATH}")
+        message(STATUS "Creating liblink symlink...")
+        execute_process(
+            COMMAND ${CMAKE_COMMAND} -E create_symlink libstitch liblink
+            WORKING_DIRECTORY "${STITCH_LIB_DIR}"
+            RESULT_VARIABLE SYMLINK_RESULT
+        )
+        if(NOT SYMLINK_RESULT EQUAL 0)
+            message(WARNING "Failed to create liblink symlink, trying alternative method...")
+            execute_process(
+                COMMAND ln -s libstitch liblink
+                WORKING_DIRECTORY "${STITCH_LIB_DIR}"
+                RESULT_VARIABLE SYMLINK_RESULT2
+            )
+            if(NOT SYMLINK_RESULT2 EQUAL 0)
+                message(FATAL_ERROR "Failed to create liblink symlink")
+            endif()
+        endif()
+    endif()
+
+    if(NOT EXISTS "${INCLUDELINK_PATH}")
+        message(STATUS "Creating includelink symlink...")
+        execute_process(
+            COMMAND ${CMAKE_COMMAND} -E create_symlink libstitch includelink
+            WORKING_DIRECTORY "${STITCH_LIB_DIR}"
+            RESULT_VARIABLE SYMLINK_RESULT
+        )
+        if(NOT SYMLINK_RESULT EQUAL 0)
+            message(WARNING "Failed to create includelink symlink, trying alternative method...")
+            execute_process(
+                COMMAND ln -s libstitch includelink
+                WORKING_DIRECTORY "${STITCH_LIB_DIR}"
+                RESULT_VARIABLE SYMLINK_RESULT2
+            )
+            if(NOT SYMLINK_RESULT2 EQUAL 0)
+                message(FATAL_ERROR "Failed to create includelink symlink")
+            endif()
+        endif()
+    endif()
+
+    # Step 3: Verify we can find the library
+    find_library(STITCH_LIBRARY
+        NAMES stitch
+        PATHS "${STITCH_LIB_DIR}/liblink"
+        NO_DEFAULT_PATH
+    )
+
+    if(NOT STITCH_LIBRARY)
+        message(FATAL_ERROR
+            "STITCH library built but could not be found.\n"
+            "Expected at: ${STITCH_LIB_DIR}/liblink/libstitch.a\n"
+            "Please check the build output above for errors."
+        )
+    endif()
+
+    message(STATUS "STITCH library found: ${STITCH_LIBRARY}")
+
+    # Step 4: Set include and library paths as cache variables (global scope)
+    set(STITCH_INCLUDE_DIR "${STITCH_LIB_DIR}/includelink" CACHE PATH "STITCH include directory" FORCE)
+    set(STITCH_LIBRARY_DIR "${STITCH_LIB_DIR}/liblink" CACHE PATH "STITCH library directory" FORCE)
+    set(STITCH_LIBRARY "${STITCH_LIBRARY}" CACHE FILEPATH "STITCH library path" FORCE)
+
+    # Step 5: Copy STITCH files to source directory
     file(GLOB STITCH_SOURCES "${STITCH_DIR}/*.cpp")
     file(GLOB STITCH_HEADERS "${STITCH_DIR}/*.h")
-    
+
     foreach(SRC_FILE ${STITCH_SOURCES})
         get_filename_component(FILENAME "${SRC_FILE}" NAME)
         configure_file("${SRC_FILE}" "${CMAKE_CURRENT_SOURCE_DIR}/${FILENAME}" COPYONLY)
     endforeach()
-    
+
     foreach(HDR_FILE ${STITCH_HEADERS})
         get_filename_component(FILENAME "${HDR_FILE}" NAME)
         configure_file("${HDR_FILE}" "${CMAKE_CURRENT_SOURCE_DIR}/${FILENAME}" COPYONLY)
     endforeach()
-    
+
     # Add to source lists
     list(APPEND SPPARKS_SOURCES dump_stitch.cpp)
     set(SPPARKS_SOURCES "${SPPARKS_SOURCES}" PARENT_SCOPE)
-    
+
     message(STATUS "STITCH package files copied to source directory")
+    message(STATUS "STITCH package installation complete")
 endfunction()
 
 # STITCH package uninstallation
@@ -229,3 +345,13 @@ endif()
 
 # Process package options during configuration
 process_package_options()
+
+# Add global include directories for packages
+if(SPPARKS_PACKAGE_STITCH)
+    if(STITCH_INCLUDE_DIR)
+        include_directories(${STITCH_INCLUDE_DIR})
+        message(STATUS "Added STITCH include directory: ${STITCH_INCLUDE_DIR}")
+    else()
+        message(WARNING "STITCH package enabled but STITCH_INCLUDE_DIR not set")
+    endif()
+endif()

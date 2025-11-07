@@ -40,14 +40,12 @@ function(generate_single_style_header CLASS_PATTERN FILE_PREFIX STYLE_NAME DEPEN
     
     # Find matching header files
     if(FILE_PREFIX STREQUAL "")
-        # For COMMAND_CLASS, look for any header that defines the pattern
-        set(PATTERN_SEARCH "${CLASS_PATTERN}")
+        # For COMMAND_CLASS, glob all headers and filter by content later
+        file(GLOB MATCHING_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
     else()
         # For others, look for headers starting with the prefix
-        set(PATTERN_SEARCH "${FILE_PREFIX}")
+        file(GLOB MATCHING_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/${FILE_PREFIX}*.h")
     endif()
-    
-    file(GLOB MATCHING_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/${PATTERN_SEARCH}*.h")
     
     # Load feature status first to ensure it's available
     set(FEATURE_STATUS_FILE "${CMAKE_CURRENT_BINARY_DIR}/feature_status.cmake")

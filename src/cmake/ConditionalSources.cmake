@@ -6,14 +6,25 @@ function(configure_conditional_sources)
     
     # Add HDF5-dependent sources
     if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
-        list(APPEND SPPARKS_SOURCES
-            app_additive_ext_temp_texture.cpp
-            temperature_source.cpp
-            temperature_source_rosenthal.cpp
-            temperature_source_hdf5.cpp
-            temperature_source_hdf5_unstructured.cpp
-        )
-        message(STATUS "Added HDF5-dependent sources")
+        # Base HDF5 temperature sources (require MPI because they use H5Pset_dxpl_mpio)
+        if(SPPARKS_ENABLE_MPI)
+            list(APPEND SPPARKS_SOURCES
+                app_additive_ext_temp_texture.cpp
+                temperature_source.cpp
+                temperature_source_rosenthal.cpp
+                temperature_source_hdf5.cpp
+                temperature_source_hdf5_unstructured.cpp
+            )
+            message(STATUS "Added HDF5+MPI temperature source files")
+        else()
+            # For serial HDF5, only add non-MPI temperature sources
+            list(APPEND SPPARKS_SOURCES
+                app_additive_ext_temp_texture.cpp
+                temperature_source.cpp
+                temperature_source_rosenthal.cpp
+            )
+            message(STATUS "Added HDF5 temperature source files (serial mode - no parallel I/O)")
+        endif()
     endif()
     
     # Add image-dependent sources
@@ -27,12 +38,22 @@ function(configure_conditional_sources)
     
     # Create a feature status file for style generation
     set(FEATURE_STATUS_FILE "${CMAKE_CURRENT_BINARY_DIR}/feature_status.cmake")
-    file(WRITE "${FEATURE_STATUS_FILE}" 
+
+    # Determine if STITCH library was found
+    if(STITCH_LIBRARY)
+        set(STITCH_LIBRARY_FOUND TRUE)
+    else()
+        set(STITCH_LIBRARY_FOUND FALSE)
+    endif()
+
+    file(WRITE "${FEATURE_STATUS_FILE}"
         "# Auto-generated feature status for style generation\n"
         "set(SPPARKS_HAS_HDF5 ${SPPARKS_ENABLE_HDF5})\n"
         "set(SPPARKS_HAS_JPEG ${JPEG_FOUND})\n"
         "set(SPPARKS_HAS_PNG ${PNG_FOUND})\n"
         "set(SPPARKS_HAS_HDF5_FOUND ${HDF5_FOUND})\n"
+        "set(SPPARKS_HAS_STITCH ${SPPARKS_PACKAGE_STITCH})\n"
+        "set(SPPARKS_HAS_STITCH_FOUND ${STITCH_LIBRARY_FOUND})\n"
     )
 endfunction()
 
@@ -59,6 +80,13 @@ function(should_include_header HEADER_NAME RESULT_VAR)
             set(INCLUDE_IT FALSE)
         endif()
     endif()
-    
+
+    # Check STITCH-related headers
+    if(HEADER_NAME MATCHES "dump_stitch\\.h")
+        if(NOT (SPPARKS_HAS_STITCH AND SPPARKS_HAS_STITCH_FOUND))
+            set(INCLUDE_IT FALSE)
+        endif()
+    endif()
+
     set(${RESULT_VAR} ${INCLUDE_IT} PARENT_SCOPE)
 endfunction()

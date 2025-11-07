@@ -246,7 +246,13 @@ function(uninstall_stitch_package)
             message(STATUS "Removed ${FILE}")
         endif()
     endforeach()
-    
+
+    # Clear STITCH-related cache variables to avoid stale references
+    unset(STITCH_INCLUDE_DIR CACHE)
+    unset(STITCH_LIBRARY_DIR CACHE)
+    unset(STITCH_LIBRARY CACHE)
+    message(STATUS "Cleared STITCH cache variables")
+
     message(STATUS "STITCH package files removed from source directory")
 endfunction()
 

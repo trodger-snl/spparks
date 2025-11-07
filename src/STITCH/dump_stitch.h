@@ -12,13 +12,17 @@
 ------------------------------------------------------------------------- */
 
 #ifdef DUMP_CLASS
+#ifdef SPK_STITCH
 
 DumpStyle(stitch,DumpStitch)
 
+#endif
 #else
 
 #ifndef SPK_DUMP_STITCH_H
 #define SPK_DUMP_STITCH_H
+
+#ifdef SPK_STITCH
 
 #include "dump.h"
 #include "stitch.h"
@@ -53,7 +57,8 @@ class DumpStitch : public Dump {
 
 }
 
-#endif
+#endif  // SPK_STITCH
+#endif  // SPK_DUMP_STITCH_H
 #endif
 
 /* ERROR/WARNING messages:

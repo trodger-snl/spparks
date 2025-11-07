@@ -225,6 +225,22 @@ if(SPPARKS_ENABLE_HIGHFIVE)
     # Use external HighFive or fetch from source
     if(SPPARKS_USE_EXTERNAL_HIGHFIVE)
         # Try to find system-provided HighFive (e.g., from Spack, Homebrew, or system package manager)
+        # Add Spack installation paths as hints for find_package (cross-platform)
+        file(GLOB SPACK_HIGHFIVE_DIRS
+            # macOS Homebrew Spack
+            "/opt/homebrew/Cellar/spack/*/opt/spack/*/highfive-*"
+            "/opt/homebrew/opt/spack/opt/spack/*/highfive-*"
+            # Linux/HPC common Spack locations
+            "/opt/spack/opt/spack/*/highfive-*"
+            "/usr/local/spack/opt/spack/*/highfive-*"
+            "$ENV{HOME}/.spack/opt/spack/*/highfive-*"
+            "/spack/opt/spack/*/highfive-*"
+        )
+        if(SPACK_HIGHFIVE_DIRS)
+            list(APPEND CMAKE_PREFIX_PATH ${SPACK_HIGHFIVE_DIRS})
+            message(STATUS "Added Spack HighFive paths to search: ${SPACK_HIGHFIVE_DIRS}")
+        endif()
+
         find_package(HighFive QUIET CONFIG)
 
         if(HighFive_FOUND)
@@ -238,10 +254,17 @@ if(SPPARKS_ENABLE_HIGHFIVE)
         message(STATUS "Fetching HighFive from GitHub")
         include(FetchContent)
 
+        # CMake 4.x compatibility: HighFive requires CMake 3.1 minimum, which is incompatible with CMake 4.0+
+        # Set policy version minimum to 3.5 as a workaround for older HighFive CMakeLists.txt
+        if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
+            set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "Minimum policy version for FetchContent compatibility")
+            message(STATUS "CMake 4.x detected - applying policy workaround for HighFive compatibility")
+        endif()
+
         FetchContent_Declare(
             HighFive
             GIT_REPOSITORY https://github.com/BlueBrain/HighFive.git
-            GIT_TAG        v2.9.0  # Use latest stable version
+            GIT_TAG        v2.10.1  # Latest stable version - CMake 4.x compatible
             GIT_SHALLOW    TRUE
         )
 

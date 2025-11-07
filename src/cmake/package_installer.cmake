@@ -1,5 +1,5 @@
 # Package installer script
-include("/Users/Tron/spparks/src/cmake/PackageManager.cmake")
+include("/Volumes/LaCie/SURGEWORK/spparks-spack-test/spparks-test/src/cmake/PackageManager.cmake")
 
 if(SPPARKS_INSTALL_ALL_PACKAGES)
     install_all_packages()

@@ -6,7 +6,13 @@ function(configure_conditional_sources)
     
     # Add HDF5-dependent sources
     if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
-        list(APPEND SPPARKS_SOURCES app_additive_ext_temp_texture.cpp)
+        list(APPEND SPPARKS_SOURCES
+            app_additive_ext_temp_texture.cpp
+            temperature_source.cpp
+            temperature_source_rosenthal.cpp
+            temperature_source_hdf5.cpp
+            temperature_source_hdf5_unstructured.cpp
+        )
         message(STATUS "Added HDF5-dependent sources")
     endif()
     

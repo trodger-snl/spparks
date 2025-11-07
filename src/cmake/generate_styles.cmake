@@ -140,7 +140,11 @@ function(generate_single_style_header CLASS_PATTERN FILE_PREFIX STYLE_NAME DEPEN
     endif()
     
     if(UPDATE_HEADER AND EXISTS "${STYLE_TEMP}")
-        file(RENAME "${STYLE_TEMP}" "${STYLE_HEADER}")
+        # Use COPY + REMOVE instead of RENAME to support cross-filesystem moves
+        file(COPY "${STYLE_TEMP}" DESTINATION "${CMAKE_CURRENT_SOURCE_DIR}")
+        get_filename_component(TEMP_FILENAME "${STYLE_TEMP}" NAME)
+        file(RENAME "${CMAKE_CURRENT_SOURCE_DIR}/${TEMP_FILENAME}" "${STYLE_HEADER}")
+        file(REMOVE "${STYLE_TEMP}")
         message(STATUS "Generated ${STYLE_HEADER}")
         
         # Remove dependency files (equivalent to rm -f Obj_*/$4.d)

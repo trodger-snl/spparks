@@ -23,7 +23,7 @@
 
 
 stitch.lib: stitch.c stitch.h sqlite3.c sqlite3.h
-	CC="${CC}" CXX="${CXX}" ${CC} -std=gnu99 -c stitch.c sqlite3.c -DSTITCH_PARALLEL 
+	CC="${CC}" CXX="${CXX}" ${CC} -std=gnu99 -c stitch.c sqlite3.c -DSTITCH_PARALLEL $(shell test -d /Applications/Xcode.app && echo "-isysroot $$(xcrun --show-sdk-path)")
 	ar rc libstitch.a stitch.o sqlite3.o
 
 stitch_test: stitch_test.c stitch.lib

@@ -112,8 +112,17 @@ function(install_stitch_package)
         message(STATUS "Building STITCH library in ${STITCH_BUILD_DIR}")
 
         # Build the library using the existing Makefile
+        # Use MPI compiler if available, otherwise use system compiler
+        if(SPPARKS_ENABLE_MPI AND MPI_C_COMPILER)
+            set(STITCH_CC "${MPI_C_COMPILER}")
+            set(STITCH_CXX "${MPI_CXX_COMPILER}")
+        else()
+            set(STITCH_CC "${CMAKE_C_COMPILER}")
+            set(STITCH_CXX "${CMAKE_CXX_COMPILER}")
+        endif()
+
         execute_process(
-            COMMAND make stitch.lib
+            COMMAND ${CMAKE_COMMAND} -E env CC=${STITCH_CC} CXX=${STITCH_CXX} make stitch.lib
             WORKING_DIRECTORY "${STITCH_BUILD_DIR}"
             RESULT_VARIABLE BUILD_RESULT
             OUTPUT_VARIABLE BUILD_OUTPUT

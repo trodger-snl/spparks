@@ -11,11 +11,40 @@ if(HDF5_FOUND)
         if(HDF5_LIBRARIES)
             foreach(LIB ${HDF5_LIBRARIES})
                 if(EXISTS "${LIB}")
+                    # Platform-specific symbol extraction
+                    # Try nm first (with platform-appropriate flag)
+                    if(APPLE)
+                        set(NM_FLAGS -g)  # macOS uses -g for global symbols
+                    else()
+                        set(NM_FLAGS -D)  # Linux uses -D for dynamic symbols
+                    endif()
+
                     execute_process(
-                        COMMAND nm -D "${LIB}" 2>/dev/null || objdump -T "${LIB}" 2>/dev/null || strings "${LIB}"
+                        COMMAND nm ${NM_FLAGS} "${LIB}"
                         OUTPUT_VARIABLE LIB_SYMBOLS
                         ERROR_QUIET
+                        RESULT_VARIABLE NM_RESULT
                     )
+
+                    # If nm fails, try objdump
+                    if(NOT NM_RESULT EQUAL 0)
+                        execute_process(
+                            COMMAND objdump -T "${LIB}"
+                            OUTPUT_VARIABLE LIB_SYMBOLS
+                            ERROR_QUIET
+                            RESULT_VARIABLE OBJDUMP_RESULT
+                        )
+
+                        # If objdump fails, fallback to strings
+                        if(NOT OBJDUMP_RESULT EQUAL 0)
+                            execute_process(
+                                COMMAND strings "${LIB}"
+                                OUTPUT_VARIABLE LIB_SYMBOLS
+                                ERROR_QUIET
+                            )
+                        endif()
+                    endif()
+
                     if(LIB_SYMBOLS MATCHES "MPI_|PMPI_")
                         set(HDF5_IS_PARALLEL TRUE)
                         break()

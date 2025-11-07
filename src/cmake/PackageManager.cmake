@@ -121,8 +121,9 @@ function(install_stitch_package)
             set(STITCH_CXX "${CMAKE_CXX_COMPILER}")
         endif()
 
+        # Use CMAKE_MAKE_PROGRAM for portability (instead of hardcoded make)
         execute_process(
-            COMMAND ${CMAKE_COMMAND} -E env CC=${STITCH_CC} CXX=${STITCH_CXX} make stitch.lib
+            COMMAND ${CMAKE_COMMAND} -E env CC=${STITCH_CC} CXX=${STITCH_CXX} ${CMAKE_MAKE_PROGRAM} stitch.lib
             WORKING_DIRECTORY "${STITCH_BUILD_DIR}"
             RESULT_VARIABLE BUILD_RESULT
             OUTPUT_VARIABLE BUILD_OUTPUT

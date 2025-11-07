@@ -11,6 +11,28 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Compiler version validation for C++17 support
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.0)
+        message(WARNING "GCC ${CMAKE_CXX_COMPILER_VERSION} may not fully support C++17. "
+                        "GCC 7.0 or later is recommended. Build may fail.")
+    endif()
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang")
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+        # Apple Clang 11+ (Xcode 11+) supports C++17
+        if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 11.0)
+            message(WARNING "Apple Clang ${CMAKE_CXX_COMPILER_VERSION} may not fully support C++17. "
+                            "Apple Clang 11.0 (Xcode 11) or later is recommended. Build may fail.")
+        endif()
+    else()
+        # Regular Clang 5+ supports C++17
+        if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 5.0)
+            message(WARNING "Clang ${CMAKE_CXX_COMPILER_VERSION} may not fully support C++17. "
+                            "Clang 5.0 or later is recommended. Build may fail.")
+        endif()
+    endif()
+endif()
+
 # Set default build type
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -58,9 +80,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         set(OPT_FLAGS "${OPT_FLAGS} -ffast-math -funroll-loops -fomit-frame-pointer")
     endif()
-    
-    set(CMAKE_CXX_FLAGS_RELEASE "${OPT_FLAGS}")
-    message(STATUS "Release optimization flags: ${CMAKE_CXX_FLAGS_RELEASE}")
+
+    # Note: OPT_FLAGS will be applied per-target, not globally
+    # This provides better build isolation and prevents flag pollution
+    message(STATUS "Release optimization flags: ${OPT_FLAGS}")
     
 elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
     # Optimized with debug info
@@ -91,6 +114,21 @@ if(NOT N EQUAL 0)
 else()
     message(WARNING "Could not detect CPU count, using single-threaded build")
     set(CMAKE_BUILD_PARALLEL_LEVEL 1 CACHE STRING "Number of parallel jobs")
+endif()
+
+# WSL2 Detection (Windows Subsystem for Linux)
+if(UNIX AND NOT APPLE)
+    execute_process(
+        COMMAND uname -r
+        OUTPUT_VARIABLE UNAME_R
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(UNAME_R MATCHES "microsoft|WSL")
+        set(WSL_BUILD ON CACHE BOOL "Building in Windows Subsystem for Linux")
+        message(STATUS "Windows Subsystem for Linux (WSL2) detected")
+        message(STATUS "  Using Linux build configuration within WSL environment")
+    endif()
 endif()
 
 # Build options
@@ -176,6 +214,11 @@ if(SPPARKS_ENABLE_PNG)
     find_package(PNG)
     if(PNG_FOUND)
         add_compile_definitions(SPPARKS_PNG)
+        message(STATUS "PNG support enabled")
+    else()
+        message(STATUS "PNG library not found - disabling PNG support")
+        message(STATUS "  To install: brew install libpng (macOS) or apt-get install libpng-dev (Ubuntu)")
+        set(SPPARKS_ENABLE_PNG OFF)
     endif()
 endif()
 
@@ -288,8 +331,9 @@ endif()
 include(cmake/MachineConfigs.cmake)
 include(cmake/PackageManager.cmake)
 
-# Apply machine configuration if specified  
+# Apply machine configuration if specified
 setup_machine_presets()
+setup_hpc_configs()  # Enable HPC system configurations
 auto_detect_machine()
 
 if(SPPARKS_MACHINE)
@@ -300,6 +344,10 @@ endif()
 # (This happens automatically since CMake cache variables take precedence)
 
 # Configure MPI after machine configuration
+# Note: This ordering is intentional - machine configs can set SPPARKS_ENABLE_MPI,
+# but the actual find_package(MPI) happens here to use the updated settings.
+# This allows machine presets to control MPI enablement while keeping the
+# MPI detection logic centralized.
 if(SPPARKS_ENABLE_MPI)
     find_package(MPI REQUIRED)
     if(MPI_CXX_FOUND)
@@ -574,7 +622,7 @@ if(SPPARKS_BUILD_EXECUTABLE)
     endif()
 endif()
 
-# Compiler flags
+# Compiler flags - applied per-target for better isolation
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         target_compile_options(spparks PRIVATE -g -Wall -Wextra)
@@ -582,9 +630,12 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
             target_compile_options(spparks_lib PRIVATE -g -Wall -Wextra)
         endif()
     else()
-        target_compile_options(spparks PRIVATE -O3)
+        # Apply all optimization flags from OPT_FLAGS (defined earlier)
+        # Convert string to list for target_compile_options
+        separate_arguments(OPT_FLAGS_LIST UNIX_COMMAND "${OPT_FLAGS}")
+        target_compile_options(spparks PRIVATE ${OPT_FLAGS_LIST})
         if(TARGET spparks_lib)
-            target_compile_options(spparks_lib PRIVATE -O3)
+            target_compile_options(spparks_lib PRIVATE ${OPT_FLAGS_LIST})
         endif()
     endif()
 endif()
@@ -597,8 +648,10 @@ if(SPPARKS_BUILD_LIB)
         ARCHIVE DESTINATION lib
         RUNTIME DESTINATION bin
     )
-    
-    install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/*.h
+
+    # Install public headers
+    file(GLOB SPPARKS_PUBLIC_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
+    install(FILES ${SPPARKS_PUBLIC_HEADERS}
         DESTINATION include/spparks
     )
 endif()

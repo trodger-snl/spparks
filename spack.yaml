@@ -15,41 +15,49 @@ spack:
   # These are abstract specs that work across platforms
   specs:
     # MPI implementation - OpenMPI with C++ bindings
-    - openmpi@4.1:+cxx
+  - openmpi@4.1+cxx
 
     # HDF5 with parallel support, high-level API, and compression
-    - hdf5@1.12:+mpi+hl+szip ^openmpi
+  - hdf5@1.12+mpi+hl+szip ^openmpi
 
     # HighFive C++ wrapper for HDF5
     # Note: If using CMake FetchContent for HighFive, this may not be needed
-    - highfive@2.8: ^hdf5+mpi
+  - highfive@2.8 ^hdf5+mpi
 
     # Image libraries
-    - libjpeg
-    - libpng
+  - libjpeg
+  - libpng
 
     # Compression library (provides gzip functionality)
-    - zlib
+  - zlib
 
     # Build tools
-    - cmake@3.20:
-    - gmake
+  - cmake@3.20
+  - gmake
 
   # Package-level configuration
   packages:
-    all:
-      # Compiler preference
-      # macOS: apple-clang or gcc from Homebrew
-      # Linux: gcc (system or Spack-provided)
-      compiler: [gcc@11:, gcc@10:, apple-clang@14:, clang@15:]
-
-      # Target optimization
-      # Spack auto-detects: m1/m2 for ARM, x86_64_v3 for Intel/AMD
-      # Set explicitly if needed: target: [x86_64_v3]
+    apple-clang:
+      externals:
+      - spec: apple-clang@17.0.0
+        prefix: /usr
+        extra_attributes:
+          compilers:
+            c: /usr/bin/clang
+            cxx: /usr/bin/clang++
+    gcc:
+      externals:
+      - spec: gcc@15.2.0 languages:='c,c++,fortran'
+        prefix: /opt/homebrew
+        extra_attributes:
+          compilers:
+            c: /opt/homebrew/bin/gcc-15
+            cxx: /opt/homebrew/bin/g++-15
+            fortran: /opt/homebrew/bin/gfortran
 
     # Ensure OpenMPI is used consistently across all MPI-dependent packages
     mpi:
-      require: [openmpi@4.1:]
+      require: ['openmpi@4.1:']
 
     # HDF5 must always be parallel with high-level API
     hdf5:
@@ -58,7 +66,7 @@ spack:
 
     # CMake: Allow newer versions
     cmake:
-      version: [3.20:]
+      version: ['3.20:']
 
   # Concretization settings
   concretizer:
@@ -76,7 +84,7 @@ spack:
       root: ./view
       link: all
       projections:
-        all: "{name}/{version}"
+        all: '{name}/{version}'
 
   # Module file generation (optional)
   # Generates environment-modules compatible files in user space
@@ -106,7 +114,7 @@ spack:
 
           # Prevent loading multiple versions
           conflict:
-            - '{name}'
+          - '{name}'
 
         # MPI-specific environment variables
         openmpi:

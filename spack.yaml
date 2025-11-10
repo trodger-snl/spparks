@@ -22,7 +22,7 @@ spack:
 
     # HighFive C++ wrapper for HDF5
     # Note: If using CMake FetchContent for HighFive, this may not be needed
-  - highfive@2.8:
+  - highfive@2.8
 
     # Image libraries
   - libjpeg

@@ -1,14 +1,18 @@
 /* ----------------------------------------------------------------------
    SPPARKS - Stochastic Parallel PARticle Kinetic Simulator
-   http://www.cs.sandia.gov/~sjplimp/spparks.html
-   Steve Plimpton, sjplimp@sandia.gov, Sandia National Laboratories
 
-   Copyright (2008) Sandia Corporation.  Under the terms of Contract
-   DE-AC04-94AL85000 with Sandia Corporation, the U.S. Government retains
-   certain rights in this software.  This software is distributed under 
-   the GNU General Public License.
+   Website
+   https://spparks.github.io/
 
-   See the README file in the top-level SPPARKS directory.
+   See authors 
+   https://spparks.github.io/authors.html
+
+   Copyright(C) 1999-2025 National Technology & Engineering Solutions
+   of Sandia, LLC (NTESS). Under the terms of Contract DE-NA0003525 with
+   NTESS, the U.S. Government retains certain rights in this software.
+
+   This software is distributed under the GNU General Public License.  See 
+   LICENSE in top-level SPPARKS directory.
 ------------------------------------------------------------------------- */
 
 #include "mpi.h"
@@ -140,21 +144,6 @@ double Output::setup(double time, int memflag)
 
 double Output::compute(double time, int done)
 {
-  // dump output
-
-  double dump_time = app->stoptime;
-  for (int i = 0; i < ndump; i++) {
-    if (time >= dumplist[i]->next_time - dumplist[i]->tolerance) {
-      dumplist[i]->write(time);
-      dumplist[i]->next_time = 
-	next_time(time+dumplist[i]->tolerance,dumplist[i]->logfreq,
-                  dumplist[i]->delta,dumplist[i]->nrepeat,
-                  dumplist[i]->scale,dumplist[i]->delay);
-      dumplist[i]->next_time -= dumplist[i]->tolerance;
-      dump_time = MIN(dump_time,dumplist[i]->next_time);
-    } else dump_time = MIN(dump_time,dumplist[i]->next_time);
-  }
-
   // sflag = 1 if stats output needed
 
   int sflag = 0;
@@ -186,6 +175,21 @@ double Output::compute(double time, int done)
 			     stats_nrepeat,stats_scale,stats_delay);
       stats_time -= stats_tolerance;
     }
+  }
+
+    // dump output, after diagnostics and stats
+  
+  double dump_time = app->stoptime;
+  for (int i = 0; i < ndump; i++) {
+    if (time >= dumplist[i]->next_time - dumplist[i]->tolerance) {
+      dumplist[i]->write(time);
+      dumplist[i]->next_time = 
+	next_time(time+dumplist[i]->tolerance,dumplist[i]->logfreq,
+                  dumplist[i]->delta,dumplist[i]->nrepeat,
+                  dumplist[i]->scale,dumplist[i]->delay);
+      dumplist[i]->next_time -= dumplist[i]->tolerance;
+      dump_time = MIN(dump_time,dumplist[i]->next_time);
+    } else dump_time = MIN(dump_time,dumplist[i]->next_time);
   }
 
   // tnext = next output time for anything

@@ -481,8 +481,8 @@ configure_conditional_sources()
 
 # Add package-specific sources
 if(SPPARKS_PACKAGE_STITCH AND STITCH_LIBRARY)
-    list(APPEND SPPARKS_SOURCES dump_stitch.cpp)
-    message(STATUS "Added dump_stitch.cpp to sources")
+    list(APPEND SPPARKS_SOURCES STITCH/dump_stitch.cpp)
+    message(STATUS "Added STITCH/dump_stitch.cpp to sources")
 elseif(SPPARKS_PACKAGE_STITCH)
     message(WARNING "STITCH package enabled but library not found at '${STITCH_LIBRARY}' - dump_stitch not added to sources")
 endif()

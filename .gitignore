@@ -1,0 +1,53 @@
+# Auto-generated style headers
+src/style_*.h
+
+# Build artifacts
+*.o
+*.d
+*.a
+src/spk*
+src/build/
+src/test_*/
+src/Obj_*/
+
+# IDE files
+.vscode/
+*.swp
+*.swo
+*~
+
+# HDF5 data files
+*.hdf5
+
+# Log files
+*.log
+log.*
+
+# Dump files
+DumpFiles/
+dump.*
+*.jpg
+*.png
+
+# Package files (auto-generated)
+src/Makefile.package
+src/Makefile.package.settings
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# CMake files
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+feature_status.cmake
+
+# OS files
+.DS_Store
+Thumbs.dbexternal/
+
+# Distribution archives (large files)
+micro_analysis_scripts/*.tar.gz
+micro_analysis_scripts/*.tar.xz

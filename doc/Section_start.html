@@ -17,6 +17,8 @@ Section</A>
 </P>
 2.1 <A HREF = "#start_1">What's in the SPPARKS distribution</A><BR>
 2.2 <A HREF = "#start_2">Making SPPARKS</A><BR>
+2.2a <A HREF = "#start_2a">Building with CMake (recommended)</A><BR>
+2.2b <A HREF = "#start_2b">Building with Spack (dependency management)</A><BR>
 2.3 <A HREF = "#start_3">Making SPPARKS with optional packages</A><BR>
 2.4 <A HREF = "#start_4">Building SPPARKS as a library</A><BR>
 2.5 <A HREF = "#start_5">Running SPPARKS</A><BR>
@@ -102,6 +104,194 @@ build SPPARKS.  Almost all current C++ compilers are; you just need to
 use a -std=c++11 flag when compiling, as in the
 src/MAKE/Makefile.machine files provided with SPPARKS.
 </P>
+<HR>
+
+<H4><A NAME = "start_2a"></A>2.2a Building with CMake (recommended) 
+</H4>
+<P><B><I>Overview:</I></B>
+</P>
+<P>CMake is a modern, cross-platform build system that provides automatic
+dependency detection, better IDE integration, and simpler configuration
+than traditional Makefiles. It is the recommended build method for
+new users.
+</P>
+<P><B><I>Quick Start:</I></B>
+</P>
+<P>From the src directory, use the build_cmake.sh convenience script:
+</P>
+<PRE>cd src
+./build_cmake.sh                    # Auto-detect platform
+./build_cmake.sh -m mpi             # MPI build
+./build_cmake.sh -m mac_arm         # macOS Apple Silicon 
+</PRE>
+<P>Or use CMake directly:
+</P>
+<PRE>cd src
+mkdir build && cd build
+cmake -DSPPARKS_MACHINE=mpi ..
+cmake --build . -j12 
+</PRE>
+<P><B><I>CMake Configuration Options:</I></B>
+</P>
+<P>The build system supports many configuration options:
+</P>
+<P>Feature Options:
+</P>
+<PRE>-DSPPARKS_ENABLE_MPI=ON/OFF         # MPI parallel support (default: ON)
+-DSPPARKS_ENABLE_HDF5=ON/OFF        # HDF5 data format (default: OFF)
+-DSPPARKS_ENABLE_HIGHFIVE=ON/OFF    # Modern C++ HDF5 wrapper (default: OFF)
+-DSPPARKS_ENABLE_JPEG=ON/OFF        # JPEG image output (default: ON)
+-DSPPARKS_ENABLE_PNG=ON/OFF         # PNG image output (default: OFF)
+-DSPPARKS_ENABLE_GZIP=ON/OFF        # GZIP compression (default: ON) 
+</PRE>
+<P>Build Type Options:
+</P>
+<PRE>-DCMAKE_BUILD_TYPE=Release          # Optimized build (default)
+-DCMAKE_BUILD_TYPE=Debug            # Debug build with symbols
+-DBUILD_SHARED_LIBS=ON              # Build shared library
+-DSPPARKS_BUILD_LIB=ON              # Build library for coupling 
+</PRE>
+<P>Performance Options:
+</P>
+<PRE>-DSPPARKS_AGGRESSIVE_OPTIMIZATION=ON    # Use -O3 and LTO (default: ON)
+-DSPPARKS_NATIVE_OPTIMIZATION=ON        # Use -march=native (default: ON) 
+</PRE>
+<P>WARNING: Native optimization (-march=native) produces non-portable
+binaries. Disable for cluster builds or binary distribution.
+</P>
+<P>Machine Presets:
+</P>
+<P>CMake includes machine-specific presets similar to Makefile.machine files:
+</P>
+<PRE>-DSPPARKS_MACHINE=mac               # macOS, no MPI
+-DSPPARKS_MACHINE=mac_mpi           # macOS with MPI
+-DSPPARKS_MACHINE=mac_arm           # Apple Silicon with MPI, HDF5, JPEG
+-DSPPARKS_MACHINE=linux             # Generic Linux
+-DSPPARKS_MACHINE=mpi               # Generic MPI build
+-DSPPARKS_MACHINE=serial            # Serial (no MPI) 
+</PRE>
+<P>Package Management:
+</P>
+<P>Install optional packages via CMake:
+</P>
+<PRE>cmake -DSPPARKS_PACKAGE_STITCH=ON ..    # Enable STITCH package 
+</PRE>
+<P>Building with External Dependencies:
+</P>
+<P>If using system-provided libraries instead of CMake's automatic detection:
+</P>
+<PRE>cmake   -DHDF5_ROOT=/path/to/hdf5   -DJPEG_ROOT=/path/to/jpeg   -DSPPARKS_ENABLE_HDF5=ON   -DSPPARKS_ENABLE_JPEG=ON   .. 
+</PRE>
+<P>See README_SPACK.md for using Spack to manage dependencies automatically.
+</P>
+<P><B><I>Advantages of CMake:</I></B>
+</P>
+<UL><LI>Automatic dependency detection - finds MPI, HDF5, JPEG automatically
+<LI>Cross-platform - works identically on macOS, Linux, HPC systems
+<LI>IDE integration - generates Xcode, Visual Studio, CLion projects
+<LI>Modern tooling - package config files for downstream projects
+<LI>Parallel builds - automatically uses all CPU cores
+<LI>Easier maintenance - less platform-specific configuration 
+</UL>
+<P><B><I>Common CMake Build Patterns:</I></B>
+</P>
+<P>Clean reconfigure:
+</P>
+<PRE>cd src/build
+rm -rf *
+cmake .. 
+</PRE>
+<P>Out-of-source debug build:
+</P>
+<PRE>cd src
+mkdir debug && cd debug
+cmake -DCMAKE_BUILD_TYPE=Debug ..
+cmake --build . 
+</PRE>
+<P>Install to custom prefix:
+</P>
+<PRE>cmake -DCMAKE_INSTALL_PREFIX=/opt/spparks ..
+cmake --build .
+cmake --build . --target install 
+</PRE>
+<HR>
+
+<H4><A NAME = "start_2b"></A>2.2b Building with Spack (dependency management) 
+</H4>
+<P><B><I>Overview:</I></B>
+</P>
+<P><A HREF = "https://spack.io">Spack</A> is a package manager for HPC systems that
+automatically builds and manages complex dependency chains. It is
+particularly useful when you need MPI, HDF5, and other libraries with
+specific configurations.
+</P>
+<P><B><I>When to Use Spack:</I></B>
+</P>
+<UL><LI>You need parallel HDF5 with specific MPI implementation
+<LI>You work across multiple systems (laptop, cluster, HPC)
+<LI>You want reproducible builds via lockfiles
+<LI>You need to manage multiple SPPARKS configurations
+<LI>Your system lacks required dependencies 
+</UL>
+<P><B><I>Quick Start:</I></B>
+</P>
+<P>Install Spack (one-time setup):
+</P>
+<PRE>git clone --depth=2 https://github.com/spack/spack.git ~/spack
+source ~/spack/share/spack/setup-env.sh
+spack compiler find 
+</PRE>
+<P>Create SPPARKS environment from the SPPARKS directory:
+</P>
+<PRE>cd spparks
+spack env create spparks-dev spack.yaml
+spack env activate spparks-dev
+spack install                       # Installs all dependencies 
+</PRE>
+<P>Build SPPARKS with Spack dependencies:
+</P>
+<PRE>cd src
+./build_cmake.sh -m mpi             # CMake finds Spack libs automatically 
+</PRE>
+<P><B><I>Available Spack Variants:</I></B>
+</P>
+<P>Install SPPARKS directly via Spack:
+</P>
+<PRE>spack install spparks@develop+mpi+hdf5+highfive+jpeg
+spack install spparks@develop+mpi+hdf5+stitch
+spack install spparks@develop+mpi~hdf5+jpeg          # Without HDF5 
+</PRE>
+<P><B><I>Advantages of Spack:</I></B>
+</P>
+<UL><LI>Consistent dependencies across dev/HPC systems
+<LI>Reproducible builds via lockfiles
+<LI>Automatic MPI/HDF5 compatibility handling
+<LI>User-space installation (no sudo required)
+<LI>Module file generation for HPC environments 
+</UL>
+<P><B><I>More Information:</I></B>
+</P>
+<P>For detailed Spack usage, platform-specific workflows, and troubleshooting,
+see README_SPACK.md in the SPPARKS distribution.
+</P>
+<HR>
+
+<P><B><I>Comparison: Makefile vs CMake vs Spack:</I></B>
+</P>
+<DIV ALIGN=center><TABLE  BORDER=1 >
+<TR><TD >Method</TD><TD >Best For</TD><TD >Complexity</TD><TD >Flexibility</TD></TR>
+<TR><TD >Makefile</TD><TD >Quick builds on known systems</TD><TD >Low</TD><TD >Medium</TD></TR>
+<TR><TD >CMake</TD><TD >Cross-platform development</TD><TD >Medium</TD><TD >High</TD></TR>
+<TR><TD >Spack</TD><TD >Multi-system, complex dependencies</TD><TD >High</TD><TD >Very High 
+</TD></TR></TABLE></DIV>
+
+<P>All three methods produce identical SPPARKS executables. Choose based
+on your workflow:
+</P>
+<UL><LI>Makefile: You know your system, want quick iteration
+<LI>CMake: You want automatic detection, modern tooling
+<LI>Spack: You need dependency management, reproducibility 
+</UL>
 <HR>
 
 <HR>
@@ -354,6 +544,21 @@ package version of a file.  Typing "make package-overwrite" will
 overwrite files in the package directories with src files.  Typing
 "make package-check" will list differences between src and package
 versions of the same files.
+</P>
+<P><B><I>Package Management with CMake:</I></B>
+</P>
+<P>When using CMake, packages can be enabled via configuration options:
+</P>
+<PRE>cmake -DSPPARKS_PACKAGE_STITCH=ON ..
+cmake --build . 
+</PRE>
+<P>CMake automatically:
+</P>
+<UL><LI>Builds required libraries (e.g., STITCH)
+<LI>Sets up include paths and linking
+<LI>Manages dependencies between packages 
+</UL>
+<P>This is equivalent to "make yes-stitch" in the Makefile system.
 </P>
 <P>2.3.1 STITCH package
 </P>

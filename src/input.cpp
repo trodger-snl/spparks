@@ -809,10 +809,9 @@ void Input::reset_time()
 
     StitchFile *stitch_file;
     double first_time,last_time,tmp;
-    int64_t int_tmp=-1;
 
     int err = stitch_open(&stitch_file,MPI_COMM_WORLD,filename);
-    err = stitch_get_parameters(stitch_file,&tmp,&tmp,&int_tmp,&first_time,&last_time);
+    err = stitch_get_parameters(stitch_file,&tmp,&tmp,&first_time,&last_time);
     err = stitch_close(&stitch_file);
 
     if (tflag == 0) time = first_time;

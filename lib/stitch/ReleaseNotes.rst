@@ -1,0 +1,107 @@
+=============
+Release Notes
+=============
+
+October 2025
+------------
+The stitch api has been updated.  This update required small modifications 
+in spparks to accommodate the new api.
+
+The set_parameters function, whether in c or python now only takes absolute and
+relative tolerances; these tolerances are used for search queries on time;
+previously, a 'no value present' (nvp) value could be set that applied to all
+fields in the file but that had ambiguities across field types (int, float,
+etc) and different fields.  Now, when a field is created, a nvp value must be
+supplied; create_field function has been updated to reflect this change. 
+
+The stitch api has been enhanced so that fields may be array valued -- this feature
+has not been tested but its in the interface.  Use with caution.  Future
+updates will include demonstrations and testing of this feature -- the target
+for this feature is quaternions, ie field is a 4-valued quaternion.   Quaternions 
+in spparks are currently dumped to the stitch file as four scalars q0, q1, q2, q3.
+
+Documentation of the stitch python api has been created; sphinx-build and a few other python 
+modules are required to generate the documentation that covers the full stitch api.  See 
+ReadMeBuildApiDoc.txt and docs/source/index.rst and docs/source/conf.py.
+
+Date based 'version' number YYYYMMDD has been added to the python stitch package.  
+
+
+November 2024
+-------------
+
+This release of stitch for SPPARKS contains two updates:
+1. Performance improvements. The 'stitch.c' file has been updated. This gives a
+significant performance improvement to the 'set stitch' command in SPPARKS
+(10-100x speedup). A new file has been added, 'stitch_performance.c'. 
+
+2. Discontinued use of numpy.disutils.  With this update, 'setuptools' are used
+to build the stitch python extension rather than numpy.disutils.  For numpy
+compatibility, the stitch package no longer uses numpy.disutils. For more
+details, see: https://numpy.org/doc/stable/reference/distutils_status_migration.html
+
+Usage note. As of this release, a slightly different import syntax should be
+used when using python Stitch to process SPPARKS *.st files:
+
+Pre-November 2024 release:
+    > from stitch.libstitch import libstitch
+
+Current and future releases:
+    > from stitch import libstitch
+
+Older SPPARKS versions should be unaffected, but those migrating to this
+release or newer should convert import statements.
+
+As Nov 2024, the Stitch master branch repo 'SHA' used in SPPARKS is:
+d446af92c7a5e843716a4a5c461756031241c602
+
+
+Sept 2022
+---------
+
+This release of stitch relates to query performance.  Use of the spparks 
+'set site stitch' command was performing very poorly as the number of 
+time steps in the associated file increased. This release dramatically 
+improves performance in this use case.  Along with this release, SPPARKS 
+now has a build macro -DLOG_STITCH which will write files related to 
+blocks read/written.  The logging also writes a 'stitch_query.dat' file 
+enumerating time taken to open, query, and close stitch file -- this 
+sequence initiated by the 'set site stitch' command in a spparks input 
+script.  Logging also includes files for each processor; these files 
+include the current simulation time, and the block read/written; this 
+is useful for stitching simulations where the blocks read/written 
+are evolving in time.
+
+Only stitch.c was updated.  The stitch repo 'SHA' that this file 
+was taken from is:
+
+1c3dd960c4ab8cb6ab1da1296c87f9183297d1ba
+
+
+May 2022
+--------
+
+This stitch release includes a new 'global-bounds' functionality.  This is
+additional capability allows user to query and existing stitch database for a
+particular field: 'what are the global bounds' written to the file for this
+field across all time steps; a bounding box is returned; this can be useful 
+when workflows use a stitch file that was written upstream and knowledge of 
+the spatial extent of the file is not known or it is inconvenient to carry 
+that information.  Note that this global bounds is not stored in the stitch 
+file as meta data -- rather it is computed on the fly.
+
+Jan 18 2021
+-----------
+
+This is a v1.1 stitch update which substantially improves performance of the
+'set stitch' command in spparks. The 'set stitch' command is most commonly used
+for additive manufacturing (AM) simulations where many spparks runs are
+'stitched' together; each run requires use of the 'set stitch' command; as the
+AM simulation proceeds, stitch files grows proportionally in size which
+increases IO time relating to stitch database queries. This release improves
+the performance of stitch queries; query times now scale linearly with stitch
+file size.  There are no new files with this release.  The algorithm used in
+stitch query has been substantially improved.  For small problems, on the order
+of millions of lattice sites, the performance improvements may not be
+noticable.  For problem sizes on the order 10s to 100s of millions of lattice
+sites performance gains are significant.

@@ -6,11 +6,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SPPARKS supports both traditional Makefile and modern CMake build systems:
 
-## Building to test Claude Code changes.
+## Repository Location
 
-Use ```make -j12 mac_arm``` to compile SPPARKS for testing after Claude Code changes.
+Primary repository: `/Users/Tron/spparks`
 
-Test changes using mpirun with 6 cores and the ```/Users/Tron/spparks/examples/ReducedTempAM/QuatTest/in.additive``` input file. Let the tests run for at least 30 seconds.
+**Related repositories:**
+- **Microstructure Analysis Scripts**: `/Users/Tron/spparks-micro-analysis`
+  - Previously located in `micro_analysis_scripts/` (extracted November 2025)
+  - Contains Python tools for analyzing SPPARKS output (IPF, KAM, GND, thermal analysis)
+  - Requires SPPARKS STITCH library
+  - See separate CLAUDE.md in that repository for analysis-specific guidance
+
+## Building to test Claude Code changes
+
+**Quick build for testing (Homebrew dependencies):**
+```bash
+cd /Users/Tron/spparks/src
+make -j12 mac_arm
+```
+
+**Full-featured build with all packages:**
+```bash
+cd /Users/Tron/spparks/src
+./build_cmake.sh --highfive --package stitch --hdf5 --jpeg -m mpi
+```
+
+**Test changes:**
+Use mpirun with 6 cores and the `/Users/Tron/spparks/examples/ReducedTempAM/QuatTest/in.additive` input file. Let tests run for at least 30 seconds.
 
 ### CMake Build (Recommended)
 
@@ -71,6 +93,42 @@ CMake advantages:
 - Cross-platform compatibility
 - Package config file generation
 - Easier customization
+
+### Spack Environment Management
+
+SPPARKS includes `spack.yaml` for reproducible dependency management across systems.
+
+**Quick Start:**
+```bash
+# One-time setup (if Spack not installed)
+git clone https://github.com/spack/spack.git ~/spack
+source ~/spack/share/spack/setup-env.sh
+
+# Create and activate environment
+cd /Users/Tron/spparks
+spack env create spparks-dev spack.yaml
+spack env activate spparks-dev
+spack install -j 4  # Install all dependencies
+
+# Build SPPARKS with Spack dependencies
+cd src
+./build_cmake.sh --highfive --package stitch --hdf5 --jpeg -m mpi
+```
+
+**Python Compatibility:**
+- Spack 1.0.2 (Homebrew): Requires Python ≤ 3.12 (incompatible with 3.13+)
+- Spack develop (source): Compatible with Python 3.13+
+- Recommended: Use Python 3.10-3.12 for stability
+
+**Common Issues:**
+- If `berkeley-db` download stalls: `brew install berkeley-db && spack external find berkeley-db`
+- Increase download timeout: Add `connect_timeout: 120` to `spack config edit config`
+- Use Homebrew fallback: Install dependencies via Homebrew, then use `spack external find`
+
+**Deactivate environment:**
+```bash
+spack env deactivate
+```
 
 ## Architecture Overview
 
@@ -251,6 +309,8 @@ make mpi-stubs
 - `cmake/PackageManager.cmake`: Package installation system
 - `style_*.h`: Auto-generated class registration headers
 
-**Package Management:**
+**Package & Dependency Management:**
 - `STITCH/`: Optional STITCH package for external coupling
 - `Makefile.package*`: Package configuration for Makefile system
+- `spack.yaml`: Spack environment specification for reproducible dependency management
+- `README_SPACK.md`: Detailed Spack usage guide

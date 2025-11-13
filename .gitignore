@@ -33,6 +33,9 @@ dump.*
 src/Makefile.package
 src/Makefile.package.settings
 
+# Installed KOKKOS package files (copied from src/KOKKOS/)
+src/*_kokkos.*
+
 # Python cache
 __pycache__/
 *.pyc

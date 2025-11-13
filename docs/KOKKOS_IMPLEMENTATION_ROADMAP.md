@@ -2,7 +2,7 @@
 
 **Author:** Research conducted November 2025
 **Branch:** SURGE-kokkos
-**Status:** ✅ Phase 3.2 Complete - All Potts Apps Race-Condition Free (as of November 13, 2025)
+**Status:** ✅ Phase 3.4 Complete - User-Controllable Sync Profiling (as of November 13, 2025)
 
 ## Executive Summary
 
@@ -112,6 +112,8 @@ This document outlines a comprehensive strategy for integrating Kokkos into SPPA
 - `434da99` - **Complete Phase 3.2: Add double-buffer framework to AppPottsKokkos** (November 13, 2025)
 - `6b9c909` - **Optimize host-device sync: Reduce device memory copies by 33% - Phase 3.3** (November 13, 2025)
 - `6ab31c5` - **Add comprehensive sync profiling infrastructure for GPU testing - Phase 3.3** (November 13, 2025)
+- `6115a31` - **Document Phase 3.3: Selective sync optimization and profiling** (November 13, 2025)
+- `530a64d` - **Add sync_profiling input command for Kokkos apps - Phase 3.4** (November 13, 2025)
 
 ### ✅ Phase 2 Complete - MPI + Sector Support + Potts Variants
 
@@ -241,9 +243,41 @@ The double-buffer solution for AppPottsQuaternionKokkos represents a general pat
 - Zero performance regression: all tests produce correct physics
 - Profiling infrastructure ready for GPU hardware testing
 
-### ⏳ Next Steps - Phase 3.4 and Beyond
+**Phase 3.4 - User-Controllable Sync Profiling (November 13, 2025):**
+- ✅ Implemented `sync_profiling yes/no` input command for Kokkos apps
+  - New input_app() override in AppPottsKokkos and AppPottsQuaternionKokkos
+  - Accepts both `yes/no` and `on/off` syntax
+  - Follows SPPARKS pattern for app-specific commands (like `sector yes/no`)
+- ✅ Made profiling disabled by default
+  - Zero overhead when not enabled
+  - Profiling only collected when explicitly requested
+  - Added sync_profiling_enabled member variable to control behavior
+- ✅ Conditional profiling output at end of run
+  - Statistics only print when profiling is enabled
+  - Detailed sync breakdown by type (selective, full, to_host)
+  - Timing, frequency, and data volume metrics
+- ✅ Testing and validation
+  - AppPottsQuaternionKokkos: Profiling shows 2,088 selective syncs
+  - ~0.07s overhead (~0.18% of 38s runtime) when enabled
+  - Default off verified: No profiling output without command
+  - 33% sync reduction confirmed via profiling data
 
-**Phase 3.4 - GPU Backend Testing (HIGH PRIORITY):**
+**Usage in input file:**
+```
+app_style potts/quaternion/kk 100 cubic
+sync_profiling yes
+run 10.0
+```
+
+**Impact:**
+- User-friendly control over performance analysis
+- Enables targeted profiling without recompilation
+- Ready for GPU hardware testing and optimization
+- Provides quantitative data for optimization decisions
+
+### ⏳ Next Steps - Phase 3.5 and Beyond
+
+**Phase 3.5 - GPU Backend Testing (HIGH PRIORITY):**
 - ⏳ Test all four Potts apps on real GPU hardware (CUDA, HIP)
 - ⏳ Expected: 10-30× speedups compared to current OpenMP results
 - ⏳ Validate physics correctness across different backends
@@ -251,14 +285,14 @@ The double-buffer solution for AppPottsQuaternionKokkos represents a general pat
 - ⏳ Use profiling infrastructure to measure actual sync overhead on GPU
 - ⏳ Profile kernel performance and identify bottlenecks
 
-**Phase 3.5 - Further Performance Optimization (Months 7-9):**
+**Phase 3.6 - Further Performance Optimization (Months 7-9):**
 - ⏳ Ghost-region-only partial syncs (reduce data volume)
 - ⏳ Team policy optimization for better GPU utilization
 - ⏳ Investigate persistent kernel approaches
 - ⏳ Async sync with Kokkos streams (overlap computation/communication)
 - ⏳ Device-side pack/unpack kernels for MPI buffers
 
-**Phase 3.6 - Additional Kokkos Apps:**
+**Phase 3.7 - Additional Kokkos Apps:**
 - ⏳ **AppIsingKokkos** - Ising model (simpler than Potts, good for testing)
 - ⏳ **AppDiffusionKokkos** - Diffusion processes
 - ⏳ Apply double-buffer framework and profiling from the start
@@ -286,6 +320,7 @@ The double-buffer solution for AppPottsQuaternionKokkos represents a general pat
 - ✅ **Phase 3.1:** Generalized double-buffer framework
 - ✅ **Phase 3.2:** All four Potts Kokkos apps race-condition free
 - ✅ **Phase 3.3:** Selective sync optimization + profiling infrastructure
+- ✅ **Phase 3.4:** User-controllable sync profiling via input command
 
 See detailed roadmap sections below for complete implementation plan.
 

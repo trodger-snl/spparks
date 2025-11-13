@@ -24,6 +24,7 @@ AppStyle(potts/kk,AppPottsKokkos)
 #define SPK_APP_POTTS_KOKKOS_H
 
 #include "app_potts.h"
+#include "kokkos_double_buffer.h"
 #include <Kokkos_Core.hpp>
 #include <Kokkos_DualView.hpp>
 #include <Kokkos_Random.hpp>
@@ -38,7 +39,7 @@ class AppPottsKokkos : public AppPotts {
   virtual ~AppPottsKokkos();
 
   // Kokkos-specific data
-  Kokkos::DualView<int*> k_spin;
+  KokkosDoubleBuffer<int> buffer_spin;
   Kokkos::DualView<int*> k_numneigh;
   Kokkos::DualView<int**> k_neighbor;
   Kokkos::DualView<double*> k_propensity;
@@ -73,9 +74,11 @@ private:
   struct ComputeEnergyFunctor;
   struct RejectionSweepFunctor;
 
-  // Sync helper
-  void sync_spin_to_device();
-  void sync_spin_to_host();
+  // Sync helpers
+  void sync_data_to_device();           // MPI version - updates both buffers
+  void sync_data_to_device_full();      // Full version - updates both buffers (initialization)
+  void sync_data_to_host();
+  void swap_buffers();
 };
 
 }

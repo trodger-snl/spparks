@@ -62,10 +62,10 @@ void AppPottsKokkos::grow_app()
   AppPotts::grow_app();
 
   // Allocate/resize Kokkos views
-  // Don't copy data here - it will be uninitialized
-  // Data copying happens in init_app() after sites are set
   int nall = nlocal + nghost;
-  k_spin = Kokkos::DualView<int*>("spin", nall);
+
+  // Allocate double buffer for spin using generalized framework
+  buffer_spin.allocate("spin", nall);
 
   // Allocate neighbor arrays
   k_numneigh = Kokkos::DualView<int*>("numneigh", nall);
@@ -102,37 +102,46 @@ void AppPottsKokkos::init_app()
     k_neighbor.modify_host();
   }
 
-  // Sync spin data to device
-  sync_spin_to_device();
+  // Sync spin data to device (full sync for initialization)
+  sync_data_to_device_full();
 }
 
 /* ----------------------------------------------------------------------
-   sync spin data to device
+   sync spin data to device - FULL VERSION (both buffers)
+   Used only during initialization
 ------------------------------------------------------------------------- */
 
-void AppPottsKokkos::sync_spin_to_device()
+void AppPottsKokkos::sync_data_to_device_full()
 {
-  int nall = nlocal + nghost;
-  auto h_spin = k_spin.h_view;
-  for (int i = 0; i < nall; i++) {
-    h_spin(i) = spin[i];
-  }
-  k_spin.modify_host();
-  k_spin.sync_device();
+  buffer_spin.sync_to_device_full(spin);
+}
+
+/* ----------------------------------------------------------------------
+   sync spin data to device - MPI VERSION (both buffers)
+   Used after MPI communication to update ghost sites
+------------------------------------------------------------------------- */
+
+void AppPottsKokkos::sync_data_to_device()
+{
+  buffer_spin.sync_to_device(spin);
 }
 
 /* ----------------------------------------------------------------------
    sync spin data to host
 ------------------------------------------------------------------------- */
 
-void AppPottsKokkos::sync_spin_to_host()
+void AppPottsKokkos::sync_data_to_host()
 {
-  int nall = nlocal + nghost;
-  k_spin.sync_host();
-  auto h_spin = k_spin.h_view;
-  for (int i = 0; i < nall; i++) {
-    spin[i] = h_spin(i);
-  }
+  buffer_spin.sync_to_host(spin);
+}
+
+/* ----------------------------------------------------------------------
+   swap read/write buffers after each sweep
+------------------------------------------------------------------------- */
+
+void AppPottsKokkos::swap_buffers()
+{
+  buffer_spin.swap();
 }
 
 /* ----------------------------------------------------------------------
@@ -236,16 +245,15 @@ struct AppPottsKokkos::ComputeEnergyFunctor {
 void AppPottsKokkos::compute_all_energies_kokkos()
 {
   // Sync data to device
-  k_spin.sync_device();
   k_numneigh.sync_device();
   k_neighbor.sync_device();
 
   // Allocate energy array on device
   Kokkos::View<double*> d_energy("energy", nlocal);
 
-  // Launch kernel
+  // Launch kernel (use read_buffer for reading spin data)
   ComputeEnergyFunctor functor(
-    k_spin.d_view,
+    buffer_spin.read_buffer,
     k_numneigh.d_view,
     k_neighbor.d_view,
     d_energy
@@ -266,19 +274,21 @@ struct AppPottsKokkos::RejectionSweepFunctor {
   typedef int value_type;  // For parallel_reduce
   typedef Kokkos::Random_XorShift64_Pool<> pool_type;
 
-  view_type spin;
+  view_type spin_read;   // Read from this buffer (immutable)
+  view_type spin_write;  // Write to this buffer
   view_type numneigh;
   Kokkos::View<int**, Kokkos::DefaultExecutionSpace::memory_space> neighbor;
-  pool_type rand_pool;  // Pool, not generator!
+  pool_type rand_pool;
   int nspins;
   double temperature;
   double t_inverse;
 
-  RejectionSweepFunctor(view_type spin_, view_type numneigh_,
+  RejectionSweepFunctor(view_type spin_read_, view_type spin_write_,
+                        view_type numneigh_,
                         Kokkos::View<int**> neighbor_,
                         pool_type& rand_pool_,
                         int nspins_, double temp_, double t_inv_) :
-    spin(spin_), numneigh(numneigh_), neighbor(neighbor_),
+    spin_read(spin_read_), spin_write(spin_write_), numneigh(numneigh_), neighbor(neighbor_),
     rand_pool(rand_pool_), nspins(nspins_), temperature(temp_), t_inverse(t_inv_) {}
 
   KOKKOS_INLINE_FUNCTION
@@ -286,13 +296,13 @@ struct AppPottsKokkos::RejectionSweepFunctor {
     // Each thread gets its own RNG state from the pool
     auto rand_gen = rand_pool.get_state();
 
-    // Get current spin
-    int oldstate = spin(i);
+    // Get current spin from read buffer
+    int oldstate = spin_read(i);
 
-    // Calculate current energy
+    // Calculate current energy (read neighbors from read buffer)
     int eng_before = 0;
     for (int j = 0; j < numneigh(i); j++) {
-      if (oldstate != spin(neighbor(i, j))) eng_before++;
+      if (oldstate != spin_read(neighbor(i, j))) eng_before++;
     }
 
     // Propose random new spin
@@ -300,25 +310,30 @@ struct AppPottsKokkos::RejectionSweepFunctor {
     int iran = static_cast<int>(nspins * rand_val) + 1;
     if (iran > nspins) iran = nspins;
 
-    // Calculate new energy
+    // Calculate new energy (read neighbors from read buffer)
     int eng_after = 0;
     for (int j = 0; j < numneigh(i); j++) {
-      if (iran != spin(neighbor(i, j))) eng_after++;
+      if (iran != spin_read(neighbor(i, j))) eng_after++;
     }
 
     // Metropolis acceptance
     double delta = eng_after - eng_before;
     int move_accepted = 0;
+    int newstate = oldstate;  // Default: keep old state
+
     if (delta <= 0.0) {
-      spin(i) = iran;
+      newstate = iran;
       move_accepted = 1;
     } else if (temperature > 0.0) {
       double prob = exp(-delta * t_inverse);
       if (rand_gen.drand() < prob) {
-        spin(i) = iran;
+        newstate = iran;
         move_accepted = 1;
       }
     }
+
+    // ALWAYS write to write buffer (accepted OR rejected state)
+    spin_write(i) = newstate;
 
     // Return RNG state to pool
     rand_pool.free_state(rand_gen);
@@ -351,7 +366,7 @@ void AppPottsKokkos::iterate_rejection(double stoptime)
       // Sync device to host before MPI communication
       // MPI operates on host data, so we need current device state
       if (nprocs > 1 && iset > 0) {
-        sync_spin_to_host();
+        sync_data_to_host();
       }
 
       // MPI communication for this sector
@@ -367,8 +382,8 @@ void AppPottsKokkos::iterate_rejection(double stoptime)
       timer->stamp();
 
       // Sync data to device after MPI communication
-      // Need to get updated ghost sites from MPI
-      sync_spin_to_device();
+      // Need to get updated ghost sites from MPI (both buffers)
+      sync_data_to_device();
       if (iset == 0) {
         if (!k_numneigh.need_sync_device()) k_numneigh.sync_device();
         if (!k_neighbor.need_sync_device()) k_neighbor.sync_device();
@@ -408,7 +423,7 @@ void AppPottsKokkos::iterate_rejection(double stoptime)
       timer->stamp(TIME_SOLVE);
 
       // Sync device to host before reverse MPI communication
-      sync_spin_to_host();
+      sync_data_to_host();
 
       if (nprocs > 1) {
         if (sectorflag) comm->reverse_sector(iset);
@@ -436,17 +451,16 @@ void AppPottsKokkos::iterate_rejection(double stoptime)
 void AppPottsKokkos::sweep_rejection_kokkos()
 {
   // Sync to device (caller already does this, but check for safety)
-  if (k_spin.need_sync_device()) k_spin.sync_device();
   if (k_numneigh.need_sync_device()) k_numneigh.sync_device();
   if (k_neighbor.need_sync_device()) k_neighbor.sync_device();
 
-  // Launch kernel with reduction to count accepted moves
-  // Pass the POOL so each thread can get its own RNG state
+  // Launch kernel with double-buffer: read from read_buffer, write to write_buffer
   RejectionSweepFunctor functor(
-    k_spin.d_view,
+    buffer_spin.read_buffer,   // Read from immutable read buffer
+    buffer_spin.write_buffer,  // Write to write buffer
     k_numneigh.d_view,
     k_neighbor.d_view,
-    *rand_pool,  // Pass pool, not individual state
+    *rand_pool,
     nspins,
     temperature,
     t_inverse
@@ -459,8 +473,8 @@ void AppPottsKokkos::sweep_rejection_kokkos()
   // Update global acceptance counter
   naccept += naccept_local;
 
-  // Mark data as modified on device
-  k_spin.modify_device();
+  // Swap buffers: write_buffer becomes new read_buffer for next sweep
+  swap_buffers();
 }
 
 /* ----------------------------------------------------------------------
@@ -470,7 +484,6 @@ void AppPottsKokkos::sweep_rejection_kokkos()
 void AppPottsKokkos::sweep_rejection_kokkos(int nsite, int *site_list)
 {
   // Sync to device (caller already does this once per timestep)
-  if (k_spin.need_sync_device()) k_spin.sync_device();
   if (k_numneigh.need_sync_device()) k_numneigh.sync_device();
   if (k_neighbor.need_sync_device()) k_neighbor.sync_device();
 
@@ -482,48 +495,47 @@ void AppPottsKokkos::sweep_rejection_kokkos(int nsite, int *site_list)
   }
   Kokkos::deep_copy(d_site_list, h_site_list);
 
-  // Create functor that operates on site list
+  // Create functor that operates on site list with double-buffer
   typedef Kokkos::View<int*, Kokkos::DefaultExecutionSpace::memory_space> view_type;
 
   struct SectorSweepFunctor {
     typedef int value_type;
     typedef Kokkos::Random_XorShift64_Pool<> pool_type;
 
-    view_type spin;
+    view_type spin_read;   // Read from this buffer
+    view_type spin_write;  // Write to this buffer
     view_type numneigh;
     Kokkos::View<int**, Kokkos::DefaultExecutionSpace::memory_space> neighbor;
-    view_type site_indices;  // List of sites to process
+    view_type site_indices;
     pool_type rand_pool;
     int nspins;
     double temperature;
     double t_inverse;
 
-    SectorSweepFunctor(view_type spin_, view_type numneigh_,
+    SectorSweepFunctor(view_type spin_read_, view_type spin_write_,
+                       view_type numneigh_,
                        Kokkos::View<int**> neighbor_,
                        view_type site_indices_,
                        pool_type& rand_pool_,
                        int nspins_, double temp_, double t_inv_) :
-      spin(spin_), numneigh(numneigh_), neighbor(neighbor_),
+      spin_read(spin_read_), spin_write(spin_write_), numneigh(numneigh_), neighbor(neighbor_),
       site_indices(site_indices_),
       rand_pool(rand_pool_), nspins(nspins_),
       temperature(temp_), t_inverse(t_inv_) {}
 
     KOKKOS_INLINE_FUNCTION
     void operator()(const int idx, int& accepted) const {
-      // idx is index into site_indices array
-      // i is the actual site index
       int i = site_indices(idx);
 
-      // Each thread gets its own RNG state from the pool
       auto rand_gen = rand_pool.get_state();
 
-      // Get current spin
-      int oldstate = spin(i);
+      // Get current spin from read buffer
+      int oldstate = spin_read(i);
 
-      // Calculate current energy
+      // Calculate current energy (read neighbors from read buffer)
       int eng_before = 0;
       for (int j = 0; j < numneigh(i); j++) {
-        if (oldstate != spin(neighbor(i, j))) eng_before++;
+        if (oldstate != spin_read(neighbor(i, j))) eng_before++;
       }
 
       // Propose random new spin
@@ -531,27 +543,31 @@ void AppPottsKokkos::sweep_rejection_kokkos(int nsite, int *site_list)
       int iran = static_cast<int>(nspins * rand_val) + 1;
       if (iran > nspins) iran = nspins;
 
-      // Calculate new energy
+      // Calculate new energy (read neighbors from read buffer)
       int eng_after = 0;
       for (int j = 0; j < numneigh(i); j++) {
-        if (iran != spin(neighbor(i, j))) eng_after++;
+        if (iran != spin_read(neighbor(i, j))) eng_after++;
       }
 
       // Metropolis acceptance
       double delta = eng_after - eng_before;
       int move_accepted = 0;
+      int newstate = oldstate;  // Default: keep old state
+
       if (delta <= 0.0) {
-        spin(i) = iran;
+        newstate = iran;
         move_accepted = 1;
       } else if (temperature > 0.0) {
         double prob = exp(-delta * t_inverse);
         if (rand_gen.drand() < prob) {
-          spin(i) = iran;
+          newstate = iran;
           move_accepted = 1;
         }
       }
 
-      // Return RNG state to pool
+      // ALWAYS write to write buffer (accepted OR rejected state)
+      spin_write(i) = newstate;
+
       rand_pool.free_state(rand_gen);
 
       accepted += move_accepted;
@@ -560,7 +576,8 @@ void AppPottsKokkos::sweep_rejection_kokkos(int nsite, int *site_list)
 
   // Launch kernel over site list
   SectorSweepFunctor functor(
-    k_spin.d_view,
+    buffer_spin.read_buffer,   // Read from immutable read buffer
+    buffer_spin.write_buffer,  // Write to write buffer
     k_numneigh.d_view,
     k_neighbor.d_view,
     d_site_list,
@@ -574,9 +591,8 @@ void AppPottsKokkos::sweep_rejection_kokkos(int nsite, int *site_list)
   Kokkos::parallel_reduce("AppPotts::SectorSweep", nsite, functor, naccept_local);
   Kokkos::fence();
 
-  // Update global acceptance counter
   naccept += naccept_local;
 
-  // Mark data as modified on device
-  k_spin.modify_device();
+  // Swap buffers: write_buffer becomes new read_buffer for next sweep
+  swap_buffers();
 }

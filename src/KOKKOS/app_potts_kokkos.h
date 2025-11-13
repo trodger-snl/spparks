@@ -1,0 +1,88 @@
+/* ----------------------------------------------------------------------
+   SPPARKS - Stochastic Parallel PARticle Kinetic Simulator
+
+   Website
+   https://spparks.github.io/
+
+   See authors
+   https://spparks.github.io/authors.html
+
+   Copyright(C) 1999-2025 National Technology & Engineering Solutions
+   of Sandia, LLC (NTESS). Under the terms of Contract DE-NA0003525 with
+   NTESS, the U.S. Government retains certain rights in this software.
+
+   This software is distributed under the GNU General Public License.  See
+   LICENSE in top-level SPPARKS directory.
+------------------------------------------------------------------------- */
+
+#ifdef APP_CLASS
+AppStyle(potts/kk,AppPottsKokkos)
+
+#else
+
+#ifndef SPK_APP_POTTS_KOKKOS_H
+#define SPK_APP_POTTS_KOKKOS_H
+
+#include "app_potts.h"
+#include "app_lattice_kokkos.h"
+
+namespace SPPARKS_NS {
+
+class AppPottsKokkos : public AppPotts {
+public:
+  AppPottsKokkos(class SPPARKS *, int, char **);
+  virtual ~AppPottsKokkos();
+
+  // Kokkos-specific data
+  Kokkos::DualView<int*> k_spin;
+
+  // Override base class methods with Kokkos versions
+  virtual void grow_app();
+  virtual void init_app();
+
+  // Kokkos computation kernels - these call the base class versions
+  // but can be overridden to call device kernels
+  virtual double site_energy(int);
+  virtual void site_event_rejection(int, class RandomPark *);
+  virtual double site_propensity(int);
+  virtual void site_event(int, class RandomPark *);
+
+  // Kokkos-specific kernel implementations
+  double site_energy_kokkos(int);
+  void site_event_rejection_kokkos(int, class RandomPark *);
+  double site_propensity_kokkos(int);
+
+  // Bulk parallel operations on device
+  void compute_all_energies_kokkos();
+  void sweep_rejection_kokkos();
+
+private:
+  // Device-side helper functors
+  struct ComputeEnergyFunctor;
+  struct RejectionSweepFunctor;
+
+  // Sync helper
+  void sync_spin_to_device();
+  void sync_spin_to_host();
+};
+
+}
+
+#endif
+#endif
+
+/* ERROR/WARNING messages:
+
+E: Illegal ... command
+
+Self-explanatory.  Check the input script syntax and compare to the
+documentation for the command.  You can use -echo screen as a
+command-line option when running SPPARKS to see the offending
+line.
+
+E: One or more sites have invalid values
+
+The application only allows sites to be initialized with specific
+values.
+
+*/

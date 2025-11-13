@@ -56,6 +56,11 @@ class AppPottsNeighOnlyKokkos : public AppPottsNeighOnly {
   void sweep_rejection_kokkos();
   void sweep_rejection_kokkos(int, int *);
 
+  // Profiling helpers
+  void enable_sync_profiling(bool enable = true) { buffer_spin.enable_profiling(enable); }
+  void reset_sync_profiling() { buffer_spin.reset_profiling(); }
+  void print_sync_profiling_stats(FILE* fp) { buffer_spin.print_profiling_stats(fp, "spin"); }
+
 private:
   // Device-side helper functors
   struct RejectionSweepFunctor;

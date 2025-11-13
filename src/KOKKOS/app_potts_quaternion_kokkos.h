@@ -70,6 +70,29 @@ class AppPottsQuaternionKokkos : public AppPottsQuaternion {
   void sweep_rejection_kokkos();
   void sweep_rejection_kokkos(int, int *);
 
+  // Profiling helpers
+  void enable_sync_profiling(bool enable = true) {
+    buffer_spin.enable_profiling(enable);
+    buffer_q0.enable_profiling(enable);
+    buffer_qx.enable_profiling(enable);
+    buffer_qy.enable_profiling(enable);
+    buffer_qz.enable_profiling(enable);
+  }
+  void reset_sync_profiling() {
+    buffer_spin.reset_profiling();
+    buffer_q0.reset_profiling();
+    buffer_qx.reset_profiling();
+    buffer_qy.reset_profiling();
+    buffer_qz.reset_profiling();
+  }
+  void print_sync_profiling_stats(FILE* fp) {
+    buffer_spin.print_profiling_stats(fp, "spin");
+    buffer_q0.print_profiling_stats(fp, "q0");
+    buffer_qx.print_profiling_stats(fp, "qx");
+    buffer_qy.print_profiling_stats(fp, "qy");
+    buffer_qz.print_profiling_stats(fp, "qz");
+  }
+
 private:
   // Device-side helper functors
   struct ComputeEnergyFunctor;

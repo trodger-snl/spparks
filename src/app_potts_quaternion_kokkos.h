@@ -48,6 +48,14 @@ class AppPottsQuaternionKokkos : public AppPottsQuaternion {
   Kokkos::DualView<double*> k_qy;
   Kokkos::DualView<double*> k_qz;
 
+  // Double-buffer system to prevent race conditions
+  // Read and write to separate buffers, then swap after each sweep
+  Kokkos::View<int*> d_spin_read, d_spin_write;
+  Kokkos::View<double*> d_q0_read, d_q0_write;
+  Kokkos::View<double*> d_qx_read, d_qx_write;
+  Kokkos::View<double*> d_qy_read, d_qy_write;
+  Kokkos::View<double*> d_qz_read, d_qz_write;
+
   // Symmetries (copied to device once, read-only)
   Kokkos::View<double*> d_symmetries;
   int num_symmetries;
@@ -77,6 +85,7 @@ private:
   // Sync helpers
   void sync_data_to_device();
   void sync_data_to_host();
+  void swap_buffers();
 
   // Device-compatible quaternion operations
   struct QuaternionOps {

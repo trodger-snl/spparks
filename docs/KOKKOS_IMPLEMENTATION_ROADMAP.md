@@ -31,11 +31,13 @@ This document outlines a comprehensive strategy for integrating Kokkos into SPPA
 - ✅ **AppPottsKokkos** - Standard Potts model with random spin flips
 - ✅ **AppPottsNeighKokkos** - Neighbor-based rejection with null bin
 - ✅ **AppPottsNeighOnlyKokkos** - Neighbor-based rejection without null bin
+- ✅ **AppPottsQuaternionKokkos** - Quaternion-based grain growth with Read-Shockley energy (NEW!)
 
 **Measured Performance (OpenMP backend, 12-core M2 Pro):**
 - ✅ **3.5× speedup** on small problem (20³ lattice, 8k sites) - AppPottsKokkos
 - ✅ **~4× speedup** on larger problem (50³ lattice, 125k sites) - AppPottsKokkos
 - ✅ **1.3× speedup** on AppPottsNeighKokkos (20³ lattice)
+- ✅ **33.5× speedup** on AppPottsQuaternionKokkos (20³ lattice, 8k sites) - NEW!
 - ✅ Physics validated - energy trends match CPU versions exactly
 - ✅ **MPI + Sectors working:** Tested with 1-2 procs and 2-8 sectors
 - ✅ **All sector configurations validated:** 2, 4, 8 sectors on single processor
@@ -77,6 +79,7 @@ This document outlines a comprehensive strategy for integrating Kokkos into SPPA
 - `src/KOKKOS/app_potts_kokkos.{h,cpp}` - **With iterate_rejection() override + MPI sync fixes**
 - `src/KOKKOS/app_potts_neigh_kokkos.{h,cpp}` - **NEW: Neighbor-based rejection with null bin**
 - `src/KOKKOS/app_potts_neighonly_kokkos.{h,cpp}` - **NEW: Neighbor-based rejection without null bin**
+- `src/app_potts_quaternion_kokkos.{h,cpp}` - **NEW: Quaternion grain growth with double-buffer race condition fix**
 - `src/main.cpp` - **Added Kokkos initialization**
 - `src/KOKKOS/Install.sh`
 - `src/KOKKOS/README.md` - **Updated with Phase 2 results**
@@ -84,6 +87,8 @@ This document outlines a comprehensive strategy for integrating Kokkos into SPPA
 - `examples/potts/in.potts.large.kk` - **Benchmark test case**
 - `examples/potts/in.potts.neigh{,.kk}` - **NEW: Test cases for AppPottsNeigh variants**
 - `examples/potts/in.potts.neighonly{,.kk}` - **NEW: Test cases for AppPottsNeighOnly variants**
+- `examples/potts_quaternion/in.potts_quaternion.compare{,.kk,.kk.nosector}` - **NEW: Quaternion test cases**
+- `examples/potts_quaternion/KOKKOS_PHYSICS_VALIDATION.md` - **NEW: Physics validation results**
 - Updated: `src/cmake/PackageManager.cmake`, `src/cmake/ConditionalSources.cmake`, `src/CMakeLists.txt`
 
 **Git Commits:**
@@ -95,6 +100,8 @@ This document outlines a comprehensive strategy for integrating Kokkos into SPPA
 - `785d6a7` - Update roadmap - Phase 1 complete with device kernels running
 - `9f4106b` - Add MPI + Sector support to AppPottsKokkos - Phase 2 complete
 - `fa7f9be` - **Add AppPottsNeighKokkos and AppPottsNeighOnlyKokkos with MPI sync fixes**
+- `a3c6a9c` - Add AppPottsQuaternionKokkos implementation (WIP - has race condition bug)
+- `69b8628` - **Fix race condition with double-buffer approach in AppPottsQuaternionKokkos**
 
 ### ✅ Phase 2 Complete - MPI + Sector Support + Potts Variants
 
@@ -126,8 +133,31 @@ This document outlines a comprehensive strategy for integrating Kokkos into SPPA
 - ✅ Updated build system (ConditionalSources.cmake, PackageManager.cmake)
 - ✅ Physics validation: All apps match CPU energy evolution
 
+**Phase 2.3 - AppPottsQuaternionKokkos + Double-Buffer Fix (November 13):**
+- ✅ Implemented `AppPottsQuaternionKokkos` - quaternion-based grain growth simulation
+  - Device-compatible quaternion operations (composition, conjugate, disorientation)
+  - Cubic crystal symmetry support (24 operations)
+  - Read-Shockley grain boundary energy model: E(θ) = (θ/θₘ)[1 - ln(θ/θₘ)]
+  - Metropolis Monte Carlo with unique neighbor finding
+  - Full MPI and sector support
+- ✅ **Fixed critical race condition in parallel kernel execution:**
+  - **Root Cause:** Parallel threads reading/writing same memory locations caused "torn reads" - spin IDs and quaternions became desynchronized
+  - **Impact:** System appeared to coarsen (all quaternions identical) but spin IDs were random noise
+  - **Solution:** Implemented double-buffer approach:
+    - Separate read and write buffers for all site data
+    - All threads read from `*_read` buffers
+    - All threads write to `*_write` buffers
+    - After each sweep, swap buffer pointers
+    - Guarantees atomic consistency of spin+quaternion data
+  - **Result:** Perfect synchronization - sites with same spin ID have identical quaternions
+- ✅ **33.5× speedup on OpenMP backend** (vs 157s CPU time → 4.7s Kokkos time)
+- ✅ Physics validation: Energy evolution matches CPU version
+- ✅ Tested with and without sectors - both configurations working correctly
+
 **Key Technical Achievement:**
 The MPI synchronization fix was critical for correctness. Before the fix, energy evolution was completely wrong (e.g., AppPottsNeigh: 9,172 vs correct 37,864). After the fix, all Kokkos apps produce physically correct results that match (within RNG variance) the CPU versions.
+
+The double-buffer solution for AppPottsQuaternionKokkos represents a general pattern for avoiding race conditions in parallel Monte Carlo simulations where complex state data (spin + multiple quaternion components) must remain atomically consistent.
 
 ### ⏳ Next Steps - Phase 3
 
@@ -136,11 +166,11 @@ The MPI synchronization fix was critical for correctness. Before the fix, energy
 - ⏳ Additional Kokkos apps:
   - AppIsing/AppIsingKokkos
   - AppDiffusion/AppDiffusionKokkos
-  - AppPottsQuaternion/AppPottsQuaternionKokkos (critical for AM simulations)
 - ⏳ Performance optimization:
   - Reduce host↔device sync overhead (currently syncing every sector)
   - Team policy optimization for better GPU utilization
   - Investigate persistent kernel approaches
+  - Profile and optimize AppPottsQuaternionKokkos double-buffer overhead
 
 **Medium-term (Q3-Q4 Months 10-12):**
 - ⏳ GPU-aware MPI communication (reduce host staging)
@@ -160,6 +190,7 @@ The MPI synchronization fix was critical for correctness. Before the fix, energy
 **Completed from Phase 3:**
 - ✅ AppPottsNeigh/AppPottsNeighKokkos
 - ✅ AppPottsNeighOnly/AppPottsNeighOnlyKokkos
+- ✅ AppPottsQuaternion/AppPottsQuaternionKokkos (with double-buffer race condition fix)
 
 See detailed roadmap sections below for complete implementation plan.
 

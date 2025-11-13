@@ -243,8 +243,7 @@ cmake -DSPPARKS_PACKAGE_STITCH=OFF ..    # Disable STITCH
 ./build_cmake.sh --highfive --hdf5       # Enable both HDF5 and HighFive
 cmake -DSPPARKS_ENABLE_HIGHFIVE=ON ..    # Direct CMake option
 
-# Traditional Makefile build with HighFive (local installation)
-./install_highfive_local.sh              # Install HighFive locally (recommended)
+# Traditional Makefile build with HighFive
 make mac_arm_highfive_local               # Build with local HighFive installation
 ```
 
@@ -313,4 +312,26 @@ make mpi-stubs
 - `STITCH/`: Optional STITCH package for external coupling
 - `Makefile.package*`: Package configuration for Makefile system
 - `spack.yaml`: Spack environment specification for reproducible dependency management
-- `README_SPACK.md`: Detailed Spack usage guide
+
+## GPU Acceleration and Future Development
+
+### Kokkos Integration (Planned)
+
+SPPARKS is exploring GPU acceleration through Kokkos, a performance portability framework that enables running on CPUs and GPUs (NVIDIA, AMD, Intel) from a single C++ codebase.
+
+**Development Branch:** `SURGE-kokkos`
+
+**Documentation:** See [`docs/KOKKOS_IMPLEMENTATION_ROADMAP.md`](/Users/Tron/spparks/docs/KOKKOS_IMPLEMENTATION_ROADMAP.md) for:
+- Comprehensive implementation strategy
+- Analysis of Kokkos in LAMMPS and SPARTA (similar codes)
+- Technical challenges and solutions
+- Phased development roadmap (1-2 years)
+- Expected performance targets (5-50x speedup on GPUs)
+
+**Key Benefits:**
+- Performance portability across diverse hardware
+- Single-source code for CPU/GPU execution
+- Proven on exascale systems (Frontier, Aurora, El Capitan)
+- Incremental adoption alongside existing code
+
+**Status:** Planning phase (November 2025). Infrastructure and proof-of-concept development planned for Year 1.

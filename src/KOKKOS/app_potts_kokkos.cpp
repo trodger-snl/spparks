@@ -30,7 +30,7 @@ enum{NOSWEEP,RANDOM,RASTER,COLOR,COLOR_STRICT};
 /* ---------------------------------------------------------------------- */
 
 AppPottsKokkos::AppPottsKokkos(SPPARKS *spk, int narg, char **arg) :
-  AppPotts(spk, narg, arg), rand_pool(nullptr)
+  AppPotts(spk, narg, arg), rand_pool(nullptr), sync_profiling_enabled(false)
 {
   // Parse arguments for potts/kk - parent skips this for child classes
   if (narg != 2) error->all(FLERR,"Illegal app_style command");
@@ -104,6 +104,11 @@ void AppPottsKokkos::init_app()
 
   // Sync spin data to device (full sync for initialization)
   sync_data_to_device_full();
+
+  // Reset sync profiling counters if enabled (via sync_profiling command)
+  if (sync_profiling_enabled) {
+    reset_sync_profiling();
+  }
 }
 
 /* ----------------------------------------------------------------------
@@ -445,6 +450,13 @@ void AppPottsKokkos::iterate_rejection(double stoptime)
     if (done || time >= nextoutput) nextoutput = output->compute(time,done);
     timer->stamp(TIME_OUTPUT);
   }
+
+  // Print sync profiling statistics at end of run
+  if (sync_profiling_enabled && screen) {
+    fprintf(screen, "\n=== Kokkos Sync Profiling Statistics ===\n");
+    print_sync_profiling_stats(screen);
+    fprintf(screen, "========================================\n\n");
+  }
 }
 
 /* ----------------------------------------------------------------------
@@ -598,4 +610,30 @@ void AppPottsKokkos::sweep_rejection_kokkos(int nsite, int *site_list)
 
   // Swap buffers: write_buffer becomes new read_buffer for next sweep
   swap_buffers();
+}
+
+/* ----------------------------------------------------------------------
+   handle app-specific input commands
+------------------------------------------------------------------------- */
+
+void AppPottsKokkos::input_app(char *command, int narg, char **arg)
+{
+  if (strcmp(command,"sync_profiling") == 0) {
+    if (narg != 1) error->all(FLERR,"Illegal sync_profiling command");
+
+    if (strcmp(arg[0],"yes") == 0 || strcmp(arg[0],"on") == 0) {
+      sync_profiling_enabled = true;
+      enable_sync_profiling(true);
+      if (screen) fprintf(screen, "Sync profiling enabled for AppPottsKokkos\n");
+    } else if (strcmp(arg[0],"no") == 0 || strcmp(arg[0],"off") == 0) {
+      sync_profiling_enabled = false;
+      enable_sync_profiling(false);
+    } else {
+      error->all(FLERR,"Illegal sync_profiling command: expected yes/no or on/off");
+    }
+
+  } else {
+    // Call parent class input_app to handle other commands
+    AppPotts::input_app(command, narg, arg);
+  }
 }

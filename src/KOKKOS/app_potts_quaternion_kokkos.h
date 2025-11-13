@@ -70,6 +70,9 @@ class AppPottsQuaternionKokkos : public AppPottsQuaternion {
   void sweep_rejection_kokkos();
   void sweep_rejection_kokkos(int, int *);
 
+  // Input command processing
+  virtual void input_app(char *, int, char **);
+
   // Profiling helpers
   void enable_sync_profiling(bool enable = true) {
     buffer_spin.enable_profiling(enable);
@@ -104,6 +107,9 @@ private:
   void sync_data_to_device_full();     // Full version - updates both buffers (initialization only)
   void sync_data_to_host();
   void swap_buffers();
+
+  // Profiling configuration
+  bool sync_profiling_enabled;
 
   // Quaternion helper - normalizes arrays on host
   void normalize_quaternion_arrays(double* q0_out, double* qx_out, double* qy_out, double* qz_out,

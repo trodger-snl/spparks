@@ -32,7 +32,8 @@ enum{NOSWEEP,RANDOM,RASTER,COLOR,COLOR_STRICT};
 /* ---------------------------------------------------------------------- */
 
 AppPottsQuaternionKokkos::AppPottsQuaternionKokkos(SPPARKS *spk, int narg, char **arg) :
-  AppPottsQuaternion(spk, narg, arg), rand_pool(nullptr), num_symmetries(0)
+  AppPottsQuaternion(spk, narg, arg), rand_pool(nullptr), num_symmetries(0),
+  sync_profiling_enabled(false)
 {
   // Parent constructor returns early for child classes (style != "potts/quaternion")
   // So we need to parse arguments ourselves
@@ -161,6 +162,11 @@ void AppPottsQuaternionKokkos::init_app()
 
   // Sync site data to device - use full version to initialize both buffers
   sync_data_to_device_full();
+
+  // Reset sync profiling counters if enabled (via sync_profiling command)
+  if (sync_profiling_enabled) {
+    reset_sync_profiling();
+  }
 }
 
 /* ----------------------------------------------------------------------
@@ -688,6 +694,13 @@ void AppPottsQuaternionKokkos::iterate_rejection(double stoptime)
     if (done || time >= nextoutput) nextoutput = output->compute(time,done);
     timer->stamp(TIME_OUTPUT);
   }
+
+  // Print sync profiling statistics at end of run
+  if (sync_profiling_enabled && screen) {
+    fprintf(screen, "\n=== Kokkos Sync Profiling Statistics ===\n");
+    print_sync_profiling_stats(screen);
+    fprintf(screen, "========================================\n\n");
+  }
 }
 
 /* ----------------------------------------------------------------------
@@ -958,4 +971,29 @@ void AppPottsQuaternionKokkos::sweep_rejection_kokkos(int nsite, int *site_list)
 
   // Update global acceptance counter
   naccept += naccept_local;
+}
+
+/* ----------------------------------------------------------------------
+   handle app-specific input commands
+------------------------------------------------------------------------- */
+
+void AppPottsQuaternionKokkos::input_app(char *command, int narg, char **arg)
+{
+  if (strcmp(command,"sync_profiling") == 0) {
+    if (narg != 1) error->all(FLERR,"Illegal sync_profiling command");
+
+    if (strcmp(arg[0],"yes") == 0 || strcmp(arg[0],"on") == 0) {
+      sync_profiling_enabled = true;
+      enable_sync_profiling(true);
+    } else if (strcmp(arg[0],"no") == 0 || strcmp(arg[0],"off") == 0) {
+      sync_profiling_enabled = false;
+      enable_sync_profiling(false);
+    } else {
+      error->all(FLERR,"Illegal sync_profiling command: expected yes/no or on/off");
+    }
+
+  } else {
+    // Call parent class input_app to handle other commands
+    AppPottsQuaternion::input_app(command, narg, arg);
+  }
 }

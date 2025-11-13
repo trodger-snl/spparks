@@ -69,6 +69,9 @@ class AppPottsKokkos : public AppPotts {
   void sweep_rejection_kokkos();
   void sweep_rejection_kokkos(int, int *);
 
+  // Input command processing
+  virtual void input_app(char *, int, char **);
+
   // Profiling helpers
   void enable_sync_profiling(bool enable = true) { buffer_spin.enable_profiling(enable); }
   void reset_sync_profiling() { buffer_spin.reset_profiling(); }
@@ -82,6 +85,9 @@ private:
   // Sync helpers
   void sync_data_to_device();           // MPI version - updates both buffers
   void sync_data_to_device_full();      // Full version - updates both buffers (initialization)
+
+  // Profiling configuration
+  bool sync_profiling_enabled;
   void sync_data_to_host();
   void swap_buffers();
 };

@@ -37,10 +37,12 @@ This document outlines a comprehensive strategy for integrating Kokkos into SPPA
 - ✅ **3.5× speedup** on small problem (20³ lattice, 8k sites) - AppPottsKokkos
 - ✅ **~4× speedup** on larger problem (50³ lattice, 125k sites) - AppPottsKokkos
 - ✅ **1.3× speedup** on AppPottsNeighKokkos (20³ lattice)
-- ✅ **33.5× speedup** on AppPottsQuaternionKokkos (20³ lattice, 8k sites) - NEW!
+- ✅ **33.5× speedup** on AppPottsQuaternionKokkos single-core (20³ lattice, 8k sites)
+- ✅ **14.7× speedup** on AppPottsQuaternionKokkos with 4 MPI ranks (20³ lattice, 8k sites) - NEW!
 - ✅ Physics validated - energy trends match CPU versions exactly
-- ✅ **MPI + Sectors working:** Tested with 1-2 procs and 2-8 sectors
-- ✅ **All sector configurations validated:** 2, 4, 8 sectors on single processor
+- ✅ **MPI + Sectors working:** Tested with 1-4 MPI procs and 2-8 sectors
+- ✅ **All sector configurations validated:** 2, 4, 8 sectors on single and multi-processor
+- ✅ **Zero desynchronized spins** in MPI runs - perfect grain structure integrity
 
 ### ✅ Completed Work
 
@@ -102,6 +104,7 @@ This document outlines a comprehensive strategy for integrating Kokkos into SPPA
 - `fa7f9be` - **Add AppPottsNeighKokkos and AppPottsNeighOnlyKokkos with MPI sync fixes**
 - `a3c6a9c` - Add AppPottsQuaternionKokkos implementation (WIP - has race condition bug)
 - `69b8628` - **Fix race condition with double-buffer approach in AppPottsQuaternionKokkos**
+- `f539eb5` - **Fix MPI + sectors desynchronization in AppPottsQuaternionKokkos** (November 13, 2025)
 
 ### ✅ Phase 2 Complete - MPI + Sector Support + Potts Variants
 
@@ -150,14 +153,27 @@ This document outlines a comprehensive strategy for integrating Kokkos into SPPA
     - After each sweep, swap buffer pointers
     - Guarantees atomic consistency of spin+quaternion data
   - **Result:** Perfect synchronization - sites with same spin ID have identical quaternions
-- ✅ **33.5× speedup on OpenMP backend** (vs 157s CPU time → 4.7s Kokkos time)
+- ✅ **Fixed critical MPI + sectors desynchronization bug:**
+  - **Root Cause:** Double-buffer approach worked for single-core but failed with MPI + sectors:
+    - After sweeping sector 0, device buffers have sector 0 updates
+    - MPI communication exchanges data via host arrays (the "source of truth")
+    - Initial approach only updated ghost sites, leaving local sites with stale data from previous sectors
+    - Example: Spin 82 had 87 different quaternions across spatial regions
+  - **Impact:** Massive desynchronization - sites with same spin ID had different quaternions across MPI boundaries
+  - **Solution:** After MPI communication, copy **ALL sites** from host → both device buffers:
+    - Host arrays contain accumulated updates from all previous sectors after MPI comm
+    - Both device buffers must start each sector with identical, synchronized state
+    - Device buffers fully resync'd from host after each MPI communication
+  - **Result:** Zero desynchronized spins, perfect grain structure integrity
+- ✅ **33.5× speedup on OpenMP backend single-core** (vs 157s CPU time → 4.7s Kokkos time)
+- ✅ **14.7× speedup with 4 MPI ranks** (10.67s vs 157s CPU single-core)
 - ✅ Physics validation: Energy evolution matches CPU version
-- ✅ Tested with and without sectors - both configurations working correctly
+- ✅ Tested with sectors (yes/no) and MPI (1-4 ranks) - all configurations working correctly
 
 **Key Technical Achievement:**
 The MPI synchronization fix was critical for correctness. Before the fix, energy evolution was completely wrong (e.g., AppPottsNeigh: 9,172 vs correct 37,864). After the fix, all Kokkos apps produce physically correct results that match (within RNG variance) the CPU versions.
 
-The double-buffer solution for AppPottsQuaternionKokkos represents a general pattern for avoiding race conditions in parallel Monte Carlo simulations where complex state data (spin + multiple quaternion components) must remain atomically consistent.
+The double-buffer solution for AppPottsQuaternionKokkos represents a general pattern for avoiding race conditions in parallel Monte Carlo simulations where complex state data (spin + multiple quaternion components) must remain atomically consistent. The subsequent MPI + sectors fix demonstrates a key principle: **host arrays are the source of truth between sector sweeps**, and device buffers must be fully resynchronized from host after MPI communication to maintain consistency across spatial domains.
 
 ### ⏳ Next Steps - Phase 3
 

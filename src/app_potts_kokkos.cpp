@@ -19,6 +19,9 @@
 #include "app_potts_kokkos.h"
 #include "random_park.h"
 #include "error.h"
+#include "timer.h"
+#include "output.h"
+#include "comm_lattice.h"
 
 using namespace SPPARKS_NS;
 
@@ -258,24 +261,29 @@ void AppPottsKokkos::compute_all_energies_kokkos()
 
 struct AppPottsKokkos::RejectionSweepFunctor {
   typedef Kokkos::View<int*, Kokkos::DefaultExecutionSpace::memory_space> view_type;
+  typedef int value_type;  // For parallel_reduce
+  typedef Kokkos::Random_XorShift64_Pool<> pool_type;
 
   view_type spin;
   view_type numneigh;
   Kokkos::View<int**, Kokkos::DefaultExecutionSpace::memory_space> neighbor;
-  typename Kokkos::Random_XorShift64_Pool<>::generator_type rand_gen;
+  pool_type rand_pool;  // Pool, not generator!
   int nspins;
   double temperature;
   double t_inverse;
 
   RejectionSweepFunctor(view_type spin_, view_type numneigh_,
                         Kokkos::View<int**> neighbor_,
-                        typename Kokkos::Random_XorShift64_Pool<>::generator_type rand_gen_,
+                        pool_type& rand_pool_,
                         int nspins_, double temp_, double t_inv_) :
     spin(spin_), numneigh(numneigh_), neighbor(neighbor_),
-    rand_gen(rand_gen_), nspins(nspins_), temperature(temp_), t_inverse(t_inv_) {}
+    rand_pool(rand_pool_), nspins(nspins_), temperature(temp_), t_inverse(t_inv_) {}
 
   KOKKOS_INLINE_FUNCTION
-  void operator()(const int i) const {
+  void operator()(const int i, int& accepted) const {
+    // Each thread gets its own RNG state from the pool
+    auto rand_gen = rand_pool.get_state();
+
     // Get current spin
     int oldstate = spin(i);
 
@@ -285,9 +293,8 @@ struct AppPottsKokkos::RejectionSweepFunctor {
       if (oldstate != spin(neighbor(i, j))) eng_before++;
     }
 
-    // Propose random new spin - make copy of RNG to avoid const issues
-    auto local_rand = rand_gen;
-    double rand_val = local_rand.drand();
+    // Propose random new spin
+    double rand_val = rand_gen.drand();
     int iran = static_cast<int>(nspins * rand_val) + 1;
     if (iran > nspins) iran = nspins;
 
@@ -299,16 +306,79 @@ struct AppPottsKokkos::RejectionSweepFunctor {
 
     // Metropolis acceptance
     double delta = eng_after - eng_before;
+    int move_accepted = 0;
     if (delta <= 0.0) {
       spin(i) = iran;
+      move_accepted = 1;
     } else if (temperature > 0.0) {
       double prob = exp(-delta * t_inverse);
-      if (local_rand.drand() < prob) {
+      if (rand_gen.drand() < prob) {
         spin(i) = iran;
+        move_accepted = 1;
       }
     }
+
+    // Return RNG state to pool
+    rand_pool.free_state(rand_gen);
+
+    accepted += move_accepted;
   }
 };
+
+/* ----------------------------------------------------------------------
+   Override main iteration loop to use device kernels
+   Phase 1: Simplified for single-processor or single-sector
+------------------------------------------------------------------------- */
+
+void AppPottsKokkos::iterate_rejection(double stoptime)
+{
+  int done = 0;
+
+  // Phase 1 limitation: Require single processor or single sector
+  if (nprocs > 1 && sectorflag) {
+    error->all(FLERR,"Kokkos apps do not yet support sectors with MPI");
+  }
+
+  while (!done) {
+    // Communication for MPI case (single sector)
+    if (nprocs > 1) {
+      timer->stamp();
+      comm->all();
+      timer->stamp(TIME_COMM);
+    }
+
+    timer->stamp();
+
+    // Sync data to device before kernel launch
+    sync_spin_to_device();
+    if (!k_numneigh.need_sync_device()) k_numneigh.sync_device();
+    if (!k_neighbor.need_sync_device()) k_neighbor.sync_device();
+
+    // DEVICE KERNEL LAUNCH - replaces CPU sweep loop
+    sweep_rejection_kokkos();
+    nattempt += nlocal;  // All sites attempted once per sweep
+
+    timer->stamp(TIME_SOLVE);
+
+    // Sync results back to host for output and communication
+    sync_spin_to_host();
+
+    if (nprocs > 1) {
+      comm->all_reverse();
+      timer->stamp(TIME_COMM);
+    }
+
+    // Time advancement
+    if (allow_app_update) app_update(dt_rkmc);
+
+    nsweeps++;
+    time += dt_rkmc;
+
+    if (time >= stoptime) done = 1;
+    if (done || time >= nextoutput) nextoutput = output->compute(time,done);
+    timer->stamp(TIME_OUTPUT);
+  }
+}
 
 /* ----------------------------------------------------------------------
    Perform rejection KMC sweep on device
@@ -316,34 +386,30 @@ struct AppPottsKokkos::RejectionSweepFunctor {
 
 void AppPottsKokkos::sweep_rejection_kokkos()
 {
-  // Sync to device
-  k_spin.sync_device();
-  k_numneigh.sync_device();
-  k_neighbor.sync_device();
+  // Sync to device (caller already does this, but check for safety)
+  if (k_spin.need_sync_device()) k_spin.sync_device();
+  if (k_numneigh.need_sync_device()) k_numneigh.sync_device();
+  if (k_neighbor.need_sync_device()) k_neighbor.sync_device();
 
-  // Get RNG state
-  auto rand_gen = rand_pool->get_state();
-
-  // Launch kernel
+  // Launch kernel with reduction to count accepted moves
+  // Pass the POOL so each thread can get its own RNG state
   RejectionSweepFunctor functor(
     k_spin.d_view,
     k_numneigh.d_view,
     k_neighbor.d_view,
-    rand_gen,
+    *rand_pool,  // Pass pool, not individual state
     nspins,
     temperature,
     t_inverse
   );
 
-  Kokkos::parallel_for("AppPotts::RejectionSweep", nlocal, functor);
+  int naccept_local = 0;
+  Kokkos::parallel_reduce("AppPotts::RejectionSweep", nlocal, functor, naccept_local);
   Kokkos::fence();
 
-  // Return RNG state
-  rand_pool->free_state(rand_gen);
+  // Update global acceptance counter
+  naccept += naccept_local;
 
   // Mark data as modified on device
   k_spin.modify_device();
-
-  // Sync back to host if needed for I/O
-  // sync_spin_to_host();
 }

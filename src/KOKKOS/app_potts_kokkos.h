@@ -49,6 +49,7 @@ class AppPottsKokkos : public AppPotts {
   // Override base class methods with Kokkos versions
   virtual void grow_app();
   virtual void init_app();
+  virtual void iterate_rejection(double);
 
   // Kokkos computation kernels - these call the base class versions
   // but can be overridden to call device kernels

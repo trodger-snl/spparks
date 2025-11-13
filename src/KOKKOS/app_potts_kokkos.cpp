@@ -27,6 +27,13 @@ using namespace SPPARKS_NS;
 AppPottsKokkos::AppPottsKokkos(SPPARKS *spk, int narg, char **arg) :
   AppPotts(spk, narg, arg), rand_pool(nullptr)
 {
+  // Parse arguments for potts/kk - parent skips this for child classes
+  if (narg != 2) error->all(FLERR,"Illegal app_style command");
+
+  nspins = atoi(arg[1]);
+  if (nspins <= 0) error->all(FLERR,"Illegal app_style command");
+  dt_sweep = 1.0/nspins;
+
   // Initialize RNG pool with a seed using world rank
   int me;
   MPI_Comm_rank(world, &me);
@@ -50,6 +57,8 @@ void AppPottsKokkos::grow_app()
   AppPotts::grow_app();
 
   // Allocate/resize Kokkos views
+  // Don't copy data here - it will be uninitialized
+  // Data copying happens in init_app() after sites are set
   int nall = nlocal + nghost;
   k_spin = Kokkos::DualView<int*>("spin", nall);
 
@@ -59,13 +68,6 @@ void AppPottsKokkos::grow_app()
     k_neighbor = Kokkos::DualView<int**>("neighbor", nall, maxneigh);
   }
   k_propensity = Kokkos::DualView<double*>("propensity", nall);
-
-  // Copy existing data to Kokkos structures
-  auto h_spin = k_spin.h_view;
-  for (int i = 0; i < nall; i++) {
-    h_spin(i) = spin[i];
-  }
-  k_spin.modify_host();
 }
 
 /* ----------------------------------------------------------------------

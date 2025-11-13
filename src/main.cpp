@@ -19,6 +19,10 @@
 #include "spparks.h"
 #include "input.h"
 
+#ifdef SPK_KOKKOS
+#include <Kokkos_Core.hpp>
+#endif
+
 using namespace SPPARKS_NS;
 
 /* ----------------------------------------------------------------------
@@ -29,9 +33,17 @@ int main(int argc, char **argv)
 {
   MPI_Init(&argc,&argv);
 
+#ifdef SPK_KOKKOS
+  Kokkos::initialize(argc, argv);
+#endif
+
   SPPARKS *spk = new SPPARKS(argc,argv,MPI_COMM_WORLD);
   spk->input->file();
   delete spk;
+
+#ifdef SPK_KOKKOS
+  Kokkos::finalize();
+#endif
 
   MPI_Finalize();
 }

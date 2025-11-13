@@ -4,6 +4,7 @@
 # Available packages
 set(SPPARKS_AVAILABLE_PACKAGES
     "stitch"
+    "kokkos"
     CACHE STRING "List of available SPPARKS packages"
 )
 
@@ -42,6 +43,9 @@ function(install_package PACKAGE_NAME)
     if(PACKAGE_NAME STREQUAL "stitch")
         install_stitch_package()
         # Variables are set as CACHE variables in install_stitch_package(), so no need to propagate
+    elseif(PACKAGE_NAME STREQUAL "kokkos")
+        install_kokkos_package()
+        # Variables are set as CACHE variables in install_kokkos_package(), so no need to propagate
     endif()
 
     if(SPPARKS_PACKAGE_${PKG_UPPER})
@@ -77,6 +81,8 @@ function(uninstall_package PACKAGE_NAME)
     # Package-specific uninstallation logic
     if(PACKAGE_NAME STREQUAL "stitch")
         uninstall_stitch_package()
+    elseif(PACKAGE_NAME STREQUAL "kokkos")
+        uninstall_kokkos_package()
     endif()
     
     # Mark package as uninstalled
@@ -266,6 +272,95 @@ function(uninstall_stitch_package)
     message(STATUS "STITCH package files removed from source directory")
 endfunction()
 
+# KOKKOS package installation
+function(install_kokkos_package)
+    set(KOKKOS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/KOKKOS")
+    set(KOKKOS_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../lib/kokkos")
+
+    if(NOT EXISTS "${KOKKOS_DIR}")
+        message(FATAL_ERROR "KOKKOS package directory not found")
+    endif()
+
+    # Step 1: Check if Kokkos is available as a submodule or system install
+    message(STATUS "Checking for Kokkos library...")
+
+    # Try to find Kokkos (either from system or bundled)
+    find_package(Kokkos 4.0 QUIET)
+
+    if(NOT Kokkos_FOUND)
+        # Check if we have the bundled Kokkos submodule
+        if(EXISTS "${KOKKOS_LIB_DIR}/CMakeLists.txt")
+            message(STATUS "Using bundled Kokkos from lib/kokkos")
+            # Add Kokkos as a subdirectory (will be built as part of SPPARKS)
+            add_subdirectory(${KOKKOS_LIB_DIR} ${CMAKE_CURRENT_BINARY_DIR}/kokkos EXCLUDE_FROM_ALL)
+        else()
+            message(FATAL_ERROR
+                "Kokkos not found. Please either:\n"
+                "  1. Install Kokkos on your system, or\n"
+                "  2. Initialize the Kokkos submodule:\n"
+                "     cd ${CMAKE_CURRENT_SOURCE_DIR}/..\n"
+                "     git submodule update --init --recursive lib/kokkos"
+            )
+        endif()
+    else()
+        message(STATUS "Using system Kokkos: ${Kokkos_DIR}")
+    endif()
+
+    # Step 2: Copy KOKKOS files to source directory
+    file(GLOB KOKKOS_SOURCES "${KOKKOS_DIR}/*.cpp")
+    file(GLOB KOKKOS_HEADERS "${KOKKOS_DIR}/*.h")
+
+    foreach(SRC_FILE ${KOKKOS_SOURCES})
+        get_filename_component(FILENAME "${SRC_FILE}" NAME)
+        configure_file("${SRC_FILE}" "${CMAKE_CURRENT_SOURCE_DIR}/${FILENAME}" COPYONLY)
+    endforeach()
+
+    foreach(HDR_FILE ${KOKKOS_HEADERS})
+        get_filename_component(FILENAME "${HDR_FILE}" NAME)
+        configure_file("${HDR_FILE}" "${CMAKE_CURRENT_SOURCE_DIR}/${FILENAME}" COPYONLY)
+    endforeach()
+
+    # Step 3: Add KOKKOS sources to build
+    list(APPEND SPPARKS_SOURCES
+        app_kokkos.cpp
+        app_lattice_kokkos.cpp
+        app_potts_kokkos.cpp
+        memory_kokkos.cpp
+    )
+    set(SPPARKS_SOURCES "${SPPARKS_SOURCES}" PARENT_SCOPE)
+
+    # Step 4: Set compile definitions
+    add_compile_definitions(SPK_KOKKOS)
+
+    message(STATUS "KOKKOS package files copied to source directory")
+    message(STATUS "KOKKOS package installation complete")
+endfunction()
+
+# KOKKOS package uninstallation
+function(uninstall_kokkos_package)
+    # Remove KOKKOS files from source directory
+    set(KOKKOS_FILES
+        app_kokkos.cpp
+        app_kokkos.h
+        app_lattice_kokkos.cpp
+        app_lattice_kokkos.h
+        app_potts_kokkos.cpp
+        app_potts_kokkos.h
+        memory_kokkos.cpp
+        memory_kokkos.h
+    )
+
+    foreach(FILE ${KOKKOS_FILES})
+        set(FULL_PATH "${CMAKE_CURRENT_SOURCE_DIR}/${FILE}")
+        if(EXISTS "${FULL_PATH}")
+            file(REMOVE "${FULL_PATH}")
+            message(STATUS "Removed ${FILE}")
+        endif()
+    endforeach()
+
+    message(STATUS "KOKKOS package files removed from source directory")
+endfunction()
+
 # Function to show package status
 function(show_package_status)
     message(STATUS "=== SPPARKS Package Status ===")
@@ -370,4 +465,9 @@ if(SPPARKS_PACKAGE_STITCH)
     else()
         message(WARNING "STITCH package enabled but STITCH_INCLUDE_DIR not set")
     endif()
+endif()
+
+if(SPPARKS_PACKAGE_KOKKOS)
+    # Kokkos include directories are handled automatically by Kokkos::kokkos target
+    message(STATUS "KOKKOS package enabled - will link against Kokkos::kokkos")
 endif()

@@ -186,23 +186,9 @@ void AppPottsQuaternionKokkos::sync_data_to_device_full()
   double* qy_norm = new double[nall];
   double* qz_norm = new double[nall];
 
-  for (int i = 0; i < nall; i++) {
-    double q[4] = {q0[i], qx[i], qy[i], qz[i]};
-    // Normalize to prevent accumulation of numerical errors
-    double norm = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
-    if (norm > 1.0e-15) {
-      double inv_norm = 1.0 / norm;
-      q0_norm[i] = q[0] * inv_norm;
-      qx_norm[i] = q[1] * inv_norm;
-      qy_norm[i] = q[2] * inv_norm;
-      qz_norm[i] = q[3] * inv_norm;
-    } else {
-      q0_norm[i] = q[0];
-      qx_norm[i] = q[1];
-      qy_norm[i] = q[2];
-      qz_norm[i] = q[3];
-    }
-  }
+  // Use helper to normalize quaternion arrays
+  normalize_quaternion_arrays(q0_norm, qx_norm, qy_norm, qz_norm,
+                               q0, qx, qy, qz, nall);
 
   // Use framework to sync normalized data
   buffer_q0.sync_to_device_full(q0_norm);
@@ -236,23 +222,9 @@ void AppPottsQuaternionKokkos::sync_data_to_device()
   double* qy_norm = new double[nall];
   double* qz_norm = new double[nall];
 
-  for (int i = 0; i < nall; i++) {
-    // Normalize quaternions to prevent drift
-    double q[4] = {q0[i], qx[i], qy[i], qz[i]};
-    double norm = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
-    if (norm > 1.0e-15) {
-      double inv_norm = 1.0 / norm;
-      q0_norm[i] = q[0] * inv_norm;
-      qx_norm[i] = q[1] * inv_norm;
-      qy_norm[i] = q[2] * inv_norm;
-      qz_norm[i] = q[3] * inv_norm;
-    } else {
-      q0_norm[i] = q[0];
-      qx_norm[i] = q[1];
-      qy_norm[i] = q[2];
-      qz_norm[i] = q[3];
-    }
-  }
+  // Use helper to normalize quaternion arrays
+  normalize_quaternion_arrays(q0_norm, qx_norm, qy_norm, qz_norm,
+                               q0, qx, qy, qz, nall);
 
   // Use framework to sync normalized data (copies to both buffers)
   buffer_q0.sync_to_device(q0_norm);
@@ -290,24 +262,10 @@ void AppPottsQuaternionKokkos::sync_data_to_host()
   buffer_qy.sync_to_host(qy_temp);
   buffer_qz.sync_to_host(qz_temp);
 
-  // Normalize and copy to final host arrays
-  for (int i = 0; i < nall; i++) {
-    // Normalize quaternions to prevent accumulation of numerical errors
-    double q[4] = {q0_temp[i], qx_temp[i], qy_temp[i], qz_temp[i]};
-    double norm = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
-    if (norm > 1.0e-15) {
-      double inv_norm = 1.0 / norm;
-      q0[i] = q[0] * inv_norm;
-      qx[i] = q[1] * inv_norm;
-      qy[i] = q[2] * inv_norm;
-      qz[i] = q[3] * inv_norm;
-    } else {
-      q0[i] = q[0];
-      qx[i] = q[1];
-      qy[i] = q[2];
-      qz[i] = q[3];
-    }
-  }
+  // Use helper to normalize and copy to final host arrays
+  normalize_quaternion_arrays(q0, qx, qy, qz,
+                               q0_temp, qx_temp, qy_temp, qz_temp,
+                               nall);
 
   delete[] q0_temp;
   delete[] qx_temp;
@@ -328,6 +286,36 @@ void AppPottsQuaternionKokkos::swap_buffers()
   buffer_qx.swap();
   buffer_qy.swap();
   buffer_qz.swap();
+}
+
+/* ----------------------------------------------------------------------
+   normalize quaternion arrays on host
+   prevents accumulation of numerical errors
+------------------------------------------------------------------------- */
+
+void AppPottsQuaternionKokkos::normalize_quaternion_arrays(
+    double* q0_out, double* qx_out, double* qy_out, double* qz_out,
+    const double* q0_in, const double* qx_in,
+    const double* qy_in, const double* qz_in,
+    int n)
+{
+  for (int i = 0; i < n; i++) {
+    double q[4] = {q0_in[i], qx_in[i], qy_in[i], qz_in[i]};
+    double norm = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
+
+    if (norm > 1.0e-15) {
+      double inv_norm = 1.0 / norm;
+      q0_out[i] = q[0] * inv_norm;
+      qx_out[i] = q[1] * inv_norm;
+      qy_out[i] = q[2] * inv_norm;
+      qz_out[i] = q[3] * inv_norm;
+    } else {
+      q0_out[i] = q[0];
+      qx_out[i] = q[1];
+      qy_out[i] = q[2];
+      qz_out[i] = q[3];
+    }
+  }
 }
 
 /* ----------------------------------------------------------------------

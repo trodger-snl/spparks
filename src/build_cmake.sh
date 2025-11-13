@@ -17,6 +17,8 @@ BUILD_LIB="OFF"
 ENABLE_HDF5="AUTO"
 ENABLE_HIGHFIVE="AUTO"
 ENABLE_JPEG="AUTO"
+ENABLE_KOKKOS="OFF"
+KOKKOS_BACKEND="OPENMP"
 CLEAN=false
 VERBOSE=false
 PARALLEL_JOBS="AUTO"
@@ -43,6 +45,9 @@ Options:
     --no-highfive               Disable HighFive C++ HDF5 wrapper
     --jpeg                      Enable JPEG support
     --no-jpeg                   Disable JPEG support
+    --kokkos                    Enable Kokkos for GPU acceleration
+    --no-kokkos                 Disable Kokkos
+    --kokkos-backend BACKEND    Kokkos backend (OPENMP, CUDA, HIP, SYCL, SERIAL)
     --shared                    Build shared libraries
     --lib                       Build as library only
     --package PKG               Enable package (can be used multiple times)
@@ -69,7 +74,10 @@ Examples:
     $0 -m mac                           # Build for macOS (auto-optimized)
     $0 -m mpi --package stitch          # Build with MPI and STITCH package
     $0 -m mac_arm --hdf5                # Build for Apple Silicon with HDF5+JPEG (auto-optimized)
-    $0 --no-jpeg -j 8                  # Build without JPEG using 8 parallel jobs
+    $0 --kokkos                         # Build with Kokkos (OpenMP backend)
+    $0 --kokkos --kokkos-backend cuda   # Build with Kokkos CUDA (NVIDIA GPUs)
+    $0 --kokkos --kokkos-backend hip    # Build with Kokkos HIP (AMD GPUs)
+    $0 --no-jpeg -j 8                   # Build without JPEG using 8 parallel jobs
     $0 --aggressive-opt --native-opt    # Maximum performance (O3, LTO, native CPU)
     $0 --no-aggressive-opt              # Conservative optimization (O2, no LTO)
     $0 --lib --shared                   # Build shared library
@@ -128,6 +136,18 @@ while [[ $# -gt 0 ]]; do
         --no-jpeg)
             ENABLE_JPEG="OFF"
             shift
+            ;;
+        --kokkos)
+            ENABLE_KOKKOS="ON"
+            shift
+            ;;
+        --no-kokkos)
+            ENABLE_KOKKOS="OFF"
+            shift
+            ;;
+        --kokkos-backend)
+            KOKKOS_BACKEND="$2"
+            shift 2
             ;;
         --shared)
             SHARED_LIBS="ON"
@@ -229,6 +249,12 @@ fi
 
 if [ "$ENABLE_JPEG" != "AUTO" ]; then
     CMAKE_ARGS+=("-DSPPARKS_ENABLE_JPEG=$ENABLE_JPEG")
+fi
+
+# Add Kokkos settings
+if [ "$ENABLE_KOKKOS" = "ON" ]; then
+    CMAKE_ARGS+=("-DSPPARKS_PACKAGE_KOKKOS=ON")
+    CMAKE_ARGS+=("-DSPPARKS_KOKKOS_BACKEND=$KOKKOS_BACKEND")
 fi
 
 # Add optimization settings

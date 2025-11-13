@@ -144,6 +144,11 @@ option(SPPARKS_ENABLE_HIGHFIVE "Enable HighFive C++ HDF5 wrapper" OFF)
 option(SPPARKS_USE_EXTERNAL_HIGHFIVE "Use system-provided HighFive instead of FetchContent" OFF)
 option(SPPARKS_UNORDERED_MAP "Use unordered_map" OFF)
 
+# Kokkos options
+option(SPPARKS_PACKAGE_KOKKOS "Enable KOKKOS package for GPU acceleration" OFF)
+set(SPPARKS_KOKKOS_BACKEND "OPENMP" CACHE STRING "Kokkos backend (OPENMP, CUDA, HIP, SYCL, SERIAL)")
+set_property(CACHE SPPARKS_KOKKOS_BACKEND PROPERTY STRINGS OPENMP CUDA HIP SYCL SERIAL)
+
 # Performance options
 option(SPPARKS_AGGRESSIVE_OPTIMIZATION "Enable aggressive optimizations (may increase compile time)" ON)
 option(SPPARKS_NATIVE_OPTIMIZATION "Enable native CPU optimizations (-march=native)" ON)
@@ -325,6 +330,76 @@ if(SPPARKS_ENABLE_HIGHFIVE)
 
     add_compile_definitions(SPPARKS_HIGHFIVE)
     message(STATUS "HighFive C++ HDF5 wrapper enabled")
+endif()
+
+# Configure Kokkos if enabled
+if(SPPARKS_PACKAGE_KOKKOS)
+    message(STATUS "Kokkos package enabled")
+    message(STATUS "Kokkos backend: ${SPPARKS_KOKKOS_BACKEND}")
+
+    # Set Kokkos options before adding subdirectory
+    # Enable the selected backend
+    if(SPPARKS_KOKKOS_BACKEND STREQUAL "OPENMP")
+        set(Kokkos_ENABLE_OPENMP ON CACHE BOOL "Enable OpenMP backend" FORCE)
+        set(Kokkos_ENABLE_SERIAL OFF CACHE BOOL "Disable Serial backend" FORCE)
+        message(STATUS "Kokkos: OpenMP backend enabled (CPU multi-threading)")
+    elseif(SPPARKS_KOKKOS_BACKEND STREQUAL "CUDA")
+        set(Kokkos_ENABLE_CUDA ON CACHE BOOL "Enable CUDA backend" FORCE)
+        set(Kokkos_ENABLE_SERIAL OFF CACHE BOOL "Disable Serial backend" FORCE)
+        message(STATUS "Kokkos: CUDA backend enabled (NVIDIA GPUs)")
+    elseif(SPPARKS_KOKKOS_BACKEND STREQUAL "HIP")
+        set(Kokkos_ENABLE_HIP ON CACHE BOOL "Enable HIP backend" FORCE)
+        set(Kokkos_ENABLE_SERIAL OFF CACHE BOOL "Disable Serial backend" FORCE)
+        message(STATUS "Kokkos: HIP backend enabled (AMD GPUs)")
+    elseif(SPPARKS_KOKKOS_BACKEND STREQUAL "SYCL")
+        set(Kokkos_ENABLE_SYCL ON CACHE BOOL "Enable SYCL backend" FORCE)
+        set(Kokkos_ENABLE_SERIAL OFF CACHE BOOL "Disable Serial backend" FORCE)
+        message(STATUS "Kokkos: SYCL backend enabled (Intel GPUs)")
+    elseif(SPPARKS_KOKKOS_BACKEND STREQUAL "SERIAL")
+        set(Kokkos_ENABLE_SERIAL ON CACHE BOOL "Enable Serial backend" FORCE)
+        message(STATUS "Kokkos: Serial backend enabled (single-threaded)")
+    else()
+        message(FATAL_ERROR "Unknown Kokkos backend: ${SPPARKS_KOKKOS_BACKEND}")
+    endif()
+
+    # Disable backends we don't want
+    if(NOT SPPARKS_KOKKOS_BACKEND STREQUAL "OPENMP")
+        set(Kokkos_ENABLE_OPENMP OFF CACHE BOOL "Disable OpenMP backend" FORCE)
+    endif()
+    if(NOT SPPARKS_KOKKOS_BACKEND STREQUAL "CUDA")
+        set(Kokkos_ENABLE_CUDA OFF CACHE BOOL "Disable CUDA backend" FORCE)
+    endif()
+    if(NOT SPPARKS_KOKKOS_BACKEND STREQUAL "HIP")
+        set(Kokkos_ENABLE_HIP OFF CACHE BOOL "Disable HIP backend" FORCE)
+    endif()
+    if(NOT SPPARKS_KOKKOS_BACKEND STREQUAL "SYCL")
+        set(Kokkos_ENABLE_SYCL OFF CACHE BOOL "Disable SYCL backend" FORCE)
+    endif()
+    if(NOT SPPARKS_KOKKOS_BACKEND STREQUAL "SERIAL")
+        set(Kokkos_ENABLE_SERIAL OFF CACHE BOOL "Disable Serial backend" FORCE)
+    endif()
+
+    # Disable Kokkos tests and examples
+    set(Kokkos_ENABLE_TESTS OFF CACHE BOOL "Disable Kokkos tests" FORCE)
+    set(Kokkos_ENABLE_EXAMPLES OFF CACHE BOOL "Disable Kokkos examples" FORCE)
+    set(Kokkos_ENABLE_BENCHMARKS OFF CACHE BOOL "Disable Kokkos benchmarks" FORCE)
+
+    # Check if bundled Kokkos exists
+    set(KOKKOS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../lib/kokkos")
+    if(NOT EXISTS "${KOKKOS_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "Kokkos submodule not found at ${KOKKOS_DIR}\n"
+            "Please initialize the submodule:\n"
+            "  git submodule update --init --recursive\n")
+    endif()
+
+    # Add bundled Kokkos
+    message(STATUS "Using bundled Kokkos from: ${KOKKOS_DIR}")
+    add_subdirectory(${KOKKOS_DIR} kokkos)
+
+    # Add Kokkos compile definition
+    add_compile_definitions(SPK_KOKKOS)
+    message(STATUS "Kokkos configured successfully")
 endif()
 
 # Include helper modules
@@ -529,6 +604,12 @@ if(SPPARKS_BUILD_LIB OR NOT SPPARKS_BUILD_EXECUTABLE)
         target_link_libraries(spparks_lib PUBLIC HighFive)
     endif()
 
+    # Add Kokkos package support
+    if(SPPARKS_PACKAGE_KOKKOS)
+        target_link_libraries(spparks_lib PUBLIC Kokkos::kokkoscore)
+        message(STATUS "Linked Kokkos::kokkoscore to spparks_lib")
+    endif()
+
     # Add STITCH package support
     if(SPPARKS_PACKAGE_STITCH AND STITCH_LIBRARY)
         target_link_libraries(spparks_lib PUBLIC ${STITCH_LIBRARY})
@@ -604,6 +685,11 @@ if(SPPARKS_BUILD_EXECUTABLE)
         
         if(SPPARKS_ENABLE_HIGHFIVE)
             target_link_libraries(spparks HighFive)
+        endif()
+
+        # Add Kokkos package support
+        if(SPPARKS_PACKAGE_KOKKOS)
+            target_link_libraries(spparks Kokkos::kokkoscore)
         endif()
 
         # Add STITCH package support
@@ -712,6 +798,10 @@ if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
     message(STATUS "HDF5 is parallel: ${HDF5_IS_PARALLEL}")
 endif()
 message(STATUS "HighFive support: ${SPPARKS_ENABLE_HIGHFIVE}")
+message(STATUS "Kokkos support: ${SPPARKS_PACKAGE_KOKKOS}")
+if(SPPARKS_PACKAGE_KOKKOS)
+    message(STATUS "  Kokkos backend: ${SPPARKS_KOKKOS_BACKEND}")
+endif()
 if(SPPARKS_SMALLSMALL)
     message(STATUS "Integer types: 32-bit (SMALLSMALL)")
 elseif(SPPARKS_BIGBIG)

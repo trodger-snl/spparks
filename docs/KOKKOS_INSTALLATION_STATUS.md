@@ -6,13 +6,32 @@
 
 ## Installation Summary
 
-✅ **Kokkos is correctly installed and working via Homebrew**
+✅ **Kokkos 4.7.01 bundled as git submodule (recommended approach)**
 
 ## Installation Details
 
-**Version:** 4.7.01 (latest stable)
-**Installation Method:** Homebrew (`brew install kokkos`)
-**Location:** `/opt/homebrew/Cellar/kokkos/4.7.01`
+**Version:** 4.7.01 (stable release)
+**Installation Method:** Git submodule (bundled with SPPARKS)
+**Location:** `/Users/Tron/spparks/lib/kokkos`
+**Commit:** `b601b82d0` (tag 4.7.01)
+
+**Previous Installation:**
+- ~~Homebrew (`/opt/homebrew/Cellar/kokkos/4.7.01`)~~ - Uninstalled
+- Removed due to CMake SDK path conflicts on macOS
+
+**For New Clones:**
+Other users cloning SPPARKS with Kokkos need to initialize the submodule:
+```bash
+git clone <spparks-repo> --branch SURGE-kokkos
+cd spparks
+git submodule update --init --recursive
+```
+
+Or if already cloned:
+```bash
+cd /Users/Tron/spparks
+git submodule update --init --recursive
+```
 
 **Enabled Backends:**
 - ✅ **OpenMP** (CPU multi-threading)
@@ -304,15 +323,20 @@ export OMP_PLACES=threads
 
 ## Summary
 
-✅ Kokkos 4.7.01 is correctly installed via Homebrew
-✅ OpenMP backend is functional (12 threads)
-✅ Test program compiles and runs successfully
-✅ CMake configuration files are available
-✅ Ready for SPPARKS integration (Phase 1)
+✅ Kokkos 4.7.01 bundled as git submodule (commit b601b82d0)
+✅ Homebrew version uninstalled to avoid SDK conflicts
+✅ OpenMP backend available (12 threads on this system)
+✅ Bundled approach tested and working (direct compilation verified)
+✅ CMakeLists.txt ready for add_subdirectory() integration
+✅ Ready for SPPARKS CMake integration (Phase 1)
+
+**Bundled vs External:**
+- ✅ **Bundled (current)**: Works on all platforms, no SDK issues
+- ⚠️ External (Homebrew/system): CMake SDK path conflicts on macOS
 
 ⚠️ macOS limitations:
 - OpenMP backend only (no GPU support)
 - Sufficient for development and CPU testing
 - GPU deployment requires Linux cluster
 
-**Status: Ready to proceed with Phase 1 of Kokkos integration**
+**Status: Ready to proceed with Phase 1 - Update SPPARKS CMakeLists.txt**

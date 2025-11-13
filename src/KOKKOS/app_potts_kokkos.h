@@ -24,17 +24,27 @@ AppStyle(potts/kk,AppPottsKokkos)
 #define SPK_APP_POTTS_KOKKOS_H
 
 #include "app_potts.h"
-#include "app_lattice_kokkos.h"
+#include <Kokkos_Core.hpp>
+#include <Kokkos_DualView.hpp>
+#include <Kokkos_Random.hpp>
 
 namespace SPPARKS_NS {
 
 class AppPottsKokkos : public AppPotts {
-public:
+ public:
+  using pool_type = Kokkos::Random_XorShift64_Pool<>;
+
   AppPottsKokkos(class SPPARKS *, int, char **);
   virtual ~AppPottsKokkos();
 
   // Kokkos-specific data
   Kokkos::DualView<int*> k_spin;
+  Kokkos::DualView<int*> k_numneigh;
+  Kokkos::DualView<int**> k_neighbor;
+  Kokkos::DualView<double*> k_propensity;
+
+  // Random number generation pool
+  pool_type *rand_pool;
 
   // Override base class methods with Kokkos versions
   virtual void grow_app();

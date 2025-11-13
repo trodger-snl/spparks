@@ -287,12 +287,12 @@ function(install_kokkos_package)
     # Try to find Kokkos (either from system or bundled)
     find_package(Kokkos 4.0 QUIET)
 
-    if(NOT Kokkos_FOUND)
+    if(NOT Kokkos_FOUND AND NOT TARGET Kokkos::kokkos)
         # Check if we have the bundled Kokkos submodule
         if(EXISTS "${KOKKOS_LIB_DIR}/CMakeLists.txt")
             message(STATUS "Using bundled Kokkos from lib/kokkos")
             # Add Kokkos as a subdirectory (will be built as part of SPPARKS)
-            add_subdirectory(${KOKKOS_LIB_DIR} ${CMAKE_CURRENT_BINARY_DIR}/kokkos EXCLUDE_FROM_ALL)
+            add_subdirectory(${KOKKOS_LIB_DIR} ${CMAKE_BINARY_DIR}/kokkos_build EXCLUDE_FROM_ALL)
         else()
             message(FATAL_ERROR
                 "Kokkos not found. Please either:\n"

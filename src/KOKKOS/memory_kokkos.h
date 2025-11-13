@@ -20,21 +20,9 @@
 
 #include "memory.h"
 #include <Kokkos_Core.hpp>
+#include <Kokkos_DualView.hpp>
 
 namespace SPPARKS_NS {
-
-// Type aliases for common Kokkos types
-template<typename T>
-using View1D = Kokkos::View<T*>;
-
-template<typename T>
-using View2D = Kokkos::View<T**>;
-
-template<typename T>
-using DualView1D = Kokkos::DualView<T*>;
-
-template<typename T>
-using DualView2D = Kokkos::DualView<T**>;
 
 class MemoryKokkos : public Memory {
 public:
@@ -43,23 +31,13 @@ public:
 
   // Kokkos-aware allocation methods
   template<typename T>
-  void create_kokkos(DualView1D<T> &view, int n, const char *name) {
-    view = DualView1D<T>(name, n);
+  void create_kokkos(Kokkos::DualView<T*> &view, int n, const char *name) {
+    view = Kokkos::DualView<T*>(name, n);
   }
 
   template<typename T>
-  void create_kokkos(DualView2D<T> &view, int n1, int n2, const char *name) {
-    view = DualView2D<T>(name, n1, n2);
-  }
-
-  template<typename T>
-  void destroy_kokkos(DualView1D<T> &view) {
-    view = DualView1D<T>();
-  }
-
-  template<typename T>
-  void destroy_kokkos(DualView2D<T> &view) {
-    view = DualView2D<T>();
+  void create_kokkos(Kokkos::DualView<T**> &view, int n1, int n2, const char *name) {
+    view = Kokkos::DualView<T**>(name, n1, n2);
   }
 
   // Sync helpers

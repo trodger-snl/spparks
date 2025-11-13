@@ -25,16 +25,19 @@ using namespace SPPARKS_NS;
 /* ---------------------------------------------------------------------- */
 
 AppPottsKokkos::AppPottsKokkos(SPPARKS *spk, int narg, char **arg) :
-  AppPotts(spk, narg, arg)
+  AppPotts(spk, narg, arg), rand_pool(nullptr)
 {
-  // Initialize RNG pool with a seed
-  AppLatticeKokkos::rand_pool = new pool_type(12345 + comm->me);
+  // Initialize RNG pool with a seed using world rank
+  int me;
+  MPI_Comm_rank(world, &me);
+  rand_pool = new pool_type(12345 + me);
 }
 
 /* ---------------------------------------------------------------------- */
 
 AppPottsKokkos::~AppPottsKokkos()
 {
+  if (rand_pool) delete rand_pool;
 }
 
 /* ----------------------------------------------------------------------
@@ -50,27 +53,19 @@ void AppPottsKokkos::grow_app()
   int nall = nlocal + nghost;
   k_spin = Kokkos::DualView<int*>("spin", nall);
 
+  // Allocate neighbor arrays
+  k_numneigh = Kokkos::DualView<int*>("numneigh", nall);
+  if (maxneigh > 0) {
+    k_neighbor = Kokkos::DualView<int**>("neighbor", nall, maxneigh);
+  }
+  k_propensity = Kokkos::DualView<double*>("propensity", nall);
+
   // Copy existing data to Kokkos structures
   auto h_spin = k_spin.h_view;
   for (int i = 0; i < nall; i++) {
     h_spin(i) = spin[i];
   }
   k_spin.modify_host();
-
-  // Make spin pointer alias to host view for compatibility
-  // This allows existing non-Kokkos code to work
-  spin = h_spin.data();
-
-  // Allocate neighbor arrays
-  AppLatticeKokkos appkk(spk, narg, NULL);
-  appkk.nlocal = nlocal;
-  appkk.nghost = nghost;
-  appkk.maxneigh = maxneigh;
-  appkk.allocate_kokkos_neighbor_arrays();
-
-  k_numneigh = appkk.k_numneigh;
-  k_neighbor = appkk.k_neighbor;
-  k_propensity = appkk.k_propensity;
 }
 
 /* ----------------------------------------------------------------------
@@ -82,8 +77,23 @@ void AppPottsKokkos::init_app()
   // Call parent initialization
   AppPotts::init_app();
 
-  // Sync neighbor data to device
-  sync_neighbor_arrays_host_to_device();
+  // Sync neighbor arrays to device
+  int nall = nlocal + nghost;
+  auto h_numneigh = k_numneigh.h_view;
+  for (int i = 0; i < nall; i++) {
+    h_numneigh(i) = numneigh[i];
+  }
+  k_numneigh.modify_host();
+
+  if (maxneigh > 0) {
+    auto h_neighbor = k_neighbor.h_view;
+    for (int i = 0; i < nall; i++) {
+      for (int j = 0; j < numneigh[i]; j++) {
+        h_neighbor(i, j) = neighbor[i][j];
+      }
+    }
+    k_neighbor.modify_host();
+  }
 
   // Sync spin data to device
   sync_spin_to_device();
@@ -120,7 +130,6 @@ void AppPottsKokkos::sync_spin_to_host()
 
 /* ----------------------------------------------------------------------
    compute energy of site - calls base class for now
-   In future, this could call Kokkos kernel for bulk computation
 ------------------------------------------------------------------------- */
 
 double AppPottsKokkos::site_energy(int i)
@@ -251,7 +260,7 @@ struct AppPottsKokkos::RejectionSweepFunctor {
   view_type spin;
   view_type numneigh;
   Kokkos::View<int**, Kokkos::DefaultExecutionSpace::memory_space> neighbor;
-  Kokkos::Random_XorShift64_Pool<>::generator_type rand_gen;
+  typename Kokkos::Random_XorShift64_Pool<>::generator_type rand_gen;
   int nspins;
   double temperature;
   double t_inverse;
@@ -274,8 +283,10 @@ struct AppPottsKokkos::RejectionSweepFunctor {
       if (oldstate != spin(neighbor(i, j))) eng_before++;
     }
 
-    // Propose random new spin
-    int iran = static_cast<int>(nspins * rand_gen.drand()) + 1;
+    // Propose random new spin - make copy of RNG to avoid const issues
+    auto local_rand = rand_gen;
+    double rand_val = local_rand.drand();
+    int iran = static_cast<int>(nspins * rand_val) + 1;
     if (iran > nspins) iran = nspins;
 
     // Calculate new energy
@@ -290,7 +301,7 @@ struct AppPottsKokkos::RejectionSweepFunctor {
       spin(i) = iran;
     } else if (temperature > 0.0) {
       double prob = exp(-delta * t_inverse);
-      if (rand_gen.drand() < prob) {
+      if (local_rand.drand() < prob) {
         spin(i) = iran;
       }
     }

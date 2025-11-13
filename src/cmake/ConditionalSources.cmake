@@ -32,7 +32,18 @@ function(configure_conditional_sources)
         list(APPEND SPPARKS_SOURCES dump_image.cpp image.cpp)
         message(STATUS "Added image-dependent sources")
     endif()
-    
+
+    # Add KOKKOS package sources
+    if(SPPARKS_PACKAGE_KOKKOS)
+        list(APPEND SPPARKS_SOURCES
+            memory_kokkos.cpp
+            app_kokkos.cpp
+            app_lattice_kokkos.cpp
+            app_potts_kokkos.cpp
+        )
+        message(STATUS "Added KOKKOS package sources")
+    endif()
+
     # Update the parent scope
     set(SPPARKS_SOURCES "${SPPARKS_SOURCES}" PARENT_SCOPE)
     

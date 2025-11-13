@@ -25,6 +25,8 @@
 
 using namespace SPPARKS_NS;
 
+enum{NOSWEEP,RANDOM,RASTER,COLOR,COLOR_STRICT};
+
 /* ---------------------------------------------------------------------- */
 
 AppPottsKokkos::AppPottsKokkos(SPPARKS *spk, int narg, char **arg) :
@@ -327,45 +329,88 @@ struct AppPottsKokkos::RejectionSweepFunctor {
 
 /* ----------------------------------------------------------------------
    Override main iteration loop to use device kernels
-   Phase 1: Simplified for single-processor or single-sector
+   Phase 2: Full sector and MPI support
 ------------------------------------------------------------------------- */
 
 void AppPottsKokkos::iterate_rejection(double stoptime)
 {
+  int i, icolor, nselect, nrange, jset;
+  int *site2i;
+
+  // Set loop is over:
+  // sectors if there are sectors and no colors
+  // colors if there are colors and no sectors
+  // first nsector sets if there are both sectors and colors
+
+  int nset_loop = nset;
+  if (bothflag) nset_loop = nsector;
+
   int done = 0;
-
-  // Phase 1 limitation: Require single processor or single sector
-  if (nprocs > 1 && sectorflag) {
-    error->all(FLERR,"Kokkos apps do not yet support sectors with MPI");
-  }
-
   while (!done) {
-    // Communication for MPI case (single sector)
-    if (nprocs > 1) {
+    for (int iset = 0; iset < nset_loop; iset++) {
+      // MPI communication for this sector
+      if (nprocs > 1) {
+        timer->stamp();
+        if (sectorflag) comm->sector(iset);
+        else comm->all();
+        timer->stamp(TIME_COMM);
+      }
+
+      if (Lmask) boundary_clear_mask(iset);
+
       timer->stamp();
-      comm->all();
-      timer->stamp(TIME_COMM);
-    }
 
-    timer->stamp();
+      // Sync data to device before kernel launch (once per timestep)
+      if (iset == 0) {
+        sync_spin_to_device();
+        if (!k_numneigh.need_sync_device()) k_numneigh.sync_device();
+        if (!k_neighbor.need_sync_device()) k_neighbor.sync_device();
+      }
 
-    // Sync data to device before kernel launch
-    sync_spin_to_device();
-    if (!k_numneigh.need_sync_device()) k_numneigh.sync_device();
-    if (!k_neighbor.need_sync_device()) k_neighbor.sync_device();
+      // Sectors but no colors (could also be no sectors)
+      // Random selection of sites in iset
+      if (sweepflag == RANDOM) {
+        site2i = set[iset].site2i;
+        nrange = set[iset].nlocal;
+        nselect = set[iset].nselect;
+        for (i = 0; i < nselect; i++)
+          sitelist[i] = site2i[ranapp->irandom(nrange) - 1];
+        sweep_rejection_kokkos(nselect, sitelist);
+        nattempt += nselect;
 
-    // DEVICE KERNEL LAUNCH - replaces CPU sweep loop
-    sweep_rejection_kokkos();
-    nattempt += nlocal;  // All sites attempted once per sweep
+      // Sectors but no colors, or colors but no sectors
+      // Ordered sweep over all sites in iset
+      } else if (bothflag == 0) {
+        for (i = 0; i < set[iset].nloop; i++)
+          sweep_rejection_kokkos(set[iset].nlocal, set[iset].site2i);
+        nattempt += set[iset].nselect;
 
-    timer->stamp(TIME_SOLVE);
+      // Sectors and colors
+      // icolor loop is over all colors in a sector
+      // jset = set that contains sites of one color in one sector
+      // Ordered sweep over all sites in jset
+      } else {
+        for (icolor = 0; icolor < ncolors; icolor++) {
+          jset = nsector + iset*ncolors + icolor;
+          for (i = 0; i < set[jset].nloop; i++)
+            sweep_rejection_kokkos(set[jset].nlocal, set[jset].site2i);
+          nattempt += set[jset].nselect;
+        }
+      }
 
-    // Sync results back to host for output and communication
-    sync_spin_to_host();
+      timer->stamp(TIME_SOLVE);
 
-    if (nprocs > 1) {
-      comm->all_reverse();
-      timer->stamp(TIME_COMM);
+      // Sync results back to host for communication and output
+      // Only sync once per timestep after last sector
+      if (iset == nset_loop - 1) {
+        sync_spin_to_host();
+      }
+
+      if (nprocs > 1) {
+        if (sectorflag) comm->reverse_sector(iset);
+        else comm->all_reverse();
+        timer->stamp(TIME_COMM);
+      }
     }
 
     // Time advancement
@@ -381,7 +426,7 @@ void AppPottsKokkos::iterate_rejection(double stoptime)
 }
 
 /* ----------------------------------------------------------------------
-   Perform rejection KMC sweep on device
+   Perform rejection KMC sweep on device - all local sites
 ------------------------------------------------------------------------- */
 
 void AppPottsKokkos::sweep_rejection_kokkos()
@@ -405,6 +450,124 @@ void AppPottsKokkos::sweep_rejection_kokkos()
 
   int naccept_local = 0;
   Kokkos::parallel_reduce("AppPotts::RejectionSweep", nlocal, functor, naccept_local);
+  Kokkos::fence();
+
+  // Update global acceptance counter
+  naccept += naccept_local;
+
+  // Mark data as modified on device
+  k_spin.modify_device();
+}
+
+/* ----------------------------------------------------------------------
+   Perform rejection KMC sweep on device - specific site list (for sectors)
+------------------------------------------------------------------------- */
+
+void AppPottsKokkos::sweep_rejection_kokkos(int nsite, int *site_list)
+{
+  // Sync to device (caller already does this once per timestep)
+  if (k_spin.need_sync_device()) k_spin.sync_device();
+  if (k_numneigh.need_sync_device()) k_numneigh.sync_device();
+  if (k_neighbor.need_sync_device()) k_neighbor.sync_device();
+
+  // Copy site list to device
+  Kokkos::View<int*> d_site_list("sector_sites", nsite);
+  auto h_site_list = Kokkos::create_mirror_view(d_site_list);
+  for (int i = 0; i < nsite; i++) {
+    h_site_list(i) = site_list[i];
+  }
+  Kokkos::deep_copy(d_site_list, h_site_list);
+
+  // Create functor that operates on site list
+  typedef Kokkos::View<int*, Kokkos::DefaultExecutionSpace::memory_space> view_type;
+
+  struct SectorSweepFunctor {
+    typedef int value_type;
+    typedef Kokkos::Random_XorShift64_Pool<> pool_type;
+
+    view_type spin;
+    view_type numneigh;
+    Kokkos::View<int**, Kokkos::DefaultExecutionSpace::memory_space> neighbor;
+    view_type site_indices;  // List of sites to process
+    pool_type rand_pool;
+    int nspins;
+    double temperature;
+    double t_inverse;
+
+    SectorSweepFunctor(view_type spin_, view_type numneigh_,
+                       Kokkos::View<int**> neighbor_,
+                       view_type site_indices_,
+                       pool_type& rand_pool_,
+                       int nspins_, double temp_, double t_inv_) :
+      spin(spin_), numneigh(numneigh_), neighbor(neighbor_),
+      site_indices(site_indices_),
+      rand_pool(rand_pool_), nspins(nspins_),
+      temperature(temp_), t_inverse(t_inv_) {}
+
+    KOKKOS_INLINE_FUNCTION
+    void operator()(const int idx, int& accepted) const {
+      // idx is index into site_indices array
+      // i is the actual site index
+      int i = site_indices(idx);
+
+      // Each thread gets its own RNG state from the pool
+      auto rand_gen = rand_pool.get_state();
+
+      // Get current spin
+      int oldstate = spin(i);
+
+      // Calculate current energy
+      int eng_before = 0;
+      for (int j = 0; j < numneigh(i); j++) {
+        if (oldstate != spin(neighbor(i, j))) eng_before++;
+      }
+
+      // Propose random new spin
+      double rand_val = rand_gen.drand();
+      int iran = static_cast<int>(nspins * rand_val) + 1;
+      if (iran > nspins) iran = nspins;
+
+      // Calculate new energy
+      int eng_after = 0;
+      for (int j = 0; j < numneigh(i); j++) {
+        if (iran != spin(neighbor(i, j))) eng_after++;
+      }
+
+      // Metropolis acceptance
+      double delta = eng_after - eng_before;
+      int move_accepted = 0;
+      if (delta <= 0.0) {
+        spin(i) = iran;
+        move_accepted = 1;
+      } else if (temperature > 0.0) {
+        double prob = exp(-delta * t_inverse);
+        if (rand_gen.drand() < prob) {
+          spin(i) = iran;
+          move_accepted = 1;
+        }
+      }
+
+      // Return RNG state to pool
+      rand_pool.free_state(rand_gen);
+
+      accepted += move_accepted;
+    }
+  };
+
+  // Launch kernel over site list
+  SectorSweepFunctor functor(
+    k_spin.d_view,
+    k_numneigh.d_view,
+    k_neighbor.d_view,
+    d_site_list,
+    *rand_pool,
+    nspins,
+    temperature,
+    t_inverse
+  );
+
+  int naccept_local = 0;
+  Kokkos::parallel_reduce("AppPotts::SectorSweep", nsite, functor, naccept_local);
   Kokkos::fence();
 
   // Update global acceptance counter

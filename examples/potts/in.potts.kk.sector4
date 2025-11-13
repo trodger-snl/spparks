@@ -1,0 +1,23 @@
+# SPPARKS Potts with 4 sectors - Kokkos version
+
+seed 56789
+
+# Use Kokkos-enabled Potts app
+app_style potts/kk 100
+
+dimension 3
+lattice sc/26n 1.0
+region box block 0 30 0 30 0 30
+create_box box
+create_sites box
+set site range 1 100
+
+sweep raster
+sector 4   # Use 4 sectors
+
+temperature 1.0
+
+stats 10.0
+dump 1 text 50.0 dump.potts.kk.sector4
+
+run 50.0

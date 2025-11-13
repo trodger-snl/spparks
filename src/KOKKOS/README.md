@@ -6,7 +6,7 @@ The KOKKOS package enables GPU acceleration and performance portability in SPPAR
 
 ## Status
 
-**Phase 1 Complete** (November 2025)
+**Phase 2 Complete** (November 2025)
 
 Currently implemented:
 - ✅ Base infrastructure (MemoryKokkos, AppKokkos, AppLatticeKokkos)
@@ -15,11 +15,13 @@ Currently implemented:
 - ✅ **Device kernels actively running** - iterate_rejection() override implemented
 - ✅ Parallel rejection KMC on device with proper RNG
 - ✅ **3-4× speedup** on CPU (OpenMP backend) for typical problems
+- ✅ **MPI + Sector support** - Multi-processor runs with 2, 4, or 8 sectors
+- ✅ **Sector-aware kernels** - Sweep over specific site lists for each sector
 
-**Limitations (Phase 1):**
-- Single-processor or single-sector only (no MPI sectors yet)
-- Masking not supported
+**Limitations (Current):**
+- Masking not yet supported
 - Only AppPottsKokkos implemented (not AppIsing, AppDiffusion, etc.)
+- GPU backends (CUDA, HIP, SYCL) not yet tested
 
 ## Prerequisites
 
@@ -103,10 +105,11 @@ export OMP_PLACES=threads
 mpirun -np 1 ./src/build/spparks -in examples/potts/in.potts.kk
 ```
 
-**Important for Phase 1:**
-- Use `sector no` in input script (sectors with MPI not yet supported)
-- Single processor recommended for now
+**Usage Notes:**
+- Sectors are fully supported: Use `sector 2`, `sector 4`, `sector 8`, or `sector yes`
+- MPI parallelism works with sectors
 - OpenMP threading via `OMP_NUM_THREADS` controls parallelism
+- For best performance: `export OMP_PROC_BIND=spread` and `export OMP_PLACES=threads`
 
 ## Architecture
 

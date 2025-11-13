@@ -66,6 +66,7 @@ class AppPottsKokkos : public AppPotts {
   // Bulk parallel operations on device
   void compute_all_energies_kokkos();
   void sweep_rejection_kokkos();
+  void sweep_rejection_kokkos(int, int *);
 
 private:
   // Device-side helper functors

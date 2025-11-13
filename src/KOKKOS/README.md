@@ -11,6 +11,8 @@ The KOKKOS package enables GPU acceleration and performance portability in SPPAR
 Currently implemented:
 - ✅ Base infrastructure (MemoryKokkos, AppKokkos, AppLatticeKokkos)
 - ✅ AppPottsKokkos - Kokkos-enabled Potts model
+- ✅ **AppPottsNeighKokkos** - Neighbor-based rejection with null bin
+- ✅ **AppPottsNeighOnlyKokkos** - Neighbor-based rejection without null bin
 - ✅ CMake and Makefile build system integration
 - ✅ **Device kernels actively running** - iterate_rejection() override implemented
 - ✅ Parallel rejection KMC on device with proper RNG
@@ -20,7 +22,7 @@ Currently implemented:
 
 **Limitations (Current):**
 - Masking not yet supported
-- Only AppPottsKokkos implemented (not AppIsing, AppDiffusion, etc.)
+- Only Potts variants implemented (not AppIsing, AppDiffusion, etc.)
 - GPU backends (CUDA, HIP, SYCL) not yet tested
 
 ## Prerequisites
@@ -84,16 +86,25 @@ make no-kokkos
 Kokkos-enabled applications use the `/kk` suffix in input scripts:
 
 ```
-# Standard Potts
+# Standard Potts variants
 app_style potts 100
+app_style potts/neigh 100
+app_style potts/neighonly 100
 
-# Kokkos-enabled Potts
+# Kokkos-enabled Potts variants
 app_style potts/kk 100
+app_style potts/neigh/kk 100
+app_style potts/neighonly/kk 100
 ```
 
-### Example Input Script
+### Example Input Scripts
 
-See `examples/potts/in.potts.kk` for a complete example:
+See example files in `examples/potts/`:
+- `in.potts.kk` - AppPottsKokkos (random spin flips 1-nspins with null bin)
+- `in.potts.neigh.kk` - AppPottsNeighKokkos (neighbor spin values with null bin)
+- `in.potts.neighonly.kk` - AppPottsNeighOnlyKokkos (neighbor spin values without null bin)
+
+Example usage:
 
 ```bash
 cd /Users/Tron/spparks
@@ -119,6 +130,14 @@ mpirun -np 1 ./src/build/spparks -in examples/potts/in.potts.kk
 AppPotts (base class)
     ↓
 AppPottsKokkos (Kokkos-enabled version)
+
+AppPotts → AppPottsNeigh
+                ↓
+           AppPottsNeighKokkos (Kokkos-enabled neighbor rejection with null bin)
+
+AppPotts → AppPottsNeighOnly
+                ↓
+           AppPottsNeighOnlyKokkos (Kokkos-enabled neighbor rejection without null bin)
 ```
 
 ### Key Components
@@ -142,6 +161,16 @@ AppPottsKokkos (Kokkos-enabled version)
    - Rejection sweep functors (parallel_reduce with acceptance counting)
    - Thread-safe RNG via Kokkos::Random_XorShift64_Pool
    - Automatic backend selection (CPU/GPU)
+
+5. **AppPottsNeighKokkos**: Neighbor-based rejection with null bin
+   - Builds unique list of neighboring spin values on device
+   - Uses null bin extending to maxneigh for proper rejection KMC
+   - Same performance characteristics as AppPottsKokkos
+
+6. **AppPottsNeighOnlyKokkos**: Neighbor-based rejection without null bin
+   - Neighbor-only spin flips (no null bin rejection)
+   - Technically incorrect rKMC but faster for some applications
+   - Useful for rapid grain growth simulations
 
 ### Data Management
 

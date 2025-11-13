@@ -40,6 +40,8 @@ function(configure_conditional_sources)
             app_kokkos.cpp
             app_lattice_kokkos.cpp
             app_potts_kokkos.cpp
+            app_potts_neigh_kokkos.cpp
+            app_potts_neighonly_kokkos.cpp
         )
         message(STATUS "Added KOKKOS package sources")
     endif()

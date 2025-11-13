@@ -348,6 +348,12 @@ void AppPottsKokkos::iterate_rejection(double stoptime)
   int done = 0;
   while (!done) {
     for (int iset = 0; iset < nset_loop; iset++) {
+      // Sync device to host before MPI communication
+      // MPI operates on host data, so we need current device state
+      if (nprocs > 1 && iset > 0) {
+        sync_spin_to_host();
+      }
+
       // MPI communication for this sector
       if (nprocs > 1) {
         timer->stamp();
@@ -360,9 +366,10 @@ void AppPottsKokkos::iterate_rejection(double stoptime)
 
       timer->stamp();
 
-      // Sync data to device before kernel launch (once per timestep)
+      // Sync data to device after MPI communication
+      // Need to get updated ghost sites from MPI
+      sync_spin_to_device();
       if (iset == 0) {
-        sync_spin_to_device();
         if (!k_numneigh.need_sync_device()) k_numneigh.sync_device();
         if (!k_neighbor.need_sync_device()) k_neighbor.sync_device();
       }
@@ -400,11 +407,8 @@ void AppPottsKokkos::iterate_rejection(double stoptime)
 
       timer->stamp(TIME_SOLVE);
 
-      // Sync results back to host for communication and output
-      // Only sync once per timestep after last sector
-      if (iset == nset_loop - 1) {
-        sync_spin_to_host();
-      }
+      // Sync device to host before reverse MPI communication
+      sync_spin_to_host();
 
       if (nprocs > 1) {
         if (sectorflag) comm->reverse_sector(iset);

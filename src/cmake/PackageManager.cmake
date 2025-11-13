@@ -346,6 +346,10 @@ function(uninstall_kokkos_package)
         app_lattice_kokkos.h
         app_potts_kokkos.cpp
         app_potts_kokkos.h
+        app_potts_neigh_kokkos.cpp
+        app_potts_neigh_kokkos.h
+        app_potts_neighonly_kokkos.cpp
+        app_potts_neighonly_kokkos.h
         memory_kokkos.cpp
         memory_kokkos.h
     )

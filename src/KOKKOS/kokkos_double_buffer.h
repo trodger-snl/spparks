@@ -140,6 +140,38 @@ public:
   }
 
   /* ----------------------------------------------------------------------
+     Selective MPI sync: host → DualView → selected device buffer(s)
+     Use for optimized sync after MPI communication
+
+     OPTIMIZATION: After MPI forward communication, only read_buffer needs
+     updating (write_buffer will be overwritten in next sweep anyway).
+     This reduces device memory copies by 33%.
+
+     sync_read:  If true, sync read_buffer (needed for next sweep)
+     sync_write: If true, sync write_buffer (only needed for initialization)
+
+     IMPORTANT: Caller is responsible for any data transformations
+     (e.g., quaternion normalization) before calling this method
+  ---------------------------------------------------------------------- */
+  void sync_to_device_selective(const T* host_data, bool sync_read = true,
+                                  bool sync_write = false) {
+    auto h_view = staging.h_view;
+    for (size_t i = 0; i < _size; i++) {
+      h_view(i) = host_data[i];
+    }
+    staging.modify_host();
+    staging.sync_device();
+
+    // Selectively copy to buffers based on flags
+    if (sync_read) {
+      Kokkos::deep_copy(read_buffer, staging.d_view);
+    }
+    if (sync_write) {
+      Kokkos::deep_copy(write_buffer, staging.d_view);
+    }
+  }
+
+  /* ----------------------------------------------------------------------
      Device → host sync: read_buffer → DualView → host
      Use before MPI communication to get current device state
 

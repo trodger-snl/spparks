@@ -117,13 +117,6 @@ void AppPottsQuaternionKokkos::grow_app()
 
   // Allocate/resize Kokkos views
   int nall = nlocal + nghost;
-  k_spin = Kokkos::DualView<int*>("spin", nall);
-
-  // Quaternion arrays
-  k_q0 = Kokkos::DualView<double*>("q0", nall);
-  k_qx = Kokkos::DualView<double*>("qx", nall);
-  k_qy = Kokkos::DualView<double*>("qy", nall);
-  k_qz = Kokkos::DualView<double*>("qz", nall);
 
   // Allocate neighbor arrays
   k_numneigh = Kokkos::DualView<int*>("numneigh", nall);
@@ -131,17 +124,12 @@ void AppPottsQuaternionKokkos::grow_app()
     k_neighbor = Kokkos::DualView<int**>("neighbor", nall, maxneigh);
   }
 
-  // Allocate double buffers for race-free parallel updates
-  d_spin_read = Kokkos::View<int*>("spin_read", nall);
-  d_spin_write = Kokkos::View<int*>("spin_write", nall);
-  d_q0_read = Kokkos::View<double*>("q0_read", nall);
-  d_q0_write = Kokkos::View<double*>("q0_write", nall);
-  d_qx_read = Kokkos::View<double*>("qx_read", nall);
-  d_qx_write = Kokkos::View<double*>("qx_write", nall);
-  d_qy_read = Kokkos::View<double*>("qy_read", nall);
-  d_qy_write = Kokkos::View<double*>("qy_write", nall);
-  d_qz_read = Kokkos::View<double*>("qz_read", nall);
-  d_qz_write = Kokkos::View<double*>("qz_write", nall);
+  // Allocate double buffers using generalized framework
+  buffer_spin.allocate("spin", nall);
+  buffer_q0.allocate("q0", nall);
+  buffer_qx.allocate("qx", nall);
+  buffer_qy.allocate("qy", nall);
+  buffer_qz.allocate("qz", nall);
 }
 
 /* ----------------------------------------------------------------------
@@ -188,57 +176,44 @@ void AppPottsQuaternionKokkos::sync_data_to_device_full()
 {
   int nall = nlocal + nghost;
 
-  // Sync spin
-  auto h_spin = k_spin.h_view;
-  for (int i = 0; i < nall; i++) {
-    h_spin(i) = spin[i];
-  }
-  k_spin.modify_host();
-  k_spin.sync_device();
+  // Sync spin directly (no transformation needed)
+  buffer_spin.sync_to_device_full(spin);
 
   // Sync quaternions with normalization to prevent drift
-  auto h_q0 = k_q0.h_view;
-  auto h_qx = k_qx.h_view;
-  auto h_qy = k_qy.h_view;
-  auto h_qz = k_qz.h_view;
+  // Allocate temporary normalized arrays
+  double* q0_norm = new double[nall];
+  double* qx_norm = new double[nall];
+  double* qy_norm = new double[nall];
+  double* qz_norm = new double[nall];
+
   for (int i = 0; i < nall; i++) {
     double q[4] = {q0[i], qx[i], qy[i], qz[i]};
     // Normalize to prevent accumulation of numerical errors
     double norm = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
     if (norm > 1.0e-15) {
       double inv_norm = 1.0 / norm;
-      h_q0(i) = q[0] * inv_norm;
-      h_qx(i) = q[1] * inv_norm;
-      h_qy(i) = q[2] * inv_norm;
-      h_qz(i) = q[3] * inv_norm;
+      q0_norm[i] = q[0] * inv_norm;
+      qx_norm[i] = q[1] * inv_norm;
+      qy_norm[i] = q[2] * inv_norm;
+      qz_norm[i] = q[3] * inv_norm;
     } else {
-      h_q0(i) = q[0];
-      h_qx(i) = q[1];
-      h_qy(i) = q[2];
-      h_qz(i) = q[3];
+      q0_norm[i] = q[0];
+      qx_norm[i] = q[1];
+      qy_norm[i] = q[2];
+      qz_norm[i] = q[3];
     }
   }
-  k_q0.modify_host();
-  k_qx.modify_host();
-  k_qy.modify_host();
-  k_qz.modify_host();
 
-  k_q0.sync_device();
-  k_qx.sync_device();
-  k_qy.sync_device();
-  k_qz.sync_device();
+  // Use framework to sync normalized data
+  buffer_q0.sync_to_device_full(q0_norm);
+  buffer_qx.sync_to_device_full(qx_norm);
+  buffer_qy.sync_to_device_full(qy_norm);
+  buffer_qz.sync_to_device_full(qz_norm);
 
-  // Copy to double buffers (both read and write start with same data)
-  Kokkos::deep_copy(d_spin_read, k_spin.d_view);
-  Kokkos::deep_copy(d_spin_write, k_spin.d_view);
-  Kokkos::deep_copy(d_q0_read, k_q0.d_view);
-  Kokkos::deep_copy(d_q0_write, k_q0.d_view);
-  Kokkos::deep_copy(d_qx_read, k_qx.d_view);
-  Kokkos::deep_copy(d_qx_write, k_qx.d_view);
-  Kokkos::deep_copy(d_qy_read, k_qy.d_view);
-  Kokkos::deep_copy(d_qy_write, k_qy.d_view);
-  Kokkos::deep_copy(d_qz_read, k_qz.d_view);
-  Kokkos::deep_copy(d_qz_write, k_qz.d_view);
+  delete[] q0_norm;
+  delete[] qx_norm;
+  delete[] qy_norm;
+  delete[] qz_norm;
 }
 
 /* ----------------------------------------------------------------------
@@ -251,57 +226,44 @@ void AppPottsQuaternionKokkos::sync_data_to_device()
 {
   int nall = nlocal + nghost;
 
-  // Copy ALL sites from host to DualView
-  auto h_spin = k_spin.h_view;
-  auto h_q0 = k_q0.h_view;
-  auto h_qx = k_qx.h_view;
-  auto h_qy = k_qy.h_view;
-  auto h_qz = k_qz.h_view;
+  // Sync spin directly (no transformation needed)
+  buffer_spin.sync_to_device(spin);
+
+  // Sync quaternions with normalization to prevent drift
+  // Allocate temporary normalized arrays
+  double* q0_norm = new double[nall];
+  double* qx_norm = new double[nall];
+  double* qy_norm = new double[nall];
+  double* qz_norm = new double[nall];
 
   for (int i = 0; i < nall; i++) {
-    h_spin(i) = spin[i];
-
     // Normalize quaternions to prevent drift
     double q[4] = {q0[i], qx[i], qy[i], qz[i]};
     double norm = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
     if (norm > 1.0e-15) {
       double inv_norm = 1.0 / norm;
-      h_q0(i) = q[0] * inv_norm;
-      h_qx(i) = q[1] * inv_norm;
-      h_qy(i) = q[2] * inv_norm;
-      h_qz(i) = q[3] * inv_norm;
+      q0_norm[i] = q[0] * inv_norm;
+      qx_norm[i] = q[1] * inv_norm;
+      qy_norm[i] = q[2] * inv_norm;
+      qz_norm[i] = q[3] * inv_norm;
     } else {
-      h_q0(i) = q[0];
-      h_qx(i) = q[1];
-      h_qy(i) = q[2];
-      h_qz(i) = q[3];
+      q0_norm[i] = q[0];
+      qx_norm[i] = q[1];
+      qy_norm[i] = q[2];
+      qz_norm[i] = q[3];
     }
   }
 
-  k_spin.modify_host();
-  k_q0.modify_host();
-  k_qx.modify_host();
-  k_qy.modify_host();
-  k_qz.modify_host();
+  // Use framework to sync normalized data (copies to both buffers)
+  buffer_q0.sync_to_device(q0_norm);
+  buffer_qx.sync_to_device(qx_norm);
+  buffer_qy.sync_to_device(qy_norm);
+  buffer_qz.sync_to_device(qz_norm);
 
-  k_spin.sync_device();
-  k_q0.sync_device();
-  k_qx.sync_device();
-  k_qy.sync_device();
-  k_qz.sync_device();
-
-  // Copy ALL sites from DualView to both device buffers
-  // This ensures both buffers have the same starting state after MPI comm
-  Kokkos::deep_copy(d_spin_read, k_spin.d_view);
-  Kokkos::deep_copy(d_spin_write, k_spin.d_view);
-  Kokkos::deep_copy(d_q0_read, k_q0.d_view);
-  Kokkos::deep_copy(d_q0_write, k_q0.d_view);
-  Kokkos::deep_copy(d_qx_read, k_qx.d_view);
-  Kokkos::deep_copy(d_qx_write, k_qx.d_view);
-  Kokkos::deep_copy(d_qy_read, k_qy.d_view);
-  Kokkos::deep_copy(d_qy_write, k_qy.d_view);
-  Kokkos::deep_copy(d_qz_read, k_qz.d_view);
-  Kokkos::deep_copy(d_qz_write, k_qz.d_view);
+  delete[] q0_norm;
+  delete[] qx_norm;
+  delete[] qy_norm;
+  delete[] qz_norm;
 }
 
 /* ----------------------------------------------------------------------
@@ -312,38 +274,26 @@ void AppPottsQuaternionKokkos::sync_data_to_host()
 {
   int nall = nlocal + nghost;
 
-  // Copy from read buffer (final state after swaps) to DualView
-  Kokkos::deep_copy(k_spin.d_view, d_spin_read);
-  Kokkos::deep_copy(k_q0.d_view, d_q0_read);
-  Kokkos::deep_copy(k_qx.d_view, d_qx_read);
-  Kokkos::deep_copy(k_qy.d_view, d_qy_read);
-  Kokkos::deep_copy(k_qz.d_view, d_qz_read);
+  // Sync spin directly (no transformation needed)
+  buffer_spin.sync_to_host(spin);
 
-  // Mark device as modified and sync to host views
-  k_spin.modify_device();
-  k_q0.modify_device();
-  k_qx.modify_device();
-  k_qy.modify_device();
-  k_qz.modify_device();
+  // Sync quaternions with normalization to prevent accumulation of errors
+  // Allocate temporary arrays
+  double* q0_temp = new double[nall];
+  double* qx_temp = new double[nall];
+  double* qy_temp = new double[nall];
+  double* qz_temp = new double[nall];
 
-  k_spin.sync_host();
-  k_q0.sync_host();
-  k_qx.sync_host();
-  k_qy.sync_host();
-  k_qz.sync_host();
+  // Get data from device
+  buffer_q0.sync_to_host(q0_temp);
+  buffer_qx.sync_to_host(qx_temp);
+  buffer_qy.sync_to_host(qy_temp);
+  buffer_qz.sync_to_host(qz_temp);
 
-  // Copy to CPU arrays with quaternion normalization
-  auto h_spin = k_spin.h_view;
-  auto h_q0 = k_q0.h_view;
-  auto h_qx = k_qx.h_view;
-  auto h_qy = k_qy.h_view;
-  auto h_qz = k_qz.h_view;
-
+  // Normalize and copy to final host arrays
   for (int i = 0; i < nall; i++) {
-    spin[i] = h_spin(i);
-
     // Normalize quaternions to prevent accumulation of numerical errors
-    double q[4] = {h_q0(i), h_qx(i), h_qy(i), h_qz(i)};
+    double q[4] = {q0_temp[i], qx_temp[i], qy_temp[i], qz_temp[i]};
     double norm = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
     if (norm > 1.0e-15) {
       double inv_norm = 1.0 / norm;
@@ -358,6 +308,11 @@ void AppPottsQuaternionKokkos::sync_data_to_host()
       qz[i] = q[3];
     }
   }
+
+  delete[] q0_temp;
+  delete[] qx_temp;
+  delete[] qy_temp;
+  delete[] qz_temp;
 }
 
 /* ----------------------------------------------------------------------
@@ -367,27 +322,12 @@ void AppPottsQuaternionKokkos::sync_data_to_host()
 
 void AppPottsQuaternionKokkos::swap_buffers()
 {
-  // Swap spin buffers
-  auto temp_spin = d_spin_read;
-  d_spin_read = d_spin_write;
-  d_spin_write = temp_spin;
-
-  // Swap quaternion buffers
-  auto temp_q0 = d_q0_read;
-  d_q0_read = d_q0_write;
-  d_q0_write = temp_q0;
-
-  auto temp_qx = d_qx_read;
-  d_qx_read = d_qx_write;
-  d_qx_write = temp_qx;
-
-  auto temp_qy = d_qy_read;
-  d_qy_read = d_qy_write;
-  d_qy_write = temp_qy;
-
-  auto temp_qz = d_qz_read;
-  d_qz_read = d_qz_write;
-  d_qz_write = temp_qz;
+  // Use framework to swap all buffers
+  buffer_spin.swap();
+  buffer_q0.swap();
+  buffer_qx.swap();
+  buffer_qy.swap();
+  buffer_qz.swap();
 }
 
 /* ----------------------------------------------------------------------
@@ -769,14 +709,14 @@ void AppPottsQuaternionKokkos::sweep_rejection_kokkos()
 
   // Launch kernel with reduction to count accepted moves
   RejectionSweepFunctor functor(
-    d_spin_read,      // Read from read buffer
-    d_spin_write,     // Write to write buffer
+    buffer_spin.read_buffer,      // Read from read buffer
+    buffer_spin.write_buffer,     // Write to write buffer
     k_numneigh.d_view,
     k_neighbor.d_view,
-    d_q0_read, d_q0_write,
-    d_qx_read, d_qx_write,
-    d_qy_read, d_qy_write,
-    d_qz_read, d_qz_write,
+    buffer_q0.read_buffer, buffer_q0.write_buffer,
+    buffer_qx.read_buffer, buffer_qx.write_buffer,
+    buffer_qy.read_buffer, buffer_qy.write_buffer,
+    buffer_qz.read_buffer, buffer_qz.write_buffer,
     d_symmetries,
     num_symmetries,
     theta_cut,
@@ -999,14 +939,14 @@ void AppPottsQuaternionKokkos::sweep_rejection_kokkos(int nsite, int *site_list)
 
   // Launch kernel over site list
   SectorSweepFunctor functor(
-    d_spin_read,      // Read from read buffer
-    d_spin_write,     // Write to write buffer
+    buffer_spin.read_buffer,      // Read from read buffer
+    buffer_spin.write_buffer,     // Write to write buffer
     k_numneigh.d_view,
     k_neighbor.d_view,
-    d_q0_read, d_q0_write,
-    d_qx_read, d_qx_write,
-    d_qy_read, d_qy_write,
-    d_qz_read, d_qz_write,
+    buffer_q0.read_buffer, buffer_q0.write_buffer,
+    buffer_qx.read_buffer, buffer_qx.write_buffer,
+    buffer_qy.read_buffer, buffer_qy.write_buffer,
+    buffer_qz.read_buffer, buffer_qz.write_buffer,
     d_symmetries,
     num_symmetries,
     theta_cut,

@@ -24,6 +24,7 @@ AppStyle(potts/quaternion/kk,AppPottsQuaternionKokkos)
 #define SPK_APP_POTTS_QUATERNION_KOKKOS_H
 
 #include "app_potts_quaternion.h"
+#include "kokkos_double_buffer.h"
 #include <Kokkos_Core.hpp>
 #include <Kokkos_DualView.hpp>
 #include <Kokkos_Random.hpp>
@@ -37,24 +38,17 @@ class AppPottsQuaternionKokkos : public AppPottsQuaternion {
   AppPottsQuaternionKokkos(class SPPARKS *, int, char **);
   virtual ~AppPottsQuaternionKokkos();
 
-  // Kokkos-specific data
-  Kokkos::DualView<int*> k_spin;
+  // Neighbor data
   Kokkos::DualView<int*> k_numneigh;
   Kokkos::DualView<int**> k_neighbor;
 
-  // Quaternion data
-  Kokkos::DualView<double*> k_q0;
-  Kokkos::DualView<double*> k_qx;
-  Kokkos::DualView<double*> k_qy;
-  Kokkos::DualView<double*> k_qz;
-
   // Double-buffer system to prevent race conditions
-  // Read and write to separate buffers, then swap after each sweep
-  Kokkos::View<int*> d_spin_read, d_spin_write;
-  Kokkos::View<double*> d_q0_read, d_q0_write;
-  Kokkos::View<double*> d_qx_read, d_qx_write;
-  Kokkos::View<double*> d_qy_read, d_qy_write;
-  Kokkos::View<double*> d_qz_read, d_qz_write;
+  // Uses generalized framework for spin and quaternion arrays
+  KokkosDoubleBuffer<int> buffer_spin;
+  KokkosDoubleBuffer<double> buffer_q0;
+  KokkosDoubleBuffer<double> buffer_qx;
+  KokkosDoubleBuffer<double> buffer_qy;
+  KokkosDoubleBuffer<double> buffer_qz;
 
   // Symmetries (copied to device once, read-only)
   Kokkos::View<double*> d_symmetries;

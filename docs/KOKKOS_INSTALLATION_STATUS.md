@@ -86,36 +86,91 @@ g++ -std=c++17 \
 - `-Xpreprocessor -fopenmp` required for Clang on macOS
 - Must link with `-lomp` (Homebrew libomp)
 
-### Method 2: CMake (Recommended for SPPARKS)
+### Method 2: CMake (Has Issues on macOS)
 
+⚠️ **Note:** CMake's `find_package(Kokkos)` has SDK path conflicts on macOS with Homebrew Kokkos.
+
+**The issue:**
+- CMake can find Kokkos package ✅
+- Compilation fails due to SDK header search path ordering ❌
+
+**Workaround - Manual Linking:**
 ```cmake
 cmake_minimum_required(VERSION 3.16)
 project(YourProject CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 
-# Find OpenMP first (required on macOS)
-find_package(OpenMP REQUIRED)
-
-# Find Kokkos
-find_package(Kokkos REQUIRED)
+# Manually specify Kokkos (works on macOS)
+include_directories(/opt/homebrew/include)
+include_directories(/opt/homebrew/opt/libomp/include)
+link_directories(/opt/homebrew/lib)
+link_directories(/opt/homebrew/opt/libomp/lib)
 
 add_executable(your_program your_code.cpp)
-target_link_libraries(your_program Kokkos::kokkos OpenMP::OpenMP_CXX)
-```
-
-**Important for macOS:**
-```bash
-# Set OpenMP paths before running CMake
-export OpenMP_ROOT=/opt/homebrew/opt/libomp
-export OpenMP_CXX_FLAGS="-Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include"
-export OpenMP_CXX_LIB_NAMES="omp"
-export OpenMP_omp_LIBRARY=/opt/homebrew/opt/libomp/lib/libomp.dylib
-
-cmake -DCMAKE_PREFIX_PATH=/opt/homebrew ..
+target_compile_options(your_program PRIVATE -Xpreprocessor -fopenmp)
+target_link_libraries(your_program kokkoscore kokkoscontainers omp)
 ```
 
 ## Recommendations for SPPARKS Integration
+
+### Recommended Approach: Bundle Kokkos (Like LAMMPS)
+
+To avoid macOS SDK path issues, **bundle Kokkos** as a git submodule (recommended for SPPARKS):
+
+```bash
+# Add Kokkos as submodule (do this once)
+cd /Users/Tron/spparks
+git submodule add https://github.com/kokkos/kokkos.git lib/kokkos
+git submodule update --init --recursive
+```
+
+**In `CMakeLists.txt`:**
+```cmake
+option(SPPARKS_PACKAGE_KOKKOS "Enable KOKKOS package" OFF)
+
+if(SPPARKS_PACKAGE_KOKKOS)
+    # Set Kokkos options before adding subdirectory
+    set(Kokkos_ENABLE_OPENMP ON CACHE BOOL "Enable OpenMP backend")
+    set(Kokkos_ENABLE_SERIAL OFF CACHE BOOL "Disable Serial backend")
+
+    # Add bundled Kokkos
+    add_subdirectory(lib/kokkos)
+
+    # Link to SPPARKS
+    target_link_libraries(spparks_lib PUBLIC Kokkos::kokkoscore)
+    target_compile_definitions(spparks_lib PUBLIC SPK_KOKKOS)
+endif()
+```
+
+**Benefits:**
+- ✅ No SDK path conflicts
+- ✅ Works on all platforms (macOS, Linux, Windows)
+- ✅ Consistent Kokkos version across builds
+- ✅ Users don't need to install Kokkos separately
+- ✅ This is exactly what LAMMPS does
+
+### Alternative: Use System Kokkos (Linux Only)
+
+For Linux clusters where Kokkos is pre-installed, allow using system Kokkos:
+
+```cmake
+if(SPPARKS_PACKAGE_KOKKOS)
+    option(SPPARKS_KOKKOS_EXTERNAL "Use external Kokkos" OFF)
+
+    if(SPPARKS_KOKKOS_EXTERNAL)
+        # Use system Kokkos (Linux)
+        find_package(Kokkos REQUIRED)
+        target_link_libraries(spparks_lib PUBLIC Kokkos::kokkos)
+    else()
+        # Use bundled Kokkos (all platforms)
+        add_subdirectory(lib/kokkos)
+        target_link_libraries(spparks_lib PUBLIC Kokkos::kokkoscore)
+    endif()
+
+    target_compile_definitions(spparks_lib PUBLIC SPK_KOKKOS)
+endif()
+```
 
 ### 1. Build System Updates
 

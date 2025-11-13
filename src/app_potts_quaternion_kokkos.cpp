@@ -171,15 +171,20 @@ void AppPottsQuaternionKokkos::init_app()
     k_neighbor.modify_host();
   }
 
-  // Sync site data to device
-  sync_data_to_device();
+  // Sync site data to device - use full version to initialize both buffers
+  sync_data_to_device_full();
 }
 
 /* ----------------------------------------------------------------------
    sync all site data to device
 ------------------------------------------------------------------------- */
 
-void AppPottsQuaternionKokkos::sync_data_to_device()
+/* ----------------------------------------------------------------------
+   sync all site data to device - FULL VERSION (both buffers)
+   Used only during initialization
+------------------------------------------------------------------------- */
+
+void AppPottsQuaternionKokkos::sync_data_to_device_full()
 {
   int nall = nlocal + nghost;
 
@@ -224,6 +229,69 @@ void AppPottsQuaternionKokkos::sync_data_to_device()
   k_qz.sync_device();
 
   // Copy to double buffers (both read and write start with same data)
+  Kokkos::deep_copy(d_spin_read, k_spin.d_view);
+  Kokkos::deep_copy(d_spin_write, k_spin.d_view);
+  Kokkos::deep_copy(d_q0_read, k_q0.d_view);
+  Kokkos::deep_copy(d_q0_write, k_q0.d_view);
+  Kokkos::deep_copy(d_qx_read, k_qx.d_view);
+  Kokkos::deep_copy(d_qx_write, k_qx.d_view);
+  Kokkos::deep_copy(d_qy_read, k_qy.d_view);
+  Kokkos::deep_copy(d_qy_write, k_qy.d_view);
+  Kokkos::deep_copy(d_qz_read, k_qz.d_view);
+  Kokkos::deep_copy(d_qz_write, k_qz.d_view);
+}
+
+/* ----------------------------------------------------------------------
+   sync all site data to device
+   Used after MPI communication to update ALL sites from host
+   Must update all sites because after MPI comm, host has the authoritative data
+------------------------------------------------------------------------- */
+
+void AppPottsQuaternionKokkos::sync_data_to_device()
+{
+  int nall = nlocal + nghost;
+
+  // Copy ALL sites from host to DualView
+  auto h_spin = k_spin.h_view;
+  auto h_q0 = k_q0.h_view;
+  auto h_qx = k_qx.h_view;
+  auto h_qy = k_qy.h_view;
+  auto h_qz = k_qz.h_view;
+
+  for (int i = 0; i < nall; i++) {
+    h_spin(i) = spin[i];
+
+    // Normalize quaternions to prevent drift
+    double q[4] = {q0[i], qx[i], qy[i], qz[i]};
+    double norm = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
+    if (norm > 1.0e-15) {
+      double inv_norm = 1.0 / norm;
+      h_q0(i) = q[0] * inv_norm;
+      h_qx(i) = q[1] * inv_norm;
+      h_qy(i) = q[2] * inv_norm;
+      h_qz(i) = q[3] * inv_norm;
+    } else {
+      h_q0(i) = q[0];
+      h_qx(i) = q[1];
+      h_qy(i) = q[2];
+      h_qz(i) = q[3];
+    }
+  }
+
+  k_spin.modify_host();
+  k_q0.modify_host();
+  k_qx.modify_host();
+  k_qy.modify_host();
+  k_qz.modify_host();
+
+  k_spin.sync_device();
+  k_q0.sync_device();
+  k_qx.sync_device();
+  k_qy.sync_device();
+  k_qz.sync_device();
+
+  // Copy ALL sites from DualView to both device buffers
+  // This ensures both buffers have the same starting state after MPI comm
   Kokkos::deep_copy(d_spin_read, k_spin.d_view);
   Kokkos::deep_copy(d_spin_write, k_spin.d_view);
   Kokkos::deep_copy(d_q0_read, k_q0.d_view);

@@ -83,7 +83,8 @@ private:
   struct SectorSweepFunctor;
 
   // Sync helpers
-  void sync_data_to_device();
+  void sync_data_to_device();          // MPI version - only updates read buffer
+  void sync_data_to_device_full();     // Full version - updates both buffers (initialization only)
   void sync_data_to_host();
   void swap_buffers();
 

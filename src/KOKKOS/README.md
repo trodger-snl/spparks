@@ -13,12 +13,14 @@ Currently implemented:
 - ✅ AppPottsKokkos - Kokkos-enabled Potts model
 - ✅ **AppPottsNeighKokkos** - Neighbor-based rejection with null bin
 - ✅ **AppPottsNeighOnlyKokkos** - Neighbor-based rejection without null bin
+- ✅ **AppPottsQuaternionKokkos** - Kokkos-enabled Potts quaternion model with crystallographic orientations
 - ✅ CMake and Makefile build system integration
 - ✅ **Device kernels actively running** - iterate_rejection() override implemented
 - ✅ Parallel rejection KMC on device with proper RNG
 - ✅ **3-4× speedup** on CPU (OpenMP backend) for typical problems
 - ✅ **MPI + Sector support** - Multi-processor runs with 2, 4, or 8 sectors
 - ✅ **Sector-aware kernels** - Sweep over specific site lists for each sector
+- ✅ **Double-buffer framework** - Generalized race-free concurrent read/write system
 
 **Limitations (Current):**
 - Masking not yet supported
@@ -90,19 +92,22 @@ Kokkos-enabled applications use the `/kk` suffix in input scripts:
 app_style potts 100
 app_style potts/neigh 100
 app_style potts/neighonly 100
+app_style potts/quaternion 100 cubic
 
 # Kokkos-enabled Potts variants
 app_style potts/kk 100
 app_style potts/neigh/kk 100
 app_style potts/neighonly/kk 100
+app_style potts/quaternion/kk 100 cubic
 ```
 
 ### Example Input Scripts
 
-See example files in `examples/potts/`:
+See example files in `examples/potts/` and `examples/potts_quaternion/`:
 - `in.potts.kk` - AppPottsKokkos (random spin flips 1-nspins with null bin)
 - `in.potts.neigh.kk` - AppPottsNeighKokkos (neighbor spin values with null bin)
 - `in.potts.neighonly.kk` - AppPottsNeighOnlyKokkos (neighbor spin values without null bin)
+- `in.potts_quaternion.compare.kk` - AppPottsQuaternionKokkos (quaternion-based grain growth with orientations)
 
 Example usage:
 
@@ -138,6 +143,10 @@ AppPotts → AppPottsNeigh
 AppPotts → AppPottsNeighOnly
                 ↓
            AppPottsNeighOnlyKokkos (Kokkos-enabled neighbor rejection without null bin)
+
+AppPotts → AppPottsQuaternion
+                ↓
+           AppPottsQuaternionKokkos (Kokkos-enabled quaternion-based grain growth)
 ```
 
 ### Key Components
@@ -171,6 +180,15 @@ AppPotts → AppPottsNeighOnly
    - Neighbor-only spin flips (no null bin rejection)
    - Technically incorrect rKMC but faster for some applications
    - Useful for rapid grain growth simulations
+
+7. **AppPottsQuaternionKokkos**: Quaternion-based grain growth with crystallographic orientations
+   - **Double-buffer framework** - Generalized concurrent read/write system (kokkos_double_buffer.h)
+   - Prevents race conditions in parallel Monte Carlo sweeps
+   - Full quaternion operations on device (normalize, composition, conjugate, disorientation)
+   - Supports cubic and HCP crystal symmetries
+   - Read-Shockley grain boundary energy model
+   - MPI + sectors fully supported with proper synchronization
+   - ~15× speedup on 6-core CPU (OpenMP backend)
 
 ### Data Management
 
@@ -267,9 +285,10 @@ See [`docs/KOKKOS_IMPLEMENTATION_ROADMAP.md`](../../docs/KOKKOS_IMPLEMENTATION_R
 ### Near Term (Q1-Q2)
 - ✅ Infrastructure and base classes
 - ✅ AppPottsKokkos implementation
-- ⏳ Full integration of Kokkos kernels into iteration loops
-- ⏳ Physics validation and benchmarking
-- ⏳ AppPottsQuaternion Kokkos version
+- ✅ Full integration of Kokkos kernels into iteration loops
+- ✅ Physics validation and benchmarking
+- ✅ AppPottsQuaternion Kokkos version
+- ✅ Double-buffer framework for race-free Monte Carlo
 
 ### Medium Term (Q3-Q4)
 - KMC solver optimization

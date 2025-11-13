@@ -81,6 +81,19 @@ private:
   // Device-compatible quaternion operations
   struct QuaternionOps {
     KOKKOS_INLINE_FUNCTION
+    static void normalize(double* q) {
+      // Normalize quaternion to unit length
+      double norm = Kokkos::sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
+      if (norm > 1.0e-15) {
+        double inv_norm = 1.0 / norm;
+        q[0] *= inv_norm;
+        q[1] *= inv_norm;
+        q[2] *= inv_norm;
+        q[3] *= inv_norm;
+      }
+    }
+
+    KOKKOS_INLINE_FUNCTION
     static void composition(const double* a, const double* b, double* result) {
       // Quaternion multiplication: result = a * b
       double ar = a[0], ax = a[1], ay = a[2], az = a[3];

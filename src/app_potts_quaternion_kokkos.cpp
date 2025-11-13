@@ -179,16 +179,27 @@ void AppPottsQuaternionKokkos::sync_data_to_device()
   k_spin.modify_host();
   k_spin.sync_device();
 
-  // Sync quaternions
+  // Sync quaternions with normalization to prevent drift
   auto h_q0 = k_q0.h_view;
   auto h_qx = k_qx.h_view;
   auto h_qy = k_qy.h_view;
   auto h_qz = k_qz.h_view;
   for (int i = 0; i < nall; i++) {
-    h_q0(i) = q0[i];
-    h_qx(i) = qx[i];
-    h_qy(i) = qy[i];
-    h_qz(i) = qz[i];
+    double q[4] = {q0[i], qx[i], qy[i], qz[i]};
+    // Normalize to prevent accumulation of numerical errors
+    double norm = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
+    if (norm > 1.0e-15) {
+      double inv_norm = 1.0 / norm;
+      h_q0(i) = q[0] * inv_norm;
+      h_qx(i) = q[1] * inv_norm;
+      h_qy(i) = q[2] * inv_norm;
+      h_qz(i) = q[3] * inv_norm;
+    } else {
+      h_q0(i) = q[0];
+      h_qx(i) = q[1];
+      h_qy(i) = q[2];
+      h_qz(i) = q[3];
+    }
   }
   k_q0.modify_host();
   k_qx.modify_host();
@@ -216,7 +227,7 @@ void AppPottsQuaternionKokkos::sync_data_to_host()
   k_qy.sync_host();
   k_qz.sync_host();
 
-  // Copy to CPU arrays
+  // Copy to CPU arrays with quaternion normalization
   auto h_spin = k_spin.h_view;
   auto h_q0 = k_q0.h_view;
   auto h_qx = k_qx.h_view;
@@ -225,10 +236,22 @@ void AppPottsQuaternionKokkos::sync_data_to_host()
 
   for (int i = 0; i < nall; i++) {
     spin[i] = h_spin(i);
-    q0[i] = h_q0(i);
-    qx[i] = h_qx(i);
-    qy[i] = h_qy(i);
-    qz[i] = h_qz(i);
+
+    // Normalize quaternions to prevent accumulation of numerical errors
+    double q[4] = {h_q0(i), h_qx(i), h_qy(i), h_qz(i)};
+    double norm = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
+    if (norm > 1.0e-15) {
+      double inv_norm = 1.0 / norm;
+      q0[i] = q[0] * inv_norm;
+      qx[i] = q[1] * inv_norm;
+      qy[i] = q[2] * inv_norm;
+      qz[i] = q[3] * inv_norm;
+    } else {
+      q0[i] = q[0];
+      qx[i] = q[1];
+      qy[i] = q[2];
+      qz[i] = q[3];
+    }
   }
 }
 
@@ -424,6 +447,9 @@ struct AppPottsQuaternionKokkos::RejectionSweepFunctor {
     int newstate = unique[iran];
     double q_new[4] = {q0(neighran), qx(neighran), qy(neighran), qz(neighran)};
 
+    // Normalize to ensure unit quaternion
+    QuaternionOps::normalize(q_new);
+
     // Calculate new energy (using temp quaternion, not modifying site yet)
     // We need to compute energy as if site i had q_new
     // This is tricky - we need to swap temporarily for energy calculation
@@ -582,10 +608,8 @@ void AppPottsQuaternionKokkos::iterate_rejection(double stoptime)
 
 void AppPottsQuaternionKokkos::sweep_rejection_kokkos()
 {
-  // Sync to device (caller already does this, but check for safety)
-  if (k_spin.need_sync_device()) sync_data_to_device();
-  if (k_numneigh.need_sync_device()) k_numneigh.sync_device();
-  if (k_neighbor.need_sync_device()) k_neighbor.sync_device();
+  // Note: sync is handled in iterate_rejection after MPI communication
+  // Don't re-sync here as it would overwrite device data with stale host data
 
   // Launch kernel with reduction to count accepted moves
   RejectionSweepFunctor functor(
@@ -626,10 +650,8 @@ void AppPottsQuaternionKokkos::sweep_rejection_kokkos()
 
 void AppPottsQuaternionKokkos::sweep_rejection_kokkos(int nsite, int *site_list)
 {
-  // Sync to device
-  if (k_spin.need_sync_device()) sync_data_to_device();
-  if (k_numneigh.need_sync_device()) k_numneigh.sync_device();
-  if (k_neighbor.need_sync_device()) k_neighbor.sync_device();
+  // Note: sync is handled in iterate_rejection after MPI communication
+  // Don't re-sync here as it would overwrite device data with stale host data
 
   // Copy site list to device
   Kokkos::View<int*> d_site_list("sector_sites", nsite);
@@ -754,6 +776,9 @@ void AppPottsQuaternionKokkos::sweep_rejection_kokkos(int nsite, int *site_list)
       int neighran = unique_neigh[iran];
       int newstate = unique[iran];
       double q_new[4] = {q0(neighran), qx(neighran), qy(neighran), qz(neighran)};
+
+      // Normalize to ensure unit quaternion
+      QuaternionOps::normalize(q_new);
 
       // Calculate new energy
       double efinal = 0.0;

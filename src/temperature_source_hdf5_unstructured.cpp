@@ -696,6 +696,12 @@ bool HDF5UnstructuredTemperatureSource::all_temperatures_below_threshold(double 
 
 bool HDF5UnstructuredTemperatureSource::has_significant_thermal_activity(double time)
 {
+  // TODO: Test this function in practical applications to determine which if statements
+  // are actually activated. The goal is to simplify the logic by removing unused or
+  // redundant thermal detection criteria based on real-world usage patterns.
+  // Track which conditions (hot_sites, rapid_heating_sites, significant_activity_sites,
+  // warm_sites+cooling_sites, trend_heating_sites) are triggered in typical AM simulations.
+
   if (!app) {
     error->all(FLERR, "App not available for temperature checking");
   }
@@ -809,6 +815,13 @@ bool HDF5UnstructuredTemperatureSource::has_significant_thermal_activity(double 
 
 bool HDF5UnstructuredTemperatureSource::has_significant_thermal_activity_hdf5_nodes(double time)
 {
+  // TODO: Test this function in practical applications to determine which if statements
+  // are actually activated. The goal is to simplify the logic by removing unused or
+  // redundant thermal detection criteria based on real-world usage patterns.
+  // Track which conditions (local_hot_nodes, local_rapid_heating_nodes,
+  // local_significant_activity_nodes, local_warm_nodes+local_cooling_nodes) are triggered
+  // in typical AM simulations.
+
   // Check if we have valid data loaded
   if (selected_chunks.empty() || dataCounts.empty()) {
     return false;

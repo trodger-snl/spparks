@@ -61,10 +61,6 @@ void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vect
   // Open HDF5 file
   try {
     file = std::make_shared<HighFive::File>(filename, HighFive::File::ReadOnly);
-    if (universe->me == 0) {
-      fprintf(screen, "\n=== HDF5 File Opening Debug ===\n");
-      fprintf(screen, "Successfully opened HDF5 file: %s\n", filename.c_str());
-    }
   } catch (const std::exception& e) {
     error->all(FLERR, (std::string("Failed to open HDF5 file: ") + e.what()).c_str());
   }
@@ -72,45 +68,7 @@ void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vect
   // Read layer times
   file->getDataSet("layerTimes").read(layerTimes);
 
-  // Debug: Report raw layerTimes data
-  if (universe->me == 0) {
-    fprintf(screen, "\n=== LayerTimes Array (Raw from HDF5) ===\n");
-    fprintf(screen, "Total size: %zu entries\n", layerTimes.size());
-
-    // Show first 5 values
-    fprintf(screen, "First values: ");
-    for (size_t i = 0; i < std::min(size_t(5), layerTimes.size()); i++) {
-      fprintf(screen, "%.6e ", layerTimes[i]);
-    }
-    fprintf(screen, "\n");
-
-    // Show last 5 values
-    if (layerTimes.size() > 5) {
-      fprintf(screen, "Last values:  ");
-      for (size_t i = std::max(size_t(0), layerTimes.size() - 5); i < layerTimes.size(); i++) {
-        fprintf(screen, "%.6e ", layerTimes[i]);
-      }
-      fprintf(screen, "\n");
-    }
-
-    // Show min/max
-    auto min_it = std::min_element(layerTimes.begin(), layerTimes.end());
-    auto max_it = std::max_element(layerTimes.begin(), layerTimes.end());
-    fprintf(screen, "Min value: %.6e at index %zu\n", *min_it, std::distance(layerTimes.begin(), min_it));
-    fprintf(screen, "Max value: %.6e at index %zu\n", *max_it, std::distance(layerTimes.begin(), max_it));
-
-    // Count zeros
-    size_t zero_count = std::count_if(layerTimes.begin(), layerTimes.end(),
-                                      [](double val) { return val == 0.0; });
-    fprintf(screen, "Number of zero values: %zu\n", zero_count);
-  }
-
   // Trim trailing zeros from layerTimes (handles pre-allocated HDF5 arrays)
-  // Find the last non-zero entry
-  if (universe->me == 0) {
-    fprintf(screen, "\n=== Trailing Zero Trimming ===\n");
-  }
-
   size_t original_size = layerTimes.size();
   size_t valid_entries = layerTimes.size();
 
@@ -123,38 +81,16 @@ void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vect
 
   if (valid_entries < layerTimes.size()) {
     if (universe->me == 0) {
-      fprintf(screen, "Trimming detected: Original size %zu -> New size %zu\n", original_size, valid_entries);
-      fprintf(screen, "Removed %zu trailing entries\n", original_size - valid_entries);
-
-      // Show what's being trimmed
-      fprintf(screen, "Last valid entry (index %zu): %.6e\n", valid_entries - 1, layerTimes[valid_entries - 1]);
-      fprintf(screen, "Trimmed values: ");
-      for (size_t i = valid_entries; i < std::min(valid_entries + 5, original_size); i++) {
-        fprintf(screen, "%.6e ", layerTimes[i]);
-      }
-      if (original_size > valid_entries + 5) {
-        fprintf(screen, "... (and %zu more)", original_size - valid_entries - 5);
-      }
-      fprintf(screen, "\n");
+      fprintf(screen, "LayerTimes: Trimmed %zu trailing zero entries\n", original_size - valid_entries);
     }
     layerTimes.resize(valid_entries);
-  } else {
-    if (universe->me == 0) {
-      fprintf(screen, "No trimming needed - all %zu entries are valid (non-zero)\n", layerTimes.size());
-    }
   }
 
   // Data validation
   if (universe->me == 0) {
-    fprintf(screen, "\n=== LayerTimes Data Validation ===\n");
-
     if (layerTimes.empty()) {
-      fprintf(screen, "ERROR: layerTimes array is empty after processing!\n");
       error->all(FLERR, "layerTimes array is empty");
     }
-
-    fprintf(screen, "Final array size: %zu entries\n", layerTimes.size());
-    fprintf(screen, "Time range: %.6e to %.6e seconds\n", layerTimes.front(), layerTimes.back());
 
     // Check for monotonically increasing values
     bool is_monotonic = true;
@@ -168,29 +104,21 @@ void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vect
     }
 
     if (is_monotonic) {
-      fprintf(screen, "Monotonicity check: PASSED (values are strictly increasing)\n");
+      fprintf(screen, "LayerTimes validation: PASSED\n");
     } else {
-      fprintf(screen, "WARNING: Monotonicity check FAILED!\n");
-      fprintf(screen, "  First violation at index %zu:\n", first_violation);
-      fprintf(screen, "    layerTimes[%zu] = %.6e\n", first_violation - 1, layerTimes[first_violation - 1]);
-      fprintf(screen, "    layerTimes[%zu] = %.6e\n", first_violation, layerTimes[first_violation]);
+      fprintf(screen, "WARNING: Monotonicity check FAILED at index %zu\n", first_violation);
     }
 
     // Check for negative values
     size_t negative_count = 0;
-    size_t first_negative = 0;
     for (size_t i = 0; i < layerTimes.size(); i++) {
       if (layerTimes[i] < 0.0) {
-        if (negative_count == 0) first_negative = i;
         negative_count++;
       }
     }
 
     if (negative_count > 0) {
-      fprintf(screen, "WARNING: Found %zu negative values!\n", negative_count);
-      fprintf(screen, "  First negative at index %zu: %.6e\n", first_negative, layerTimes[first_negative]);
-    } else {
-      fprintf(screen, "Negative value check: PASSED (no negative values)\n");
+      fprintf(screen, "WARNING: Found %zu negative values in layerTimes\n", negative_count);
     }
 
     // Check for duplicate consecutive values
@@ -203,8 +131,6 @@ void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vect
 
     if (duplicate_count > 0) {
       fprintf(screen, "WARNING: Found %zu duplicate consecutive values\n", duplicate_count);
-    } else {
-      fprintf(screen, "Duplicate check: PASSED (no duplicate consecutive values)\n");
     }
 
     // Check for zeros in middle of array
@@ -216,28 +142,7 @@ void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vect
     }
 
     if (internal_zeros > 0) {
-      fprintf(screen, "WARNING: Found %zu zero values in the array\n", internal_zeros);
-    }
-
-    // Report time step statistics
-    if (layerTimes.size() > 1) {
-      double min_dt = std::numeric_limits<double>::max();
-      double max_dt = 0.0;
-      double sum_dt = 0.0;
-
-      for (size_t i = 1; i < layerTimes.size(); i++) {
-        double dt = layerTimes[i] - layerTimes[i-1];
-        min_dt = std::min(min_dt, dt);
-        max_dt = std::max(max_dt, dt);
-        sum_dt += dt;
-      }
-
-      double avg_dt = sum_dt / (layerTimes.size() - 1);
-
-      fprintf(screen, "\nLayer time step statistics:\n");
-      fprintf(screen, "  Min time step: %.6e seconds\n", min_dt);
-      fprintf(screen, "  Max time step: %.6e seconds\n", max_dt);
-      fprintf(screen, "  Avg time step: %.6e seconds\n", avg_dt);
+      fprintf(screen, "WARNING: Found %zu zero values in layerTimes\n", internal_zeros);
     }
   }
 
@@ -373,27 +278,15 @@ void HDF5UnstructuredTemperatureSource::print_source_info() const
 void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
 {
   if (universe->me == 0) {
-    fprintf(screen, "\n=== Loading Layer %u ===\n", layerIdx);
-    fprintf(screen, "Layer index: %u (valid range: 0 to %zu)\n", layerIdx, layerTimes.size() - 1);
-    if (layerIdx < layerTimes.size()) {
-      fprintf(screen, "Layer time: %.6e seconds\n", layerTimes[layerIdx]);
-    } else {
-      fprintf(screen, "WARNING: Layer index %u is out of range! Max valid index is %zu\n",
-              layerIdx, layerTimes.size() - 1);
-    }
+    fprintf(screen, "Loading layer %u at time %.6e s\n", layerIdx,
+            (layerIdx < layerTimes.size()) ? layerTimes[layerIdx] : -1.0);
   }
 
   // Try to open the layer group with error handling
   std::shared_ptr<HighFive::Group> grp;
   try {
     std::string group_name = std::to_string(layerIdx);
-    if (universe->me == 0) {
-      fprintf(screen, "Attempting to open HDF5 group: '%s'\n", group_name.c_str());
-    }
     grp = std::make_shared<HighFive::Group>(file->getGroup(group_name));
-    if (universe->me == 0) {
-      fprintf(screen, "Successfully opened HDF5 group '%s'\n", group_name.c_str());
-    }
   } catch (const HighFive::Exception& e) {
     char error_msg[512];
     snprintf(error_msg, sizeof(error_msg),
@@ -419,13 +312,6 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
 
   std::vector<unsigned> nodePtr;
   grp->getDataSet("nodePtrs").read(nodePtr);
-
-  if (universe->me == 0) {
-    fprintf(screen, "Successfully read layer metadata:\n");
-    fprintf(screen, "  Number of chunks: %zu\n", bboxes.size());
-    fprintf(screen, "  Total elements: %u\n", elemPtr.empty() ? 0 : elemPtr.back());
-    fprintf(screen, "  Total nodes: %u\n", nodePtr.empty() ? 0 : nodePtr.back());
-  }
   
   // Convert SPPARKS domain bounds from lattice units to physical coordinates (meters)
   std::vector<double> spparksPhysicalBbox{
@@ -456,9 +342,6 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   // Second pass: ensure element completeness
   // For elements in loaded chunks that might contain SPPARKS sites,
   // we need to ensure all their nodes are available
-  if (universe->me == 0 && chunksToLoad.size() > 0) {
-    fprintf(screen, "  Initial chunks overlapping SPPARKS domain: %zu\n", chunksToLoad.size());
-  }
   
   // To implement element completeness, we need to:
   // 1. Load elementToNode connectivity for the initial chunks
@@ -491,26 +374,19 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   selected_chunks = overlappingChunks;
   
   if (universe->me == 0 && overlappingChunks.size() > 0) {
-    // Calculate data reduction statistics
     unsigned totalElements = elemPtr.back();
     unsigned loadedElements = elemOffsets.back();
     unsigned totalNodes = nodePtr.back();
     unsigned loadedNodes = nodeOffsets.back();
-    
-    fprintf(screen, "  Chunk loading optimization results:\n");
-    fprintf(screen, "    Total chunks: %zu, Loaded: %zu (%.1f%%)\n", 
-            bboxes.size(), overlappingChunks.size(), 
-            100.0 * overlappingChunks.size() / bboxes.size());
-    fprintf(screen, "    Total elements: %u, Loaded: %u (%.1f%%)\n",
-            totalElements, loadedElements,
-            100.0 * loadedElements / totalElements);
-    fprintf(screen, "    Total nodes: %u, Loaded: %u (%.1f%%)\n",
-            totalNodes, loadedNodes,
-            100.0 * loadedNodes / totalNodes);
+
+    fprintf(screen, "  Loaded %zu/%zu chunks (%.1f%%), %u/%u elements (%.1f%%), %u/%u nodes (%.1f%%)\n",
+            overlappingChunks.size(), bboxes.size(), 100.0 * overlappingChunks.size() / bboxes.size(),
+            loadedElements, totalElements, 100.0 * loadedElements / totalElements,
+            loadedNodes, totalNodes, 100.0 * loadedNodes / totalNodes);
   }
   node_offsets = nodeOffsets;
   elem_offsets = elemOffsets;
-  
+
   // Build hyperslabs for selective reading
   auto build_hyperslab = [](const std::vector<std::array<size_t, 2>>& slices, 
                            const std::array<size_t, 2>& cols) -> HighFive::HyperSlab {
@@ -563,11 +439,6 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
     maxData = std::max(maxData, cnt);
   }
 
-  if (universe->me == 0) {
-    fprintf(screen, "Data array dimensions:\n");
-    fprintf(screen, "  Max data count per node: %u\n", maxData);
-  }
-
   // Read time and temperature data
   auto dataHyperSlab = build_hyperslab(nodeSlices, {0, maxData});
 
@@ -578,10 +449,6 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   std::vector<double> tempData;
   grp->getDataSet("temperatures").select(dataHyperSlab).read(tempData);
   temperatures = Array2D<double>(maxData, std::move(tempData));
-
-  if (universe->me == 0) {
-    fprintf(screen, "Successfully loaded all layer data for layer %u\n", layerIdx);
-  }
   
   // Build element bounding boxes for spatial queries
   elem_bboxes = build_elem_bounding_boxes(overlappingChunks.size(), 
@@ -632,23 +499,6 @@ std::array<double, 3> HDF5UnstructuredTemperatureSource::get_parametric_coordina
 
 unsigned HDF5UnstructuredTemperatureSource::get_active_layer(double t) const
 {
-  // Debug output for layer determination
-  static bool first_call = true;
-  static double last_t = -1.0;
-  static unsigned last_layer = 0;
-
-  if (first_call && universe->me == 0) {
-    fprintf(screen, "\n=== Active Layer Determination Debug ===\n");
-    fprintf(screen, "Available layer times:\n");
-    for (size_t i = 0; i < std::min(size_t(10), layerTimes.size()); i++) {
-      fprintf(screen, "  Layer %zu: %.6e s\n", i, layerTimes[i]);
-    }
-    if (layerTimes.size() > 10) {
-      fprintf(screen, "  ... (%zu more layers)\n", layerTimes.size() - 10);
-    }
-    first_call = false;
-  }
-
   // Check time bounds with detailed error messages
   if (t < layerTimes.front()) {
     char error_msg[512];
@@ -679,19 +529,6 @@ unsigned HDF5UnstructuredTemperatureSource::get_active_layer(double t) const
   auto lower = std::lower_bound(layerTimes.begin(), layerTimes.end(), t);
   auto idx = std::distance(layerTimes.begin(), lower);
   unsigned layer_idx = (idx == 0) ? 0 : idx - 1;
-
-  // Commented out to reduce runtime output spam
-  // Uncomment below for detailed layer switching debug information
-  /*
-  if (universe->me == 0 && (std::abs(t - last_t) > 1e-10 || layer_idx != last_layer)) {
-    fprintf(screen, "Layer determination: time=%.6e s -> layer %u (range: %.6e to %.6e s)\n",
-            t, layer_idx,
-            layerTimes[layer_idx],
-            (layer_idx + 1 < layerTimes.size()) ? layerTimes[layer_idx + 1] : layerTimes[layer_idx]);
-    last_t = t;
-    last_layer = layer_idx;
-  }
-  */
 
   return layer_idx;
 }
@@ -1128,17 +965,11 @@ bool HDF5UnstructuredTemperatureSource::has_significant_thermal_activity_hdf5_no
   // MPI communication to determine global thermal activity status
   int local_activity = local_has_activity ? 1 : 0;
   int global_activity = 0;
-  
+
   // Use MPI_Allreduce to get the maximum activity status across all processors
   // If any processor has thermal activity, all processors will know
   MPI_Allreduce(&local_activity, &global_activity, 1, MPI_INT, MPI_MAX, universe->uworld);
-  
-  // Debug output to understand what's happening - only when no activity detected
-  if (universe->me == 0 && global_activity == 0) {
-    printf("DEBUG: Time %.3e - Hot nodes: %d, Warm nodes: %d, Rapid heating: %d, Total nodes checked: %d, Activity: NO\n",
-           time, local_hot_nodes, local_warm_nodes, local_rapid_heating_nodes, total_nodes);
-  }
-  
+
   return (global_activity > 0);
 }
 
@@ -1328,66 +1159,39 @@ double HDF5UnstructuredTemperatureSource::find_next_active_time_sequential(doubl
 double HDF5UnstructuredTemperatureSource::get_next_time_with_temperature(double current_time, double threshold_temp)
 {
   if (layerTimes.empty()) {
-    if (universe->me == 0) std::cout << "DEBUG get_next_time: layerTimes empty" << std::endl;
     return current_time;
   }
-  
+
   // Find current layer
   unsigned current_layer = get_active_layer(current_time);
-  
+
   // Check if we have thermal intervals computed for this layer
   if (current_layer >= layer_thermal_intervals.size()) {
-    if (universe->me == 0) std::cout << "DEBUG get_next_time: current_layer " << current_layer 
-                                    << " >= layer_thermal_intervals.size() " << layer_thermal_intervals.size() << std::endl;
     return current_time;
   }
-  
-  if (universe->me == 0) {
-    std::cout << "DEBUG get_next_time: current_time=" << current_time << " current_layer=" << current_layer 
-              << " intervals_in_layer=" << layer_thermal_intervals[current_layer].size() << std::endl;
-  }
-  
+
   // Check remaining intervals in current layer
   for (const auto& interval : layer_thermal_intervals[current_layer]) {
-    if (universe->me == 0) {
-      std::cout << "DEBUG get_next_time: checking interval [" << interval.start_time << ", " << interval.end_time << "]" << std::endl;
-    }
     if (interval.start_time > current_time) {
-      if (universe->me == 0) std::cout << "DEBUG get_next_time: found next time " << interval.start_time << std::endl;
       return interval.start_time;
     }
   }
-  
+
   // Check subsequent layers
-  if (universe->me == 0) {
-    std::cout << "DEBUG get_next_time: checking subsequent layers, total layers=" << layerTimes.size() 
-              << " thermal_intervals_size=" << layer_thermal_intervals.size() << std::endl;
-  }
-  
   for (unsigned layer = current_layer + 1; layer < layerTimes.size(); layer++) {
-    if (universe->me == 0) {
-      std::cout << "DEBUG get_next_time: checking layer " << layer << " layer_time=" << layerTimes[layer] << std::endl;
-    }
-    
     // If we haven't computed thermal intervals for this layer yet, we should advance to it
     // The layer loading will happen when we reach its time
     if (layer >= layer_thermal_intervals.size() || layer_thermal_intervals[layer].empty()) {
-      if (universe->me == 0) {
-        std::cout << "DEBUG get_next_time: advancing to next layer " << layer << " at time " << layerTimes[layer] << std::endl;
-      }
       return layerTimes[layer];
     }
-    
+
     // If this layer has thermal intervals, return the first one
     if (!layer_thermal_intervals[layer].empty()) {
-      if (universe->me == 0) std::cout << "DEBUG get_next_time: found next layer " << layer 
-                                      << " with time " << layer_thermal_intervals[layer][0].start_time << std::endl;
       return layer_thermal_intervals[layer][0].start_time;
     }
   }
-  
+
   // No more thermal activity found
-  if (universe->me == 0) std::cout << "DEBUG get_next_time: no more thermal activity found" << std::endl;
   return std::numeric_limits<double>::max();
 }
 

@@ -12,7 +12,6 @@ function(configure_conditional_sources)
                 app_additive_ext_temp_texture.cpp
                 temperature_source.cpp
                 temperature_source_rosenthal.cpp
-                temperature_source_hdf5.cpp
                 temperature_source_hdf5_unstructured.cpp
             )
             message(STATUS "Added HDF5+MPI temperature source files")

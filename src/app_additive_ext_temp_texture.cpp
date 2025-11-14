@@ -17,7 +17,7 @@
    parameters for nucleation and grain growth during solidification processes.
    
    Key features:
-   - HDF5-based external temperature field reading with chunked data loading
+   - Modular temperature source system with HDF5 unstructured data support
    - Monte Carlo nucleation model with temperature-dependent kinetics
    - Quaternion-based crystallographic orientation tracking
    - Arrhenius mobility model for grain boundary kinetics
@@ -73,21 +73,19 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
   AppPottsQuaternion(spk,3,construct_parent_args(arg))
 {
 
-    if (narg != 6  )
+    if (narg != 5  )
     error->all(FLERR,"Illegal app_style command");
 
     nspins = atoi(arg[1]);
-    temp_file_string = arg[2]; //The name of the temperature file
-    dx = atof(arg[3]); //The source lattice spacing ( in m)
-    dt = atof(arg[4]); //The source timestep (in seconds)
-    nrefine = atoi(arg[5]); //How many refinement MC steps to perform after a site solidifies
+    dx = atof(arg[2]); //The source lattice spacing ( in m)
+    dt = atof(arg[3]); //The source timestep (in seconds)
+    nrefine = atoi(arg[4]); //How many refinement MC steps to perform after a site solidifies
     
     //I think we need all of these variables still!
     ndouble = 9;
     allow_app_update = 1;
     app_update_only = 1; //Skip solid-state growth for now.
     ninteger = 2;
-    total_time = 0;
     sites = unique = NULL;
     unique_dot = NULL;
     neigh_dist = NULL;
@@ -375,7 +373,6 @@ void AppAdditiveExtTempTexture::app_update(double dt)
         qy[i] = uq[2];
         qz[i] = uq[3];
         solid_d[i] = 0;
-        //melt_misorientation_out[i] = 0;
         G[i] = 0;
         V[i] = 0;
     }
@@ -457,23 +454,8 @@ void AppAdditiveExtTempTexture::grow_app()
   mobility_out = darray[4];
   T = darray[5];
   solid_d = darray[6];
-  //melt_misorientation_out = darray[7];
   G = darray[7];
   V = darray[8];
-
-  if (nlocal_app < nlocal) {
-    nlocal_app = nlocal;
-            
-  }
-  //Determine whether the domain is fully periodic, if not. Specify the periodicity of each boundary
-  if(domain->nonperiodic == 0) {
-  		fully_periodic = 1;
-  }
-  else {
-  	x_period = 1- domain->xperiodic;
-  	y_period = 1- domain->yperiodic;
-  	z_period = 1- domain->zperiodic;
-  }
 }
 
 
@@ -698,7 +680,6 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
   double efinal = 0;
   double Mobloc = 0;
   double dotValue = 0;
-  // std::cout << "Running site_event_rejection when I shouldn't!" << std::endl;
 
     //Assign the local mobility
     Mobloc = mobility_out[i];
@@ -721,7 +702,6 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
                 // Use cumulative probability for random sampling
                 //Exclude gas or molten sites from the Potts neighbor tally
                 double melt_misori_val = melt_misorientation(neighbor[i][j],c1,c2,c3);
-                //melt_misorientation_out[i] = melt_misori_val;
                 dotValue += melt_misori_val;
                 unique_dot[nevent] = dotValue;
                 value = spin[neighbor[i][j]];
@@ -739,7 +719,6 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
         for( int j = 0; j < nevent -1; j++) {
             if(dran <= unique_dot[j]) {
               int neighran = unique_neigh[j];
-              // melt_misorientation_out[i] = melt_misorientation(neighran,c1,c2,c3);
               SiteState s_new(unique[j], {q0[neighran], qx[neighran], qy[neighran], qz[neighran]});
               flip_site(i, s_new);
               efinal = site_energy(i);
@@ -773,17 +752,14 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
   if (efinal <= einitial) {
      if (random->uniform() > Mobloc){
        flip_site(i, s_old);
-      //  melt_misorientation_out[i] = 0;
      }
   }
   else if (temperature == 0.0) {
     flip_site(i, s_old);
-    // melt_misorientation_out[i] = 0;
 
   } 
   else if (random->uniform() > Mobloc * exp((einitial-efinal)*t_inverse)) {
     flip_site(i, s_old);
-    // melt_misorientation_out[i] = 0;
 
   }
 
@@ -903,7 +879,6 @@ void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, R
               // Use cumulative probability for random sampling
               //Exclude gas or molten sites from the Potts neighbor tally
               double melt_misori_val = melt_misorientation(neighbor[i][j],c1,c2,c3);
-              // melt_misorientation_out[i] = melt_misori_val;
               dotValue += melt_misori_val;
               unique_dot[nevent] = dotValue;
               value = spin[neighbor[i][j]];
@@ -924,7 +899,6 @@ void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, R
         if(dran <= unique_dot[j]) {
             int neighran = unique_neigh[j];
             SiteState s1(unique[j],{q0[neighran],qx[neighran],qy[neighran],qz[neighran]});
-            // melt_misorientation_out[i] = melt_misorientation(neighran,c1,c2,c3);
             flip_site(i,s1);
             active_flag[i] = 3;
             solid_d[i] = -1;
@@ -1030,7 +1004,6 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 naccept++;
             }
             if(nSites <= 0) {
-                //comm->all();
                 return;
             }
         }
@@ -1105,7 +1078,6 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
             int idx = shell3_indices[j];
             if(active_flag[neighbor[i][third_nearest[idx]]] ==2) {
                 int i_chosen = neighbor[i][third_nearest[idx]];
-                //spin[i_chosen] = spin[i];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
                 solid_d[i_chosen] = -nrefine -3;
@@ -1953,68 +1925,6 @@ void AppAdditiveExtTempTexture::generate_voids(RandomPark *random) {
     timer->stamp(TIME_APP);
 }
 
-/**
- * @brief Converts a 1D vector (in row-major order) into a 3D array with custom index ranges.
- *
- * This function takes a 1D vector of values and maps it to a 3D array with specified ranges
- * for the x, y, and z indices. The ranges allow the 3D array indices to start at arbitrary
- * values instead of zero. The input vector must have a size equal to the total number of
- * elements in the 3D array, calculated as:
- *     (xEnd - xStart + 1) * (yEnd - yStart + 1) * (zEnd - zStart + 1).
- *
- * @param inputVector The 1D vector containing the values in row-major order.
- * @param xStart The starting index for the x dimension.
- * @param xEnd The ending index for the x dimension.
- * @param yStart The starting index for the y dimension.
- * @param yEnd The ending index for the y dimension.
- * @param zStart The starting index for the z dimension.
- * @param zEnd The ending index for the z dimension.
- * @return A 3D array (vector of vectors of vectors) containing the mapped values.
- * @throws std::invalid_argument If the size of the input vector does not match the expected
- *         number of elements in the 3D array based on the specified ranges.
- */
-std::vector<std::vector<std::vector<int>>> AppAdditiveExtTempTexture::convert_to_3d_array_with_range(std::vector<int>& inputVector, 
-    int xStart, int xEnd, 
-    int yStart, int yEnd, 
-    int zStart, int zEnd) {
-    // Calculate the sizes of each dimension
-    int xSize = xEnd - xStart;
-    int ySize = yEnd - yStart;
-    int zSize = zEnd - zStart;
-
-    // Ensure the input vector has the correct size
-
-    if (inputVector.size() != xSize * ySize * zSize) {
-        throw std::invalid_argument("Input vector size does not match the specified dimensions.");
-    }
-
-    // Create the 3D array
-    std::vector<std::vector<std::vector<int>>> outputArray(
-        xSize, 
-        std::vector<std::vector<int>>(ySize, std::vector<int>(zSize))
-    );
-
-    // Fill the 3D array using the input vector
-    for (int x = xStart; x < xEnd; x++) {
-        for (int y = yStart; y < yEnd; y++) {
-            for (int z = zStart; z < zEnd; z++) {
-                // Compute the index in the 1D vector
-                int index = (x - xStart) * (ySize * zSize) + (y - yStart) * zSize + (z - zStart);
-                outputArray[x - xStart][y - yStart][z - zStart] = inputVector[index];
-            }
-        }
-    }
-    return outputArray;
-}
-
-
-
-
-
-
-
-
-
 /* ----------------------------------------------------------------------
    Setup modular temperature source command
    Format: setup_temperature_source type [arguments...]
@@ -2116,7 +2026,7 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
   
   if (!use_temperature_source || !temperature_source) {
     timer->stamp(TIME_APP);
-    return; // Fall back to legacy HDF5 system
+    return; // No temperature source configured
   }
   
   // Update temperature source (may load new data)

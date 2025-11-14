@@ -61,9 +61,6 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   // Void generation methods
   void generate_voids(class RandomPark *);
 
-  int xyz_to_local( double x, double y, double z );
-	std::vector<std::vector<std::vector<int>>> convert_to_3d_array_with_range(std::vector<int>&,int,int,int,int,int,int);
-
  protected:
 	// Void structure for tracking spherical voids
 	struct Void {
@@ -76,25 +73,16 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
 
 	double *mobility_out;
 	double *solid_d;
-	double *melt_misorientation_out;
 		double *neigh_dist;
-    int time_index;
-    double dtFD;
  	// Active flag for site visualization and state tracking
  	// 0: inactive, 1: active layer, 2: molten, 3: solidified, 5: void
  	int *active_flag;
- 	double read_interval;
  	const double R = 8.314459848; // Gas constant (J/mol/K)
 	// Temperature array for thermal field
 	double *T;
   double *G; //Temperature gradient at solidification
   double *V; //Solidification rate at solidification.
 	double time_step;
-	int total_time; // Time tracking for app_update
-   int line_count;
-  	double *temp_in_array;
-  	double *phase_in_array;
-	int x_period, y_period, z_period;
 	int nrefine;
 	// Physical and simulation parameters
 	double dt;
@@ -102,8 +90,6 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
 	double tc;
 	double tsig;
 	double dx;
-    double mo; // Arrhenius pre-factor
- 	double q; // Arrhenius exponential factor
  	double tl; // Liquidus temperature
  	double ts; // Solidus temperature
   double t_room;
@@ -117,8 +103,6 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
 	int    solid_front_length;
 	// Texture model parameters
 	double c1, c2, c3;
-	int nlocal_app; // Local application size
- 	int fully_periodic;
   double max_misorient;
   double t_cool_max;
   double mis_thresh;
@@ -131,7 +115,6 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
 	int *nucleation_flags;
 	double *nucleation_temps;
 	double *nucleation_sizes;
-  std::string temp_file_string;
 
   // Void generation parameters
   double void_density;           // Voids per cubic meter

@@ -36,6 +36,11 @@ src/Makefile.package.settings
 # Installed KOKKOS package files (copied from src/KOKKOS/)
 src/*_kokkos.*
 
+# Package file backups (created by Install.sh)
+*.backup
+*.backup2
+*.backup3
+
 # Python cache
 __pycache__/
 *.pyc

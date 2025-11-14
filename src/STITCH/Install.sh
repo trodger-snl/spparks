@@ -14,6 +14,20 @@ action () {
     rm -f ../$1
   elif (! cmp -s $1 ../$1) then
     if (test -z "$2" || test -e ../$2) then
+      # Create backup if file exists and differs
+      if (test -e ../$1) then
+        # Rotate backups: .backup2 -> .backup3, .backup -> .backup2
+        if (test -e ../$1.backup2) then
+          mv -f ../$1.backup2 ../$1.backup3
+        fi
+        if (test -e ../$1.backup) then
+          mv -f ../$1.backup ../$1.backup2
+        fi
+        cp ../$1 ../$1.backup
+        if (test $mode = 2) then
+          echo "  backed up src/$1 to src/$1.backup"
+        fi
+      fi
       cp $1 ..
       if (test $mode = 2) then
         echo "  updating src/$1"

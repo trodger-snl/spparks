@@ -306,14 +306,25 @@ if [ "$PARALLEL_JOBS" = "AUTO" ]; then
         # Fallback
         CORES=4
     fi
-    
-    # On Apple Silicon, use all cores; otherwise leave one free
+
+    echo "System has $CORES CPU cores detected"
+
+    # On Apple Silicon, use all cores; otherwise use smart defaults
     if [[ "$OSTYPE" == "darwin"* ]] && [[ "$(uname -m)" == "arm64" ]]; then
         BUILD_JOBS=$CORES
         echo "Apple Silicon detected: Using all $CORES cores for parallel build"
     else
-        BUILD_JOBS=$((CORES > 1 ? CORES - 1 : 1))
-        echo "Using $BUILD_JOBS of $CORES available cores for parallel build"
+        # Linux/other systems: default to 8 cores, or 50% if system has <= 8 cores
+        if [ $CORES -le 8 ]; then
+            BUILD_JOBS=$((CORES / 2))
+            if [ $BUILD_JOBS -lt 1 ]; then
+                BUILD_JOBS=1
+            fi
+            echo "Using $BUILD_JOBS of $CORES available cores for parallel build (50%)"
+        else
+            BUILD_JOBS=8
+            echo "Using $BUILD_JOBS of $CORES available cores for parallel build"
+        fi
     fi
 else
     BUILD_JOBS=$PARALLEL_JOBS

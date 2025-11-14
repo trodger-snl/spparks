@@ -13,7 +13,6 @@
 
 #include "temperature_source.h"
 #include "temperature_source_rosenthal.h"
-#include "temperature_source_hdf5.h"
 #include "temperature_source_hdf5_unstructured.h"
 #include "domain.h"
 #include "lattice.h"
@@ -76,8 +75,6 @@ std::unique_ptr<TemperatureSource> SPPARKS_NS::create_temperature_source(
 {
   if (type == "rosenthal") {
     return std::make_unique<RosenthalTemperatureSource>(spk);
-  } else if (type == "hdf5") {
-    return std::make_unique<HDF5TemperatureSource>(spk);
   } else if (type == "hdf5_unstructured") {
     return std::make_unique<HDF5UnstructuredTemperatureSource>(spk);
   } else if (type == "finitediff") {

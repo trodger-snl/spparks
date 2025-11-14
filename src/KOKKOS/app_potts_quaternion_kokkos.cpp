@@ -618,7 +618,9 @@ void AppPottsQuaternionKokkos::iterate_rejection(double stoptime)
       // Sync device to host before MPI communication
       // MPI operates on host data, so we need current device state
       if (nprocs > 1 && iset > 0) {
+        timer->stamp();
         sync_data_to_host();
+        timer->stamp(TIME_SOLVE);
       }
 
       // MPI communication for this sector
@@ -675,7 +677,9 @@ void AppPottsQuaternionKokkos::iterate_rejection(double stoptime)
       timer->stamp(TIME_SOLVE);
 
       // Sync device to host before reverse MPI communication
+      timer->stamp();
       sync_data_to_host();
+      timer->stamp(TIME_SOLVE);
 
       if (nprocs > 1) {
         if (sectorflag) comm->reverse_sector(iset);

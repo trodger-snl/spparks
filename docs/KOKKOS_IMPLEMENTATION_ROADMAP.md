@@ -116,7 +116,7 @@ This document outlines a comprehensive strategy for integrating Kokkos into SPPA
 - `530a64d` - **Add sync_profiling input command for Kokkos apps - Phase 3.4** (November 13, 2025)
 - `1fe6b5b` - **Document Phase 3.4: User-controllable sync profiling** (November 13, 2025)
 - `e1d7a6a` - **Fix timer instrumentation in all Kokkos apps - Phase 3.5** (November 13, 2025)
-- (pending) - **Document Phase 3.5: Performance benchmarking (20× speedup achieved)** (November 13, 2025)
+- `761e38a` - **Document Phase 3.5: Performance benchmarking (20× speedup achieved)** (November 13, 2025)
 
 ### ✅ Phase 2 Complete - MPI + Sector Support + Potts Variants
 

@@ -1,5 +1,20 @@
 # Package management system for SPPARKS CMake build
 # Equivalent to the Makefile package system (yes-package/no-package)
+#
+# IMPORTANT: Package files live in two locations:
+#   - src/PACKAGE/  (reference version, tracked in git)
+#   - src/          (installed/compiled version, ignored by git)
+#
+# GOLDEN RULE: Always edit src/PACKAGE/ files, never src/ installed copies!
+# Changes to installed files will be LOST on package reinstall.
+
+# Development mode option
+option(SPPARKS_DEV_MODE "Enable development mode with symlinks instead of copies (Unix only)" OFF)
+
+if(SPPARKS_DEV_MODE AND WIN32)
+    message(WARNING "SPPARKS_DEV_MODE is not supported on Windows, falling back to file copies")
+    set(SPPARKS_DEV_MODE OFF CACHE BOOL "Development mode disabled on Windows" FORCE)
+endif()
 
 # Available packages
 set(SPPARKS_AVAILABLE_PACKAGES
@@ -19,15 +34,76 @@ endfunction()
 
 # Function to save package status
 function(save_package_status)
-    file(WRITE "${SPPARKS_PACKAGE_STATUS_FILE}" 
+    file(WRITE "${SPPARKS_PACKAGE_STATUS_FILE}"
          "# SPPARKS Package Status - Auto-generated\n")
     foreach(PKG ${SPPARKS_AVAILABLE_PACKAGES})
         string(TOUPPER "${PKG}" PKG_UPPER)
         if(SPPARKS_PACKAGE_${PKG_UPPER})
-            file(APPEND "${SPPARKS_PACKAGE_STATUS_FILE}" 
+            file(APPEND "${SPPARKS_PACKAGE_STATUS_FILE}"
                  "set(SPPARKS_PACKAGE_${PKG_UPPER} ON)\n")
         endif()
     endforeach()
+endfunction()
+
+# Function to check if package files are in sync
+# Compares files in src/PACKAGE/ with their installed copies in src/
+function(check_package_sync PACKAGE_NAME)
+    string(TOUPPER "${PACKAGE_NAME}" PKG_UPPER)
+    set(PKG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/${PKG_UPPER}")
+
+    if(NOT EXISTS "${PKG_DIR}")
+        return()
+    endif()
+
+    # Find all .cpp and .h files in package directory
+    file(GLOB PKG_CPP_FILES "${PKG_DIR}/*.cpp")
+    file(GLOB PKG_H_FILES "${PKG_DIR}/*.h")
+    set(PKG_FILES ${PKG_CPP_FILES} ${PKG_H_FILES})
+
+    set(FILES_DIFFER FALSE)
+    set(DIFFERING_FILES "")
+
+    foreach(PKG_FILE ${PKG_FILES})
+        get_filename_component(FILENAME "${PKG_FILE}" NAME)
+        set(SRC_FILE "${CMAKE_CURRENT_SOURCE_DIR}/${FILENAME}")
+
+        if(EXISTS "${SRC_FILE}")
+            # Compare files
+            execute_process(
+                COMMAND ${CMAKE_COMMAND} -E compare_files "${PKG_FILE}" "${SRC_FILE}"
+                RESULT_VARIABLE FILES_ARE_DIFFERENT
+                OUTPUT_QUIET
+                ERROR_QUIET
+            )
+
+            if(FILES_ARE_DIFFERENT)
+                set(FILES_DIFFER TRUE)
+                list(APPEND DIFFERING_FILES "${FILENAME}")
+            endif()
+        endif()
+    endforeach()
+
+    if(FILES_DIFFER)
+        message(WARNING "")
+        message(WARNING "╔═══════════════════════════════════════════════════════════════")
+        message(WARNING "║ PACKAGE SYNC WARNING: ${PACKAGE_NAME} package files differ!")
+        message(WARNING "╠═══════════════════════════════════════════════════════════════")
+        message(WARNING "║ The following installed files differ from package source:")
+        foreach(FILE ${DIFFERING_FILES})
+            message(WARNING "║   • ${FILE}")
+        endforeach()
+        message(WARNING "║")
+        message(WARNING "║ GOLDEN RULE: Always edit src/${PKG_UPPER}/ files, not src/ copies!")
+        message(WARNING "║")
+        message(WARNING "║ If you edited src/ files by mistake:")
+        message(WARNING "║   1. Copy your changes to src/${PKG_UPPER}/")
+        message(WARNING "║   2. Reconfigure to reinstall: cmake ..")
+        message(WARNING "║")
+        message(WARNING "║ If src/${PKG_UPPER}/ has the correct version:")
+        message(WARNING "║   • Reconfigure to reinstall: cmake ..")
+        message(WARNING "╚═══════════════════════════════════════════════════════════════")
+        message(WARNING "")
+    endif()
 endfunction()
 
 # Function to install a package
@@ -55,6 +131,9 @@ function(install_package PACKAGE_NAME)
     set(SPPARKS_PACKAGE_${PKG_UPPER} ON PARENT_SCOPE)
     set(SPPARKS_PACKAGE_${PKG_UPPER} ON CACHE BOOL "Package ${PACKAGE_NAME} is installed")
     save_package_status()
+
+    # Check sync status after installation
+    check_package_sync("${PACKAGE_NAME}")
 
     message(STATUS "Package '${PACKAGE_NAME}' installed successfully")
 endfunction()
@@ -219,19 +298,40 @@ function(install_stitch_package)
     set(STITCH_LIBRARY_DIR "${STITCH_LIB_DIR}/liblink" CACHE PATH "STITCH library directory" FORCE)
     set(STITCH_LIBRARY "${STITCH_LIBRARY}" CACHE FILEPATH "STITCH library path" FORCE)
 
-    # Step 5: Copy STITCH files to source directory
+    # Step 5: Install STITCH files to source directory
     file(GLOB STITCH_SOURCES "${STITCH_DIR}/*.cpp")
     file(GLOB STITCH_HEADERS "${STITCH_DIR}/*.h")
 
-    foreach(SRC_FILE ${STITCH_SOURCES})
-        get_filename_component(FILENAME "${SRC_FILE}" NAME)
-        configure_file("${SRC_FILE}" "${CMAKE_CURRENT_SOURCE_DIR}/${FILENAME}" COPYONLY)
-    endforeach()
+    if(SPPARKS_DEV_MODE)
+        message(STATUS "Development mode: Creating symlinks for STITCH package files")
+        foreach(SRC_FILE ${STITCH_SOURCES} ${STITCH_HEADERS})
+            get_filename_component(FILENAME "${SRC_FILE}" NAME)
+            set(DEST_FILE "${CMAKE_CURRENT_SOURCE_DIR}/${FILENAME}")
 
-    foreach(HDR_FILE ${STITCH_HEADERS})
-        get_filename_component(FILENAME "${HDR_FILE}" NAME)
-        configure_file("${HDR_FILE}" "${CMAKE_CURRENT_SOURCE_DIR}/${FILENAME}" COPYONLY)
-    endforeach()
+            # Remove existing file/symlink if present
+            if(EXISTS "${DEST_FILE}" OR IS_SYMLINK "${DEST_FILE}")
+                file(REMOVE "${DEST_FILE}")
+            endif()
+
+            # Create symlink
+            file(CREATE_LINK "${SRC_FILE}" "${DEST_FILE}" SYMBOLIC)
+            message(STATUS "  Linked: ${FILENAME}")
+        endforeach()
+        message(STATUS "STITCH package files linked (development mode)")
+        message(STATUS "  Edits to src/STITCH/ will be reflected immediately!")
+    else()
+        # Production mode: Copy files
+        foreach(SRC_FILE ${STITCH_SOURCES})
+            get_filename_component(FILENAME "${SRC_FILE}" NAME)
+            configure_file("${SRC_FILE}" "${CMAKE_CURRENT_SOURCE_DIR}/${FILENAME}" COPYONLY)
+        endforeach()
+
+        foreach(HDR_FILE ${STITCH_HEADERS})
+            get_filename_component(FILENAME "${HDR_FILE}" NAME)
+            configure_file("${HDR_FILE}" "${CMAKE_CURRENT_SOURCE_DIR}/${FILENAME}" COPYONLY)
+        endforeach()
+        message(STATUS "STITCH package files copied to source directory")
+    endif()
 
     # Add to source lists
     list(APPEND SPPARKS_SOURCES dump_stitch.cpp)
@@ -305,20 +405,23 @@ endforeach()
 # Auto-install packages based on options
 function(process_package_options)
     load_package_status()
-    
+
     foreach(PKG ${SPPARKS_AVAILABLE_PACKAGES})
         string(TOUPPER "${PKG}" PKG_UPPER)
-        
+
         if(SPPARKS_PACKAGE_${PKG_UPPER})
             # Check if package is not currently installed
-            if(NOT DEFINED SPPARKS_PACKAGE_${PKG_UPPER}_CURRENT OR 
+            if(NOT DEFINED SPPARKS_PACKAGE_${PKG_UPPER}_CURRENT OR
                NOT SPPARKS_PACKAGE_${PKG_UPPER}_CURRENT)
                 install_package("${PKG}")
                 set(SPPARKS_PACKAGE_${PKG_UPPER}_CURRENT ON CACHE INTERNAL "")
+            else()
+                # Package already installed - check sync status
+                check_package_sync("${PKG}")
             endif()
         else()
             # Check if package is currently installed
-            if(DEFINED SPPARKS_PACKAGE_${PKG_UPPER}_CURRENT AND 
+            if(DEFINED SPPARKS_PACKAGE_${PKG_UPPER}_CURRENT AND
                SPPARKS_PACKAGE_${PKG_UPPER}_CURRENT)
                 uninstall_package("${PKG}")
                 set(SPPARKS_PACKAGE_${PKG_UPPER}_CURRENT OFF CACHE INTERNAL "")
@@ -329,8 +432,15 @@ endfunction()
 
 # Custom targets for package management
 add_custom_target(package-status
-    COMMAND ${CMAKE_COMMAND} -E echo "=== SPPARKS Package Status ==="
-    COMMENT "Show package installation status"
+    COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/package_status.cmake"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Show package installation and sync status"
+)
+
+add_custom_target(package-diff
+    COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/package_diff.cmake"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Show detailed differences between package source and installed files"
 )
 
 add_custom_target(install-all-packages

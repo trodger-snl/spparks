@@ -19,6 +19,7 @@ ENABLE_HIGHFIVE="AUTO"
 ENABLE_JPEG="AUTO"
 CLEAN=false
 VERBOSE=false
+DEV_MODE=false
 PARALLEL_JOBS="AUTO"
 AGGRESSIVE_OPT="AUTO"
 NATIVE_OPT="AUTO"
@@ -46,14 +47,28 @@ Options:
     --shared                    Build shared libraries
     --lib                       Build as library only
     --package PKG               Enable package (can be used multiple times)
+                                  Available: stitch, kokkos (kokkos may not be available on all branches)
     -j, --jobs N                Number of parallel build jobs (default: auto-detect)
     --aggressive-opt            Enable aggressive optimizations (-O3, LTO)
     --no-aggressive-opt         Disable aggressive optimizations (use -O2)
     --native-opt                Enable native CPU optimizations (-march=native)
     --no-native-opt             Disable native CPU optimizations
     --clean                     Clean build directory before building
+    --dev-mode                  Development mode: use symlinks instead of copies (Unix only)
     -v, --verbose               Verbose output
     -h, --help                  Show this help
+
+Package Management:
+    IMPORTANT: Package files live in two locations:
+      • src/PACKAGE/  (reference version, tracked in git) ← EDIT HERE!
+      • src/          (installed copy, ignored by git)  ← DON'T EDIT!
+
+    GOLDEN RULE: Always edit src/PACKAGE/ files, never src/ installed copies!
+    Changes to installed files will be LOST on package reinstall.
+
+    Check package sync status:
+      cmake --build build --target package-status   # Show which packages differ
+      cmake --build build --target package-diff     # Show detailed differences
 
 Machine configurations:
     mac        macOS, no MPI, c++
@@ -66,14 +81,23 @@ Machine configurations:
     mpi_debug  MPI Debug build, mpicxx
 
 Examples:
-    $0 -m mac                           # Build for macOS (auto-optimized)
-    $0 -m mpi --package stitch          # Build with MPI and STITCH package
-    $0 -m mac_arm --hdf5                # Build for Apple Silicon with HDF5+JPEG (auto-optimized)
-    $0 --no-jpeg -j 8                  # Build without JPEG using 8 parallel jobs
-    $0 --aggressive-opt --native-opt    # Maximum performance (O3, LTO, native CPU)
-    $0 --no-aggressive-opt              # Conservative optimization (O2, no LTO)
-    $0 --lib --shared                   # Build shared library
-    $0 --clean -b Debug                 # Clean build in debug mode
+    Basic builds:
+      $0 -m mac                           # Build for macOS (auto-optimized)
+      $0 -m mpi --package stitch          # Build with MPI and STITCH package
+      $0 -m mac_arm --hdf5                # Build for Apple Silicon with HDF5+JPEG
+      $0 --no-jpeg -j 8                   # Build without JPEG using 8 parallel jobs
+      $0 --clean -b Debug                 # Clean build in debug mode
+
+    Performance tuning:
+      $0 --aggressive-opt --native-opt    # Maximum performance (O3, LTO, native CPU)
+      $0 --no-aggressive-opt              # Conservative optimization (O2, no LTO)
+
+    Library builds:
+      $0 --lib --shared                   # Build shared library
+
+    Package management:
+      $0 --package stitch                 # Enable STITCH package
+      cmake --build build --target package-status  # Check if installed files match source
 
 EOF
 }
@@ -165,6 +189,10 @@ while [[ $# -gt 0 ]]; do
             CLEAN=true
             shift
             ;;
+        --dev-mode)
+            DEV_MODE=true
+            shift
+            ;;
         -v|--verbose)
             VERBOSE=true
             shift
@@ -245,6 +273,12 @@ for PKG in $ENABLE_PACKAGES; do
     PKG_UPPER=$(echo "$PKG" | tr '[:lower:]' '[:upper:]')
     CMAKE_ARGS+=("-DSPPARKS_PACKAGE_$PKG_UPPER=ON")
 done
+
+# Development mode
+if [ "$DEV_MODE" = true ]; then
+    CMAKE_ARGS+=("-DSPPARKS_DEV_MODE=ON")
+    echo "Development mode enabled: Package files will be symlinked instead of copied"
+fi
 
 # Run CMake configuration
 echo ""

@@ -33,6 +33,11 @@ dump.*
 src/Makefile.package
 src/Makefile.package.settings
 
+# Package file backups (created by Install.sh)
+*.backup
+*.backup2
+*.backup3
+
 # Python cache
 __pycache__/
 *.pyc

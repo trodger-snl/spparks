@@ -130,6 +130,106 @@ cd src
 spack env deactivate
 ```
 
+## Package Development Workflow
+
+SPPARKS uses a dual-directory package system inherited from LAMMPS:
+
+### ⚠️ CRITICAL: Two-Location System
+
+**Package files exist in TWO locations:**
+
+1. **`src/PACKAGE/`** - **Reference version** (tracked in git) ← **EDIT HERE!**
+2. **`src/`** - **Installed copy** (ignored by git) ← **DON'T EDIT!**
+
+### 🔑 GOLDEN RULE
+
+**ALWAYS edit `src/PACKAGE/` files, NEVER edit `src/` installed copies!**
+
+Changes to installed files (`src/*.cpp`, `src/*.h`) will be **LOST** on package reinstall.
+
+### How It Works
+
+1. **Package source** lives in `src/STITCH/`, `src/KOKKOS/`, etc.
+2. **Installation** copies files to `src/` for compilation
+3. **Git tracks** only `src/PACKAGE/` (installed files ignored via `.gitignore`)
+4. **Compilation** uses files from `src/`
+
+### Common Mistake (AVOID!)
+
+```bash
+# ❌ WRONG - editing installed file
+vim src/app_potts_kokkos.cpp
+
+# ✅ CORRECT - editing source file
+vim src/KOKKOS/app_potts_kokkos.cpp
+```
+
+### Package Management Commands
+
+**CMake:**
+```bash
+# Install package (copies src/PACKAGE/ → src/)
+./build_cmake.sh --package stitch
+
+# Check if files are in sync
+cmake --build build --target package-status
+
+# Show detailed differences
+cmake --build build --target package-diff
+
+# Reinstall package (updates installed copies)
+cmake ..
+```
+
+**Makefile:**
+```bash
+# Install package
+make yes-stitch
+make yes-kokkos
+
+# Uninstall package
+make no-stitch
+make no-kokkos
+
+# Check sync status
+make package-status
+
+# Show differences (after implementing Phase 1)
+make package-diff
+```
+
+### Development Workflow
+
+**Typical development cycle:**
+
+1. Edit source file: `src/KOKKOS/app_potts_kokkos.cpp`
+2. Reinstall package: `cmake ..` or `make yes-kokkos`
+3. Build: `cmake --build build` or `make`
+4. Test
+5. Commit (only `src/KOKKOS/` files are tracked)
+
+**If you accidentally edited `src/` instead:**
+
+1. Copy your changes to `src/PACKAGE/`
+2. Reconfigure to reinstall: `cmake ..`
+3. Verify with `cmake --build build --target package-status`
+
+### Package Sync Detection
+
+CMake automatically warns if installed files differ from package source:
+
+```
+╔═══════════════════════════════════════════════════════════════
+║ PACKAGE SYNC WARNING: kokkos package files differ!
+╠═══════════════════════════════════════════════════════════════
+║ The following installed files differ from package source:
+║   • app_potts_kokkos.cpp
+║   • app_potts_kokkos.h
+║
+║ GOLDEN RULE: Always edit src/KOKKOS/ files, not src/ copies!
+╚═══════════════════════════════════════════════════════════════
+```
+
 ## Architecture Overview
 
 SPPARKS is a **Stochastic Parallel PARticle Kinetic Simulator** with a modular, object-oriented C++ design:

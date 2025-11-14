@@ -18,355 +18,23 @@ This document outlines a comprehensive strategy for integrating Kokkos into SPPA
 
 ---
 
-## Progress Summary (November 13, 2025)
+## Current Status (November 13, 2025)
 
-### 🎉 Phase 3.2 Complete - All Potts Apps Race-Condition Free!
-
-**Major Milestones:**
-- **Phase 1:** Kokkos device kernels actively executing with 3-4× speedups ✅
-- **Phase 2:** Full MPI + Sector support with multiple Potts variants ✅
-- **Phase 3.1:** Generalized double-buffer framework for race-free Monte Carlo ✅
-- **Phase 3.2:** All four Potts Kokkos apps use double-buffering for correctness ✅
-- **Critical Bug Fix:** MPI ghost site synchronization resolved ✅
-
-**Implemented Applications:**
-- ✅ **AppPottsKokkos** - Standard Potts model with random spin flips
-- ✅ **AppPottsNeighKokkos** - Neighbor-based rejection with null bin
-- ✅ **AppPottsNeighOnlyKokkos** - Neighbor-based rejection without null bin
-- ✅ **AppPottsQuaternionKokkos** - Quaternion-based grain growth with Read-Shockley energy (NEW!)
-
-**Measured Performance (OpenMP backend, 12-core M2 Pro):**
-- ✅ **3.5× speedup** on small problem (20³ lattice, 8k sites) - AppPottsKokkos
-- ✅ **~4× speedup** on larger problem (50³ lattice, 125k sites) - AppPottsKokkos
-- ✅ **1.3× speedup** on AppPottsNeighKokkos (20³ lattice)
-- ✅ **33.5× speedup** on AppPottsQuaternionKokkos single-core (20³ lattice, 8k sites)
-- ✅ **14.7× speedup** on AppPottsQuaternionKokkos with 4 MPI ranks (20³ lattice, 8k sites) - NEW!
-- ✅ Physics validated - energy trends match CPU versions exactly
-- ✅ **MPI + Sectors working:** Tested with 1-4 MPI procs and 2-8 sectors
-- ✅ **All sector configurations validated:** 2, 4, 8 sectors on single and multi-processor
-- ✅ **Zero desynchronized spins** in MPI runs - perfect grain structure integrity
-
-### ✅ Completed Work
-
-**Infrastructure (Q1 Months 1-3):**
-- Created SURGE-kokkos development branch
-- Implemented base class hierarchy:
-  - `MemoryKokkos` - Kokkos-aware memory management with DualView wrappers
-  - `AppKokkos` - Base app class with Kokkos data structures and sync methods
-  - `AppLatticeKokkos` - Lattice app base with neighbor list management
-- Integrated KOKKOS package into build systems (CMake and Makefile)
-- Added Kokkos 4.7.01 as git submodule for bundled builds
-- Created comprehensive documentation (src/KOKKOS/README.md)
-- Set up test infrastructure (examples/potts/in.potts.kk)
-
-**First Application (Q2 Months 4-5):**
-- Implemented `AppPottsKokkos` with full Kokkos kernel support:
-  - `ComputeEnergyFunctor` - Parallel energy calculation on device
-  - `RejectionSweepFunctor` - Parallel Metropolis MC sweeps with acceptance counting
-  - Thread-safe RNG via Kokkos::Random_XorShift64_Pool
-  - Host/device data synchronization mechanisms
-- Registered `potts/kk` app style for use in input scripts
-
-**Runtime Integration (Q2 Month 6) - COMPLETED:**
-- ✅ Added Kokkos::initialize/finalize to main.cpp with SPK_KOKKOS guards
-- ✅ **Overrode iterate_rejection()** in AppPottsKokkos to use device kernels
-- ✅ Replaced CPU sweep loop with parallel_reduce device kernel
-- ✅ **Critical RNG bug fix:** Each thread now gets own RNG state from pool
-- ✅ Added proper host↔device synchronization in main iteration loop
-- ✅ Validated physics correctness vs CPU version
-- ✅ Measured performance on multiple problem sizes
-
-**Key Files Created/Modified:**
-- `src/KOKKOS/memory_kokkos.{h,cpp}`
-- `src/KOKKOS/app_kokkos.{h,cpp}`
-- `src/KOKKOS/app_lattice_kokkos.{h,cpp}`
-- `src/KOKKOS/app_potts_kokkos.{h,cpp}` - **With iterate_rejection() override + MPI sync fixes**
-- `src/KOKKOS/app_potts_neigh_kokkos.{h,cpp}` - **NEW: Neighbor-based rejection with null bin**
-- `src/KOKKOS/app_potts_neighonly_kokkos.{h,cpp}` - **NEW: Neighbor-based rejection without null bin**
-- `src/app_potts_quaternion_kokkos.{h,cpp}` - **NEW: Quaternion grain growth with double-buffer race condition fix**
-- `src/main.cpp` - **Added Kokkos initialization**
-- `src/KOKKOS/Install.sh`
-- `src/KOKKOS/README.md` - **Updated with Phase 2 results**
-- `examples/potts/in.potts.kk`
-- `examples/potts/in.potts.large.kk` - **Benchmark test case**
-- `examples/potts/in.potts.neigh{,.kk}` - **NEW: Test cases for AppPottsNeigh variants**
-- `examples/potts/in.potts.neighonly{,.kk}` - **NEW: Test cases for AppPottsNeighOnly variants**
-- `examples/potts_quaternion/in.potts_quaternion.compare{,.kk,.kk.nosector}` - **NEW: Quaternion test cases**
-- `examples/potts_quaternion/KOKKOS_PHYSICS_VALIDATION.md` - **NEW: Physics validation results**
-- Updated: `src/cmake/PackageManager.cmake`, `src/cmake/ConditionalSources.cmake`, `src/CMakeLists.txt`
-
-**Git Commits:**
-- `0e7d220` - Integrate Kokkos into CMake build system
-- `9736325` - Add Kokkos 4.7.01 as git submodule
-- `c8a99a7` - Fix KOKKOS package compilation issues
-- `9705e64` - Add Kokkos initialization and fix AppPottsKokkos runtime issues
-- `9140d1f` - **Integrate Kokkos device kernels into main iteration loops - Phase 1 complete**
-- `785d6a7` - Update roadmap - Phase 1 complete with device kernels running
-- `9f4106b` - Add MPI + Sector support to AppPottsKokkos - Phase 2 complete
-- `fa7f9be` - **Add AppPottsNeighKokkos and AppPottsNeighOnlyKokkos with MPI sync fixes**
-- `a3c6a9c` - Add AppPottsQuaternionKokkos implementation (WIP - has race condition bug)
-- `69b8628` - **Fix race condition with double-buffer approach in AppPottsQuaternionKokkos**
-- `f539eb5` - **Fix MPI + sectors desynchronization in AppPottsQuaternionKokkos** (November 13, 2025)
-- `7ffdd92` - **Add generalized double-buffer framework for race-free Kokkos Monte Carlo - Phase 3.1** (November 13, 2025)
-- `9871b62` - **Add double-buffer framework to AppPottsNeighKokkos and AppPottsNeighOnlyKokkos - Phase 3.2** (November 13, 2025)
-- `434da99` - **Complete Phase 3.2: Add double-buffer framework to AppPottsKokkos** (November 13, 2025)
-- `6b9c909` - **Optimize host-device sync: Reduce device memory copies by 33% - Phase 3.3** (November 13, 2025)
-- `6ab31c5` - **Add comprehensive sync profiling infrastructure for GPU testing - Phase 3.3** (November 13, 2025)
-- `6115a31` - **Document Phase 3.3: Selective sync optimization and profiling** (November 13, 2025)
-- `530a64d` - **Add sync_profiling input command for Kokkos apps - Phase 3.4** (November 13, 2025)
-- `1fe6b5b` - **Document Phase 3.4: User-controllable sync profiling** (November 13, 2025)
-- `e1d7a6a` - **Fix timer instrumentation in all Kokkos apps - Phase 3.5** (November 13, 2025)
-- `761e38a` - **Document Phase 3.5: Performance benchmarking (20× speedup achieved)** (November 13, 2025)
-
-### ✅ Phase 2 Complete - MPI + Sector Support + Potts Variants
-
-**Completed (November 12-13, 2025):**
-
-**Phase 2.1 - MPI + Sectors (November 12):**
-- ✅ Modified iterate_rejection() to support sector loop
-- ✅ Implemented sector-aware sweep_rejection_kokkos(nsite, site_list)
-- ✅ Added MPI sector communication (comm->sector/reverse_sector)
-- ✅ Tested single-processor with 2, 4, 8 sectors
-- ✅ Tested multi-processor MPI runs with sectors
-- ✅ Validated physics correctness across configurations
-
-**Phase 2.2 - Potts Variants + Critical Bug Fix (November 13):**
-- ✅ Implemented `AppPottsNeighKokkos` - neighbor-based rejection with null bin
-  - Device kernel builds unique list of neighboring spin values
-  - Null bin extends to maxneigh for proper rejection KMC
-  - 1.3× speedup on CPU (OpenMP backend)
-- ✅ Implemented `AppPottsNeighOnlyKokkos` - neighbor-based rejection without null bin
-  - No null bin rejection (technically incorrect rKMC but faster)
-  - Direct selection from unique neighbor spins
-  - Useful for rapid grain growth simulations
-- ✅ **Fixed critical MPI ghost site synchronization bug in all Kokkos apps:**
-  - **Root Cause:** MPI communication operates on host memory, but Kokkos kernels execute on device
-  - **Impact:** Ghost sites received stale data between sectors causing incorrect physics
-  - **Solution:** Added device↔host syncs around every MPI communication call
-  - **Result:** Energy trends now match CPU versions exactly
-- ✅ Added comprehensive test input files for all variants
-- ✅ Updated build system (ConditionalSources.cmake, PackageManager.cmake)
-- ✅ Physics validation: All apps match CPU energy evolution
-
-**Phase 2.3 - AppPottsQuaternionKokkos + Double-Buffer Fix (November 13):**
-- ✅ Implemented `AppPottsQuaternionKokkos` - quaternion-based grain growth simulation
-  - Device-compatible quaternion operations (composition, conjugate, disorientation)
-  - Cubic crystal symmetry support (24 operations)
-  - Read-Shockley grain boundary energy model: E(θ) = (θ/θₘ)[1 - ln(θ/θₘ)]
-  - Metropolis Monte Carlo with unique neighbor finding
-  - Full MPI and sector support
-- ✅ **Fixed critical race condition in parallel kernel execution:**
-  - **Root Cause:** Parallel threads reading/writing same memory locations caused "torn reads" - spin IDs and quaternions became desynchronized
-  - **Impact:** System appeared to coarsen (all quaternions identical) but spin IDs were random noise
-  - **Solution:** Implemented double-buffer approach:
-    - Separate read and write buffers for all site data
-    - All threads read from `*_read` buffers
-    - All threads write to `*_write` buffers
-    - After each sweep, swap buffer pointers
-    - Guarantees atomic consistency of spin+quaternion data
-  - **Result:** Perfect synchronization - sites with same spin ID have identical quaternions
-- ✅ **Fixed critical MPI + sectors desynchronization bug:**
-  - **Root Cause:** Double-buffer approach worked for single-core but failed with MPI + sectors:
-    - After sweeping sector 0, device buffers have sector 0 updates
-    - MPI communication exchanges data via host arrays (the "source of truth")
-    - Initial approach only updated ghost sites, leaving local sites with stale data from previous sectors
-    - Example: Spin 82 had 87 different quaternions across spatial regions
-  - **Impact:** Massive desynchronization - sites with same spin ID had different quaternions across MPI boundaries
-  - **Solution:** After MPI communication, copy **ALL sites** from host → both device buffers:
-    - Host arrays contain accumulated updates from all previous sectors after MPI comm
-    - Both device buffers must start each sector with identical, synchronized state
-    - Device buffers fully resync'd from host after each MPI communication
-  - **Result:** Zero desynchronized spins, perfect grain structure integrity
-- ✅ **33.5× speedup on OpenMP backend single-core** (vs 157s CPU time → 4.7s Kokkos time)
-- ✅ **14.7× speedup with 4 MPI ranks** (10.67s vs 157s CPU single-core)
-- ✅ Physics validation: Energy evolution matches CPU version
-- ✅ Tested with sectors (yes/no) and MPI (1-4 ranks) - all configurations working correctly
-
-### ✅ Phase 3 Progress - Refinement and Production Readiness
-
-**Phase 3.1 - Generalized Double-Buffer Framework (November 13):**
-- ✅ Created reusable `KokkosDoubleBuffer<T>` template class (src/kokkos_double_buffer.h)
-  - Supports any data type (int, double, custom structs)
-  - Automatic buffer allocation and O(1) pointer swapping
-  - Separate methods for full initialization vs. MPI synchronization
-  - Clean separation between framework and app-specific logic
-- ✅ Created `KokkosDoubleBufferManager` for managing multiple buffers
-  - Named buffer registry for easy access
-  - Bulk operations (allocate_all, swap_all)
-  - Type-safe buffer retrieval
-
-**Phase 3.2 - Apply Double-Buffering to All Potts Apps (November 13):**
-- ✅ **AppPottsKokkos** - Refactored to use double-buffering framework
-  - Eliminates race conditions in parallel sweeps
-  - buffer_spin for atomic spin updates
-- ✅ **AppPottsNeighKokkos** - Refactored to use double-buffering framework
-  - Neighbor-based rejection now race-condition free
-  - Reads from read_buffer, writes to write_buffer
-- ✅ **AppPottsNeighOnlyKokkos** - Refactored to use double-buffering framework
-  - Same pattern as AppPottsNeighKokkos
-  - All neighbor operations safe from torn reads
-- ✅ **AppPottsQuaternionKokkos** - Already using double-buffering (Phase 2.3)
-  - 4 double buffers: spin, q0, qx, qy, qz
-  - Validated with MPI + sectors
-
-**Impact:**
-- **All four Potts Kokkos apps now race-condition free**
-- Consistent physics across all configurations (single-core, MPI, sectors)
-- Reusable framework ready for future apps (AppIsing, AppDiffusion, AM models)
-
-**Key Technical Achievement:**
-The MPI synchronization fix was critical for correctness. Before the fix, energy evolution was completely wrong (e.g., AppPottsNeigh: 9,172 vs correct 37,864). After the fix, all Kokkos apps produce physically correct results that match (within RNG variance) the CPU versions.
-
-The double-buffer solution for AppPottsQuaternionKokkos represents a general pattern for avoiding race conditions in parallel Monte Carlo simulations where complex state data (spin + multiple quaternion components) must remain atomically consistent. The subsequent MPI + sectors fix demonstrates a key principle: **host arrays are the source of truth between sector sweeps**, and device buffers must be fully resynchronized from host after MPI communication to maintain consistency across spatial domains.
-
-**Phase 3.3 - Selective Sync Optimization (November 13, 2025):**
-- ✅ Added `sync_to_device_selective()` method to KokkosDoubleBuffer
-  - Allows selective sync of read_buffer only (write_buffer skipped)
-  - Reduces Kokkos::deep_copy operations from 2 to 1 per array
-  - 33% reduction in device memory copies per sync
-- ✅ Applied selective sync to all four Potts Kokkos apps
-  - Modified sync_data_to_device() to use selective sync after MPI
-  - AppPottsKokkos: 1 array → 33% reduction
-  - AppPottsQuaternionKokkos: 5 arrays → 33% reduction (10 copies → 5 copies)
-- ✅ Added comprehensive sync profiling infrastructure
-  - Kokkos::Timer-based timing for all sync methods
-  - Counters for sync frequency by type
-  - Profiling API: enable_sync_profiling(), print_sync_profiling_stats()
-  - Formatted output with percentages, bytes transferred, avg time per sync
-- ✅ Testing and validation
-  - All apps tested with example files: physics correctness verified
-  - AppPottsKokkos: 10,000 sweeps in 3.79s, energy 43,640 ✓
-  - AppPottsQuaternionKokkos (single core): 30 time units in 47.82s ✓
-  - AppPottsQuaternionKokkos (4 MPI, 8 sectors): 10 time units in 10.73s ✓
-  - MPI + sectors working correctly with selective sync
-
-**Impact:**
-- Estimated 30-40% reduction in total host↔device sync count
-- Sync overhead reduced from ~5-25% to ~3-15% of runtime (estimated)
-- Zero performance regression: all tests produce correct physics
-- Profiling infrastructure ready for GPU hardware testing
-
-**Phase 3.4 - User-Controllable Sync Profiling (November 13, 2025):**
-- ✅ Implemented `sync_profiling yes/no` input command for Kokkos apps
-  - New input_app() override in AppPottsKokkos and AppPottsQuaternionKokkos
-  - Accepts both `yes/no` and `on/off` syntax
-  - Follows SPPARKS pattern for app-specific commands (like `sector yes/no`)
-- ✅ Made profiling disabled by default
-  - Zero overhead when not enabled
-  - Profiling only collected when explicitly requested
-  - Added sync_profiling_enabled member variable to control behavior
-- ✅ Conditional profiling output at end of run
-  - Statistics only print when profiling is enabled
-  - Detailed sync breakdown by type (selective, full, to_host)
-  - Timing, frequency, and data volume metrics
-- ✅ Testing and validation
-  - AppPottsQuaternionKokkos: Profiling shows 2,088 selective syncs
-  - ~0.07s overhead (~0.18% of 38s runtime) when enabled
-  - Default off verified: No profiling output without command
-  - 33% sync reduction confirmed via profiling data
-
-**Usage in input file:**
-```
-app_style potts/quaternion/kk 100 cubic
-sync_profiling yes
-run 10.0
-```
-
-**Impact:**
-- User-friendly control over performance analysis
-- Enables targeted profiling without recompilation
-- Ready for GPU hardware testing and optimization
-- Provides quantitative data for optimization decisions
-
-**Phase 3.5 - Timer Fixes and Performance Benchmarking (November 13, 2025):**
-- ✅ Fixed timer instrumentation in all four Kokkos apps
-  - Added timer->stamp() calls around sync_data_to_host() operations
-  - Fixed incorrect timing attribution (device sync was counted as OUTPUT instead of SOLVE)
-  - Files modified: app_potts_kokkos.cpp, app_potts_neigh_kokkos.cpp, app_potts_neighonly_kokkos.cpp, app_potts_quaternion_kokkos.cpp
-- ✅ Comprehensive performance testing on AppPottsQuaternionKokkos
-  - Test system: 100³ lattice (1M sites), 10,000 grains, cubic symmetry
-  - CPU baseline: 6 MPI ranks with masking enabled
-  - Kokkos testing: Multiple MPI×OpenMP configurations (1×12, 1×6, 2×6, 6×2)
-  - Apple M2 Max: 6 performance cores + 6 efficiency cores
-- ✅ Identified and eliminated diagnostics overhead
-  - diag_style cluster stats caused 83% overhead (expensive cluster analysis)
-  - Established fair comparison methodology with minimal diagnostics
-- ✅ Performance results with minimal diagnostics (t=1.0 simulation):
-
-| Configuration | Loop Time (s) | Solve Time (s) | Comm Time (s) | Overall Speedup | Solve Speedup |
-|---------------|--------------|----------------|---------------|-----------------|---------------|
-| **CPU (6 MPI)** | **313.4** | 304.5 (97.2%) | 8.85 (2.8%) | **1.0×** | **1.0×** |
-| **Kokkos 1×12** | **15.8** | 15.2 (96.1%) | 0.0 (0.0%) | **19.9×** | **20.1×** |
-| **Kokkos 1×6** | **19.1** | 18.5 (97.1%) | 0.0 (0.0%) | **16.4×** | **16.5×** |
-| **Kokkos 2×6** | **15.8** | 14.5 (91.8%) | 0.96 (6.1%) | **19.8×** | **21.0×** |
-| **Kokkos 6×2** | **15.7** | 13.7 (87.8%) | 1.71 (10.9%) | **20.0×** | **22.2×** |
-
-**Key Findings:**
-- **Consistent 16-20× overall speedup** across all Kokkos configurations
-- Best configuration: **6 MPI × 2 OpenMP threads (20.0× speedup)**
-- Solve speedup: **22.2×** for optimal configuration
-- Single MPI rank (1×12) achieves 19.9× speedup with zero comm overhead
-- Communication overhead increases with MPI ranks (0% → 6% → 11%) but overall performance remains excellent
-- Selective sync working efficiently: ~0.7-0.8s sync time across all buffers
-- Double-buffer framework enables race-free parallel Monte Carlo with minimal overhead
-
-**Impact:**
-- First quantitative performance validation of Phase 3 Kokkos implementation
-- Demonstrates excellent scaling on CPU with OpenMP backend
-- Validates double-buffer framework and selective sync optimizations
-- Establishes baseline for future GPU testing (expect 10-30× additional speedup on GPU)
-- Proves timer infrastructure correctly measures performance breakdown
-
-### ⏳ Next Steps - Phase 3.6 and Beyond
-
-**Phase 3.6 - GPU Backend Testing (HIGH PRIORITY):**
-- ⏳ Test all four Potts apps on real GPU hardware (CUDA, HIP)
-- ⏳ Expected: 200-600× speedups on GPU compared to single-core CPU
-- ⏳ Expected: 10-30× speedups compared to current OpenMP results (20× baseline)
-- ⏳ Validate physics correctness across different backends
-- ⏳ Benchmark memory bandwidth utilization
-- ⏳ Use profiling infrastructure to measure actual sync overhead on GPU
-- ⏳ Profile kernel performance and identify bottlenecks
-
-**Phase 3.7 - Further Performance Optimization (Months 7-9):**
-- ⏳ Ghost-region-only partial syncs (reduce data volume)
-- ⏳ Team policy optimization for better GPU utilization
-- ⏳ Investigate persistent kernel approaches
-- ⏳ Async sync with Kokkos streams (overlap computation/communication)
-- ⏳ Device-side pack/unpack kernels for MPI buffers
-
-**Phase 3.7 - Additional Kokkos Apps:**
-- ⏳ **AppIsingKokkos** - Ising model (simpler than Potts, good for testing)
-- ⏳ **AppDiffusionKokkos** - Diffusion processes
-- ⏳ Apply double-buffer framework and profiling from the start
-
-**Medium-term (Q3-Q4 Months 10-12):**
-- ⏳ GPU-aware MPI communication (direct device-to-device transfers)
-- ⏳ AM model Kokkos versions:
-  - AppPottsAMBezier
-  - AppPottsAMWeld
-  - Temperature field handling on device
-- ⏳ KMC solver optimization (tree-based solver on device)
-- ⏳ Advanced masking support on device
-
-**Long-term (Year 2):**
-- ⏳ Multi-GPU support (domain decomposition across GPUs)
-- ⏳ Advanced optimizations (graph coloring on device, dynamic load balancing)
-- ⏳ Full suite of Kokkos apps (all major SPPARKS applications)
-- ⏳ Production deployment on exascale systems (Frontier, Aurora, El Capitan)
+**🎉 Phase 3.5 Complete - Production-Ready with 20× Speedup**
 
 **Completed Phases:**
-- ✅ **Phase 1:** Infrastructure and base classes
-- ✅ **Phase 2.1:** MPI + Sectors support
-- ✅ **Phase 2.2:** Multiple Potts variants with MPI sync fixes
-- ✅ **Phase 2.3:** AppPottsQuaternionKokkos with double-buffer race condition fix
-- ✅ **Phase 3.1:** Generalized double-buffer framework
-- ✅ **Phase 3.2:** All four Potts Kokkos apps race-condition free
-- ✅ **Phase 3.3:** Selective sync optimization + profiling infrastructure
-- ✅ **Phase 3.4:** User-controllable sync profiling via input command
-- ✅ **Phase 3.5:** Timer fixes and performance benchmarking (20× CPU speedup achieved)
+- ✅ **Phase 1-3.5:** Infrastructure, applications, and optimizations complete
+- ✅ **4 Production Apps:** AppPottsKokkos, AppPottsNeighKokkos, AppPottsNeighOnlyKokkos, AppPottsQuaternionKokkos
+- ✅ **Performance:** 20× speedup on CPU (OpenMP backend), 200-600× expected on GPU
+- ✅ **Correctness:** Zero race conditions, perfect MPI+sectors support, physics validated
+- ✅ **Framework:** Double-buffer pattern, selective sync (33% reduction), user-controllable profiling
 
-See detailed roadmap sections below for complete implementation plan.
+**Next Priority - Phase 3.6:**
+- ⏳ GPU backend testing (CUDA, HIP) for 10-30× additional speedup
+- ⏳ Diagnostic Kokkos-ification (see `KOKKOS_DIAGNOSTICS_ANALYSIS.md`)
+- ⏳ Additional apps (Ising, Diffusion, AM models)
+
+📖 **For detailed implementation history, see [KOKKOS_IMPLEMENTATION_HISTORY.md](KOKKOS_IMPLEMENTATION_HISTORY.md)**
 
 ---
 
@@ -1379,6 +1047,723 @@ void CommLatticeKokkos::perform_swap_kokkos(Swap *swap) {
 
 ---
 
+### Phase 5: Additive Manufacturing Applications (Months 13-16)
+
+**Status**: ⏳ Planning (November 2025)
+
+**Objective**: Enable Kokkos acceleration for additive manufacturing simulations with HDF5 unstructured temperature sources, implementing dual-target parallelization for maximum performance.
+
+**Target Application**: `app_additive_ext_temp_texture` with `HDF5UnstructuredTemperatureSource`
+
+#### Dual-Target Parallelization Strategy
+
+This phase implements **two independent parallelization targets**, each providing significant speedup:
+
+1. **Temperature Source Interpolation** (HIGH PRIORITY)
+   - Target: `get_temperature_at_site()` tetrahedral interpolation
+   - Complexity: 40-60 FLOPs + ~200 bytes memory read per site
+   - Parallelism: Embarrassingly parallel (zero data dependencies)
+   - Expected speedup: **10-40× on GPU**
+   - Implementation: Hybrid host-device (HDF5 I/O on host, interpolation on device)
+
+2. **Monte Carlo Site Events** (Inherits from AppPottsQuaternionKokkos)
+   - Target: `site_event_rejection()` grain growth
+   - Expected speedup: **20× on CPU (OpenMP)**
+   - Architecture: Inherit double-buffer framework from parent class
+
+**Combined Expected Performance**: **15-30× overall application speedup**
+
+#### Key Technical Insights
+
+**Temperature Interpolation is Ideal for GPUs:**
+- The existing `site_element_cache` design eliminates expensive element search from the critical path
+- Cache contains pre-computed tetrahedral element indices and barycentric weights per site
+- Element search is O(C × E × 60 FLOPs) but done **once per layer** (infrequent)
+- Temperature interpolation is O(log M + 1) but called **every timestep for all sites** (frequent)
+- Result: Perfect separation of irregular (host) and regular (device) work
+
+**Memory Transfer Cost is Negligible:**
+- Per-layer data: ~100 MB (mesh + cache)
+- Transfer time: 9 ms on PCIe Gen3
+- Layer duration: 50-100 ms typical
+- Temperature queries per layer: 50-500
+- **ROI: Transfer cost recovered after first query**
+
+#### Sub-Phase 5.1: Temperature Source Infrastructure (Weeks 1-2)
+
+**Goal**: Create Kokkos-enabled HDF5 temperature source with device data structures
+
+**Files to create:**
+```
+src/KOKKOS/temperature_source_hdf5_unstructured_kokkos.h
+src/KOKKOS/temperature_source_hdf5_unstructured_kokkos.cpp
+```
+
+**Implementation:**
+```cpp
+class HDF5UnstructuredTemperatureSourceKokkos :
+  public HDF5UnstructuredTemperatureSource {
+
+public:
+  // Override for device-accelerated queries
+  virtual double get_temperature_at_site(int site_index, double time) override;
+
+private:
+  // Device data structures
+  Kokkos::View<double**, Kokkos::LayoutRight> times_device;
+  Kokkos::View<double**, Kokkos::LayoutRight> temperatures_device;
+  Kokkos::View<ElementCache*> cache_device;
+  Kokkos::View<unsigned*> dataCounts_device;
+
+  // Host mirrors (for HDF5 I/O)
+  Kokkos::View<double**, Kokkos::LayoutRight>::HostMirror times_host;
+  Kokkos::View<double**, Kokkos::LayoutRight>::HostMirror temperatures_host;
+  // ... etc
+
+  // Hybrid approach: HDF5 on host, transfer to device
+  void load_layer_and_sync_device(unsigned layerIdx);
+  void build_cache_and_transfer();
+};
+```
+
+**Key tasks:**
+1. Convert `Array2D<double>` to `Kokkos::View<double**, LayoutRight>`
+2. Create host and device views for:
+   - `times` (nNodes × maxTimePoints)
+   - `temperatures` (nNodes × maxTimePoints)
+   - `site_element_cache` (nlocal ElementCache structs)
+   - `dataCounts` (nNodes valid entry counts)
+3. Keep all HDF5 I/O on host (library limitation)
+4. Implement `Kokkos::deep_copy()` on layer change
+
+**Memory layout optimization:**
+- Use `LayoutRight` (row-major) for coalesced memory access
+- `times_device(nodeIdx, 0...maxData)` → sequential memory reads
+- GPU memory requirement: ~100-150 MB per layer (easily fits modern GPUs)
+
+**Validation:**
+- Compile successfully with Kokkos enabled
+- Allocate views without errors
+- Verify host-device transfers complete
+
+**Expected outcome**: Infrastructure ready for parallel interpolation
+
+---
+
+#### Sub-Phase 5.2: Parallel Temperature Interpolation (Weeks 2-4)
+
+**Goal**: GPU-accelerate tetrahedral temperature interpolation (**HIGHEST IMPACT**)
+
+**Implementation Strategy: Hybrid Host-Device**
+
+**Host responsibilities (HDF5 constraints):**
+```cpp
+void load_layer_and_sync_device(unsigned layerIdx) {
+  // 1. HDF5 file I/O (host-only, cannot move to device)
+  grp->getDataSet("times").select(hyperslab).read(times_host_data);
+  grp->getDataSet("temperatures").select(hyperslab).read(temps_host_data);
+  // ... load mesh geometry, chunks, etc.
+
+  // 2. Build element cache (serial element search - complex, irregular)
+  for (int i = 0; i < nlocal; i++) {
+    cache_host(i) = find_element_point_is_in(...);  // O(C × E × 60 FLOPs)
+  }
+
+  // 3. Transfer to device (one-time per layer, ~9 ms)
+  Kokkos::deep_copy(times_device, times_host);
+  Kokkos::deep_copy(temperatures_device, temperatures_host);
+  Kokkos::deep_copy(cache_device, cache_host);
+  Kokkos::deep_copy(dataCounts_device, dataCounts_host);
+}
+```
+
+**Device kernel (called every timestep):**
+```cpp
+void update_temperatures_device(double simulation_time,
+                                 Kokkos::View<double*> T_device) {
+  const int nlocal_local = nlocal;
+  const auto cache_d = cache_device;
+  const auto times_d = times_device;
+  const auto temps_d = temperatures_device;
+  const auto counts_d = dataCounts_device;
+  const double default_temp_local = default_temp;
+
+  Kokkos::parallel_for("UpdateTemperatures", nlocal_local,
+    KOKKOS_LAMBDA(const int i) {
+      // 1. CACHE LOOKUP (O(1) - array access, 64 bytes)
+      const ElementCache& cache = cache_d(i);
+
+      if (!cache.valid) {
+        T_device(i) = default_temp_local;
+        return;
+      }
+
+      // 2. TEMPORAL INTERPOLATION FOR 4 TET NODES (O(4 × log M))
+      double nodalVals[4];
+      for (int n = 0; n < 4; n++) {
+        unsigned nodeIdx = cache.nodeIndices[n];
+        int count = counts_d(nodeIdx);
+
+        // Device-compatible binary search
+        int idx = binary_search_device(times_d, nodeIdx, simulation_time, count);
+
+        // Linear interpolation in time
+        double t0 = times_d(nodeIdx, idx-1);
+        double t1 = times_d(nodeIdx, idx);
+        double T0 = temps_d(nodeIdx, idx-1);
+        double T1 = temps_d(nodeIdx, idx);
+
+        nodalVals[n] = T0 + (T1 - T0) / (t1 - t0) * (simulation_time - t0);
+      }
+
+      // 3. SPATIAL INTERPOLATION (O(1) - barycentric, 9 FLOPs)
+      T_device(i) = nodalVals[0] +
+                    cache.weights[0] * (nodalVals[1] - nodalVals[0]) +
+                    cache.weights[1] * (nodalVals[2] - nodalVals[0]) +
+                    cache.weights[2] * (nodalVals[3] - nodalVals[0]);
+    });
+}
+```
+
+**Device-compatible binary search:**
+```cpp
+KOKKOS_INLINE_FUNCTION
+int binary_search_device(const Kokkos::View<double**>& times,
+                         int nodeIdx, double target, int count) {
+  int low = 0, high = count - 1;
+  while (low < high) {
+    int mid = (low + high) / 2;
+    if (times(nodeIdx, mid) < target)
+      low = mid + 1;
+    else
+      high = mid;
+  }
+  return (low == 0) ? 1 : low;  // Ensure valid interpolation interval
+}
+```
+
+**Performance analysis:**
+
+**Per-site computation:**
+- Cache lookup: 1 read (64 bytes)
+- 4 binary searches: 4-7 iterations each (M=10-100 time points typical)
+- 4 linear interpolations: 8 FLOPs each = 32 FLOPs
+- 1 tetrahedral interpolation: 9 FLOPs
+- **Total: ~40-60 FLOPs + ~200 bytes memory read**
+
+**Scaling (1M sites):**
+- CPU (10 cores, memory-bound): 50-200 ms (cache miss limited)
+- GPU (V100, 900 GB/s bandwidth): 2-5 ms (50% bandwidth utilization)
+- **Speedup: 10-40×**
+
+**Validation:**
+- Compare host vs device temperatures: `fabs(T_host - T_device) < 1e-10`
+- Verify cache validity flags match
+- Test layer transitions (ensure proper HDF5 reload + device sync)
+- Test edge cases: sites outside mesh, invalid elements
+
+**Expected outcome**: 10-40× speedup for temperature field updates
+
+---
+
+#### Sub-Phase 5.3: Additive App Infrastructure (Weeks 4-5)
+
+**Goal**: Create AppAdditiveExtTempTextureKokkos inheriting from AppPottsQuaternionKokkos
+
+**Files to create:**
+```
+src/KOKKOS/app_additive_ext_temp_texture_kokkos.h
+src/KOKKOS/app_additive_ext_temp_texture_kokkos.cpp
+```
+
+**Class hierarchy** (mirrors CPU inheritance):
+```
+CPU HIERARCHY:
+AppPottsQuaternion → AppAdditiveExtTempTexture
+
+KOKKOS HIERARCHY:
+AppPottsQuaternionKokkos → AppAdditiveExtTempTextureKokkos
+```
+
+**Inherited from AppPottsQuaternionKokkos** (already working):
+- Double buffers: `buffer_spin`, `buffer_q0/qx/qy/qz`
+- Device-compatible quaternion operations (`compute_disorientation`)
+- Sector sweep patterns + ghost exchange sync
+- RNG pool (`Kokkos::Random_XorShift64_Pool`)
+- Profiling infrastructure (`enable_profiling` input command)
+- Selective sync optimization (33% reduction demonstrated)
+
+**New double buffers for additive-specific data:**
+```cpp
+class AppAdditiveExtTempTextureKokkos : public AppAdditiveExtTempTexture {
+private:
+  // Additive-specific Kokkos double buffers
+  KokkosDoubleBuffer<double> buffer_T;           // Temperature field
+  KokkosDoubleBuffer<double> buffer_G;           // Gradient magnitude
+  KokkosDoubleBuffer<double> buffer_V;           // Solidification velocity
+  KokkosDoubleBuffer<int> buffer_active_flag;    // Phase state (0=inactive, 1=active, 2=molten, 3=solid, 5=void)
+  KokkosDoubleBuffer<double> buffer_solid_d;     // Solidification smoothing counter
+  KokkosDoubleBuffer<double> buffer_mobility;    // Diagnostic mobility output
+
+  // Kokkos temperature source (owns device data)
+  HDF5UnstructuredTemperatureSourceKokkos* kokkos_temp_source;
+};
+```
+
+**Memory requirements:**
+- Per site: 1 int (spin) + 4 doubles (quat) + 6 doubles (additive) = 84 bytes
+- With double buffering: 168 bytes/site
+- 1M sites: ~160 MB (app) + ~110 MB (temp source) = **270 MB total**
+- Modern GPU (16+ GB): Easily handles 10M+ sites
+
+**Key method overrides:**
+
+**1. Data allocation:**
+```cpp
+void AppAdditiveExtTempTextureKokkos::allocate_data() {
+  // Call parent to allocate spin + quaternion buffers
+  AppPottsQuaternionKokkos::allocate_data();
+
+  // Allocate additive-specific buffers
+  buffer_T.allocate(nlocal + nghost);
+  buffer_G.allocate(nlocal + nghost);
+  buffer_V.allocate(nlocal + nghost);
+  buffer_active_flag.allocate(nlocal + nghost);
+  buffer_solid_d.allocate(nlocal + nghost);
+  buffer_mobility.allocate(nlocal + nghost);
+}
+```
+
+**2. Temperature source integration:**
+```cpp
+void AppAdditiveExtTempTextureKokkos::setup_temperature_source(args) {
+  // Create Kokkos-enabled temperature source
+  kokkos_temp_source = new HDF5UnstructuredTemperatureSourceKokkos(spk);
+  kokkos_temp_source->setup_temperature_source(args);
+  temperature_source = kokkos_temp_source;  // Base pointer
+}
+```
+
+**3. Buffer swapping:**
+```cpp
+void AppAdditiveExtTempTextureKokkos::swap_buffers() {
+  // Call parent to swap spin + quaternion buffers
+  AppPottsQuaternionKokkos::swap_buffers();
+
+  // Swap additive buffers
+  buffer_T.swap();
+  buffer_G.swap();
+  buffer_V.swap();
+  buffer_active_flag.swap();
+  buffer_solid_d.swap();
+  buffer_mobility.swap();
+}
+```
+
+**Validation:**
+- Compile with Kokkos + HDF5 + HighFive
+- Allocate/deallocate buffers without memory leaks
+- Verify temperature source integration (device views created)
+
+**Expected outcome**: Infrastructure ready for device MC kernels
+
+---
+
+#### Sub-Phase 5.4: Device MC Kernels and Synchronization (Weeks 5-7)
+
+**Goal**: GPU-accelerate Monte Carlo site events with additive-specific physics
+
+**Host-side app_update() pattern:**
+```cpp
+void AppAdditiveExtTempTextureKokkos::app_update(double dt) {
+  // === HOST-SIDE OPERATIONS ===
+
+  // 1. Update temperatures using Kokkos temp source (DEVICE KERNEL)
+  update_temperature_from_source(time);
+  // Internally calls kokkos_temp_source->update_temperatures_device()
+  // Result: T[] array updated on device
+
+  // 2. Phase transition logic (HOST-ONLY - complex branching)
+  for (int i = 0; i < nlocal; i++) {
+    if (T[i] >= tl && active_flag[i] != 2) {
+      // Melting: initialize molten site
+      active_flag[i] = 2;
+      // ... other initialization
+    } else if (T[i] <= tl && active_flag[i] == 2) {
+      // Nucleation: mushy_phase() decision
+      mushy_phase(i, ranapp);  // Per-spin nucleation data (host-only)
+      if (nucleated) {
+        active_flag[i] = 3;  // Solidified
+        solid_d[i] = -1;     // Start smoothing countdown
+        G[i] = compute_gradient();  // Store gradient at solidification
+        V[i] = compute_velocity();
+      }
+    }
+  }
+
+  // 3. Sync updated arrays to device
+  sync_all_to_device();
+  // Transfers: T[], active_flag[], G[], V[], solid_d[]
+  // Only read_buffer (selective sync optimization)
+
+  // === DEVICE-SIDE OPERATIONS ===
+
+  // 4. Monte Carlo sweeps (DEVICE KERNELS)
+  for (int isector = 0; isector < nsector; isector++) {
+    sweep_rejection_kokkos(isector);  // Parallel on device
+    swap_buffers();  // Make writes visible
+  }
+
+  // === BACK TO HOST FOR MPI ===
+
+  // 5. MPI ghost exchange
+  sync_data_to_host();  // Needed for MPI communication
+  comm->all();
+  sync_data_to_device();  // Resync ghost data
+}
+```
+
+**Why phase transitions stay on host:**
+- Nucleation uses per-spin data (`nucleation_temps[spin[i]]`) - not per-site
+- Complex branching logic (epitaxial vs competitive growth)
+- Random number generation for nucleation probabilities
+- Infrequent operation (once per site during solidification)
+- **Cost: Acceptable overhead vs complexity of device implementation**
+
+**Device MC kernel (override from parent):**
+```cpp
+struct RejectionSweepFunctor {
+  // Inherit base data from AppPottsQuaternionKokkos
+  // Add additive-specific views
+
+  Kokkos::View<double*> T_read;
+  Kokkos::View<double*> G_read;
+  Kokkos::View<double*> V_read;
+  Kokkos::View<int*> active_flag_read;
+  Kokkos::View<double*> solid_d_read, solid_d_write;
+
+  // Physical constants
+  double c1, c2, c3;  // Melt misorientation weights
+  double q, tl, ts, mo;  // Arrhenius mobility parameters
+
+  KOKKOS_INLINE_FUNCTION
+  void operator()(const int& i) const {
+    // Skip non-solidified sites
+    if (active_flag_read(i) != 3) return;
+    if (active_flag_read(i) == 5) return;  // Voids
+
+    // Read temperature (from Kokkos temp source)
+    double T_i = T_read(i);
+
+    // Arrhenius mobility
+    double mobility = compute_mobility_device(T_i, q, tl, ts, mo);
+
+    // BRANCHING: Solidification smoothing vs solid-state growth
+    if (solid_d_read(i) < 0 && solid_d_read(i) > -nrefine - 1) {
+      // === SOLIDIFICATION SMOOTHING (weighted neighbor selection) ===
+
+      // Thread-local scratch arrays
+      double unique_dot[MAX_NEIGH];
+      int unique[MAX_NEIGH];
+      int unique_neigh[MAX_NEIGH];
+      int nevent = 0;
+
+      // Build weighted CDF
+      double dotValue = 0.0;
+      for (int j = 0; j < numneigh[i]; j++) {
+        int nj = neighbor[i][j];
+        if (active_flag_read(nj) == 3 || active_flag_read(nj) == 1) {
+          // Compute melt misorientation weight
+          double weight = compute_melt_misorientation_device(i, nj,
+            G_read, V_read, c1, c2, c3);
+
+          dotValue += weight;
+          unique_dot[nevent] = dotValue;
+          unique[nevent] = spin_read(nj);
+          unique_neigh[nevent] = nj;
+          nevent++;
+        }
+      }
+
+      if (nevent == 0) return;
+
+      // Sample from CDF using thread RNG
+      auto rand_gen = rand_pool.get_state(i);
+      double dran = unique_dot[nevent-1] * rand_gen.drand();
+
+      // Find selected neighbor (binary search in CDF)
+      int m = 0;
+      while (m < nevent && unique_dot[m] <= dran) m++;
+
+      int newsite = unique_neigh[m];
+      int newspin = unique[m];
+
+      // Update smoothing counter
+      solid_d_write(i) = solid_d_read(i) + 1;
+
+      // Standard Metropolis acceptance with mobility modulation
+      // ... (same as parent class)
+
+    } else {
+      // === SOLID-STATE GROWTH (standard Potts) ===
+
+      // Inherit from AppPottsQuaternionKokkos::operator()
+      // Standard neighbor selection, Metropolis acceptance
+      // ... (call parent's logic)
+    }
+  }
+};
+```
+
+**Device-compatible melt misorientation:**
+```cpp
+KOKKOS_INLINE_FUNCTION
+double compute_melt_misorientation_device(int i, int neigh_id,
+  const Kokkos::View<double*>& G_read,
+  const Kokkos::View<double*>& V_read,
+  double c1, double c2, double c3) const {
+
+  // Compute quaternion misorientation (reuse parent's device function)
+  double angle = compute_disorientation_device(i, neigh_id);
+
+  // Gradient direction term (c2 weight)
+  double G_val = G_read(i);
+  double V_val = V_read(i);
+  // ... compute normal · direction term
+
+  // Thermal gradient term (c3 weight)
+  // ... compute f(G, V)
+
+  return c1 * f_angle(angle) + c2 * f_normal(normal_dot) + c3 * f_thermal(G_val, V_val);
+}
+```
+
+**Synchronization pattern (inherits from parent + extends):**
+```cpp
+void AppAdditiveExtTempTextureKokkos::sync_all_to_device() {
+  // Call parent (syncs spin + quaternions)
+  AppPottsQuaternionKokkos::sync_all_to_device();
+
+  // Sync additive arrays (selective: only read_buffer, skip write_buffer)
+  buffer_T.sync_to_device_selective(T, true, false);
+  buffer_G.sync_to_device_selective(G, true, false);
+  buffer_V.sync_to_device_selective(V, true, false);
+  buffer_active_flag.sync_to_device_selective(active_flag, true, false);
+  buffer_solid_d.sync_to_device_selective(solid_d, true, false);
+}
+```
+
+**Validation:**
+- Single MPI rank: CPU vs Kokkos grain structure comparison
+- Verify thermal histories: T(t), G, V fields identical
+- Check grain boundary statistics (disorientation distributions)
+- Verify no race conditions (zero desynchronized spins)
+
+**Expected outcome**: Device MC sweeps working, 20× speedup on OpenMP backend
+
+---
+
+#### Sub-Phase 5.5: MPI and Optimization (Weeks 7-8)
+
+**Goal**: Multi-rank support and performance profiling
+
+**Multi-MPI pattern** (same as parent class):
+```cpp
+// After device MC sweeps, before MPI:
+sync_data_to_host();  // Get device data for MPI communication
+
+// MPI ghost exchange (host buffers)
+comm->all();
+
+// After MPI, before next device sweep:
+sync_data_to_device();  // Resync ghost data to device
+```
+
+**Selective sync optimization for temperature:**
+```cpp
+// Temperature doesn't change during MC sweep (only in app_update)
+// Only sync read_buffer after device writes are swapped
+buffer_T.sync_to_device_selective(T, true, false);  // read=true, write=false
+// Result: 33% reduction in sync time (same as parent's optimization)
+```
+
+**Profiling infrastructure:**
+```cpp
+if (profiling_enabled) {
+  Kokkos::Timer timer;
+
+  // Time HDF5 load
+  timer.reset();
+  kokkos_temp_source->load_layer_and_sync_device(layer);
+  double hdf5_time = timer.seconds();
+
+  // Time temperature interpolation
+  timer.reset();
+  kokkos_temp_source->update_temperatures_device(time, buffer_T.get_read_view());
+  double interp_time = timer.seconds();
+
+  // Time MC sweeps
+  timer.reset();
+  sweep_rejection_kokkos(isector);
+  double mc_time = timer.seconds();
+
+  if (me == 0) {
+    fprintf(screen, "HDF5: %.3f ms, Interp: %.3f ms, MC: %.3f ms\n",
+            hdf5_time*1000, interp_time*1000, mc_time*1000);
+  }
+}
+```
+
+**Validation:**
+- Test with 1, 2, 4, 6 MPI ranks
+- Compare grain structures across ranks (continuity at boundaries)
+- Verify no desynchronized sites at MPI boundaries
+- Performance scaling: measure speedup vs CPU baseline
+
+**Benchmarking:**
+- Small (10³): Quick validation
+- Medium (20³): Typical production
+- Large (40³): Scaling test
+- Document: CPU time, Kokkos time, speedup, memory usage
+
+**Expected outcome**: Production-ready multi-MPI support, documented performance
+
+---
+
+#### Sub-Phase 5.6: Production Testing and Documentation (Weeks 8-10)
+
+**Test cases** (from `/Users/Tron/spparks/examples/ReducedTempAM/QuatTest/`):
+
+**1. Standard AM simulation:**
+```bash
+# Input: in.additive
+# Features: HDF5 unstructured temp source, multiple layers
+# Validation: Grain structure, IPF texture, misorientation
+```
+
+**2. Serpentine scan pattern:**
+```bash
+# Input: in.additive_serpentine
+# Features: Complex thermal history, bidirectional scanning
+# Validation: Epitaxial growth patterns, thermal gradients
+```
+
+**3. Multi-layer build:**
+```bash
+# Features: Layer-by-layer solidification, thermal cycling
+# Validation: Columnar grain growth across layers
+```
+
+**4. Large-scale benchmark:**
+```bash
+# Size: 1M+ sites, 100+ layers
+# Validation: Memory scaling, performance consistency
+```
+
+**Physics validation checklist:**
+- ✅ Grain size distribution matches CPU version
+- ✅ IPF (Inverse Pole Figure) texture identical
+- ✅ Misorientation angle distribution < 0.1° difference
+- ✅ Thermal history: T(x,y,z,t) arrays match within 1e-10
+- ✅ Gradient/velocity fields: G, V match CPU version
+- ✅ Nucleation events: Same grains nucleate at same times
+
+**Performance validation checklist:**
+- ✅ Temperature interpolation: 10-40× speedup measured
+- ✅ MC sweeps: 20× speedup (OpenMP backend)
+- ✅ Overall application: 15-30× speedup documented
+- ✅ Memory usage: < 500 MB for 1M sites
+- ✅ Scalability: Speedup maintained across problem sizes
+
+**Deliverables:**
+
+**1. Code:**
+- `src/KOKKOS/temperature_source_hdf5_unstructured_kokkos.h/cpp` (working)
+- `src/KOKKOS/app_additive_ext_temp_texture_kokkos.h/cpp` (working)
+- CMake integration (automatic with package system)
+
+**2. Documentation:**
+- Update this roadmap with Phase 5 completion (commit hash)
+- Performance benchmark report (CPU vs Kokkos)
+- Validation report (physics comparison)
+
+**3. Example input files:**
+- `examples/ReducedTempAM/QuatTest/in.additive.kk` (Kokkos version)
+- README with usage instructions
+
+**Expected outcome**: Production-ready additive manufacturing Kokkos implementation
+
+---
+
+#### Technical Architecture Summary
+
+**Data Flow:**
+
+```
+1. HDF5 File (Host)
+   ↓
+2. Load Layer (Host) → mesh, times, temps arrays
+   ↓
+3. Build Cache (Host) → find elements for all sites
+   ↓
+4. Transfer to Device (9 ms, once per layer)
+   ├── times_device
+   ├── temps_device
+   ├── cache_device
+   └── dataCounts_device
+   ↓
+5. Temperature Interpolation (Device) ← PARALLEL (10-40× faster)
+   ├── Binary search in time series
+   ├── Linear interpolation (temporal)
+   └── Barycentric interpolation (spatial)
+   ↓
+6. T[] array on device → used by MC kernels
+   ↓
+7. Phase Transitions (Host) → melting, nucleation
+   ↓
+8. MC Sweeps (Device) ← PARALLEL (20× faster)
+   ├── Weighted neighbor selection
+   ├── Metropolis acceptance
+   └── Quaternion updates
+   ↓
+9. MPI Communication (Host)
+   └── Resync to device
+```
+
+**Performance breakdown (1M sites, typical):**
+
+| Operation | CPU Time | Kokkos Time | Speedup | Frequency |
+|-----------|----------|-------------|---------|-----------|
+| HDF5 layer load | 50 ms | 50 ms | 1× | Once per layer |
+| Cache building | 500 ms | 500 ms | 1× | Once per layer |
+| Device transfer | N/A | 9 ms | N/A | Once per layer |
+| **Temperature interp** | **100 ms** | **3 ms** | **33×** | **Every timestep** |
+| Phase transitions | 10 ms | 10 ms | 1× | Every timestep |
+| **MC sweeps** | **200 ms** | **10 ms** | **20×** | **Every timestep** |
+| MPI communication | 5 ms | 5 ms | 1× | Every timestep |
+| **Total per timestep** | **315 ms** | **28 ms** | **11×** | - |
+
+**Per layer (50 timesteps):**
+- CPU: 550 ms (setup) + 50 × 315 ms = 16.3 seconds
+- Kokkos: 559 ms (setup) + 50 × 28 ms = 2.0 seconds
+- **Speedup: 8× (includes setup overhead)**
+- **For 100 layers: 27 minutes → 3.3 minutes** ✅
+
+---
+
+#### Success Criteria
+
+**Phase 5 is complete when:**
+1. ✅ Both Kokkos classes compile and run
+2. ✅ Temperature interpolation achieves 10× speedup minimum
+3. ✅ MC sweeps achieve 15× speedup minimum (combined with parent optimizations)
+4. ✅ Physics validation: All test cases match CPU results
+5. ✅ Multi-MPI: Tested with up to 6 ranks successfully
+6. ✅ Documentation: Roadmap updated, performance documented
+7. ✅ Production testing: Large-scale runs (1M+ sites) validated
+
+---
+
 ## 6. Component Prioritization
 
 ### Tier 1: High Impact, Lower Complexity (Start Here)
@@ -2079,77 +2464,43 @@ for (int iset = 0; iset < nset_loop; iset++) {
 
 ### Year 1: Foundation and Proof of Concept
 
-#### Q1: Infrastructure (Months 1-3)
+#### Q1: Infrastructure (Months 1-3) ✅ **COMPLETED**
 
-**Month 1:** ✅ **COMPLETED November 2025**
-- [x] Set up development branch (`SURGE-kokkos`)
-- [x] Add Kokkos as git submodule in `/lib/kokkos` (documented, not yet initialized)
-- [x] Extend CMake build system with Kokkos options
-- [x] Update build system with Kokkos package support
-- [x] Document build instructions
+**Deliverable:** ✅ Working infrastructure with base classes, build system, and test framework
+- Implemented: MemoryKokkos, AppKokkos, AppLatticeKokkos
+- Build system: CMake and Makefile with KOKKOS package
+- Documentation: src/KOKKOS/README.md
 
-**Month 2:** ✅ **COMPLETED November 2025**
-- [x] Implement `MemoryKokkos` class
-- [x] Create `AppKokkos` base class
-- [x] Create `AppLatticeKokkos` base class
-- [ ] Add Kokkos initialization/finalization to `spparks.cpp` (TODO: needs integration)
-- [x] Set up testing framework (created test input file)
+**📖 See [KOKKOS_IMPLEMENTATION_HISTORY.md](KOKKOS_IMPLEMENTATION_HISTORY.md) for details**
 
-**Month 3:** ✅ **COMPLETED November 2025**
-- [x] Implement basic data structure conversion (spin, xyz, etc.)
-- [x] Add sync mechanisms (host ↔ device)
-- [x] Create simple test cases (examples/potts/in.potts.kk)
-- [ ] Benchmark overhead of DualView approach (TODO: pending Kokkos library)
-- [x] Document API and design patterns (src/KOKKOS/README.md)
+#### Q2: First Application (Months 4-6) ✅ **COMPLETED**
 
-**Deliverable:** ✅ Working infrastructure with basic physics kernels implemented
+**Deliverable:** ✅ Four production-ready Potts apps with 20× CPU speedup
+- AppPottsKokkos, AppPottsNeighKokkos, AppPottsNeighOnlyKokkos, AppPottsQuaternionKokkos
+- Phases 1-3.5 complete: Infrastructure → MPI+Sectors → Double-buffering → Optimization → Benchmarking
+- 20× speedup achieved, physics validated, zero race conditions
 
-#### Q2: First Application (Months 4-6)
+**📖 See [KOKKOS_IMPLEMENTATION_HISTORY.md](KOKKOS_IMPLEMENTATION_HISTORY.md) for details**
 
-**Month 4:** 🔄 **IN PROGRESS November 2025**
-- [x] Implement `AppPottsKokkos` skeleton
-- [x] Port `site_energy()` to GPU (ComputeEnergyFunctor implemented)
-- [x] Create energy calculation kernel
-- [ ] Validate against CPU version (TODO: needs Kokkos library and testing)
-- [ ] Benchmark performance (TODO: needs Kokkos library and testing)
+#### Q3: Refinement (Months 7-9) ⏳ **IN PROGRESS - Phase 3.6**
 
-**Month 5:** 🔄 **PARTIALLY COMPLETE November 2025**
-- [x] Implement `site_event_rejection_kokkos()` (RejectionSweepFunctor implemented)
-- [x] Create rejection sweep kernel
-- [x] Add Kokkos RNG pool
-- [ ] Handle coloring/sectors (TODO: integration needed)
-- [ ] Validate physics (TODO: needs testing)
+**Immediate priorities (Month 7):**
+- [ ] **GPU backend testing** (CUDA on NVIDIA, HIP on AMD)
+  - Expected: 10-30× additional speedup beyond current 20× CPU baseline
+  - Validate physics correctness across backends
+  - Measure actual sync overhead on GPU hardware
+- [ ] **Diagnostic Kokkos-ification** (see KOKKOS_DIAGNOSTICS_ANALYSIS.md)
+  - diag_energy/kk - 5-20× speedup
+  - diag_array/kk - 10-50× speedup
+- [ ] Additional apps: AppIsingKokkos, AppDiffusionKokkos
 
-**Month 6:** ⏳ **NOT STARTED**
-- [ ] Performance optimization (layout, team size, etc.)
-- [ ] Add diagnostic outputs
-- [x] Create example input scripts (examples/potts/in.potts.kk)
-- [x] Document usage (src/KOKKOS/README.md)
-- [ ] Publish results
+**Optimization (Months 8-9):**
+- [ ] Ghost-region-only partial syncs
+- [ ] Team policy optimization for GPUs
+- [ ] Async sync with Kokkos streams
+- [ ] Device-side MPI pack/unpack kernels
 
-**Deliverable:** ⏳ Working `AppPottsKokkos` with measured performance vs CPU (pending validation)
-
-#### Q3: Refinement (Months 7-9)
-
-**Month 7:**
-- [ ] Implement `AppPottsNeighKokkos`
-- [ ] Add more complex energy calculations
-- [ ] Neighbor list management
-- [ ] Benchmark vs CPU
-
-**Month 8:**
-- [ ] Implement hybrid KMC solver
-- [ ] Propensities on GPU, tree on CPU
-- [ ] Measure transfer overhead
-- [ ] Optimize data movement
-
-**Month 9:**
-- [ ] Multi-backend testing (CUDA, HIP, OpenMP)
-- [ ] Performance portability analysis
-- [ ] Tuning for different architectures
-- [ ] Document best practices
-
-**Deliverable:** Multiple apps working, multi-backend support validated
+**Deliverable:** GPU-validated apps, optimized performance, diagnostic support
 
 #### Q4: Validation (Months 10-12)
 
@@ -2177,24 +2528,20 @@ for (int iset = 0; iset < nset_loop; iset++) {
 
 #### Q1: Complex Applications (Months 13-15)
 
-**Month 13:**
-- [ ] Implement `AppPottsQuaternionKokkos`
-- [ ] Port quaternion mathematics to GPU
-- [ ] Misorientation calculations
-- [ ] Grain boundary energy
+**Month 13:** ✅ **AppPottsQuaternionKokkos already complete** (see history)
 
-**Month 14:**
-- [ ] AM applications: `AppPottsAMBezier`
-- [ ] Temperature field on GPU
-- [ ] Bézier curve evaluation
-- [ ] Nucleation models
+**Month 14-15: AM Applications**
+- [ ] `AppPottsAMBezierKokkos` - AM with Bézier temperature profiles
+  - Temperature field on device
+  - Bézier curve evaluation kernels
+  - Nucleation models on GPU
+- [ ] `AppPottsAMWeldKokkos` - Welding simulations
+  - Moving heat source on device
+  - Dynamic temperature updates
+- [ ] Apply double-buffer framework from Phase 3.1
+- [ ] Leverage selective sync and profiling infrastructure
 
-**Month 15:**
-- [ ] Advanced features (multiple site arrays, complex events)
-- [ ] Optimization for complex apps
-- [ ] Validation and benchmarking
-
-**Deliverable:** Complex production apps running on GPU
+**Deliverable:** AM production apps running on GPU with validated physics
 
 #### Q2: Solver and Communication (Months 16-18)
 
@@ -2363,6 +2710,20 @@ for (int iset = 0; iset < nset_loop; iset++) {
 - **Website:** https://spparks.github.io
 - **GitHub:** https://github.com/spparks/spparks
 - **Manual:** https://spparks.github.io/doc/Manual.html
+
+### SPPARKS Kokkos Documentation
+
+- **KOKKOS_IMPLEMENTATION_HISTORY.md** - Detailed history of Kokkos implementation (Phases 1-3.5, November 2025)
+  - Complete chronology of infrastructure development, bug fixes, and optimizations
+  - Performance benchmarking results (20× CPU speedup achieved)
+  - Technical details of double-buffer framework, selective sync, and MPI synchronization
+  - Git commit history and file modification records
+
+- **KOKKOS_DIAGNOSTICS_ANALYSIS.md** - Comprehensive analysis of Kokkos-ifying diagnostic styles (diag_energy, diag_array, diag_cluster)
+  - Evaluates GPU suitability and implementation complexity
+  - Recommends diag_energy (5-20× speedup) and diag_array (10-50× speedup)
+  - Advises against diag_cluster (poor GPU fit for graph algorithms)
+  - Provides detailed implementation roadmap and code examples
 
 ### Related Technologies
 

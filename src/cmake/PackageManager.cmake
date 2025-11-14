@@ -170,7 +170,17 @@ endfunction()
 function(install_stitch_package)
     set(STITCH_DIR "${CMAKE_CURRENT_SOURCE_DIR}/STITCH")
     set(STITCH_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../lib/stitch")
-    set(STITCH_BUILD_DIR "${STITCH_LIB_DIR}/libstitch")
+
+    # Check for new path structure first (src/stitch/libstitch), fall back to old (libstitch)
+    if(EXISTS "${STITCH_LIB_DIR}/src/stitch/libstitch")
+        set(STITCH_BUILD_DIR "${STITCH_LIB_DIR}/src/stitch/libstitch")
+    elseif(EXISTS "${STITCH_LIB_DIR}/libstitch")
+        set(STITCH_BUILD_DIR "${STITCH_LIB_DIR}/libstitch")
+    else()
+        message(FATAL_ERROR "STITCH library directory not found. Tried:\n"
+                "  ${STITCH_LIB_DIR}/src/stitch/libstitch\n"
+                "  ${STITCH_LIB_DIR}/libstitch")
+    endif()
 
     if(NOT EXISTS "${STITCH_DIR}")
         message(FATAL_ERROR "STITCH package directory not found")
@@ -178,10 +188,7 @@ function(install_stitch_package)
 
     # Step 1: Build the stitch library if needed
     message(STATUS "Checking for STITCH library...")
-
-    if(NOT EXISTS "${STITCH_BUILD_DIR}")
-        message(FATAL_ERROR "STITCH library directory not found at ${STITCH_BUILD_DIR}")
-    endif()
+    message(STATUS "STITCH build directory: ${STITCH_BUILD_DIR}")
 
     # Check if library exists
     set(STITCH_LIB_PATH "${STITCH_BUILD_DIR}/libstitch.a")
@@ -236,17 +243,24 @@ function(install_stitch_package)
     set(LIBLINK_PATH "${STITCH_LIB_DIR}/liblink")
     set(INCLUDELINK_PATH "${STITCH_LIB_DIR}/includelink")
 
+    # Determine symlink target based on which directory structure exists
+    if(EXISTS "${STITCH_LIB_DIR}/src/stitch/libstitch")
+        set(SYMLINK_TARGET "src/stitch/libstitch")
+    else()
+        set(SYMLINK_TARGET "libstitch")
+    endif()
+
     if(NOT EXISTS "${LIBLINK_PATH}")
-        message(STATUS "Creating liblink symlink...")
+        message(STATUS "Creating liblink symlink to ${SYMLINK_TARGET}...")
         execute_process(
-            COMMAND ${CMAKE_COMMAND} -E create_symlink libstitch liblink
+            COMMAND ${CMAKE_COMMAND} -E create_symlink ${SYMLINK_TARGET} liblink
             WORKING_DIRECTORY "${STITCH_LIB_DIR}"
             RESULT_VARIABLE SYMLINK_RESULT
         )
         if(NOT SYMLINK_RESULT EQUAL 0)
             message(WARNING "Failed to create liblink symlink, trying alternative method...")
             execute_process(
-                COMMAND ln -s libstitch liblink
+                COMMAND ln -s ${SYMLINK_TARGET} liblink
                 WORKING_DIRECTORY "${STITCH_LIB_DIR}"
                 RESULT_VARIABLE SYMLINK_RESULT2
             )
@@ -257,16 +271,16 @@ function(install_stitch_package)
     endif()
 
     if(NOT EXISTS "${INCLUDELINK_PATH}")
-        message(STATUS "Creating includelink symlink...")
+        message(STATUS "Creating includelink symlink to ${SYMLINK_TARGET}...")
         execute_process(
-            COMMAND ${CMAKE_COMMAND} -E create_symlink libstitch includelink
+            COMMAND ${CMAKE_COMMAND} -E create_symlink ${SYMLINK_TARGET} includelink
             WORKING_DIRECTORY "${STITCH_LIB_DIR}"
             RESULT_VARIABLE SYMLINK_RESULT
         )
         if(NOT SYMLINK_RESULT EQUAL 0)
             message(WARNING "Failed to create includelink symlink, trying alternative method...")
             execute_process(
-                COMMAND ln -s libstitch includelink
+                COMMAND ln -s ${SYMLINK_TARGET} includelink
                 WORKING_DIRECTORY "${STITCH_LIB_DIR}"
                 RESULT_VARIABLE SYMLINK_RESULT2
             )

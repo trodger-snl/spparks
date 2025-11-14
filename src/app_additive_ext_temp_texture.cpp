@@ -73,6 +73,9 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
   AppPottsQuaternion(spk,3,construct_parent_args(arg))
 {
 
+    if (narg == 6)
+    error->all(FLERR,"app_style command format changed: remove temperature file path argument and use 'setup_temperature_source' command instead");
+
     if (narg != 5  )
     error->all(FLERR,"Illegal app_style command");
 

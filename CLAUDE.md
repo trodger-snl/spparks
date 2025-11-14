@@ -252,6 +252,8 @@ make mac_arm_highfive_local               # Build with local HighFive installati
 # Package installation/removal
 make yes-stitch    # install STITCH package
 make no-stitch     # remove STITCH package
+make yes-kokkos    # install KOKKOS package
+make no-kokkos     # remove KOKKOS package
 
 # Style header generation (run automatically during build)
 sh Make.sh style
@@ -259,6 +261,44 @@ sh Make.sh style
 # MPI stubs for serial builds
 make mpi-stubs
 ```
+
+### KOKKOS Package Directory Structure
+
+**IMPORTANT**: SPPARKS uses a modular package system similar to LAMMPS. Package files are stored in subdirectories and copied to `src/` when installed.
+
+**Directory structure:**
+```
+src/
+├── KOKKOS/              # KOKKOS package source (REFERENCE VERSION)
+│   ├── Install.sh       # Installation script
+│   ├── README.md        # Package documentation
+│   ├── app_*_kokkos.h   # Kokkos app headers
+│   └── app_*_kokkos.cpp # Kokkos app implementations
+└── [copied files]       # Installed copies when package is active
+```
+
+**Best practices for KOKKOS development:**
+
+1. **Edit files in `src/KOKKOS/` directory** - This is the source of truth
+2. **After making changes**: Reinstall the package to copy updates to `src/`
+   ```bash
+   make yes-kokkos    # Copies from KOKKOS/ to src/
+   ```
+3. **Or use CMake**: Auto-copies from `KOKKOS/` during configuration
+   ```bash
+   ./build_cmake.sh --kokkos
+   ```
+4. **DO NOT** manually edit the installed copies in `src/` - they will be overwritten
+
+**How Install.sh works:**
+- `make yes-kokkos` → runs `Install.sh 1` → copies files from `KOKKOS/` to `src/`
+- `make no-kokkos` → runs `Install.sh 0` → removes copies from `src/`
+- Script uses `cmp -s` to avoid overwriting identical files
+- Also modifies `Makefile.package` and `Makefile.package.settings` with build flags
+
+**Other package directories:**
+- `src/STITCH/` - STITCH package for external coupling
+- Each package follows the same pattern: reference files in subdirectory, installed copies in `src/`
 
 **CMake Configuration Options:**
 ```bash

@@ -121,9 +121,6 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     max_misorient = 0;
     mis_thresh = 10.0 * MY_PI / 180.0; // Default 10 degrees converted to radians
     misorient_alpha = 5.0; // Default exponential steepness parameter
-    
-    // Debug defaults
-    normal_finder_debug = 0; // Off by default
 
     // Diagnostic defaults (temporary - for refactoring analysis)
     normal_finder_diagnostics = 0; // Off by default
@@ -280,12 +277,6 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
      c1 = atof(arg[0]);
      c2 = atof(arg[1]);
      c3 = atof(arg[2]);
-  }
-  else if (strcmp(command,"normal_finder_debug") == 0) {
-     if (narg != 1) error->all(FLERR,"Illegal normal_finder_debug command");
-     normal_finder_debug = atoi(arg[0]);
-     if (normal_finder_debug < 0 || normal_finder_debug > 1)
-       error->all(FLERR,"Illegal normal_finder_debug value: must be 0 (off) or 1 (on)");
   }
   else if (strcmp(command,"normal_finder_diagnostics") == 0) {
      if (narg != 1) error->all(FLERR,"Illegal normal_finder_diagnostics command");
@@ -1226,23 +1217,6 @@ std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
 		// For now, we'll track cumulative statistics
 	}
 
-	// Debug statistics for comparing old vs new methods (only if debugging enabled)
-	static int debug_counter = 0;
-	static double bulk_angle_sum = 0.0;
-	static int bulk_count = 0;
-	static double boundary_angle_sum = 0.0;
-	static int boundary_count = 0;
-	static double melt_surface_angle_sum = 0.0;
-	static int melt_surface_count = 0;
-
-	bool should_debug = (normal_finder_debug == 1);
-	bool should_output = false;
-
-	if (should_debug) {
-		debug_counter++;
-		should_output = (debug_counter % 60000 == 0);
-	}
-	
 	// Initialize gradient components
 	double grad_x = 0, grad_y = 0, grad_z = 0;
 	
@@ -1259,22 +1233,7 @@ std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
 		{ 1, 0,-1}, { 1, 0, 0}, { 1, 0, 1},  // i=1, j=0
 		{ 1, 1,-1}, { 1, 1, 0}, { 1, 1, 1}   // i=1, j=1
 	};
-	
-	// Calculate old 6-neighbor result for comparison (only if debugging enabled)
-	double old_result[3] = {0, 0, 0};
-	if (should_debug) {
-		double grad_x_old = (T[neighbor[site][4]] - T[neighbor[site][21]]) / (2.0 * dx);
-		double grad_y_old = (T[neighbor[site][10]] - T[neighbor[site][15]]) / (2.0 * dx);
-		double grad_z_old = (T[neighbor[site][12]] - T[neighbor[site][13]]) / (2.0 * dx);
-		
-		double norm_old = sqrt(grad_x_old*grad_x_old + grad_y_old*grad_y_old + grad_z_old*grad_z_old);
-		if (norm_old > 1e-12) {
-			old_result[0] = fabs(grad_x_old)/norm_old;
-			old_result[1] = fabs(grad_y_old)/norm_old;
-			old_result[2] = fabs(grad_z_old)/norm_old;
-		}
-	}
-	
+
 	// Special case: top of melt pool where some neighbors are inactive
 	// Use only neighbors at or below current site's z-coordinate
 	bool is_melt_surface = (active_flag[neighbor[site][13]] <= 1);
@@ -1287,21 +1246,6 @@ std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
 	}
 
 	if (is_melt_surface) {
-		// Store old melt surface method result for comparison (only if debugging enabled)
-		double old_melt_result[3] = {0, 0, 0};
-		double norm_old_melt = 0.0;
-		if (should_debug) {
-			double xDel_old = fabs(T[neighbor[site][4]] - T[neighbor[site][21]]);
-			double yDel_old = fabs(T[neighbor[site][10]] - T[neighbor[site][15]]);
-			int lower_site = neighbor[site][12];
-			double zDel_old = fabs(T[neighbor[lower_site][12]] - T[neighbor[lower_site][13]]);
-			norm_old_melt = sqrt(xDel_old*xDel_old + yDel_old*yDel_old + zDel_old*zDel_old);
-			if (norm_old_melt > 1e-12) {
-				old_melt_result[0] = xDel_old/norm_old_melt;
-				old_melt_result[1] = yDel_old/norm_old_melt;
-				old_melt_result[2] = zDel_old/norm_old_melt;
-			}
-		}
 		// Filter neighbors to only include those at or below current z-level
 		double site_z = xyz[site][2];
 		
@@ -1392,25 +1336,7 @@ std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
 		result[1] = fabs(grad_y)/norm;
 		result[2] = fabs(grad_z)/norm;
 		result[3] = norm;  // Store the actual gradient magnitude
-		
-		// Compare old vs new melt surface methods for debugging
-		if (should_debug && norm > 1e-12 && norm_old_melt > 1e-12) {
-			double dot_product = old_melt_result[0]*result[0] + old_melt_result[1]*result[1] + old_melt_result[2]*result[2];
-			double old_norm = sqrt(old_melt_result[0]*old_melt_result[0] + old_melt_result[1]*old_melt_result[1] + old_melt_result[2]*old_melt_result[2]);
-			double new_norm = sqrt(result[0]*result[0] + result[1]*result[1] + result[2]*result[2]);
-			
-			if (old_norm > 1e-12 && new_norm > 1e-12) {
-				dot_product = dot_product / (old_norm * new_norm);
-				if (dot_product > 1.0) dot_product = 1.0;
-				if (dot_product < -1.0) dot_product = -1.0;
-				
-				double angle_rad = acos(dot_product);
-				double angle_deg = angle_rad * 180.0 / 3.14159265359;
-				
-				melt_surface_angle_sum += angle_deg;
-				melt_surface_count++;
-			}
-		}
+
 		return result;
 	}
 
@@ -1511,68 +1437,6 @@ std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
 	result[1] = fabs(grad_y)/norm;
 	result[2] = fabs(grad_z)/norm;
 	result[3] = norm;  // Store the actual gradient magnitude
-	
-	// Accumulate statistics for comparing old vs new methods
-	if (should_debug && norm > 1e-12) {
-		// Calculate angle between old and new vectors
-		double dot_product = old_result[0]*result[0] + old_result[1]*result[1] + old_result[2]*result[2];
-		double old_norm = sqrt(old_result[0]*old_result[0] + old_result[1]*old_result[1] + old_result[2]*old_result[2]);
-		double new_norm = sqrt(result[0]*result[0] + result[1]*result[1] + result[2]*result[2]);
-		
-		if (old_norm > 1e-12 && new_norm > 1e-12) {
-			// Clamp dot product to [-1,1] to avoid numerical issues with acos
-			dot_product = dot_product / (old_norm * new_norm);
-			if (dot_product > 1.0) dot_product = 1.0;
-			if (dot_product < -1.0) dot_product = -1.0;
-			
-			double angle_rad = acos(dot_product);
-			double angle_deg = angle_rad * 180.0 / 3.14159265359;
-			
-			// Determine if this is a boundary site (has fewer than 26 neighbors)
-			bool is_boundary = (numneigh[site] < 26);
-			
-			if (is_boundary) {
-				boundary_angle_sum += angle_deg;
-				boundary_count++;
-			} else {
-				bulk_angle_sum += angle_deg;
-				bulk_count++;
-			}
-		}
-	}
-	
-	// Output statistics every 60000 calls
-	if (should_output) {
-		std::cout << "NORMAL_FINDER STATS [Calls " << (debug_counter-59999) << "-" << debug_counter << "]:\n";
-		if (bulk_count > 0) {
-			double avg_bulk = bulk_angle_sum / bulk_count;
-			std::cout << "  Bulk sites: " << bulk_count << " samples, average angle: " << avg_bulk << " degrees\n";
-		} else {
-			std::cout << "  Bulk sites: 0 samples\n";
-		}
-		if (boundary_count > 0) {
-			double avg_boundary = boundary_angle_sum / boundary_count;
-			std::cout << "  Boundary sites: " << boundary_count << " samples, average angle: " << avg_boundary << " degrees\n";
-		} else {
-			std::cout << "  Boundary sites: 0 samples\n";
-		}
-		if (melt_surface_count > 0) {
-			double avg_melt_surface = melt_surface_angle_sum / melt_surface_count;
-			std::cout << "  Melt surface sites: " << melt_surface_count << " samples, average angle: " << avg_melt_surface << " degrees\n";
-			std::cout << "    (Old: crude finite differences vs New: z-filtered weighted least squares)\n";
-		} else {
-			std::cout << "  Melt surface sites: 0 samples\n";
-		}
-		std::cout << std::endl;
-
-		// Reset counters for next interval
-		bulk_angle_sum = 0.0;
-		bulk_count = 0;
-		boundary_angle_sum = 0.0;
-		boundary_count = 0;
-		melt_surface_angle_sum = 0.0;
-		melt_surface_count = 0;
-	}
 
 	// Diagnostic: Periodic statistics output to log file
 	if (normal_finder_diagnostics == 1 && normal_diagnostics_fp != nullptr) {

@@ -107,9 +107,6 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   double t_cool_max;
   double mis_thresh;
   double misorient_alpha;
- 	
- 	// Debug parameters
- 	int normal_finder_debug; // Flag to enable/disable normal_finder debugging
 
  	// Diagnostic parameters for temporary analysis (will be removed after refactoring)
  	int normal_finder_diagnostics; // Flag: 0=off, 1=on

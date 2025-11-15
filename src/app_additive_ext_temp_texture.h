@@ -110,6 +110,60 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
  	
  	// Debug parameters
  	int normal_finder_debug; // Flag to enable/disable normal_finder debugging
+
+ 	// Diagnostic parameters for temporary analysis (will be removed after refactoring)
+ 	int normal_finder_diagnostics; // Flag: 0=off, 1=on
+ 	FILE *normal_diagnostics_fp;   // Log file pointer
+
+ 	// Branch execution counters
+ 	struct DiagnosticCounters {
+ 		// Main path counters
+ 		int melt_surface_path;
+ 		int bulk_boundary_path;
+
+ 		// Melt surface sub-branches
+ 		int melt_sufficient_neighbors;
+ 		int melt_insufficient_neighbors;
+ 		int melt_nonsingular_matrix;
+ 		int melt_singular_matrix;
+ 		int melt_normalized;
+ 		int melt_zero_norm;
+
+ 		// Bulk/boundary sub-branches
+ 		int bulk_nonsingular_matrix;
+ 		int bulk_singular_matrix;
+ 		int bulk_normalized;
+ 		int bulk_zero_norm;
+
+ 		// Calling context
+ 		int call_from_nucleation;
+ 		int call_from_solidification;
+ 		int call_from_misorientation;
+ 		int call_from_other;
+
+ 		// Site property accumulators
+ 		double melt_neighbors_sum;
+ 		double melt_z_sum;
+ 		double bulk_neighbors_sum;
+ 		double bulk_temp_sum;
+ 		double boundary_neighbors_sum;
+ 		double boundary_temp_sum;
+
+ 		int total_calls;
+
+ 		DiagnosticCounters() : melt_surface_path(0), bulk_boundary_path(0),
+ 		                       melt_sufficient_neighbors(0), melt_insufficient_neighbors(0),
+ 		                       melt_nonsingular_matrix(0), melt_singular_matrix(0),
+ 		                       melt_normalized(0), melt_zero_norm(0),
+ 		                       bulk_nonsingular_matrix(0), bulk_singular_matrix(0),
+ 		                       bulk_normalized(0), bulk_zero_norm(0),
+ 		                       call_from_nucleation(0), call_from_solidification(0),
+ 		                       call_from_misorientation(0), call_from_other(0),
+ 		                       melt_neighbors_sum(0.0), melt_z_sum(0.0),
+ 		                       bulk_neighbors_sum(0.0), bulk_temp_sum(0.0),
+ 		                       boundary_neighbors_sum(0.0), boundary_temp_sum(0.0),
+ 		                       total_calls(0) {}
+ 	} diag_counters;
  	
  	// Monte Carlo nucleation model parameters
 	int *nucleation_flags;

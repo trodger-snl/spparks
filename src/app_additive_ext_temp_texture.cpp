@@ -122,10 +122,6 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     mis_thresh = 10.0 * MY_PI / 180.0; // Default 10 degrees converted to radians
     misorient_alpha = 5.0; // Default exponential steepness parameter
 
-    // Diagnostic defaults (temporary - for refactoring analysis)
-    normal_finder_diagnostics = 0; // Off by default
-    normal_diagnostics_fp = nullptr;
-
     // Void generation defaults
     enable_voids = 0;              // Disabled by default
     void_density = 0.0;            // No voids by default
@@ -150,55 +146,6 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
 
 AppAdditiveExtTempTexture::~AppAdditiveExtTempTexture()
 {
-  // Close diagnostic log file and write final statistics
-  if (normal_diagnostics_fp != nullptr) {
-    fprintf(normal_diagnostics_fp, "\n=== FINAL STATISTICS ===\n");
-    fprintf(normal_diagnostics_fp, "Total normal_finder calls: %d\n\n", diag_counters.total_calls);
-
-    fprintf(normal_diagnostics_fp, "EXECUTION PATHS:\n");
-    fprintf(normal_diagnostics_fp, "  Melt Surface Path: %d calls\n", diag_counters.melt_surface_path);
-    fprintf(normal_diagnostics_fp, "    - Sufficient neighbors (>=3): %d\n", diag_counters.melt_sufficient_neighbors);
-    fprintf(normal_diagnostics_fp, "    - Insufficient neighbors (fallback): %d\n", diag_counters.melt_insufficient_neighbors);
-    fprintf(normal_diagnostics_fp, "    - Non-singular matrix: %d\n", diag_counters.melt_nonsingular_matrix);
-    fprintf(normal_diagnostics_fp, "    - Singular matrix (fallback): %d\n", diag_counters.melt_singular_matrix);
-    fprintf(normal_diagnostics_fp, "    - Normalized: %d\n", diag_counters.melt_normalized);
-    fprintf(normal_diagnostics_fp, "    - Zero norm: %d\n\n", diag_counters.melt_zero_norm);
-
-    fprintf(normal_diagnostics_fp, "  Bulk/Boundary Path: %d calls\n", diag_counters.bulk_boundary_path);
-    fprintf(normal_diagnostics_fp, "    - Non-singular matrix: %d\n", diag_counters.bulk_nonsingular_matrix);
-    fprintf(normal_diagnostics_fp, "    - Singular matrix (fallback): %d\n", diag_counters.bulk_singular_matrix);
-    fprintf(normal_diagnostics_fp, "    - Normalized: %d\n", diag_counters.bulk_normalized);
-    fprintf(normal_diagnostics_fp, "    - Zero norm: %d\n\n", diag_counters.bulk_zero_norm);
-
-    fprintf(normal_diagnostics_fp, "CALLING CONTEXT:\n");
-    fprintf(normal_diagnostics_fp, "  Nucleation: %d calls\n", diag_counters.call_from_nucleation);
-    fprintf(normal_diagnostics_fp, "  Solidification: %d calls\n", diag_counters.call_from_solidification);
-    fprintf(normal_diagnostics_fp, "  Misorientation: %d calls\n", diag_counters.call_from_misorientation);
-    fprintf(normal_diagnostics_fp, "  Other: %d calls\n\n", diag_counters.call_from_other);
-
-    if (diag_counters.melt_surface_path > 0) {
-      fprintf(normal_diagnostics_fp, "SITE PROPERTIES (Melt Surface):\n");
-      fprintf(normal_diagnostics_fp, "  Average neighbors: %.2f\n", diag_counters.melt_neighbors_sum / diag_counters.melt_surface_path);
-      fprintf(normal_diagnostics_fp, "  Average z-coord: %.6f\n\n", diag_counters.melt_z_sum / diag_counters.melt_surface_path);
-    }
-
-    int boundary_count = diag_counters.boundary_neighbors_sum > 0 ? 1 : 0;
-    int bulk_count = diag_counters.bulk_neighbors_sum > 0 ? 1 : 0;
-    if (boundary_count > 0) {
-      fprintf(normal_diagnostics_fp, "SITE PROPERTIES (Boundary):\n");
-      fprintf(normal_diagnostics_fp, "  Average neighbors: %.2f\n", diag_counters.boundary_neighbors_sum / boundary_count);
-      fprintf(normal_diagnostics_fp, "  Average temp: %.2f\n\n", diag_counters.boundary_temp_sum / boundary_count);
-    }
-    if (bulk_count > 0) {
-      fprintf(normal_diagnostics_fp, "SITE PROPERTIES (Bulk):\n");
-      fprintf(normal_diagnostics_fp, "  Average neighbors: %.2f\n", diag_counters.bulk_neighbors_sum / bulk_count);
-      fprintf(normal_diagnostics_fp, "  Average temp: %.2f\n\n", diag_counters.bulk_temp_sum / bulk_count);
-    }
-
-    fclose(normal_diagnostics_fp);
-    normal_diagnostics_fp = nullptr;
-  }
-
   // Only delete arrays that are specific to this class
   // Parent class destructors will handle sites, unique, unique_neigh
   if (unique_dot) delete[] unique_dot;
@@ -277,41 +224,6 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
      c1 = atof(arg[0]);
      c2 = atof(arg[1]);
      c3 = atof(arg[2]);
-  }
-  else if (strcmp(command,"normal_finder_diagnostics") == 0) {
-     if (narg != 1) error->all(FLERR,"Illegal normal_finder_diagnostics command");
-     int new_value = atoi(arg[0]);
-     if (new_value < 0 || new_value > 1)
-       error->all(FLERR,"Illegal normal_finder_diagnostics value: must be 0 (off) or 1 (on)");
-
-     // Handle turning diagnostics on
-     if (new_value == 1 && normal_finder_diagnostics == 0) {
-       normal_finder_diagnostics = 1;
-       normal_diagnostics_fp = fopen("normal_finder_diagnostics.log", "w");
-       if (normal_diagnostics_fp == nullptr) {
-         error->all(FLERR,"Cannot open normal_finder_diagnostics.log for writing");
-       }
-       fprintf(normal_diagnostics_fp, "=== NORMAL_FINDER DIAGNOSTICS LOG ===\n");
-       fprintf(normal_diagnostics_fp, "Tracking conditional branch execution and site properties\n\n");
-       fflush(normal_diagnostics_fp);
-
-       if (domain->me == 0) {
-         fprintf(screen,"Normal finder diagnostics enabled. Writing to normal_finder_diagnostics.log\n");
-       }
-     }
-     // Handle turning diagnostics off
-     else if (new_value == 0 && normal_finder_diagnostics == 1) {
-       if (normal_diagnostics_fp != nullptr) {
-         fprintf(normal_diagnostics_fp, "\n=== Diagnostics disabled by user command ===\n");
-         fclose(normal_diagnostics_fp);
-         normal_diagnostics_fp = nullptr;
-       }
-       normal_finder_diagnostics = 0;
-
-       if (domain->me == 0) {
-         fprintf(screen,"Normal finder diagnostics disabled.\n");
-       }
-     }
   }
   else if (strcmp(command,"misorientation_function") == 0) {
      if (narg != 2 && narg != 3) error->all(FLERR,"Illegal misorientation_function command");
@@ -1207,16 +1119,6 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
 // using weighted least squares with multiple neighbors for improved accuracy
 std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
 {
-	// Diagnostic tracking (temporary - for refactoring analysis)
-	static int calling_context = 0; // 0=unknown, 1=nucleation, 2=solidification, 3=misorientation
-	if (normal_finder_diagnostics == 1) {
-		diag_counters.total_calls++;
-
-		// Track calling context based on line number heuristic
-		// This is a simple approach - could be improved with explicit context passing
-		// For now, we'll track cumulative statistics
-	}
-
 	// Initialize gradient components
 	double grad_x = 0, grad_y = 0, grad_z = 0;
 	
@@ -1237,13 +1139,6 @@ std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
 	// Special case: top of melt pool where some neighbors are inactive
 	// Use only neighbors at or below current site's z-coordinate
 	bool is_melt_surface = (active_flag[neighbor[site][13]] <= 1);
-
-	// Diagnostic: Track melt surface path
-	if (normal_finder_diagnostics == 1 && is_melt_surface) {
-		diag_counters.melt_surface_path++;
-		diag_counters.melt_neighbors_sum += numneigh[site];
-		diag_counters.melt_z_sum += xyz[site][2];
-	}
 
 	if (is_melt_surface) {
 		// Filter neighbors to only include those at or below current z-level
@@ -1293,22 +1188,12 @@ std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
 			
 			valid_neighbors++;
 		}
-		
-		// Diagnostic: Track sufficient neighbors (diagnostics showed always >= 3)
-		if (normal_finder_diagnostics == 1) {
-			diag_counters.melt_sufficient_neighbors++;
-		}
 
 		// Compute gradient using weighted least squares with Cramer's rule
 		// Note: Diagnostics (2M+ calls) showed matrix always non-singular and valid_neighbors always >= 3
 		double det = AtA[0]*(AtA[4]*AtA[8] - AtA[5]*AtA[7]) -
 		             AtA[1]*(AtA[3]*AtA[8] - AtA[5]*AtA[6]) +
 		             AtA[2]*(AtA[3]*AtA[7] - AtA[4]*AtA[6]);
-
-		// Diagnostic: Track non-singular matrix
-		if (normal_finder_diagnostics == 1) {
-			diag_counters.melt_nonsingular_matrix++;
-		}
 
 		grad_x = (Atb[0]*(AtA[4]*AtA[8] - AtA[5]*AtA[7]) -
 		          AtA[1]*(Atb[1]*AtA[8] - AtA[5]*Atb[2]) +
@@ -1327,30 +1212,12 @@ std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
 		double norm = sqrt(grad_x*grad_x + grad_y*grad_y + grad_z*grad_z);
 		std::vector<double> result(4);  // 4 elements: [norm_x, norm_y, norm_z, magnitude]
 
-		// Diagnostic: Track normalized (always true based on testing)
-		if (normal_finder_diagnostics == 1) {
-			diag_counters.melt_normalized++;
-		}
-
 		result[0] = fabs(grad_x)/norm;
 		result[1] = fabs(grad_y)/norm;
 		result[2] = fabs(grad_z)/norm;
 		result[3] = norm;  // Store the actual gradient magnitude
 
 		return result;
-	}
-
-	// Diagnostic: Track bulk/boundary path
-	if (normal_finder_diagnostics == 1) {
-		diag_counters.bulk_boundary_path++;
-		bool is_boundary = (numneigh[site] < 26);
-		if (is_boundary) {
-			diag_counters.boundary_neighbors_sum += numneigh[site];
-			diag_counters.boundary_temp_sum += T[site];
-		} else {
-			diag_counters.bulk_neighbors_sum += numneigh[site];
-			diag_counters.bulk_temp_sum += T[site];
-		}
 	}
 
 	// Use weighted least squares with all available neighbors
@@ -1405,11 +1272,6 @@ std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
 	             AtA[1]*(AtA[3]*AtA[8] - AtA[5]*AtA[6]) +
 	             AtA[2]*(AtA[3]*AtA[7] - AtA[4]*AtA[6]);
 
-	// Diagnostic: Track non-singular matrix (always true based on testing)
-	if (normal_finder_diagnostics == 1) {
-		diag_counters.bulk_nonsingular_matrix++;
-	}
-
 	// Compute gradient using Cramer's rule
 	grad_x = (Atb[0]*(AtA[4]*AtA[8] - AtA[5]*AtA[7]) -
 	          AtA[1]*(Atb[1]*AtA[8] - AtA[5]*Atb[2]) +
@@ -1428,57 +1290,10 @@ std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
 	double norm = sqrt(grad_x*grad_x + grad_y*grad_y + grad_z*grad_z);
 	std::vector<double> result(4);  // 4 elements: [norm_x, norm_y, norm_z, magnitude]
 
-	// Diagnostic: Track normalized (always true based on testing)
-	if (normal_finder_diagnostics == 1) {
-		diag_counters.bulk_normalized++;
-	}
-
 	result[0] = fabs(grad_x)/norm;
 	result[1] = fabs(grad_y)/norm;
 	result[2] = fabs(grad_z)/norm;
 	result[3] = norm;  // Store the actual gradient magnitude
-
-	// Diagnostic: Periodic statistics output to log file
-	if (normal_finder_diagnostics == 1 && normal_diagnostics_fp != nullptr) {
-		static int last_report_call = 0;
-		const int report_interval = 10000;
-
-		if (diag_counters.total_calls - last_report_call >= report_interval) {
-			fprintf(normal_diagnostics_fp, "\n=== STATISTICS (Calls %d-%d) ===\n",
-			        last_report_call, diag_counters.total_calls);
-
-			fprintf(normal_diagnostics_fp, "EXECUTION PATHS:\n");
-			fprintf(normal_diagnostics_fp, "  Melt Surface Path: %d calls\n",
-			        diag_counters.melt_surface_path - (last_report_call > 0 ? diag_counters.melt_surface_path * last_report_call / diag_counters.total_calls : 0));
-			fprintf(normal_diagnostics_fp, "  Bulk/Boundary Path: %d calls\n\n",
-			        diag_counters.bulk_boundary_path - (last_report_call > 0 ? diag_counters.bulk_boundary_path * last_report_call / diag_counters.total_calls : 0));
-
-			fprintf(normal_diagnostics_fp, "MELT SURFACE BRANCHES:\n");
-			fprintf(normal_diagnostics_fp, "  Sufficient neighbors (>=3): %d\n", diag_counters.melt_sufficient_neighbors);
-			fprintf(normal_diagnostics_fp, "  Insufficient neighbors (fallback): %d\n", diag_counters.melt_insufficient_neighbors);
-			fprintf(normal_diagnostics_fp, "  Non-singular matrix: %d\n", diag_counters.melt_nonsingular_matrix);
-			fprintf(normal_diagnostics_fp, "  Singular matrix (fallback): %d\n", diag_counters.melt_singular_matrix);
-			fprintf(normal_diagnostics_fp, "  Normalized: %d\n", diag_counters.melt_normalized);
-			fprintf(normal_diagnostics_fp, "  Zero norm: %d\n\n", diag_counters.melt_zero_norm);
-
-			fprintf(normal_diagnostics_fp, "BULK/BOUNDARY BRANCHES:\n");
-			fprintf(normal_diagnostics_fp, "  Non-singular matrix: %d\n", diag_counters.bulk_nonsingular_matrix);
-			fprintf(normal_diagnostics_fp, "  Singular matrix (fallback): %d\n", diag_counters.bulk_singular_matrix);
-			fprintf(normal_diagnostics_fp, "  Normalized: %d\n", diag_counters.bulk_normalized);
-			fprintf(normal_diagnostics_fp, "  Zero norm: %d\n\n", diag_counters.bulk_zero_norm);
-
-			if (diag_counters.melt_surface_path > 0) {
-				fprintf(normal_diagnostics_fp, "SITE PROPERTIES (Melt Surface):\n");
-				fprintf(normal_diagnostics_fp, "  Average neighbors: %.2f\n",
-				        diag_counters.melt_neighbors_sum / diag_counters.melt_surface_path);
-				fprintf(normal_diagnostics_fp, "  Average z-coord: %.6f\n\n",
-				        diag_counters.melt_z_sum / diag_counters.melt_surface_path);
-			}
-
-			fflush(normal_diagnostics_fp);
-			last_report_call = diag_counters.total_calls;
-		}
-	}
 
 	return result;
 }

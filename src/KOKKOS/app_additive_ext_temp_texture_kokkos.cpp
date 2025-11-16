@@ -28,11 +28,13 @@
 #include "error.h"
 #include "random_park.h"
 #include "timer.h"
+#include "math_const.h"
 #include "temperature_source_rosenthal.h"
 #include "temperature_source_hdf5_unstructured.h"
 #include <cstring>
 
 using namespace SPPARKS_NS;
+using namespace MathConst;
 
 /* ----------------------------------------------------------------------
    Helper to construct parent class args from user input
@@ -541,9 +543,9 @@ void AppAdditiveExtTempTextureKokkos::input_app(char *command, int narg, char **
       error->all(FLERR, "Unknown temperature source type");
     }
 
-    // Pass remaining args to temperature source for setup
+    // Pass remaining args to temperature source for setup (skip arg[0] which is source type)
     std::vector<std::string> setup_args;
-    for (int i = 0; i < narg; i++) {
+    for (int i = 1; i < narg; i++) {
       setup_args.push_back(std::string(arg[i]));
     }
     temperature_source->setup_temperature_source(setup_args);
@@ -578,6 +580,36 @@ void AppAdditiveExtTempTextureKokkos::input_app(char *command, int narg, char **
   } else if (strcmp(command, "fast_forward_search_window") == 0) {
     if (narg != 1) error->all(FLERR, "Illegal fast_forward_search_window command");
     fast_forward_search_window = atof(arg[0]);
+
+  } else if (strcmp(command, "mean_nuclei_volume") == 0) {
+    if (narg != 1) error->all(FLERR, "Illegal mean_nuclei_volume command");
+    size_norm = atof(arg[0]);
+
+  } else if (strcmp(command, "nuclei_volume_deviation") == 0) {
+    if (narg != 1) error->all(FLERR, "Illegal nuclei_volume_deviation command");
+    size_sig = atof(arg[0]);
+
+  } else if (strcmp(command, "solid_front_vel") == 0) {
+    delete[] solid_front_coeffs;
+    if (narg < 1) error->all(FLERR, "Illegal solid_front_vel command");
+    solid_front_length = atoi(arg[0]);
+    if (solid_front_length <= 0) {
+      error->all(FLERR, "Illegal solidification front velocity specification");
+    }
+    solid_front_coeffs = new double[solid_front_length];
+    for (int i = 1; i < solid_front_length + 1; i++) {
+      solid_front_coeffs[i - 1] = atof(arg[i]);
+    }
+
+  } else if (strcmp(command, "misorientation_function") == 0) {
+    if (narg != 2 && narg != 3) error->all(FLERR, "Illegal misorientation_function command");
+    max_misorient = atof(arg[0]);
+    mis_thresh = atof(arg[1]) * MY_PI / 180.0; // Convert from degrees to radians
+    if (narg == 3) {
+      misorient_alpha = atof(arg[2]);
+      if (misorient_alpha <= 0)
+        error->all(FLERR, "Illegal misorientation_function alpha value: must be greater than 0");
+    }
 
   } else if (strcmp(command, "sync_profiling") == 0) {
     if (narg != 1) error->all(FLERR, "Illegal sync_profiling command");

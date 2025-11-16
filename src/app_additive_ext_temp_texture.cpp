@@ -299,35 +299,48 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
  ------------------------------------------------------------------------- */
 void AppAdditiveExtTempTexture::app_update(double dt)
 {
+  // CPU Performance Timing Instrumentation
+  static int step_count = 0;
+  static double t_temp_update = 0.0, t_fast_forward = 0.0;
+  static double t_melting = 0.0, t_mushy = 0.0, t_smoothing = 0.0;
+  static double t_comm = 0.0;
+  double t_start, t_end;
+  step_count++;
 
   //Reset t_active to assume we don't have a melt pool right now
   t_active = 0;
-  
+
   // Update temperature first to get current temperatures
   if (use_temperature_source) {
+    // Time: Temperature update from HDF5
+    t_start = MPI_Wtime();
     // Use new modular temperature source system
     update_temperature_from_source(time);
-    
+    t_end = MPI_Wtime();
+    t_temp_update += (t_end - t_start);
+
     // Check for active sites using temperature source's threshold
     double fast_forward_threshold = t_room; // Default to t_room
-    
+
     // If using HDF5 temperature source, use its threshold
-    HDF5UnstructuredTemperatureSource* hdf5_source = 
+    HDF5UnstructuredTemperatureSource* hdf5_source =
       dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
     if (hdf5_source) {
       fast_forward_threshold = hdf5_source->get_fast_forward_threshold();
     }
-    
+
     for (int i = 0; i < nlocal; i++) {
       if (T[i] > fast_forward_threshold) t_active = 1;
     }
-    
+
     // Use MPI_Allreduce to check if t_active is 0 on all processors
     int global_t_active;
     MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-    
+
 
     // If no active sites and temperature source supports time queries, fast forward
+    // Time: Fast-forward logic
+    t_start = MPI_Wtime();
     if (global_t_active == 0 && time > 1e-6 && temperature_source->supports_time_queries()) {
       double next_thermal_time = temperature_source->get_next_time_with_temperature(time, fast_forward_threshold);
 
@@ -345,10 +358,12 @@ void AppAdditiveExtTempTexture::app_update(double dt)
         update_temperature_from_source(time);
       }
     }
+    t_end = MPI_Wtime();
+    t_fast_forward += (t_end - t_start);
   }
-  
+
   // Common processing for both temperature systems
-  
+
   //iterate through all the sites for phase transitions (applies to both systems)
   for (int i=0; i<nlocal; i++) {
     // Skip void sites - they never change state
@@ -358,6 +373,8 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     //site's temperature has gone above tl. Only do this when melting the first time
     //to avoid repeated initialization
     if( (T[i] >= tl) && active_flag[i] != 2) {
+        // Time: Melting operations
+        t_start = MPI_Wtime();
         active_flag[i] = 2;
         spin[i] = (int) (nspins * ranapp->uniform());
         // Create random orientation as each site
@@ -369,31 +386,66 @@ void AppAdditiveExtTempTexture::app_update(double dt)
         solid_d[i] = 0;
         G[i] = 0;
         V[i] = 0;
+        t_end = MPI_Wtime();
+        t_melting += (t_end - t_start);
     }
     //If we're molten, call the mushy_phase function to figure out any phase change
     else if (active_flag[i] == 2 && T[i] <= tl) {
+        // Time: Mushy phase (includes nucleation + solidification + gradient computation)
+        t_start = MPI_Wtime();
         mushy_phase(i, ranapp);
-    } 
+        t_end = MPI_Wtime();
+        t_mushy += (t_end - t_start);
+    }
     //Call smoothing
     else if(solid_d[i] < 0 && solid_d[i] > -nrefine -1 && active_flag[i] == 3)    {
+            // Time: Smoothing operations
+            t_start = MPI_Wtime();
             mobility_out[i] = 1;
             smooth_site(i);
             solid_d[i]--;
+            t_end = MPI_Wtime();
+            t_smoothing += (t_end - t_start);
     }
   }
-    
+
   //Communicate changes
+  t_start = MPI_Wtime();
   timer->stamp();
   comm->all();
   timer->stamp(TIME_COMM);
-  
+
     // Use MPI_Allreduce to check if t_active is 0 on all processors
     int global_t_active;
     timer->stamp();
     MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
     timer->stamp(TIME_COMM);
+  t_end = MPI_Wtime();
+  t_comm += (t_end - t_start);
 
-    
+  // Print timing summary every 100 steps (on rank 0 only)
+  if (step_count % 100 == 0 && domain->me == 0) {
+    double total_time = t_temp_update + t_fast_forward + t_melting + t_mushy + t_smoothing + t_comm;
+
+    fprintf(screen, "\n=== CPU Timing Summary (after %d steps, %.4f total sec) ===\n",
+            step_count, total_time);
+    fprintf(screen, "  Temperature update:   %8.3f s (%5.1f%%)  [HDF5 loading]\n",
+            t_temp_update, 100.0*t_temp_update/total_time);
+    fprintf(screen, "  Fast-forward logic:   %8.3f s (%5.1f%%)  [Time skip checks]\n",
+            t_fast_forward, 100.0*t_fast_forward/total_time);
+    fprintf(screen, "  Melting:              %8.3f s (%5.1f%%)  [T >= Tl transitions]\n",
+            t_melting, 100.0*t_melting/total_time);
+    fprintf(screen, "  Mushy phase:          %8.3f s (%5.1f%%)  [Nucleation + solidification + gradients]\n",
+            t_mushy, 100.0*t_mushy/total_time);
+    fprintf(screen, "  Smoothing:            %8.3f s (%5.1f%%)  [Grain boundary smoothing]\n",
+            t_smoothing, 100.0*t_smoothing/total_time);
+    fprintf(screen, "  Communication:        %8.3f s (%5.1f%%)  [MPI comm]\n",
+            t_comm, 100.0*t_comm/total_time);
+    fprintf(screen, "  --------------------------------------------------------\n");
+    fprintf(screen, "  Average time/step:    %8.4f s\n", total_time / step_count);
+    fprintf(screen, "=========================================================\n\n");
+  }
+
     timer->stamp(TIME_UPDATE);
 }
 

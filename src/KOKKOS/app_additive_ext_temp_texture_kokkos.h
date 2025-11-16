@@ -28,6 +28,7 @@ AppStyle(additive_temperature_texture/kk,AppAdditiveExtTempTextureKokkos)
 #include "temperature_source.h"
 #include <Kokkos_Core.hpp>
 #include <Kokkos_DualView.hpp>
+#include <Kokkos_Random.hpp>
 #include <memory>
 
 namespace SPPARKS_NS {
@@ -48,6 +49,12 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
   void sync_temperature_to_device();
   void compute_gradients_kernel();
 
+  // Phase 3: Phase transition kernels
+  void initialize_nucleation_parameters();
+  void melting_kernel();
+  void nucleation_kernel();
+  void solidification_kernel();
+
  protected:
   // Temperature fields (CPU-updated from HDF5, device-readable)
   // Uses DualView because temperature is read-only during device sweeps
@@ -65,6 +72,18 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
   KokkosDoubleBuffer<int> buffer_active_flag;      // 0=inactive, 1=active, 2=molten, 3=solidified, 5=void
   KokkosDoubleBuffer<double> buffer_mobility_out;  // Arrhenius mobility
   KokkosDoubleBuffer<double> buffer_solid_d;       // Solid front distance
+
+  // Per-spin nucleation arrays (device-accessible, initialized once)
+  Kokkos::View<int*> d_nucleation_flags;     // Can this spin nucleate? (1=yes, 0=no)
+  Kokkos::View<double*> d_nucleation_temps;  // Critical undercooling for nucleation (K)
+  Kokkos::View<double*> d_nucleation_sizes;  // Nucleus volume (m^3)
+
+  // Global parameter arrays (device-accessible constants)
+  Kokkos::View<double*> d_solid_front_coeffs;  // Solidification velocity polynomial coefficients
+  Kokkos::View<double[3]> d_texture_params;    // Texture model parameters: [c1, c2, c3]
+
+  // Random number generator pool (thread-safe device RNG)
+  Kokkos::Random_XorShift64_Pool<> rand_pool;
 
   // Host pointers (mapped to iarray/darray like CPU version)
   int *active_flag;

@@ -1,12 +1,14 @@
 # Additive Manufacturing Kokkos Implementation Plan
 
-**Status:** Phase 2 Substantially Complete - Ready for Phase 3
+**Status:** Phase 3.1 Complete - Nucleation Implementation in Progress
 **Date Updated:** November 16, 2025
 **Target:** AppAdditiveExtTempTextureKokkos extending AppPottsQuaternionKokkos
 **Expected Speedup:** 30-70x for full AM simulations
 **Progress:**
 - Phase 1 (Quaternion Foundation) ✅ Complete
 - Phase 2 (Temperature/Gradients) ✅ Substantially Complete (timing issue documented)
+- Phase 3.1 (Melting Kernel + RNG) ✅ Complete
+- Phase 3.2 (Nucleation) 🔄 In Progress
 
 ---
 
@@ -24,7 +26,13 @@ This document outlines the plan for adding Kokkos GPU acceleration to `app_addit
   - ✅ Thermal gradient computation kernel
   - ✅ Data structures for phase transitions
   - ⚠️  Known timing issue documented (see `KOKKOS_TIMING_ISSUE.md`)
-- ⏸️  Phase 3 (Phase Transitions): Ready to begin
+- ✅ **Phase 3.1 Complete:** Melting kernel and RNG infrastructure (Nov 16, 2025)
+  - ✅ Kokkos Random_XorShift64_Pool for thread-safe device RNG
+  - ✅ Per-spin nucleation parameters on device
+  - ✅ Melting kernel (T >= liquidus transition)
+  - ✅ Random quaternion generation (Marsaglia method)
+  - ✅ Double buffering for phase state updates
+- 🔄 **Phase 3.2 In Progress:** Nucleation kernel
 
 **Key Challenge:** Converting 450+ lines of thermal gradient computation and texture modeling to device-compatible code while maintaining physics accuracy.
 

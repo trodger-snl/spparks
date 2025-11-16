@@ -138,6 +138,9 @@ AppAdditiveExtTempTextureKokkos::AppAdditiveExtTempTextureKokkos(SPPARKS *spk, i
 
   t_active = 0;
   time_step = dt;
+
+  // Initialize RNG pool (seed will be set in init_app() using ranapp->state())
+  rand_pool = Kokkos::Random_XorShift64_Pool<>();
 }
 
 /* ----------------------------------------------------------------------
@@ -210,6 +213,15 @@ void AppAdditiveExtTempTextureKokkos::grow_app()
   buffer_mobility_out.allocate("mobility_out", nall);
   buffer_solid_d.allocate("solid_d", nall);
 
+  // Allocate per-spin nucleation parameter arrays (device-accessible)
+  d_nucleation_flags = Kokkos::View<int*>("nucleation_flags", nspins);
+  d_nucleation_temps = Kokkos::View<double*>("nucleation_temps", nspins);
+  d_nucleation_sizes = Kokkos::View<double*>("nucleation_sizes", nspins);
+
+  // Allocate global parameter arrays (device-accessible constants)
+  d_solid_front_coeffs = Kokkos::View<double*>("solid_front_coeffs", solid_front_length);
+  d_texture_params = Kokkos::View<double[3]>("texture_params");
+
   // Allocate neighbor distance and unique arrays on host (used in site_event methods)
   if (neigh_dist) delete[] neigh_dist;
   neigh_dist = new double[maxneigh];
@@ -236,6 +248,14 @@ void AppAdditiveExtTempTextureKokkos::init_app()
     mobility_out[i] = 0.0;
     solid_d[i] = 0.0;
   }
+
+  // Initialize RNG pool with seed from ranapp
+  // Use ranapp->state() to get reproducible seed from MPI rank
+  uint64_t seed = static_cast<uint64_t>(ranapp->state());
+  rand_pool = Kokkos::Random_XorShift64_Pool<>(seed);
+
+  // Initialize nucleation parameters (per-spin arrays and global params)
+  initialize_nucleation_parameters();
 
   // Sync initial data to device (including new arrays)
   sync_data_to_device();
@@ -479,13 +499,179 @@ void AppAdditiveExtTempTextureKokkos::compute_gradients_kernel()
 }
 
 /* ----------------------------------------------------------------------
+   Initialize nucleation parameters on device
+   Phase 3.1: Port per-spin nucleation arrays from CPU to device
+------------------------------------------------------------------------- */
+
+void AppAdditiveExtTempTextureKokkos::initialize_nucleation_parameters()
+{
+  // Allocate host temp arrays for nucleation parameters
+  delete[] nucleation_flags;
+  delete[] nucleation_temps;
+  delete[] nucleation_sizes;
+  nucleation_flags = new int[nspins];
+  nucleation_temps = new double[nspins];
+  nucleation_sizes = new double[nspins];
+
+  // Initialize nucleation_flags (which spins can nucleate)
+  // Nucleation fraction = volume of voxel * nucleation density (grains/m^3)
+  double nucleationFraction = dx * dx * dx * no;
+
+  if (nucleationFraction >= 1.0 && domain->me == 0) {
+    fprintf(screen, "Nucleation fraction is %g (>= 1). All spins can nucleate.\n", nucleationFraction);
+  }
+
+  // Assign nucleation flags randomly based on nucleation density
+  for (int i = 0; i < nspins; i++) {
+    if (nucleationFraction >= 1.0) {
+      nucleation_flags[i] = 1;  // All spins can nucleate
+    } else {
+      nucleation_flags[i] = (ranapp->uniform() <= nucleationFraction) ? 1 : 0;
+    }
+  }
+
+  // Initialize nucleation_temps and nucleation_sizes using Gaussian distributions
+  // Use C++ standard library random (consistent with CPU version)
+  std::random_device rd{};
+  std::mt19937 gen{rd()};
+  std::normal_distribution<> dist_T{tc, tsig};       // Critical undercooling (K)
+  std::normal_distribution<> dist_S{size_norm, size_sig};  // Nucleus volume (m^3)
+
+  for (int i = 0; i < nspins; i++) {
+    nucleation_temps[i] = dist_T(gen);
+    nucleation_sizes[i] = dist_S(gen);
+  }
+
+  // Copy to device views
+  auto h_nucleation_flags = Kokkos::create_mirror_view(d_nucleation_flags);
+  auto h_nucleation_temps = Kokkos::create_mirror_view(d_nucleation_temps);
+  auto h_nucleation_sizes = Kokkos::create_mirror_view(d_nucleation_sizes);
+
+  for (int i = 0; i < nspins; i++) {
+    h_nucleation_flags(i) = nucleation_flags[i];
+    h_nucleation_temps(i) = nucleation_temps[i];
+    h_nucleation_sizes(i) = nucleation_sizes[i];
+  }
+
+  Kokkos::deep_copy(d_nucleation_flags, h_nucleation_flags);
+  Kokkos::deep_copy(d_nucleation_temps, h_nucleation_temps);
+  Kokkos::deep_copy(d_nucleation_sizes, h_nucleation_sizes);
+
+  // Copy global parameters to device
+  auto h_solid_front_coeffs = Kokkos::create_mirror_view(d_solid_front_coeffs);
+  for (int i = 0; i < solid_front_length; i++) {
+    h_solid_front_coeffs(i) = solid_front_coeffs[i];
+  }
+  Kokkos::deep_copy(d_solid_front_coeffs, h_solid_front_coeffs);
+
+  auto h_texture_params = Kokkos::create_mirror_view(d_texture_params);
+  h_texture_params(0) = c1;
+  h_texture_params(1) = c2;
+  h_texture_params(2) = c3;
+  Kokkos::deep_copy(d_texture_params, h_texture_params);
+}
+
+/* ----------------------------------------------------------------------
+   Melting kernel: Transition sites to liquid state when T >= liquidus
+   Phase 3.1: Simplest phase transition kernel (no neighbor interactions)
+------------------------------------------------------------------------- */
+
+void AppAdditiveExtTempTextureKokkos::melting_kernel()
+{
+  // Get device views (read-only and read-write)
+  auto d_T_local = k_T.d_view;
+  auto d_spin_current = buffer_spin.get_current();
+  auto d_spin_next = buffer_spin.get_next();
+  auto d_q0_current = buffer_q0.get_current();
+  auto d_q0_next = buffer_q0.get_next();
+  auto d_qx_current = buffer_qx.get_current();
+  auto d_qx_next = buffer_qx.get_next();
+  auto d_qy_current = buffer_qy.get_current();
+  auto d_qy_next = buffer_qy.get_next();
+  auto d_qz_current = buffer_qz.get_current();
+  auto d_qz_next = buffer_qz.get_next();
+  auto d_active_flag_current = buffer_active_flag.get_current();
+  auto d_active_flag_next = buffer_active_flag.get_next();
+  auto d_solid_d_current = buffer_solid_d.get_current();
+  auto d_solid_d_next = buffer_solid_d.get_next();
+
+  // Capture parameters for lambda
+  double tl_local = this->tl;
+  int nspins_local = this->nspins;
+  int nlocal_local = this->nlocal;
+  auto rand_pool_local = this->rand_pool;
+  auto d_G_local = this->d_G;
+  auto d_V_local = this->d_V;
+
+  // Melting kernel: parallel over all local sites
+  Kokkos::parallel_for("MeltingKernel", nlocal_local,
+    KOKKOS_LAMBDA(int i) {
+      // Read current state
+      double T_i = d_T_local(i);
+      int active_flag_i = d_active_flag_current(i);
+
+      // Check if site should melt: T >= liquidus && not already liquid
+      if (T_i >= tl_local && active_flag_i != 2) {
+        // Get thread-local RNG state
+        auto generator = rand_pool_local.get_state();
+
+        // Transition to liquid state
+        d_active_flag_next(i) = 2;  // LIQUID
+
+        // Randomize grain ID (destroy grain structure)
+        d_spin_next(i) = static_cast<int>(nspins_local * generator.drand());
+
+        // Randomize orientation (destroy crystallographic texture)
+        // Generate random unit quaternion using Marsaglia method
+        double x0, x1, x2, x3, r1, r2;
+        do {
+          x0 = 2.0 * generator.drand() - 1.0;
+          x1 = 2.0 * generator.drand() - 1.0;
+          r1 = x0*x0 + x1*x1;
+        } while (r1 >= 1.0);
+
+        do {
+          x2 = 2.0 * generator.drand() - 1.0;
+          x3 = 2.0 * generator.drand() - 1.0;
+          r2 = x2*x2 + x3*x3;
+        } while (r2 >= 1.0);
+
+        double s = Kokkos::sqrt((1.0 - r1) / r2);
+        d_q0_next(i) = x0;
+        d_qx_next(i) = x1;
+        d_qy_next(i) = x2 * s;
+        d_qz_next(i) = x3 * s;
+
+        // Reset solidification tracking
+        d_solid_d_next(i) = 0.0;
+        d_G_local(i) = 0.0;
+        d_V_local(i) = 0.0;
+
+        // Return RNG state to pool
+        rand_pool_local.free_state(generator);
+      } else {
+        // No change - copy current state to next
+        d_active_flag_next(i) = active_flag_i;
+        d_spin_next(i) = d_spin_current(i);
+        d_q0_next(i) = d_q0_current(i);
+        d_qx_next(i) = d_qx_current(i);
+        d_qy_next(i) = d_qy_current(i);
+        d_qz_next(i) = d_qz_current(i);
+        d_solid_d_next(i) = d_solid_d_current(i);
+      }
+    });
+
+  Kokkos::fence();  // Ensure kernel completes before buffer swap
+}
+
+/* ----------------------------------------------------------------------
    App update - main time integration loop (placeholder for Phase 3)
 ------------------------------------------------------------------------- */
 
 void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
 {
-  // PHASE 2: Temperature update and gradient computation for validation
-  // PHASE 3 will add phase transition kernels (melting, nucleation, solidification)
+  // PHASE 3.1: Add melting kernel
+  // PHASE 3.2-3.4: Will add nucleation, solidification, and smoothing
 
   // 1. Update temperature from HDF5 source on CPU
   update_temperature_from_source(time);
@@ -496,28 +682,25 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   // 3. Compute thermal gradients on device (cache for later use)
   compute_gradients_kernel();
 
-  // 4. Sync gradients back to host for validation/output
-  // This allows us to verify gradient computation against CPU version
-  int nall = nlocal + nghost;
-  auto h_G = Kokkos::create_mirror_view(d_G);
-  auto h_V = Kokkos::create_mirror_view(d_V);
-  Kokkos::deep_copy(h_G, d_G);
-  Kokkos::deep_copy(h_V, d_V);
-  for (int i = 0; i < nall; i++) {
-    G[i] = h_G(i);
-    V[i] = h_V(i);
-  }
+  // 4. Phase transition kernels
+  // Phase 3.1: Melting
+  melting_kernel();
+  swap_buffers();  // Swap double buffers after melting
 
-  // TODO Phase 3: Add phase transition kernels here
-  // - Melting kernel (T >= T_liquidus)
-  // - Nucleation kernel (molten + undercooled)
-  // - Solidification kernel (epitaxial growth with texture weighting)
+  // TODO Phase 3.2: Nucleation kernel (molten + undercooled)
+  // nucleation_kernel();
+  // swap_buffers();
 
-  // For now, just call parent class grain growth (if not app_update_only)
-  if (!app_update_only) {
-    // Parent class handles grain growth
-    // AppPottsQuaternionKokkos::iterate_rejection(dt_sweep);
-  }
+  // TODO Phase 3.3: Solidification kernel (epitaxial growth with texture weighting)
+  // solidification_kernel();
+  // swap_buffers();
+
+  // TODO Phase 3.4: Smoothing kernel (Potts MC for boundary smoothing)
+  // smoothing_kernel();
+  // swap_buffers();
+
+  // 5. Sync results back to host for output
+  sync_data_to_host();
 
   // Increment time
   time += dt_sweep;

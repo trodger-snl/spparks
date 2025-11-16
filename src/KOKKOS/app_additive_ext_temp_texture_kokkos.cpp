@@ -32,6 +32,8 @@
 #include "temperature_source_rosenthal.h"
 #include "temperature_source_hdf5_unstructured.h"
 #include <cstring>
+#include <limits>
+#include <random>
 
 using namespace SPPARKS_NS;
 using namespace MathConst;
@@ -665,16 +667,158 @@ void AppAdditiveExtTempTextureKokkos::melting_kernel()
 }
 
 /* ----------------------------------------------------------------------
-   App update - main time integration loop (placeholder for Phase 3)
+   Nucleation kernel: Stochastic nucleation in undercooled liquid
+   Phase 3.2: Sites transition to solid when undercooling exceeds critical value
+------------------------------------------------------------------------- */
+
+void AppAdditiveExtTempTextureKokkos::nucleation_kernel()
+{
+  // Get device views
+  auto d_T_local = k_T.d_view;
+  auto d_spin_current = buffer_spin.get_current();
+  auto d_active_flag_current = buffer_active_flag.get_current();
+  auto d_active_flag_next = buffer_active_flag.get_next();
+  auto d_solid_d_current = buffer_solid_d.get_current();
+  auto d_solid_d_next = buffer_solid_d.get_next();
+
+  // Capture parameters for lambda
+  double tl_local = this->tl;
+  int nlocal_local = this->nlocal;
+  int nrefine_local = this->nrefine;
+  auto d_nucleation_flags = this->d_nucleation_flags;
+  auto d_nucleation_temps = this->d_nucleation_temps;
+  auto d_nucleation_sizes = this->d_nucleation_sizes;
+  auto d_solid_front_coeffs = this->d_solid_front_coeffs;
+  int solid_front_length_local = this->solid_front_length;
+  auto d_G_local = this->d_G;
+  auto d_V_local = this->d_V;
+  double dx_local = this->dx;
+
+  // Nucleation kernel: parallel over all local sites
+  Kokkos::parallel_for("NucleationKernel", nlocal_local,
+    KOKKOS_LAMBDA(int i) {
+      // Read current state
+      double T_i = d_T_local(i);
+      int active_flag_i = d_active_flag_current(i);
+      int spin_i = d_spin_current(i);
+
+      // Check if site is liquid and below liquidus (undercooled)
+      if (active_flag_i == 2 && T_i < tl_local) {
+        // Check if this spin can nucleate
+        if (d_nucleation_flags(spin_i) == 1) {
+          // Calculate undercooling
+          double Tcool = tl_local - T_i;
+
+          // Check if undercooling exceeds critical value for this spin
+          if (Tcool >= d_nucleation_temps(spin_i)) {
+            // Nucleate: transition to solid
+            d_active_flag_next(i) = 3;  // SOLID
+
+            // Set solid_d flag to prevent disappearance during smoothing
+            // Negative value triggers smoothing countdown later
+            d_solid_d_next(i) = -nrefine_local - 2;
+
+            // Compute solidification velocity using polynomial: V = Σ coeffs[k] * Tcool^k
+            double V_i = 0.0;
+            double Tcool_power = 1.0;
+            for (int k = solid_front_length_local - 1; k >= 0; k--) {
+              V_i += d_solid_front_coeffs(k) * Tcool_power;
+              Tcool_power *= Tcool;
+            }
+            d_V_local(i) = V_i;
+
+            // Note: Gradient G is already computed by compute_gradients_kernel()
+            // No need to recompute here
+
+            // TODO Phase 3.2: Particle flipper to grow nucleus
+            // For now, nucleus is single site
+            // Will implement particle growth in separate kernel
+          } else {
+            // Can nucleate but hasn't reached critical undercooling yet
+            d_active_flag_next(i) = active_flag_i;  // Remain liquid
+            d_solid_d_next(i) = d_solid_d_current(i);
+          }
+        } else {
+          // This spin cannot nucleate
+          d_active_flag_next(i) = active_flag_i;  // Remain liquid
+          d_solid_d_next(i) = d_solid_d_current(i);
+        }
+      } else {
+        // Not liquid or not undercooled - no change
+        d_active_flag_next(i) = active_flag_i;
+        d_solid_d_next(i) = d_solid_d_current(i);
+      }
+    });
+
+  Kokkos::fence();  // Ensure kernel completes before buffer swap
+}
+
+/* ----------------------------------------------------------------------
+   Solidification kernel: Stub for Phase 3.3
+------------------------------------------------------------------------- */
+
+void AppAdditiveExtTempTextureKokkos::solidification_kernel()
+{
+  // TODO Phase 3.3: Implement epitaxial growth with texture weighting
+  // For now, this is a placeholder
+}
+
+/* ----------------------------------------------------------------------
+   App update - main time integration loop
 ------------------------------------------------------------------------- */
 
 void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
 {
-  // PHASE 3.1: Add melting kernel
-  // PHASE 3.2-3.4: Will add nucleation, solidification, and smoothing
+  // PHASE 3.1-3.2: Melting and nucleation kernels
+  // PHASE 3.3-3.4: Will add solidification and smoothing
 
   // 1. Update temperature from HDF5 source on CPU
   update_temperature_from_source(time);
+
+  // Phase 3.2: Fast-forward logic - skip inactive thermal periods
+  if (use_temperature_source && temperature_source) {
+    // Determine fast-forward threshold
+    double fast_forward_threshold = t_room;  // Default to room temperature
+
+    // If using HDF5 source, use its specific threshold
+    HDF5UnstructuredTemperatureSource* hdf5_source =
+      dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+    if (hdf5_source) {
+      fast_forward_threshold = hdf5_source->get_fast_forward_threshold();
+    }
+
+    // Check if any local sites have temperature above threshold
+    t_active = 0;
+    for (int i = 0; i < nlocal; i++) {
+      if (T[i] > fast_forward_threshold) {
+        t_active = 1;
+        break;  // Found an active site
+      }
+    }
+
+    // Global check across all MPI ranks
+    int global_t_active = 0;
+    MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, world);
+
+    // If no thermal activity anywhere and source supports time queries
+    if (global_t_active == 0 && time > 1e-6 && temperature_source->supports_time_queries()) {
+      double next_thermal_time = temperature_source->get_next_time_with_temperature(time, fast_forward_threshold);
+
+      if (next_thermal_time > time && next_thermal_time < std::numeric_limits<double>::max()) {
+        double time_skip = next_thermal_time - time;
+        if (domain->me == 0 && time_skip > 1e-6) {  // Report significant skips
+          fprintf(screen, "Fast-forward: Skipping %.6f s from t=%.6f to t=%.6f (all T < %.1f K)\n",
+                  time_skip, time, next_thermal_time, fast_forward_threshold);
+        }
+
+        // Jump to next thermal event
+        time = next_thermal_time;
+
+        // Update temperature at new time
+        update_temperature_from_source(time);
+      }
+    }
+  }
 
   // 2. Sync temperature to device
   sync_temperature_to_device();
@@ -687,8 +831,12 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   melting_kernel();
   swap_buffers();  // Swap double buffers after melting
 
-  // TODO Phase 3.2: Nucleation kernel (molten + undercooled)
-  // nucleation_kernel();
+  // Phase 3.2: Nucleation (stochastic nucleation in undercooled liquid)
+  nucleation_kernel();
+  swap_buffers();
+
+  // TODO Phase 3.2: Particle flipper (grow nuclei to specified size)
+  // particle_flipper_kernel();
   // swap_buffers();
 
   // TODO Phase 3.3: Solidification kernel (epitaxial growth with texture weighting)

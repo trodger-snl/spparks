@@ -23,6 +23,7 @@
 ------------------------------------------------------------------------- */
 
 #include "app_additive_ext_temp_texture_kokkos.h"
+#include "app_kokkos.h"
 #include "comm_lattice.h"
 #include "error.h"
 #include "random_park.h"
@@ -223,12 +224,50 @@ void AppAdditiveExtTempTextureKokkos::init_app()
 
 void AppAdditiveExtTempTextureKokkos::sync_data_to_device()
 {
-  // Sync parent class arrays (spin, quaternions)
-  AppPottsQuaternionKokkos::sync_data_to_device();
-
   int nall = nlocal + nghost;
 
-  // Sync new double-buffered arrays (updates both read and write buffers)
+  // Sync parent class arrays (spin and quaternions) - duplicate parent logic
+  // since sync_data_to_device() is private
+
+  // Sync spin directly
+  buffer_spin.sync_to_device(spin);
+
+  // Sync quaternions with normalization (inline normalization logic)
+  double* q0_norm = new double[nall];
+  double* qx_norm = new double[nall];
+  double* qy_norm = new double[nall];
+  double* qz_norm = new double[nall];
+
+  // Normalize quaternion arrays
+  for (int i = 0; i < nall; i++) {
+    double q[4] = {q0[i], qx[i], qy[i], qz[i]};
+    double norm = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
+
+    if (norm > 1.0e-15) {
+      double inv_norm = 1.0 / norm;
+      q0_norm[i] = q[0] * inv_norm;
+      qx_norm[i] = q[1] * inv_norm;
+      qy_norm[i] = q[2] * inv_norm;
+      qz_norm[i] = q[3] * inv_norm;
+    } else {
+      q0_norm[i] = q[0];
+      qx_norm[i] = q[1];
+      qy_norm[i] = q[2];
+      qz_norm[i] = q[3];
+    }
+  }
+
+  buffer_q0.sync_to_device(q0_norm);
+  buffer_qx.sync_to_device(qx_norm);
+  buffer_qy.sync_to_device(qy_norm);
+  buffer_qz.sync_to_device(qz_norm);
+
+  delete[] q0_norm;
+  delete[] qx_norm;
+  delete[] qy_norm;
+  delete[] qz_norm;
+
+  // Sync our new double-buffered arrays
   buffer_active_flag.sync_to_device(active_flag);
   buffer_mobility_out.sync_to_device(mobility_out);
   buffer_solid_d.sync_to_device(solid_d);
@@ -243,12 +282,50 @@ void AppAdditiveExtTempTextureKokkos::sync_data_to_device()
 
 void AppAdditiveExtTempTextureKokkos::sync_data_to_host()
 {
-  // Sync parent class arrays (spin, quaternions)
-  AppPottsQuaternionKokkos::sync_data_to_host();
-
   int nall = nlocal + nghost;
 
-  // Sync double-buffered arrays back to host
+  // Sync parent class arrays (spin and quaternions) - duplicate parent logic
+  // since sync_data_to_host() is private
+
+  // Sync spin directly
+  buffer_spin.sync_to_host(spin);
+
+  // Sync quaternions with normalization
+  double* q0_temp = new double[nall];
+  double* qx_temp = new double[nall];
+  double* qy_temp = new double[nall];
+  double* qz_temp = new double[nall];
+
+  buffer_q0.sync_to_host(q0_temp);
+  buffer_qx.sync_to_host(qx_temp);
+  buffer_qy.sync_to_host(qy_temp);
+  buffer_qz.sync_to_host(qz_temp);
+
+  // Normalize and copy to final host arrays (inline normalization logic)
+  for (int i = 0; i < nall; i++) {
+    double q[4] = {q0_temp[i], qx_temp[i], qy_temp[i], qz_temp[i]};
+    double norm = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
+
+    if (norm > 1.0e-15) {
+      double inv_norm = 1.0 / norm;
+      q0[i] = q[0] * inv_norm;
+      qx[i] = q[1] * inv_norm;
+      qy[i] = q[2] * inv_norm;
+      qz[i] = q[3] * inv_norm;
+    } else {
+      q0[i] = q[0];
+      qx[i] = q[1];
+      qy[i] = q[2];
+      qz[i] = q[3];
+    }
+  }
+
+  delete[] q0_temp;
+  delete[] qx_temp;
+  delete[] qy_temp;
+  delete[] qz_temp;
+
+  // Sync our double-buffered arrays back to host
   buffer_active_flag.sync_to_host(active_flag);
   buffer_mobility_out.sync_to_host(mobility_out);
   buffer_solid_d.sync_to_host(solid_d);
@@ -271,10 +348,15 @@ void AppAdditiveExtTempTextureKokkos::sync_data_to_host()
 
 void AppAdditiveExtTempTextureKokkos::swap_buffers()
 {
-  // Swap parent class buffers (spin, quaternions)
-  AppPottsQuaternionKokkos::swap_buffers();
+  // Note: Can't call parent swap_buffers() directly as it's private
+  // Instead, swap all buffers (parent + ours) here
+  AppPottsQuaternionKokkos::buffer_spin.swap();
+  AppPottsQuaternionKokkos::buffer_q0.swap();
+  AppPottsQuaternionKokkos::buffer_qx.swap();
+  AppPottsQuaternionKokkos::buffer_qy.swap();
+  AppPottsQuaternionKokkos::buffer_qz.swap();
 
-  // Swap new buffers
+  // Swap our new buffers
   buffer_active_flag.swap();
   buffer_mobility_out.swap();
   buffer_solid_d.swap();
@@ -332,9 +414,14 @@ void AppAdditiveExtTempTextureKokkos::compute_gradients_kernel()
   auto d_T = k_T.d_view;  // Read-only temperature on device
   auto k_numneigh_d = k_numneigh.d_view;
   auto k_neighbor_d = k_neighbor.d_view;
-  auto k_xyz_d = Kokkos::create_mirror_view_and_copy(
-    Kokkos::DefaultExecutionSpace(),
-    Kokkos::View<double**,Kokkos::HostSpace>(xyz, nlocal+nghost, 3));
+
+  // Create temporary device view for xyz (xyz comes from CPU parent, not Kokkos)
+  // Use unmanaged view wrapped around host xyz array
+  int nall = nlocal + nghost;
+  using HostSpace = Kokkos::HostSpace;
+  using LayoutRight = Kokkos::LayoutRight;
+  Kokkos::View<double*[3], LayoutRight, HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> h_xyz(xyz[0], nall);
+  auto k_xyz_d = Kokkos::create_mirror_view_and_copy(Kokkos::DefaultExecutionSpace(), h_xyz);
 
   // Capture member variables for lambda
   double dx_lattice = this->dx;

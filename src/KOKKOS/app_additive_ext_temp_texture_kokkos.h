@@ -170,7 +170,7 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
         const Kokkos::View<const double*>& d_T,
         const Kokkos::View<const int*>& numneigh,
         const Kokkos::View<int**>& neighbor,
-        const Kokkos::View<double**>& xyz,
+        const Kokkos::View<double*[3]>& xyz,
         double dx_lattice,
         double* grad_out,
         double* magnitude_out) {

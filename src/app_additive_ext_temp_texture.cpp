@@ -326,21 +326,21 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     int global_t_active;
     MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
     
-    
+
     // If no active sites and temperature source supports time queries, fast forward
     if (global_t_active == 0 && time > 1e-6 && temperature_source->supports_time_queries()) {
       double next_thermal_time = temperature_source->get_next_time_with_temperature(time, fast_forward_threshold);
-      
+
       if (next_thermal_time > time && next_thermal_time < std::numeric_limits<double>::max()) {
         double time_skip = next_thermal_time - time;
         if (domain->me == 0 && time_skip > 1e-6) {  // Only report significant time skips
-          std::cout << "Fast-forward: Skipping " << time_skip << " seconds from time " 
+          std::cout << "Fast-forward: Skipping " << time_skip << " seconds from time "
                     << time << " to " << next_thermal_time << " (all temperatures < " << fast_forward_threshold << "K)" << std::endl;
         }
-        
+
         // Update simulation time
         time = next_thermal_time;
-        
+
         // Update temperatures at new time
         update_temperature_from_source(time);
       }

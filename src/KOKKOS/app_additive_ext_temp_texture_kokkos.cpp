@@ -1896,9 +1896,32 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   t_melting += (t_end - t_start);
 
   // Phase 3.2: Nucleation (stochastic nucleation in undercooled liquid)
+  // OPTIMIZATION 2A: Check if any sites are in undercooled liquid state before launching
   t_start = MPI_Wtime();
-  naccept += nucleation_kernel();
-  swap_buffers();
+
+  int n_nucleation_candidates = 0;
+  {
+    auto d_T_check = k_T.d_view;
+    auto d_active_flag_check = buffer_active_flag.read_buffer;
+    double ts_check = this->ts;
+    double tl_check = this->tl;
+    int nlocal_check = this->nlocal;
+
+    Kokkos::parallel_reduce("CheckNucleationCandidates", nlocal_check,
+      KOKKOS_LAMBDA(int i, int& count) {
+        // Nucleation occurs in undercooled liquid: ts <= T < tl && active_flag == 2
+        if (d_active_flag_check(i) == 2 && d_T_check(i) >= ts_check && d_T_check(i) < tl_check) {
+          count++;
+        }
+      }, n_nucleation_candidates);
+  }
+
+  // Only launch nucleation kernel if there are undercooled liquid sites
+  if (n_nucleation_candidates > 0) {
+    naccept += nucleation_kernel();
+    swap_buffers();
+  }
+
   t_end = MPI_Wtime();
   t_nucleation += (t_end - t_start);
 
@@ -1991,8 +2014,8 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
     fprintf(screen, "\n=== Kokkos Timing Summary (after %d steps, %.4f total sec) ===\n", step_count, total_time);
     fprintf(screen, "  Temperature update:   %8.3f s (%5.1f%%)\n", t_temp_update, 100.0*t_temp_update/total_time);
     fprintf(screen, "  Temp sync to device:  %8.3f s (%5.1f%%)\n", t_temp_sync, 100.0*t_temp_sync/total_time);
-    fprintf(screen, "  Melting kernel:       %8.3f s (%5.1f%%)\n", t_melting, 100.0*t_melting/total_time);
-    fprintf(screen, "  Nucleation kernel:    %8.3f s (%5.1f%%)\n", t_nucleation, 100.0*t_nucleation/total_time);
+    fprintf(screen, "  Melting kernel:       %8.3f s (%5.1f%%) [selective launch]\n", t_melting, 100.0*t_melting/total_time);
+    fprintf(screen, "  Nucleation kernel:    %8.3f s (%5.1f%%) [selective launch]\n", t_nucleation, 100.0*t_nucleation/total_time);
     fprintf(screen, "  Particle kernel:      %8.3f s (%5.1f%%) [selective launch]\n", t_particle, 100.0*t_particle/total_time);
     fprintf(screen, "  Solidification kernel:%8.3f s (%5.1f%%) [on-demand gradients]\n", t_solidification, 100.0*t_solidification/total_time);
     fprintf(screen, "  Smoothing kernel:     %8.3f s (%5.1f%%) [selective launch, 1x/timestep]\n", t_smoothing, 100.0*t_smoothing/total_time);

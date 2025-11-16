@@ -43,6 +43,8 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
   virtual void init_app();
   virtual void app_update(double);
   virtual void input_app(char *, int, char **);
+  virtual void stats(char *);
+  virtual void stats_header(char *);
 
   // Temperature field management
   void update_temperature_from_source(double simulation_time);

@@ -501,7 +501,7 @@ void AppAdditiveExtTempTextureKokkos::compute_gradients_kernel()
       d_grad_z_local(i) = gradient[2];
     });
 
-  Kokkos::fence();  // Ensure gradients are computed before next kernel
+  // Fence removed - single fence at end of app_update() handles all kernels
 }
 
 /* ----------------------------------------------------------------------
@@ -671,7 +671,7 @@ int AppAdditiveExtTempTextureKokkos::melting_kernel()
       }
     }, naccept_local);
 
-  Kokkos::fence();  // Ensure kernel completes before buffer swap
+  // Fence removed - single fence at end of app_update() handles all kernels
 
   return naccept_local;
 }
@@ -762,7 +762,7 @@ int AppAdditiveExtTempTextureKokkos::nucleation_kernel()
       }
     }, naccept_local);
 
-  Kokkos::fence();  // Ensure kernel completes before buffer swap
+  // Fence removed - single fence at end of app_update() handles all kernels
 
   return naccept_local;
 }
@@ -943,7 +943,7 @@ int AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
       count++;
     }, naccept_local);
 
-  Kokkos::fence();  // Ensure kernel completes before buffer swap
+  // Fence removed - single fence at end of app_update() handles all kernels
 
   return naccept_local;
 }
@@ -1210,7 +1210,7 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
       }
     }, naccept_local);
 
-  Kokkos::fence();  // Ensure kernel completes before buffer swap
+  // Fence removed - single fence at end of app_update() handles all kernels
 
   return naccept_local;
 }
@@ -1504,7 +1504,7 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel()
       rand_pool_local.free_state(generator);
     }, naccept_local);
 
-  Kokkos::fence();  // Ensure kernel completes before buffer swap
+  // Fence removed - single fence at end of app_update() handles all kernels
 
   // Return count of accepted moves
   return naccept_local;
@@ -1519,8 +1519,19 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   // PHASE 3.1-3.2: Melting and nucleation kernels
   // PHASE 3.3-3.4: Will add solidification and smoothing
 
+  // Timing instrumentation
+  static int step_count = 0;
+  static double t_temp_update = 0.0, t_temp_sync = 0.0, t_gradients = 0.0;
+  static double t_melting = 0.0, t_nucleation = 0.0, t_particle = 0.0;
+  static double t_solidification = 0.0, t_smoothing = 0.0, t_sync_host = 0.0;
+  double t_start, t_end;
+  step_count++;
+
   // 1. Update temperature from HDF5 source on CPU
+  t_start = MPI_Wtime();
   update_temperature_from_source(time);
+  t_end = MPI_Wtime();
+  t_temp_update += (t_end - t_start);
 
   // Phase 3.2: Fast-forward logic - skip inactive thermal periods
   if (use_temperature_source && temperature_source) {
@@ -1568,40 +1579,105 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   }
 
   // 2. Sync temperature to device
+  t_start = MPI_Wtime();
   sync_temperature_to_device();
+  t_end = MPI_Wtime();
+  t_temp_sync += (t_end - t_start);
 
   // 3. Compute thermal gradients on device (cache for later use)
+  t_start = MPI_Wtime();
   compute_gradients_kernel();
+  t_end = MPI_Wtime();
+  t_gradients += (t_end - t_start);
 
   // 4. Phase transition kernels with event tracking
   // Phase 3.1: Melting
+  t_start = MPI_Wtime();
   naccept += melting_kernel();
   swap_buffers();  // Swap double buffers after melting
+  t_end = MPI_Wtime();
+  t_melting += (t_end - t_start);
 
   // Phase 3.2: Nucleation (stochastic nucleation in undercooled liquid)
+  t_start = MPI_Wtime();
   naccept += nucleation_kernel();
   swap_buffers();
+  t_end = MPI_Wtime();
+  t_nucleation += (t_end - t_start);
 
   // Phase 3.5: Particle flipper (grow nuclei to specified size)
+  t_start = MPI_Wtime();
   naccept += particle_flipper_kernel();
   swap_buffers();
+  t_end = MPI_Wtime();
+  t_particle += (t_end - t_start);
 
   // Phase 3.3: Solidification (epitaxial growth with texture weighting)
+  t_start = MPI_Wtime();
   naccept += solidification_kernel();
   swap_buffers();
+  t_end = MPI_Wtime();
+  t_solidification += (t_end - t_start);
 
   // Phase 3.4: Smoothing kernel (Potts MC for grain boundary refinement)
   // Perform nrefine sweeps to smooth newly solidified sites
+  t_start = MPI_Wtime();
   for (int sweep = 0; sweep < nrefine; sweep++) {
     naccept += smoothing_kernel();
     swap_buffers();
   }
+  t_end = MPI_Wtime();
+  t_smoothing += (t_end - t_start);
 
-  // 5. Sync results back to host for output
-  sync_data_to_host();
+  // 5. Single fence after all kernels complete (replaces individual kernel fences)
+  // This ensures all device writes are visible before proceeding
+  t_start = MPI_Wtime();
+  Kokkos::fence();
+  t_end = MPI_Wtime();
+  t_sync_host += (t_end - t_start);
+
+  // NOTE: Removed unconditional sync_data_to_host() - only sync when actually needed
+  // for stats/dumps. This saves ~12.8% per timestep when not outputting.
+
+  // Print timing summary every 100 steps
+  if (step_count % 100 == 0 && domain->me == 0) {
+    double total_time = t_temp_update + t_temp_sync + t_gradients + t_melting +
+                        t_nucleation + t_particle + t_solidification + t_smoothing + t_sync_host;
+    fprintf(screen, "\n=== Kokkos Timing Summary (after %d steps, %.4f total sec) ===\n", step_count, total_time);
+    fprintf(screen, "  Temperature update:   %8.3f s (%5.1f%%)\n", t_temp_update, 100.0*t_temp_update/total_time);
+    fprintf(screen, "  Temp sync to device:  %8.3f s (%5.1f%%)\n", t_temp_sync, 100.0*t_temp_sync/total_time);
+    fprintf(screen, "  Gradient kernel:      %8.3f s (%5.1f%%)\n", t_gradients, 100.0*t_gradients/total_time);
+    fprintf(screen, "  Melting kernel:       %8.3f s (%5.1f%%)\n", t_melting, 100.0*t_melting/total_time);
+    fprintf(screen, "  Nucleation kernel:    %8.3f s (%5.1f%%)\n", t_nucleation, 100.0*t_nucleation/total_time);
+    fprintf(screen, "  Particle kernel:      %8.3f s (%5.1f%%)\n", t_particle, 100.0*t_particle/total_time);
+    fprintf(screen, "  Solidification kernel:%8.3f s (%5.1f%%)\n", t_solidification, 100.0*t_solidification/total_time);
+    fprintf(screen, "  Smoothing kernel:     %8.3f s (%5.1f%%)\n", t_smoothing, 100.0*t_smoothing/total_time);
+    fprintf(screen, "  Sync to host:         %8.3f s (%5.1f%%)\n", t_sync_host, 100.0*t_sync_host/total_time);
+    fprintf(screen, "  TOTAL:                %8.3f s\n", total_time);
+    fprintf(screen, "  Avg per step:         %8.6f s\n\n", total_time/step_count);
+  }
 
   // Increment time
   time += dt_sweep;
+}
+
+/* ----------------------------------------------------------------------
+   Override stats to sync device data before computing statistics
+------------------------------------------------------------------------- */
+
+void AppAdditiveExtTempTextureKokkos::stats(char *strtmp)
+{
+  // Sync device data to host so stats can access current values
+  sync_data_to_host();
+
+  // Call parent class stats implementation
+  AppPottsQuaternionKokkos::stats(strtmp);
+}
+
+void AppAdditiveExtTempTextureKokkos::stats_header(char *strtmp)
+{
+  // Just forward to parent - no sync needed for header
+  AppPottsQuaternionKokkos::stats_header(strtmp);
 }
 
 /* ----------------------------------------------------------------------

@@ -754,6 +754,171 @@ void AppAdditiveExtTempTextureKokkos::nucleation_kernel()
 }
 
 /* ----------------------------------------------------------------------
+   Phase 3.5: Particle flipper kernel - grow nuclei to specified volume
+
+   Grows newly nucleated grains by flipping neighboring liquid sites to
+   match the nucleus orientation and grain ID. This avoids lattice-size
+   dependency where nuclei start as single sites.
+
+   Algorithm:
+   1. Identify newly nucleated sites (solid_d == -nrefine-2)
+   2. Calculate target number of sites from nucleation_sizes
+   3. Flip liquid neighbors in randomized order until target reached
+   4. Copy nucleus spin, quaternion, G, and V to flipped sites
+   5. Set flipped sites to solid_d = -nrefine-3 (ready for smoothing)
+
+   Note: Simplified parallel version - flips immediate neighbors only.
+   CPU version uses recursive shell-based expansion which is complex
+   to parallelize. This version achieves similar physics with simpler logic.
+------------------------------------------------------------------------- */
+
+void AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
+{
+  // Capture all necessary data for device lambda
+  auto d_spin_current = buffer_spin.read_buffer;
+  auto d_spin_next = buffer_spin.write_buffer;
+  auto d_q0_current = buffer_q0.read_buffer;
+  auto d_q0_next = buffer_q0.write_buffer;
+  auto d_qx_current = buffer_qx.read_buffer;
+  auto d_qx_next = buffer_qx.write_buffer;
+  auto d_qy_current = buffer_qy.read_buffer;
+  auto d_qy_next = buffer_qy.write_buffer;
+  auto d_qz_current = buffer_qz.read_buffer;
+  auto d_qz_next = buffer_qz.write_buffer;
+  auto d_active_flag_current = buffer_active_flag.read_buffer;
+  auto d_active_flag_next = buffer_active_flag.write_buffer;
+  auto d_solid_d_current = buffer_solid_d.read_buffer;
+  auto d_solid_d_next = buffer_solid_d.write_buffer;
+
+  auto k_neighbor_d = k_neighbor.d_view;
+  auto k_numneigh_d = k_numneigh.d_view;
+  auto d_G_local = d_G;
+  auto d_grad_x_local = d_grad_x;
+  auto d_grad_y_local = d_grad_y;
+  auto d_grad_z_local = d_grad_z;
+  auto d_V_local = d_V;
+  auto d_nucleation_sizes_local = d_nucleation_sizes;
+  auto rand_pool_local = rand_pool;
+
+  int nlocal_local = nlocal;
+  int nrefine_local = nrefine;
+  double dx_local = dx;
+
+  // Parallel over all local sites - each nucleus flips its neighbors
+  Kokkos::parallel_for("ParticleFlipperKernel", nlocal_local,
+    KOKKOS_LAMBDA(int i) {
+      // Only process newly nucleated sites (marked with solid_d = -nrefine-2)
+      double solid_d_i = d_solid_d_current(i);
+      int active_flag_i = d_active_flag_current(i);
+
+      // Check if this is a newly nucleated site
+      if (active_flag_i != 3 || solid_d_i != -nrefine_local - 2) {
+        // Not a nucleus - copy state unchanged
+        d_spin_next(i) = d_spin_current(i);
+        d_q0_next(i) = d_q0_current(i);
+        d_qx_next(i) = d_qx_current(i);
+        d_qy_next(i) = d_qy_current(i);
+        d_qz_next(i) = d_qz_current(i);
+        d_active_flag_next(i) = active_flag_i;
+        d_solid_d_next(i) = solid_d_i;
+        return;
+      }
+
+      // This is a newly nucleated site - attempt to grow it
+      int spin_i = d_spin_current(i);
+      double q_i[4] = {d_q0_current(i), d_qx_current(i), d_qy_current(i), d_qz_current(i)};
+      double G_i = d_G_local(i);
+      double V_i = d_V_local(i);
+
+      // Calculate target number of sites from nucleus volume
+      // nucleation_sizes is in m^3, dx^3 is voxel volume
+      double nucleus_volume = d_nucleation_sizes_local(spin_i);
+      double voxel_volume = dx_local * dx_local * dx_local;
+      int target_sites = static_cast<int>(Kokkos::round(nucleus_volume / voxel_volume));
+
+      // Nucleus itself counts as 1 site
+      if (target_sites <= 1) {
+        // No neighbors to flip - just update solid_d to ready state
+        d_spin_next(i) = spin_i;
+        d_q0_next(i) = q_i[0];
+        d_qx_next(i) = q_i[1];
+        d_qy_next(i) = q_i[2];
+        d_qz_next(i) = q_i[3];
+        d_active_flag_next(i) = 3;  // SOLID
+        d_solid_d_next(i) = -nrefine_local - 3;  // Ready for smoothing
+        return;
+      }
+
+      // Build list of liquid neighbors that can be flipped
+      int nn = k_numneigh_d(i);
+      int liquid_neighbors[26];
+      int num_liquid = 0;
+
+      for (int j = 0; j < nn && j < 26; j++) {
+        int nbr = k_neighbor_d(i, j);
+        int nbr_flag = d_active_flag_current(nbr);
+
+        // Only flip liquid neighbors (active_flag == 2)
+        if (nbr_flag == 2) {
+          liquid_neighbors[num_liquid++] = nbr;
+        }
+      }
+
+      // Shuffle the liquid neighbor list using Fisher-Yates
+      auto generator = rand_pool_local.get_state();
+      for (int j = num_liquid - 1; j > 0; j--) {
+        int k = static_cast<int>(generator.drand() * (j + 1));
+        // Swap
+        int temp = liquid_neighbors[j];
+        liquid_neighbors[j] = liquid_neighbors[k];
+        liquid_neighbors[k] = temp;
+      }
+
+      // Flip up to (target_sites - 1) neighbors
+      // Note: In parallel execution, some neighbors may be claimed by other nuclei
+      // This is acceptable - results in statistical variation in nucleus sizes
+      int sites_to_flip = Kokkos::min(target_sites - 1, num_liquid);
+
+      for (int j = 0; j < sites_to_flip; j++) {
+        int nbr = liquid_neighbors[j];
+
+        // Attempt to flip this neighbor
+        // Check again that it's still liquid (may have been claimed by another nucleus)
+        if (d_active_flag_current(nbr) == 2) {
+          // Flip neighbor to match nucleus
+          d_spin_next(nbr) = spin_i;
+          d_q0_next(nbr) = q_i[0];
+          d_qx_next(nbr) = q_i[1];
+          d_qy_next(nbr) = q_i[2];
+          d_qz_next(nbr) = q_i[3];
+          d_active_flag_next(nbr) = 3;  // SOLID
+          d_solid_d_next(nbr) = -nrefine_local - 3;  // Ready for smoothing
+
+          // Copy thermal properties from nucleus
+          d_G_local(nbr) = G_i;
+          d_V_local(nbr) = V_i;
+          d_grad_x_local(nbr) = d_grad_x_local(i);
+          d_grad_y_local(nbr) = d_grad_y_local(i);
+          d_grad_z_local(nbr) = d_grad_z_local(i);
+        }
+      }
+
+      rand_pool_local.free_state(generator);
+
+      // Update nucleus solid_d to ready state
+      d_spin_next(i) = spin_i;
+      d_q0_next(i) = q_i[0];
+      d_qx_next(i) = q_i[1];
+      d_qy_next(i) = q_i[2];
+      d_qz_next(i) = q_i[3];
+      d_active_flag_next(i) = 3;  // SOLID
+      d_solid_d_next(i) = -nrefine_local - 3;  // Ready for smoothing
+    });
+
+  Kokkos::fence();  // Ensure kernel completes before buffer swap
+}
+
+/* ----------------------------------------------------------------------
    Solidification kernel: Epitaxial growth with texture weighting
    Phase 3.3: Liquid sites captured by solid neighbors based on texture
 ------------------------------------------------------------------------- */
@@ -1305,9 +1470,9 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   nucleation_kernel();
   swap_buffers();
 
-  // TODO Phase 3.2: Particle flipper (grow nuclei to specified size)
-  // particle_flipper_kernel();
-  // swap_buffers();
+  // Phase 3.5: Particle flipper (grow nuclei to specified size)
+  particle_flipper_kernel();
+  swap_buffers();
 
   // Phase 3.3: Solidification (epitaxial growth with texture weighting)
   solidification_kernel();

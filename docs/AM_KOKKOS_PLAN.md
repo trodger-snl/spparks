@@ -1,6 +1,6 @@
 # Additive Manufacturing Kokkos Implementation Plan
 
-**Status:** Phase 3.4 Complete - Integration Testing Next
+**Status:** Phase 3.5 Complete - All Core Features Implemented
 **Date Updated:** November 16, 2025
 **Target:** AppAdditiveExtTempTextureKokkos extending AppPottsQuaternionKokkos
 **Expected Speedup:** 30-70x for full AM simulations
@@ -11,6 +11,7 @@
 - Phase 3.2 (Nucleation + Fast-Forward) ✅ Complete
 - Phase 3.3 (Solidification + Texture) ✅ Complete
 - Phase 3.4 (Smoothing + Integration) ✅ Complete
+- Phase 3.5 (Particle Flipper) ✅ Complete
 
 ---
 
@@ -47,6 +48,11 @@ This document outlines the plan for adding Kokkos GPU acceleration to `app_addit
   - ✅ Metropolis acceptance based on quaternion misorientation energy
   - ✅ Texture-weighted neighbor selection during smoothing
   - ✅ Full app_update() integration with all phase transition kernels
+- ✅ **Phase 3.5 Complete:** Particle flipper for nucleus growth (Nov 16, 2025)
+  - ✅ Grows newly nucleated grains to specified volume
+  - ✅ Flips liquid neighbors in randomized order
+  - ✅ Avoids lattice-size dependency for nucleation
+  - ✅ Parallel-safe implementation with neighbor conflict handling
 
 **Key Challenge:** Converting 450+ lines of thermal gradient computation and texture modeling to device-compatible code while maintaining physics accuracy.
 

@@ -53,6 +53,7 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
   void initialize_nucleation_parameters();
   void melting_kernel();
   void nucleation_kernel();
+  void particle_flipper_kernel();
   void solidification_kernel();
   void smoothing_kernel();
 

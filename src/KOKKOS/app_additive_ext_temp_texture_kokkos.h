@@ -51,11 +51,11 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
 
   // Phase 3: Phase transition kernels
   void initialize_nucleation_parameters();
-  void melting_kernel();
-  void nucleation_kernel();
-  void particle_flipper_kernel();
-  void solidification_kernel();
-  void smoothing_kernel();
+  int melting_kernel();
+  int nucleation_kernel();
+  int particle_flipper_kernel();
+  int solidification_kernel();
+  int smoothing_kernel();
 
  protected:
   // Temperature fields (CPU-updated from HDF5, device-readable)

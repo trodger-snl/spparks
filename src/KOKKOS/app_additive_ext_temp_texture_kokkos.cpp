@@ -582,7 +582,7 @@ void AppAdditiveExtTempTextureKokkos::initialize_nucleation_parameters()
    Phase 3.1: Simplest phase transition kernel (no neighbor interactions)
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTextureKokkos::melting_kernel()
+int AppAdditiveExtTempTextureKokkos::melting_kernel()
 {
   // Get device views (read-only and read-write)
   auto d_T_local = k_T.d_view;
@@ -609,9 +609,10 @@ void AppAdditiveExtTempTextureKokkos::melting_kernel()
   auto d_G_local = this->d_G;
   auto d_V_local = this->d_V;
 
-  // Melting kernel: parallel over all local sites
-  Kokkos::parallel_for("MeltingKernel", nlocal_local,
-    KOKKOS_LAMBDA(int i) {
+  // Melting kernel: parallel over all local sites with event tracking
+  int naccept_local = 0;
+  Kokkos::parallel_reduce("MeltingKernel", nlocal_local,
+    KOKKOS_LAMBDA(int i, int& count) {
       // Read current state
       double T_i = d_T_local(i);
       int active_flag_i = d_active_flag_current(i);
@@ -655,6 +656,9 @@ void AppAdditiveExtTempTextureKokkos::melting_kernel()
 
         // Return RNG state to pool
         rand_pool_local.free_state(generator);
+
+        // Track melting event
+        count++;
       } else {
         // No change - copy current state to next
         d_active_flag_next(i) = active_flag_i;
@@ -665,9 +669,11 @@ void AppAdditiveExtTempTextureKokkos::melting_kernel()
         d_qz_next(i) = d_qz_current(i);
         d_solid_d_next(i) = d_solid_d_current(i);
       }
-    });
+    }, naccept_local);
 
   Kokkos::fence();  // Ensure kernel completes before buffer swap
+
+  return naccept_local;
 }
 
 /* ----------------------------------------------------------------------
@@ -675,7 +681,7 @@ void AppAdditiveExtTempTextureKokkos::melting_kernel()
    Phase 3.2: Sites transition to solid when undercooling exceeds critical value
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTextureKokkos::nucleation_kernel()
+int AppAdditiveExtTempTextureKokkos::nucleation_kernel()
 {
   // Get device views
   auto d_T_local = k_T.d_view;
@@ -698,9 +704,10 @@ void AppAdditiveExtTempTextureKokkos::nucleation_kernel()
   auto d_V_local = this->d_V;
   double dx_local = this->dx;
 
-  // Nucleation kernel: parallel over all local sites
-  Kokkos::parallel_for("NucleationKernel", nlocal_local,
-    KOKKOS_LAMBDA(int i) {
+  // Nucleation kernel: parallel over all local sites with event tracking
+  int naccept_local = 0;
+  Kokkos::parallel_reduce("NucleationKernel", nlocal_local,
+    KOKKOS_LAMBDA(int i, int& count) {
       // Read current state
       double T_i = d_T_local(i);
       int active_flag_i = d_active_flag_current(i);
@@ -717,6 +724,7 @@ void AppAdditiveExtTempTextureKokkos::nucleation_kernel()
           if (Tcool >= d_nucleation_temps(spin_i)) {
             // Nucleate: transition to solid
             d_active_flag_next(i) = 3;  // SOLID
+            count++;  // Track nucleation event
 
             // Set solid_d flag to prevent disappearance during smoothing
             // Negative value triggers smoothing countdown later
@@ -752,13 +760,15 @@ void AppAdditiveExtTempTextureKokkos::nucleation_kernel()
         d_active_flag_next(i) = active_flag_i;
         d_solid_d_next(i) = d_solid_d_current(i);
       }
-    });
+    }, naccept_local);
 
   Kokkos::fence();  // Ensure kernel completes before buffer swap
+
+  return naccept_local;
 }
 
 /* ----------------------------------------------------------------------
-   Phase 3.5: Particle flipper kernel - grow nuclei to specified volume
+   Phase 3.5: Particle flipper) kernel - grow nuclei to specified volume
 
    Grows newly nucleated grains by flipping neighboring liquid sites to
    match the nucleus orientation and grain ID. This avoids lattice-size
@@ -776,7 +786,7 @@ void AppAdditiveExtTempTextureKokkos::nucleation_kernel()
    to parallelize. This version achieves similar physics with simpler logic.
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
+int AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
 {
   // Capture all necessary data for device lambda
   auto d_spin_current = buffer_spin.read_buffer;
@@ -808,9 +818,10 @@ void AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
   int nrefine_local = nrefine;
   double dx_local = dx;
 
-  // Parallel over all local sites - each nucleus flips its neighbors
-  Kokkos::parallel_for("ParticleFlipperKernel", nlocal_local,
-    KOKKOS_LAMBDA(int i) {
+  // Parallel over all local sites - each nucleus flips its neighbors with event tracking
+  int naccept_local = 0;
+  Kokkos::parallel_reduce("ParticleFlipperKernel", nlocal_local,
+    KOKKOS_LAMBDA(int i, int& count) {
       // Only process newly nucleated sites (marked with solid_d = -nrefine-2)
       double solid_d_i = d_solid_d_current(i);
       int active_flag_i = d_active_flag_current(i);
@@ -849,6 +860,7 @@ void AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
         d_qy_next(i) = q_i[2];
         d_qz_next(i) = q_i[3];
         d_active_flag_next(i) = 3;  // SOLID
+            count++;  // Track nucleation event
         d_solid_d_next(i) = -nrefine_local - 3;  // Ready for smoothing
         return;
       }
@@ -926,9 +938,14 @@ void AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
       d_qz_next(i) = q_i[3];
       d_active_flag_next(i) = 3;  // SOLID
       d_solid_d_next(i) = -nrefine_local - 3;  // Ready for smoothing
-    });
+
+      // Track nucleus growth event
+      count++;
+    }, naccept_local);
 
   Kokkos::fence();  // Ensure kernel completes before buffer swap
+
+  return naccept_local;
 }
 
 /* ----------------------------------------------------------------------
@@ -936,7 +953,7 @@ void AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
    Phase 3.3: Liquid sites captured by solid neighbors based on texture
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTextureKokkos::solidification_kernel()
+int AppAdditiveExtTempTextureKokkos::solidification_kernel()
 {
   // Get device views
   auto d_T_local = k_T.d_view;
@@ -996,9 +1013,10 @@ void AppAdditiveExtTempTextureKokkos::solidification_kernel()
     1.732050808, 1.414213562, 1.732050808
   };
 
-  // Solidification kernel: parallel over all local sites
-  Kokkos::parallel_for("SolidificationKernel", nlocal_local,
-    KOKKOS_LAMBDA(int i) {
+  // Solidification kernel: parallel over all local sites with event tracking
+  int naccept_local = 0;
+  Kokkos::parallel_reduce("SolidificationKernel", nlocal_local,
+    KOKKOS_LAMBDA(int i, int& count) {
       double T_i = d_T_local(i);
       int active_flag_i = d_active_flag_current(i);
 
@@ -1159,6 +1177,7 @@ void AppAdditiveExtTempTextureKokkos::solidification_kernel()
 
           // Set to solid state
           d_active_flag_next(i) = 3;  // SOLID
+            count++;  // Track nucleation event
 
           // Set solid_d flag to trigger smoothing countdown
           d_solid_d_next(i) = -1.0;
@@ -1189,13 +1208,15 @@ void AppAdditiveExtTempTextureKokkos::solidification_kernel()
         d_active_flag_next(i) = active_flag_i;
         d_solid_d_next(i) = d_solid_d_current(i);
       }
-    });
+    }, naccept_local);
 
   Kokkos::fence();  // Ensure kernel completes before buffer swap
+
+  return naccept_local;
 }
 
 /* ----------------------------------------------------------------------
-   Phase 3.4: Smoothing kernel - Potts MC for grain boundary refinement
+   Phase 3.4: Smoothing kernel) - Potts MC for grain boundary refinement
 
    Performs Monte Carlo sweeps on newly solidified sites (solid_d < 0) to
    smooth grain boundaries. Uses texture-weighted neighbor selection and
@@ -1212,7 +1233,7 @@ void AppAdditiveExtTempTextureKokkos::solidification_kernel()
    3. Mark as ACTIVE (flag=1) when solid_d reaches 0
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTextureKokkos::smoothing_kernel()
+int AppAdditiveExtTempTextureKokkos::smoothing_kernel()
 {
   // Capture all necessary data for device lambda
   auto d_spin_current = buffer_spin.read_buffer;
@@ -1250,9 +1271,10 @@ void AppAdditiveExtTempTextureKokkos::smoothing_kernel()
   double c2_local = c2;
   double c3_local = c3;
 
-  // Parallel sweep over all local sites
-  Kokkos::parallel_for("SmoothingKernel", nlocal_local,
-    KOKKOS_LAMBDA(int i) {
+  // Parallel sweep over all local sites with acceptance tracking
+  int naccept_local = 0;
+  Kokkos::parallel_reduce("SmoothingKernel", nlocal_local,
+    KOKKOS_LAMBDA(int i, int& count) {
       // Get current state
       int active_flag_i = d_active_flag_current(i);
       double solid_d_i = d_solid_d_current(i);
@@ -1476,10 +1498,16 @@ void AppAdditiveExtTempTextureKokkos::smoothing_kernel()
         d_active_flag_next(i) = active_flag_i;
       }
 
+      // Track acceptance for stats output
+      if (accept) count++;
+
       rand_pool_local.free_state(generator);
-    });
+    }, naccept_local);
 
   Kokkos::fence();  // Ensure kernel completes before buffer swap
+
+  // Return count of accepted moves
+  return naccept_local;
 }
 
 /* ----------------------------------------------------------------------
@@ -1545,27 +1573,27 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   // 3. Compute thermal gradients on device (cache for later use)
   compute_gradients_kernel();
 
-  // 4. Phase transition kernels
+  // 4. Phase transition kernels with event tracking
   // Phase 3.1: Melting
-  melting_kernel();
+  naccept += melting_kernel();
   swap_buffers();  // Swap double buffers after melting
 
   // Phase 3.2: Nucleation (stochastic nucleation in undercooled liquid)
-  nucleation_kernel();
+  naccept += nucleation_kernel();
   swap_buffers();
 
   // Phase 3.5: Particle flipper (grow nuclei to specified size)
-  particle_flipper_kernel();
+  naccept += particle_flipper_kernel();
   swap_buffers();
 
   // Phase 3.3: Solidification (epitaxial growth with texture weighting)
-  solidification_kernel();
+  naccept += solidification_kernel();
   swap_buffers();
 
   // Phase 3.4: Smoothing kernel (Potts MC for grain boundary refinement)
   // Perform nrefine sweeps to smooth newly solidified sites
   for (int sweep = 0; sweep < nrefine; sweep++) {
-    smoothing_kernel();
+    naccept += smoothing_kernel();
     swap_buffers();
   }
 

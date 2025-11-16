@@ -852,10 +852,11 @@ void AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
 
       // Build list of liquid neighbors that can be flipped
       int nn = k_numneigh_d(i);
-      int liquid_neighbors[26];
+      constexpr int MAX_NEIGHBORS = 26;  // sc/26n lattice assumption
+      int liquid_neighbors[MAX_NEIGHBORS];
       int num_liquid = 0;
 
-      for (int j = 0; j < nn && j < 26; j++) {
+      for (int j = 0; j < nn && j < MAX_NEIGHBORS; j++) {
         int nbr = k_neighbor_d(i, j);
         int nbr_flag = d_active_flag_current(nbr);
 
@@ -869,6 +870,7 @@ void AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
       auto generator = rand_pool_local.get_state();
       for (int j = num_liquid - 1; j > 0; j--) {
         int k = static_cast<int>(generator.drand() * (j + 1));
+        if (k > j) k = j;  // Clamp to valid range [0, j] to prevent out-of-bounds
         // Swap
         int temp = liquid_neighbors[j];
         liquid_neighbors[j] = liquid_neighbors[k];
@@ -883,16 +885,22 @@ void AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
       for (int j = 0; j < sites_to_flip; j++) {
         int nbr = liquid_neighbors[j];
 
-        // Attempt to flip this neighbor
-        // Check again that it's still liquid (may have been claimed by another nucleus)
-        if (d_active_flag_current(nbr) == 2) {
-          // Flip neighbor to match nucleus
+        // Attempt to flip this neighbor using atomic compare-and-swap
+        // to prevent race conditions when multiple nuclei compete for same neighbor
+        int expected = 2;  // LIQUID
+        int desired = 3;   // SOLID (claimed)
+
+        // Atomic CAS: only succeeds if neighbor is still liquid
+        int old_flag = Kokkos::atomic_compare_exchange(&d_active_flag_next(nbr), expected, desired);
+
+        if (old_flag == 2) {
+          // We successfully claimed this neighbor - flip it to match nucleus
           d_spin_next(nbr) = spin_i;
           d_q0_next(nbr) = q_i[0];
           d_qx_next(nbr) = q_i[1];
           d_qy_next(nbr) = q_i[2];
           d_qz_next(nbr) = q_i[3];
-          d_active_flag_next(nbr) = 3;  // SOLID
+          // active_flag already set to SOLID by CAS above
           d_solid_d_next(nbr) = -nrefine_local - 3;  // Ready for smoothing
 
           // Copy thermal properties from nucleus
@@ -902,6 +910,7 @@ void AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
           d_grad_y_local(nbr) = d_grad_y_local(i);
           d_grad_z_local(nbr) = d_grad_z_local(i);
         }
+        // If old_flag != 2, another nucleus already claimed it - skip
       }
 
       rand_pool_local.free_state(generator);
@@ -1085,7 +1094,8 @@ void AppAdditiveExtTempTextureKokkos::solidification_kernel()
           if (max_misorient_local > 0.0) {
             // Calculate misorientation angle from cooling rate
             // Exponential function: grows slowly initially, then rapidly in last ~10%
-            double normalized_temp = Tcool / t_cool_max_local;
+            // Clamp normalized_temp to [0, 1] to prevent exponential overflow
+            double normalized_temp = Kokkos::fmin(Tcool / t_cool_max_local, 1.0);
             double mis_angle = max_misorient_local *
                                (Kokkos::exp(misorient_alpha_local * normalized_temp) - 1.0) /
                                (Kokkos::exp(misorient_alpha_local) - 1.0) * MY_PI / 180.0;

@@ -149,7 +149,19 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
   void swap_buffers();
 
   // Device-compatible thermal operations
+  //
+  // LATTICE TYPE ASSUMPTION: Simple Cubic with 26 Neighbors (sc/26n)
+  // This implementation assumes a simple cubic lattice with 26 neighbors
+  // (3×3×3 cube minus center). The offset_map, neighbor distance calculations,
+  // and gradient computation are specifically designed for this lattice type.
+  //
+  // For other lattice types (fcc, bcc, hcp), the offset_map array and
+  // neighbor-based calculations must be updated accordingly.
+  //
   struct ThermalOps {
+    // Maximum neighbors for sc/26n lattice
+    static constexpr int MAX_NEIGHBORS_SC26N = 26;
+
     // 26-neighbor offset map for sc/26n lattice (device constant memory)
     // Maps neighbor index to [dx, dy, dz] offset in lattice units
     static constexpr int offset_map[26][3] = {

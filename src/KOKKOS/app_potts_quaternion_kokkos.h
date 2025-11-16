@@ -98,12 +98,23 @@ class AppPottsQuaternionKokkos : public AppPottsQuaternion {
 
 protected:
   // Device-compatible quaternion operations (accessible to derived classes)
+  //
+  // QUATERNION CONVENTION: Scalar-first (Hamilton notation)
+  // q = (q0, qx, qy, qz) where:
+  //   q0 = cos(θ/2)          (scalar/real component)
+  //   (qx, qy, qz) = sin(θ/2)·axis  (vector/imaginary components)
+  // This matches the CPU reference implementation in quaternion.h
+  //
   struct QuaternionOps {
+    // Numerical thresholds for quaternion operations
+    static constexpr double PARALLEL_VECTOR_THRESHOLD = 1.0e-10;  // Threshold for detecting parallel vectors
+    static constexpr double QUATERNION_ZERO_THRESHOLD = 1.0e-15;  // Threshold for quaternion normalization
+
     KOKKOS_INLINE_FUNCTION
     static void normalize(double* q) {
       // Normalize quaternion to unit length
       double norm = Kokkos::sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
-      if (norm > 1.0e-15) {
+      if (norm > QUATERNION_ZERO_THRESHOLD) {
         double inv_norm = 1.0 / norm;
         q[0] *= inv_norm;
         q[1] *= inv_norm;
@@ -294,7 +305,7 @@ protected:
                                      axis[2] * axis[2]);
 
       // Handle parallel vectors (cross product ≈ 0)
-      if (axis_mag < 1.0e-10) {
+      if (axis_mag < PARALLEL_VECTOR_THRESHOLD) {
         // Vectors are parallel, no rotation needed
         q_out[0] = q_in[0];
         q_out[1] = q_in[1];

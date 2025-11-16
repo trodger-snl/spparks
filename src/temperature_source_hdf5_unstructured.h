@@ -85,10 +85,6 @@ public:
 
   // Fast-forward capability methods
   bool all_temperatures_below_threshold(double time);
-  bool has_significant_thermal_activity(double time);
-  bool has_significant_thermal_activity_hdf5_nodes(double time);
-  double find_next_active_time(double start_time, double end_time);
-  double find_next_active_time_sequential(double start_time, double end_time);
   double get_fast_forward_threshold() const { return threshold_temp; }
   double get_dx() const { return dx; }
   
@@ -190,10 +186,10 @@ private:
   // Element cache management
   mutable std::vector<ElementCache> site_element_cache;
   mutable bool cache_valid;
-  
+
   // Build element cache for all sites
   void build_site_element_cache() const;
-  
+
   // Get cached element for a site
   const ElementCache& get_cached_element(int site_index) const;
 };

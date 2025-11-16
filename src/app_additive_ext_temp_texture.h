@@ -107,10 +107,7 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   double t_cool_max;
   double mis_thresh;
   double misorient_alpha;
- 	
- 	// Debug parameters
- 	int normal_finder_debug; // Flag to enable/disable normal_finder debugging
- 	
+
  	// Monte Carlo nucleation model parameters
 	int *nucleation_flags;
 	double *nucleation_temps;

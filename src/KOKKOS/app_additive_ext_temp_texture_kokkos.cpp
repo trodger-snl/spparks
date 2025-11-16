@@ -257,6 +257,9 @@ void AppAdditiveExtTempTextureKokkos::init_app()
   uint64_t seed = static_cast<uint64_t>(ranapp->seed);
   rand_pool = Kokkos::Random_XorShift64_Pool<>(seed);
 
+  // Set timestep for framework (matches CPU version behavior)
+  dt_sweep = dt;
+
   // Initialize nucleation parameters (per-spin arrays and global params)
   initialize_nucleation_parameters();
 

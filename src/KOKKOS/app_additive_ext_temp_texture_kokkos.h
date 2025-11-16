@@ -58,6 +58,7 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
   int particle_flipper_kernel();
   int solidification_kernel();
   int smoothing_kernel();
+  int smoothing_kernel_efficient(Kokkos::View<int*> d_smoothing_sites, int n_sites);  // Phase 1 optimization
 
  protected:
   // Temperature fields (CPU-updated from HDF5, device-readable)

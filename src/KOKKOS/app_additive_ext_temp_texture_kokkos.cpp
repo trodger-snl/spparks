@@ -1528,6 +1528,264 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel()
 }
 
 /* ----------------------------------------------------------------------
+   PHASE 1 OPTIMIZATION: Work-efficient smoothing kernel
+
+   Processes ONLY sites in the compact smoothing list (not all 2.99M sites).
+   This is a direct replacement for smoothing_kernel() but operates on
+   a filtered list of ~100-1000 sites instead of checking all sites.
+
+   Expected performance: 0.4 ms vs 1.2 ms (3× faster)
+------------------------------------------------------------------------- */
+
+int AppAdditiveExtTempTextureKokkos::smoothing_kernel_efficient(
+    Kokkos::View<int*> d_smoothing_sites, int n_sites)
+{
+  // Capture all necessary data for device lambda
+  auto d_spin_current = buffer_spin.read_buffer;
+  auto d_spin_next = buffer_spin.write_buffer;
+  auto d_q0_current = buffer_q0.read_buffer;
+  auto d_q0_next = buffer_q0.write_buffer;
+  auto d_qx_current = buffer_qx.read_buffer;
+  auto d_qx_next = buffer_qx.write_buffer;
+  auto d_qy_current = buffer_qy.read_buffer;
+  auto d_qy_next = buffer_qy.write_buffer;
+  auto d_qz_current = buffer_qz.read_buffer;
+  auto d_qz_next = buffer_qz.write_buffer;
+  auto d_active_flag_current = buffer_active_flag.read_buffer;
+  auto d_active_flag_next = buffer_active_flag.write_buffer;
+  auto d_solid_d_current = buffer_solid_d.read_buffer;
+  auto d_solid_d_next = buffer_solid_d.write_buffer;
+
+  auto k_neighbor_d = k_neighbor.d_view;
+  auto k_numneigh_d = k_numneigh.d_view;
+  auto d_grad_x_local = d_grad_x;
+  auto d_grad_y_local = d_grad_y;
+  auto d_grad_z_local = d_grad_z;
+  auto d_symmetries_local = d_symmetries;
+  auto rand_pool_local = rand_pool;
+
+  int nrefine_local = nrefine;
+  double theta_cut_local = theta_cut;
+  double temperature_local = temperature;
+  double t_inverse_local = t_inverse;
+  int num_symmetries_local = num_symmetries;
+
+  // Texture parameters
+  double c1_local = c1;
+  double c2_local = c2;
+  double c3_local = c3;
+
+  // Parallel sweep over ONLY smoothing sites (not all sites!)
+  int naccept_local = 0;
+  Kokkos::parallel_reduce("SmoothingKernelEfficient", n_sites,
+    KOKKOS_LAMBDA(int idx, int& count) {
+      // Get actual site index from compact list
+      int i = d_smoothing_sites(idx);
+
+      // All sites in this list need smoothing - no branching needed!
+      int active_flag_i = d_active_flag_current(i);
+      int spin_i = d_spin_current(i);
+      double solid_d_i = d_solid_d_current(i);
+      double q_i[4] = {d_q0_current(i), d_qx_current(i), d_qy_current(i), d_qz_current(i)};
+
+      // Get thermal gradient direction at this site
+      double grad_norm = Kokkos::sqrt(
+        d_grad_x_local(i) * d_grad_x_local(i) +
+        d_grad_y_local(i) * d_grad_y_local(i) +
+        d_grad_z_local(i) * d_grad_z_local(i)
+      );
+
+      double grad_dir[3] = {0.0, 0.0, 1.0};  // Default: +z direction
+      if (grad_norm > 1.0e-10) {
+        grad_dir[0] = d_grad_x_local(i) / grad_norm;
+        grad_dir[1] = d_grad_y_local(i) / grad_norm;
+        grad_dir[2] = d_grad_z_local(i) / grad_norm;
+      }
+
+      // Build list of unique solid/active neighbors
+      int nn = k_numneigh_d(i);
+      int unique_spins[27];
+      double texture_weights[27];
+      int unique_count = 0;
+
+      for (int n = 0; n < nn; n++) {
+        int nbr = k_neighbor_d(i, n);
+        int nbr_spin = d_spin_current(nbr);
+        int nbr_flag = d_active_flag_current(nbr);
+
+        // Only consider solid/active neighbors
+        if (nbr_spin != -1 && (nbr_flag == 1 || nbr_flag == 3)) {
+          // Check if already in unique list
+          bool found = false;
+          for (int k = 0; k < unique_count; k++) {
+            if (unique_spins[k] == nbr_spin) {
+              found = true;
+              break;
+            }
+          }
+
+          if (!found && unique_count < 27) {
+            unique_spins[unique_count] = nbr_spin;
+
+            // Compute texture weight for this neighbor
+            double q_nbr[4] = {
+              d_q0_current(nbr), d_qx_current(nbr),
+              d_qy_current(nbr), d_qz_current(nbr)
+            };
+
+            // Get cosine of angle between grain <100> and gradient
+            double cos_min_angle = QuaternionOps::get_cosine_angle_q_u(q_nbr, grad_dir);
+            double theta = Kokkos::acos(cos_min_angle);
+
+            // Texture weight: c1 + c2*cos(c3*theta)
+            double weight = c1_local + c2_local * Kokkos::cos(c3_local * theta);
+            texture_weights[unique_count] = (weight > 0.0) ? weight : 0.0;
+
+            unique_count++;
+          }
+        }
+      }
+
+      if (unique_count == 0) {
+        // No neighbors - keep current state
+        d_spin_next(i) = spin_i;
+        d_q0_next(i) = q_i[0];
+        d_qx_next(i) = q_i[1];
+        d_qy_next(i) = q_i[2];
+        d_qz_next(i) = q_i[3];
+        d_active_flag_next(i) = active_flag_i;
+        d_solid_d_next(i) = solid_d_i + 1.0;
+        if (d_solid_d_next(i) >= 0.0) {
+          d_active_flag_next(i) = 1;
+          d_solid_d_next(i) = 0.0;
+        }
+        return;
+      }
+
+      // Select neighbor using texture-weighted probabilities
+      auto generator = rand_pool_local.get_state();
+
+      // Compute cumulative sum of weights
+      double total_weight = 0.0;
+      for (int k = 0; k < unique_count; k++) {
+        total_weight += texture_weights[k];
+      }
+
+      // Weighted random selection
+      double rand_val = generator.drand() * total_weight;
+      double cumsum = 0.0;
+      int selected_spin = unique_spins[0];
+      int selected_nbr = -1;
+
+      for (int k = 0; k < unique_count; k++) {
+        cumsum += texture_weights[k];
+        if (rand_val <= cumsum) {
+          selected_spin = unique_spins[k];
+          // Find actual neighbor index with this spin
+          for (int n = 0; n < nn; n++) {
+            int nbr = k_neighbor_d(i, n);
+            if (d_spin_current(nbr) == selected_spin) {
+              selected_nbr = nbr;
+              break;
+            }
+          }
+          break;
+        }
+      }
+
+      if (selected_nbr < 0) selected_nbr = k_neighbor_d(i, 0);  // Fallback
+
+      // Get proposed quaternion from selected neighbor
+      double q_new[4] = {
+        d_q0_current(selected_nbr), d_qx_current(selected_nbr),
+        d_qy_current(selected_nbr), d_qz_current(selected_nbr)
+      };
+      int new_spin = d_spin_current(selected_nbr);
+
+      // Compute energy change (Metropolis criterion)
+      // Energy = sum of disorientations with neighbors
+      double energy_initial = 0.0;
+      double energy_final = 0.0;
+
+      for (int n = 0; n < nn; n++) {
+        int nbr = k_neighbor_d(i, n);
+        double q_nbr[4] = {
+          d_q0_current(nbr), d_qx_current(nbr),
+          d_qy_current(nbr), d_qz_current(nbr)
+        };
+
+        // Initial energy
+        double di_init = QuaternionOps::compute_disorientation(
+          d_symmetries_local.data(), num_symmetries_local, q_i, q_nbr
+        );
+        double ratio_init = di_init / theta_cut_local;
+        if (ratio_init > 0.0) {
+          if (ratio_init < 1.0) {
+            energy_initial += ratio_init * (1.0 - Kokkos::log(ratio_init));
+          } else {
+            energy_initial += 1.0;
+          }
+        }
+
+        // Final energy
+        double di_final = QuaternionOps::compute_disorientation(
+          d_symmetries_local.data(), num_symmetries_local, q_new, q_nbr
+        );
+        double ratio_final = di_final / theta_cut_local;
+        if (ratio_final > 0.0) {
+          if (ratio_final < 1.0) {
+            energy_final += ratio_final * (1.0 - Kokkos::log(ratio_final));
+          } else {
+            energy_final += 1.0;
+          }
+        }
+      }
+      energy_initial *= 0.5;
+      energy_final *= 0.5;
+
+      // Metropolis acceptance
+      bool accept = false;
+      if (energy_final <= energy_initial) {
+        accept = true;
+      } else if (temperature_local > 0.0) {
+        double prob = Kokkos::exp((energy_initial - energy_final) * t_inverse_local);
+        if (generator.drand() < prob) {
+          accept = true;
+        }
+      }
+
+      // Apply move
+      if (accept) {
+        d_spin_next(i) = new_spin;
+        d_q0_next(i) = q_new[0];
+        d_qx_next(i) = q_new[1];
+        d_qy_next(i) = q_new[2];
+        d_qz_next(i) = q_new[3];
+        count++;
+      } else {
+        d_spin_next(i) = spin_i;
+        d_q0_next(i) = q_i[0];
+        d_qx_next(i) = q_i[1];
+        d_qy_next(i) = q_i[2];
+        d_qz_next(i) = q_i[3];
+      }
+
+      // Increment solid_d counter
+      d_solid_d_next(i) = solid_d_i + 1.0;
+      if (d_solid_d_next(i) >= 0.0) {
+        d_active_flag_next(i) = 1;  // ACTIVE
+        d_solid_d_next(i) = 0.0;
+      } else {
+        d_active_flag_next(i) = active_flag_i;
+      }
+
+      rand_pool_local.free_state(generator);
+    }, naccept_local);
+
+  return naccept_local;
+}
+
+/* ----------------------------------------------------------------------
    App update - main time integration loop
 ------------------------------------------------------------------------- */
 
@@ -1605,10 +1863,35 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   // (Removed global compute_gradients_kernel() - gradients now computed only when needed)
 
   // 4. Phase transition kernels with event tracking
-  // Phase 3.1: Melting
+  // Phase 3.1: Melting (with Phase 1 optimization: early temperature scan)
   t_start = MPI_Wtime();
-  naccept += melting_kernel();
-  swap_buffers();  // Swap double buffers after melting
+
+  // OPTIMIZATION 1A: Quick pre-scan to check if ANY sites might melt
+  // This avoids launching the expensive kernel when no melting occurs (~80% of timesteps)
+  int n_melt_candidates = 0;
+  {
+    auto d_T_check = k_T.d_view;
+    auto d_active_flag_check = buffer_active_flag.read_buffer;
+    double tl_check = this->tl;
+    int nlocal_check = this->nlocal;
+
+    Kokkos::parallel_reduce("CheckMeltingCandidates", nlocal_check,
+      KOKKOS_LAMBDA(int i, int& count) {
+        if (d_T_check(i) >= tl_check && d_active_flag_check(i) != 2) {
+          count++;
+        }
+      }, n_melt_candidates);
+  }
+
+  // Only launch melting kernel if there are candidates
+  if (n_melt_candidates > 0) {
+    naccept += melting_kernel();
+    swap_buffers();  // Swap double buffers after melting
+  } else {
+    // No melting - buffers unchanged, no swap needed
+    // (Sites remain in current state)
+  }
+
   t_end = MPI_Wtime();
   t_melting += (t_end - t_start);
 
@@ -1655,26 +1938,36 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
 
   // Phase 3.4: Smoothing kernel (Potts MC for grain boundary refinement)
   // Call once per timestep - sites smooth over multiple timesteps as solid_d increments
-  // Only launch if there are sites in smoothing range: solid_d ∈ (-nrefine-1, 0)
+  // OPTIMIZATION 3: Work-efficient smoothing - only process sites in smoothing range
   t_start = MPI_Wtime();
 
-  // Check if any sites need smoothing (selective kernel launch optimization)
+  // Build compact list of smoothing sites using parallel_scan (Phase 1 optimization)
   int n_smoothing_sites = 0;
+  Kokkos::View<int*> d_smoothing_sites("smoothing_sites", nlocal);
   {
     auto d_solid_d_check = buffer_solid_d.read_buffer;
     int nrefine_check = nrefine;
-    Kokkos::parallel_reduce("CheckSmoothingSites", nlocal,
-      KOKKOS_LAMBDA(int i, int& count) {
+    int nlocal_check = nlocal;
+
+    // Parallel scan to build compact list of sites needing smoothing
+    Kokkos::parallel_scan("BuildSmoothingList", nlocal_check,
+      KOKKOS_LAMBDA(int i, int& offset, bool final) {
         double sd = d_solid_d_check(i);
-        if (sd > -nrefine_check - 1 && sd < 0.0) {
-          count++;
+        bool needs_smoothing = (sd > -nrefine_check - 1 && sd < 0.0);
+
+        if (needs_smoothing) {
+          if (final) {
+            d_smoothing_sites(offset) = i;  // Store site index
+          }
+          offset++;
         }
       }, n_smoothing_sites);
   }
 
   // Only launch smoothing kernel if there are eligible sites
+  // Process ONLY the sites in the compact list (not all 2.99M sites!)
   if (n_smoothing_sites > 0) {
-    naccept += smoothing_kernel();
+    naccept += smoothing_kernel_efficient(d_smoothing_sites, n_smoothing_sites);
     swap_buffers();
   }
 

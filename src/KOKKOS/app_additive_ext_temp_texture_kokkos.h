@@ -54,6 +54,7 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
   void melting_kernel();
   void nucleation_kernel();
   void solidification_kernel();
+  void smoothing_kernel();
 
  protected:
   // Temperature fields (CPU-updated from HDF5, device-readable)

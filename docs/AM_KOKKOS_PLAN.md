@@ -1,6 +1,6 @@
 # Additive Manufacturing Kokkos Implementation Plan
 
-**Status:** Phase 3.3 Complete - Smoothing Implementation Next
+**Status:** Phase 3.4 Complete - Integration Testing Next
 **Date Updated:** November 16, 2025
 **Target:** AppAdditiveExtTempTextureKokkos extending AppPottsQuaternionKokkos
 **Expected Speedup:** 30-70x for full AM simulations
@@ -10,7 +10,7 @@
 - Phase 3.1 (Melting Kernel + RNG) ✅ Complete
 - Phase 3.2 (Nucleation + Fast-Forward) ✅ Complete
 - Phase 3.3 (Solidification + Texture) ✅ Complete
-- Phase 3.4 (Smoothing) 🔄 Next
+- Phase 3.4 (Smoothing + Integration) ✅ Complete
 
 ---
 
@@ -34,7 +34,19 @@ This document outlines the plan for adding Kokkos GPU acceleration to `app_addit
   - ✅ Melting kernel (T >= liquidus transition)
   - ✅ Random quaternion generation (Marsaglia method)
   - ✅ Double buffering for phase state updates
-- 🔄 **Phase 3.2 In Progress:** Nucleation kernel
+- ✅ **Phase 3.2 Complete:** Nucleation kernel and fast-forward logic (Nov 16, 2025)
+  - ✅ Stochastic nucleation in undercooled melt
+  - ✅ Fast-forward logic to skip inactive thermal periods
+  - ✅ Solidification velocity computation
+- ✅ **Phase 3.3 Complete:** Solidification kernel with texture weighting (Nov 16, 2025)
+  - ✅ Epitaxial growth from solid neighbors
+  - ✅ Texture-dependent selection (mobility = c1 + c2*cos(c3*θ))
+  - ✅ Stochastic neighbor selection weighted by gradient alignment
+- ✅ **Phase 3.4 Complete:** Smoothing kernel with Metropolis MC (Nov 16, 2025)
+  - ✅ Potts Monte Carlo for grain boundary refinement
+  - ✅ Metropolis acceptance based on quaternion misorientation energy
+  - ✅ Texture-weighted neighbor selection during smoothing
+  - ✅ Full app_update() integration with all phase transition kernels
 
 **Key Challenge:** Converting 450+ lines of thermal gradient computation and texture modeling to device-compatible code while maintaining physics accuracy.
 

@@ -946,6 +946,294 @@ void AppAdditiveExtTempTextureKokkos::solidification_kernel()
 }
 
 /* ----------------------------------------------------------------------
+   Phase 3.4: Smoothing kernel - Potts MC for grain boundary refinement
+
+   Performs Monte Carlo sweeps on newly solidified sites (solid_d < 0) to
+   smooth grain boundaries. Uses texture-weighted neighbor selection and
+   Metropolis acceptance based on quaternion misorientation energy.
+
+   Algorithm:
+   1. For sites with solid_d ∈ (-nrefine-1, 0):
+      - Build list of solid/active neighbors
+      - Calculate texture weight for each neighbor using gradient alignment
+      - Stochastic selection weighted by texture
+      - Metropolis acceptance based on energy change
+      - If accepted: copy neighbor's spin and quaternion
+   2. Increment solid_d counter after sweep
+   3. Mark as ACTIVE (flag=1) when solid_d reaches 0
+------------------------------------------------------------------------- */
+
+void AppAdditiveExtTempTextureKokkos::smoothing_kernel()
+{
+  // Capture all necessary data for device lambda
+  auto d_spin_current = buffer_spin.read_buffer;
+  auto d_spin_next = buffer_spin.write_buffer;
+  auto d_q0_current = buffer_q0.read_buffer;
+  auto d_q0_next = buffer_q0.write_buffer;
+  auto d_qx_current = buffer_qx.read_buffer;
+  auto d_qx_next = buffer_qx.write_buffer;
+  auto d_qy_current = buffer_qy.read_buffer;
+  auto d_qy_next = buffer_qy.write_buffer;
+  auto d_qz_current = buffer_qz.read_buffer;
+  auto d_qz_next = buffer_qz.write_buffer;
+  auto d_active_flag_current = buffer_active_flag.read_buffer;
+  auto d_active_flag_next = buffer_active_flag.write_buffer;
+  auto d_solid_d_current = buffer_solid_d.read_buffer;
+  auto d_solid_d_next = buffer_solid_d.write_buffer;
+
+  auto k_neighbor_d = k_neighbor.d_view;
+  auto k_numneigh_d = k_numneigh.d_view;
+  auto d_grad_x_local = d_grad_x;
+  auto d_grad_y_local = d_grad_y;
+  auto d_grad_z_local = d_grad_z;
+  auto d_symmetries_local = d_symmetries;
+  auto rand_pool_local = rand_pool;
+
+  int nlocal_local = nlocal;
+  int nrefine_local = nrefine;
+  double theta_cut_local = theta_cut;
+  double temperature_local = temperature;
+  double t_inverse_local = t_inverse;
+  int num_symmetries_local = num_symmetries;
+
+  // Texture parameters
+  double c1_local = c1;
+  double c2_local = c2;
+  double c3_local = c3;
+
+  // Parallel sweep over all local sites
+  Kokkos::parallel_for("SmoothingKernel", nlocal_local,
+    KOKKOS_LAMBDA(int i) {
+      // Get current state
+      int active_flag_i = d_active_flag_current(i);
+      double solid_d_i = d_solid_d_current(i);
+
+      // Only smooth sites in the refinement range: (-nrefine-1, 0)
+      if (solid_d_i >= 0.0 || solid_d_i <= -nrefine_local - 1) {
+        // Not eligible for smoothing - copy state unchanged
+        d_spin_next(i) = d_spin_current(i);
+        d_q0_next(i) = d_q0_current(i);
+        d_qx_next(i) = d_qx_current(i);
+        d_qy_next(i) = d_qy_current(i);
+        d_qz_next(i) = d_qz_current(i);
+        d_active_flag_next(i) = active_flag_i;
+
+        // Increment solid_d if in smoothing range
+        if (solid_d_i < 0.0 && solid_d_i > -nrefine_local - 1) {
+          d_solid_d_next(i) = solid_d_i + 1.0;
+          // If just reached 0, mark as ACTIVE
+          if (d_solid_d_next(i) >= 0.0) {
+            d_active_flag_next(i) = 1;  // ACTIVE
+            d_solid_d_next(i) = 0.0;
+          }
+        } else {
+          d_solid_d_next(i) = solid_d_i;
+        }
+        return;
+      }
+
+      // Site is eligible for smoothing
+      int spin_i = d_spin_current(i);
+      double q_i[4] = {d_q0_current(i), d_qx_current(i), d_qy_current(i), d_qz_current(i)};
+
+      // Get thermal gradient direction at this site
+      double grad_norm = Kokkos::sqrt(
+        d_grad_x_local(i) * d_grad_x_local(i) +
+        d_grad_y_local(i) * d_grad_y_local(i) +
+        d_grad_z_local(i) * d_grad_z_local(i)
+      );
+
+      double grad_dir[3];
+      if (grad_norm > 1e-12) {
+        grad_dir[0] = d_grad_x_local(i) / grad_norm;
+        grad_dir[1] = d_grad_y_local(i) / grad_norm;
+        grad_dir[2] = d_grad_z_local(i) / grad_norm;
+      } else {
+        grad_dir[0] = 0.0;
+        grad_dir[1] = 0.0;
+        grad_dir[2] = 0.0;
+      }
+
+      // Build list of eligible neighbors with texture weights
+      int nn = k_numneigh_d(i);
+      int eligible_neighbors[26];  // Max 26 neighbors for sc lattice
+      double cumulative_weight[26];
+      double cumulative_sum = 0.0;
+      int num_eligible = 0;
+
+      for (int j = 0; j < nn && j < 26; j++) {
+        int nbr = k_neighbor_d(i, j);
+        int nbr_flag = d_active_flag_current(nbr);
+
+        // Only consider solid or active neighbors (not liquid, molten, or void)
+        if (nbr_flag != 1 && nbr_flag != 3) continue;
+
+        // Skip neighbors with same spin (no energy change possible)
+        int nbr_spin = d_spin_current(nbr);
+        if (nbr_spin == spin_i) continue;
+
+        // Calculate texture weight: mobility = c1 + c2 * cos(c3 * theta)
+        // where theta is angle between neighbor's orientation and gradient
+        double q_nbr[4] = {
+          d_q0_current(nbr), d_qx_current(nbr),
+          d_qy_current(nbr), d_qz_current(nbr)
+        };
+
+        double cos_min_angle = QuaternionOps::get_cosine_angle_q_u(q_nbr, grad_dir);
+        double theta = Kokkos::acos(Kokkos::fmax(-1.0, Kokkos::fmin(1.0, cos_min_angle)));
+        double mobility = c1_local + c2_local * Kokkos::cos(c3_local * theta);
+
+        // Only include neighbors with positive mobility
+        if (mobility > 0.0) {
+          cumulative_sum += mobility;
+          cumulative_weight[num_eligible] = cumulative_sum;
+          eligible_neighbors[num_eligible] = nbr;
+          num_eligible++;
+        }
+      }
+
+      // If no eligible neighbors, keep current state
+      if (num_eligible == 0) {
+        d_spin_next(i) = spin_i;
+        d_q0_next(i) = q_i[0];
+        d_qx_next(i) = q_i[1];
+        d_qy_next(i) = q_i[2];
+        d_qz_next(i) = q_i[3];
+        d_active_flag_next(i) = active_flag_i;
+        d_solid_d_next(i) = solid_d_i + 1.0;
+        if (d_solid_d_next(i) >= 0.0) {
+          d_active_flag_next(i) = 1;  // ACTIVE
+          d_solid_d_next(i) = 0.0;
+        }
+        return;
+      }
+
+      // Stochastic selection of neighbor weighted by texture
+      auto generator = rand_pool_local.get_state();
+      double rand_val = generator.drand() * cumulative_sum;
+
+      int selected_idx = 0;
+      for (int k = 0; k < num_eligible; k++) {
+        if (rand_val <= cumulative_weight[k]) {
+          selected_idx = k;
+          break;
+        }
+      }
+
+      int selected_nbr = eligible_neighbors[selected_idx];
+      int new_spin = d_spin_current(selected_nbr);
+      double q_new[4] = {
+        d_q0_current(selected_nbr),
+        d_qx_current(selected_nbr),
+        d_qy_current(selected_nbr),
+        d_qz_current(selected_nbr)
+      };
+
+      // Compute energy change using quaternion disorientation
+      // Initial energy: sum over neighbors
+      double energy_initial = 0.0;
+      for (int j = 0; j < nn && j < 26; j++) {
+        int nbr = k_neighbor_d(i, j);
+        int nbr_flag = d_active_flag_current(nbr);
+
+        // Skip void and non-solid neighbors
+        if (nbr_flag == 5 || (nbr_flag != 3 && nbr_flag != 1)) continue;
+
+        double q_nbr[4] = {
+          d_q0_current(nbr), d_qx_current(nbr),
+          d_qy_current(nbr), d_qz_current(nbr)
+        };
+
+        double di = QuaternionOps::compute_disorientation(
+          d_symmetries_local.data(), num_symmetries_local, q_i, q_nbr
+        );
+
+        double ratio = di / theta_cut_local;
+        if (ratio <= 0.0) {
+          continue;
+        } else if (ratio < 1.0) {
+          energy_initial += ratio * (1.0 - Kokkos::log(ratio));
+        } else {
+          energy_initial += 1.0;
+        }
+      }
+      energy_initial *= 0.5;  // Each site carries half the boundary energy
+
+      // Final energy: sum with new orientation
+      double energy_final = 0.0;
+      for (int j = 0; j < nn && j < 26; j++) {
+        int nbr = k_neighbor_d(i, j);
+        int nbr_flag = d_active_flag_current(nbr);
+
+        if (nbr_flag == 5 || (nbr_flag != 3 && nbr_flag != 1)) continue;
+
+        double q_nbr[4] = {
+          d_q0_current(nbr), d_qx_current(nbr),
+          d_qy_current(nbr), d_qz_current(nbr)
+        };
+
+        double di = QuaternionOps::compute_disorientation(
+          d_symmetries_local.data(), num_symmetries_local, q_new, q_nbr
+        );
+
+        double ratio = di / theta_cut_local;
+        if (ratio <= 0.0) {
+          continue;
+        } else if (ratio < 1.0) {
+          energy_final += ratio * (1.0 - Kokkos::log(ratio));
+        } else {
+          energy_final += 1.0;
+        }
+      }
+      energy_final *= 0.5;
+
+      // Metropolis acceptance criterion
+      bool accept = false;
+      if (energy_final <= energy_initial) {
+        accept = true;  // Always accept energy-lowering moves
+      } else if (temperature_local > 0.0) {
+        double prob = Kokkos::exp((energy_initial - energy_final) * t_inverse_local);
+        double rand_accept = generator.drand();
+        if (rand_accept < prob) {
+          accept = true;
+        }
+      }
+      // If temperature == 0, only accept downhill moves (already handled)
+
+      // Apply move if accepted
+      if (accept) {
+        d_spin_next(i) = new_spin;
+        d_q0_next(i) = q_new[0];
+        d_qx_next(i) = q_new[1];
+        d_qy_next(i) = q_new[2];
+        d_qz_next(i) = q_new[3];
+      } else {
+        // Keep current state
+        d_spin_next(i) = spin_i;
+        d_q0_next(i) = q_i[0];
+        d_qx_next(i) = q_i[1];
+        d_qy_next(i) = q_i[2];
+        d_qz_next(i) = q_i[3];
+      }
+
+      // Increment solid_d counter (moves toward 0)
+      d_solid_d_next(i) = solid_d_i + 1.0;
+
+      // If smoothing complete, mark as ACTIVE
+      if (d_solid_d_next(i) >= 0.0) {
+        d_active_flag_next(i) = 1;  // ACTIVE
+        d_solid_d_next(i) = 0.0;
+      } else {
+        d_active_flag_next(i) = active_flag_i;
+      }
+
+      rand_pool_local.free_state(generator);
+    });
+
+  Kokkos::fence();  // Ensure kernel completes before buffer swap
+}
+
+/* ----------------------------------------------------------------------
    App update - main time integration loop
 ------------------------------------------------------------------------- */
 
@@ -1025,9 +1313,12 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   solidification_kernel();
   swap_buffers();
 
-  // TODO Phase 3.4: Smoothing kernel (Potts MC for boundary smoothing)
-  // smoothing_kernel();
-  // swap_buffers();
+  // Phase 3.4: Smoothing kernel (Potts MC for grain boundary refinement)
+  // Perform nrefine sweeps to smooth newly solidified sites
+  for (int sweep = 0; sweep < nrefine; sweep++) {
+    smoothing_kernel();
+    swap_buffers();
+  }
 
   // 5. Sync results back to host for output
   sync_data_to_host();

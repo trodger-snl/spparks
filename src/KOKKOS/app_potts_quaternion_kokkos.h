@@ -96,28 +96,8 @@ class AppPottsQuaternionKokkos : public AppPottsQuaternion {
     buffer_qz.print_profiling_stats(fp, "qz");
   }
 
-private:
-  // Device-side helper functors
-  struct ComputeEnergyFunctor;
-  struct RejectionSweepFunctor;
-  struct SectorSweepFunctor;
-
-  // Sync helpers
-  void sync_data_to_device();          // MPI version - only updates read buffer
-  void sync_data_to_device_full();     // Full version - updates both buffers (initialization only)
-  void sync_data_to_host();
-  void swap_buffers();
-
-  // Profiling configuration
-  bool sync_profiling_enabled;
-
-  // Quaternion helper - normalizes arrays on host
-  void normalize_quaternion_arrays(double* q0_out, double* qx_out, double* qy_out, double* qz_out,
-                                   const double* q0_in, const double* qx_in,
-                                   const double* qy_in, const double* qz_in,
-                                   int n);
-
-  // Device-compatible quaternion operations
+protected:
+  // Device-compatible quaternion operations (accessible to derived classes)
   struct QuaternionOps {
     KOKKOS_INLINE_FUNCTION
     static void normalize(double* q) {
@@ -382,6 +362,27 @@ private:
       normalize(q);
     }
   };
+
+private:
+  // Device-side helper functors
+  struct ComputeEnergyFunctor;
+  struct RejectionSweepFunctor;
+  struct SectorSweepFunctor;
+
+  // Sync helpers
+  void sync_data_to_device();          // MPI version - only updates read buffer
+  void sync_data_to_device_full();     // Full version - updates both buffers (initialization only)
+  void sync_data_to_host();
+  void swap_buffers();
+
+  // Profiling configuration
+  bool sync_profiling_enabled;
+
+  // Quaternion helper - normalizes arrays on host
+  void normalize_quaternion_arrays(double* q0_out, double* qx_out, double* qy_out, double* qz_out,
+                                   const double* q0_in, const double* qx_in,
+                                   const double* qy_in, const double* qz_in,
+                                   int n);
 };
 
 }

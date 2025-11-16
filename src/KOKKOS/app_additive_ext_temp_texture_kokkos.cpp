@@ -25,6 +25,7 @@
 #include "app_additive_ext_temp_texture_kokkos.h"
 #include "app_kokkos.h"
 #include "comm_lattice.h"
+#include "domain.h"
 #include "error.h"
 #include "random_park.h"
 #include "timer.h"
@@ -252,8 +253,8 @@ void AppAdditiveExtTempTextureKokkos::init_app()
   }
 
   // Initialize RNG pool with seed from ranapp
-  // Use ranapp->state() to get reproducible seed from MPI rank
-  uint64_t seed = static_cast<uint64_t>(ranapp->state());
+  // Use ranapp->seed to get reproducible seed from MPI rank
+  uint64_t seed = static_cast<uint64_t>(ranapp->seed);
   rand_pool = Kokkos::Random_XorShift64_Pool<>(seed);
 
   // Initialize nucleation parameters (per-spin arrays and global params)
@@ -582,20 +583,20 @@ void AppAdditiveExtTempTextureKokkos::melting_kernel()
 {
   // Get device views (read-only and read-write)
   auto d_T_local = k_T.d_view;
-  auto d_spin_current = buffer_spin.get_current();
-  auto d_spin_next = buffer_spin.get_next();
-  auto d_q0_current = buffer_q0.get_current();
-  auto d_q0_next = buffer_q0.get_next();
-  auto d_qx_current = buffer_qx.get_current();
-  auto d_qx_next = buffer_qx.get_next();
-  auto d_qy_current = buffer_qy.get_current();
-  auto d_qy_next = buffer_qy.get_next();
-  auto d_qz_current = buffer_qz.get_current();
-  auto d_qz_next = buffer_qz.get_next();
-  auto d_active_flag_current = buffer_active_flag.get_current();
-  auto d_active_flag_next = buffer_active_flag.get_next();
-  auto d_solid_d_current = buffer_solid_d.get_current();
-  auto d_solid_d_next = buffer_solid_d.get_next();
+  auto d_spin_current = buffer_spin.read_buffer;
+  auto d_spin_next = buffer_spin.write_buffer;
+  auto d_q0_current = buffer_q0.read_buffer;
+  auto d_q0_next = buffer_q0.write_buffer;
+  auto d_qx_current = buffer_qx.read_buffer;
+  auto d_qx_next = buffer_qx.write_buffer;
+  auto d_qy_current = buffer_qy.read_buffer;
+  auto d_qy_next = buffer_qy.write_buffer;
+  auto d_qz_current = buffer_qz.read_buffer;
+  auto d_qz_next = buffer_qz.write_buffer;
+  auto d_active_flag_current = buffer_active_flag.read_buffer;
+  auto d_active_flag_next = buffer_active_flag.write_buffer;
+  auto d_solid_d_current = buffer_solid_d.read_buffer;
+  auto d_solid_d_next = buffer_solid_d.write_buffer;
 
   // Capture parameters for lambda
   double tl_local = this->tl;
@@ -675,11 +676,11 @@ void AppAdditiveExtTempTextureKokkos::nucleation_kernel()
 {
   // Get device views
   auto d_T_local = k_T.d_view;
-  auto d_spin_current = buffer_spin.get_current();
-  auto d_active_flag_current = buffer_active_flag.get_current();
-  auto d_active_flag_next = buffer_active_flag.get_next();
-  auto d_solid_d_current = buffer_solid_d.get_current();
-  auto d_solid_d_next = buffer_solid_d.get_next();
+  auto d_spin_current = buffer_spin.read_buffer;
+  auto d_active_flag_current = buffer_active_flag.read_buffer;
+  auto d_active_flag_next = buffer_active_flag.write_buffer;
+  auto d_solid_d_current = buffer_solid_d.read_buffer;
+  auto d_solid_d_next = buffer_solid_d.write_buffer;
 
   // Capture parameters for lambda
   double tl_local = this->tl;
@@ -927,20 +928,20 @@ void AppAdditiveExtTempTextureKokkos::solidification_kernel()
 {
   // Get device views
   auto d_T_local = k_T.d_view;
-  auto d_spin_current = buffer_spin.get_current();
-  auto d_spin_next = buffer_spin.get_next();
-  auto d_q0_current = buffer_q0.get_current();
-  auto d_q0_next = buffer_q0.get_next();
-  auto d_qx_current = buffer_qx.get_current();
-  auto d_qx_next = buffer_qx.get_next();
-  auto d_qy_current = buffer_qy.get_current();
-  auto d_qy_next = buffer_qy.get_next();
-  auto d_qz_current = buffer_qz.get_current();
-  auto d_qz_next = buffer_qz.get_next();
-  auto d_active_flag_current = buffer_active_flag.get_current();
-  auto d_active_flag_next = buffer_active_flag.get_next();
-  auto d_solid_d_current = buffer_solid_d.get_current();
-  auto d_solid_d_next = buffer_solid_d.get_next();
+  auto d_spin_current = buffer_spin.read_buffer;
+  auto d_spin_next = buffer_spin.write_buffer;
+  auto d_q0_current = buffer_q0.read_buffer;
+  auto d_q0_next = buffer_q0.write_buffer;
+  auto d_qx_current = buffer_qx.read_buffer;
+  auto d_qx_next = buffer_qx.write_buffer;
+  auto d_qy_current = buffer_qy.read_buffer;
+  auto d_qy_next = buffer_qy.write_buffer;
+  auto d_qz_current = buffer_qz.read_buffer;
+  auto d_qz_next = buffer_qz.write_buffer;
+  auto d_active_flag_current = buffer_active_flag.read_buffer;
+  auto d_active_flag_next = buffer_active_flag.write_buffer;
+  auto d_solid_d_current = buffer_solid_d.read_buffer;
+  auto d_solid_d_next = buffer_solid_d.write_buffer;
 
   auto k_numneigh_d = k_numneigh.d_view;
   auto k_neighbor_d = k_neighbor.d_view;
@@ -961,6 +962,13 @@ void AppAdditiveExtTempTextureKokkos::solidification_kernel()
   auto d_grad_y_local = this->d_grad_y;
   auto d_grad_z_local = this->d_grad_z;
   auto rand_pool_local = this->rand_pool;
+
+  // Misorientation parameters (Phase 3.6)
+  double max_misorient_local = this->max_misorient;
+  double t_cool_max_local = this->t_cool_max;
+  double mis_thresh_local = this->mis_thresh;
+  double misorient_alpha_local = this->misorient_alpha;
+  int nspins_local = this->nspins;
 
   // Neighbor distance lookup (26-neighbor sc lattice)
   // Distance to each neighbor type in lattice units
@@ -1032,7 +1040,7 @@ void AppAdditiveExtTempTextureKokkos::solidification_kernel()
 
             // Use QuaternionOps from parent class to get cosine of min angle
             // This finds the minimum angle between any <100> direction and gradient
-            double cos_min_angle = AppPottsQuaternionKokkos::QuaternionOps::get_cosine_angle_q_u(q_nbr, grad_dir);
+            double cos_min_angle = QuaternionOps::get_cosine_angle_q_u(q_nbr, grad_dir);
             double theta = Kokkos::acos(cos_min_angle);
             double mobility = c1 + c2 * Kokkos::cos(c3 * theta);
 
@@ -1064,11 +1072,77 @@ void AppAdditiveExtTempTextureKokkos::solidification_kernel()
           int selected_nbr = solid_neighbor_idx[selected_idx];
 
           // Solidify: copy grain ID and quaternion from selected neighbor
-          d_spin_next(i) = d_spin_current(selected_nbr);
-          d_q0_next(i) = d_q0_current(selected_nbr);
-          d_qx_next(i) = d_qx_current(selected_nbr);
-          d_qy_next(i) = d_qy_current(selected_nbr);
-          d_qz_next(i) = d_qz_current(selected_nbr);
+          int new_spin = d_spin_current(selected_nbr);
+          double q_nbr_inherited[4] = {
+            d_q0_current(selected_nbr),
+            d_qx_current(selected_nbr),
+            d_qy_current(selected_nbr),
+            d_qz_current(selected_nbr)
+          };
+
+          // Phase 3.6: Apply misorientation rotation toward gradient
+          // Rotate orientation based on cooling rate and gradient direction
+          if (max_misorient_local > 0.0) {
+            // Calculate misorientation angle from cooling rate
+            // Exponential function: grows slowly initially, then rapidly in last ~10%
+            double normalized_temp = Tcool / t_cool_max_local;
+            double mis_angle = max_misorient_local *
+                               (Kokkos::exp(misorient_alpha_local * normalized_temp) - 1.0) /
+                               (Kokkos::exp(misorient_alpha_local) - 1.0) * MY_PI / 180.0;
+
+            // Get gradient direction (already normalized from gradient kernel)
+            double grad_dir[3] = {
+              d_grad_x_local(i),
+              d_grad_y_local(i),
+              d_grad_z_local(i)
+            };
+
+            // Normalize the inherited quaternion (should already be normalized, but ensure it)
+            double q_mag = Kokkos::sqrt(q_nbr_inherited[0] * q_nbr_inherited[0] +
+                                        q_nbr_inherited[1] * q_nbr_inherited[1] +
+                                        q_nbr_inherited[2] * q_nbr_inherited[2] +
+                                        q_nbr_inherited[3] * q_nbr_inherited[3]);
+            if (q_mag > 1.0e-15) {
+              q_nbr_inherited[0] /= q_mag;
+              q_nbr_inherited[1] /= q_mag;
+              q_nbr_inherited[2] /= q_mag;
+              q_nbr_inherited[3] /= q_mag;
+            }
+
+            // Rotate quaternion toward gradient direction
+            double q_rotated[4];
+            QuaternionOps::rotate_q_towards_u(q_nbr_inherited, grad_dir, mis_angle, q_rotated);
+
+            // Compute rotation angle between original and rotated quaternion
+            // This determines if we create a new grain
+            double dot_product = q_nbr_inherited[0] * q_rotated[0] +
+                                 q_nbr_inherited[1] * q_rotated[1] +
+                                 q_nbr_inherited[2] * q_rotated[2] +
+                                 q_nbr_inherited[3] * q_rotated[3];
+            dot_product = Kokkos::fabs(dot_product);  // Handle quaternion double cover
+            dot_product = Kokkos::fmin(1.0, dot_product);  // Clamp to avoid numerical issues
+            double direct_angle = 2.0 * Kokkos::acos(dot_product);
+
+            // If rotation exceeds threshold, create new grain with random spin
+            if (direct_angle >= mis_thresh_local) {
+              new_spin = static_cast<int>(nspins_local * generator.drand());
+            }
+
+            // Use the rotated quaternion
+            d_q0_next(i) = q_rotated[0];
+            d_qx_next(i) = q_rotated[1];
+            d_qy_next(i) = q_rotated[2];
+            d_qz_next(i) = q_rotated[3];
+          } else {
+            // No misorientation - use neighbor's orientation as-is
+            d_q0_next(i) = q_nbr_inherited[0];
+            d_qx_next(i) = q_nbr_inherited[1];
+            d_qy_next(i) = q_nbr_inherited[2];
+            d_qz_next(i) = q_nbr_inherited[3];
+          }
+
+          // Assign grain ID (may be new grain if rotation exceeded threshold)
+          d_spin_next(i) = new_spin;
 
           // Set to solid state
           d_active_flag_next(i) = 3;  // SOLID
@@ -1082,9 +1156,6 @@ void AppAdditiveExtTempTextureKokkos::solidification_kernel()
 
           // Return RNG state
           rand_pool_local.free_state(generator);
-
-          // TODO Phase 3.3: Apply misorientation (rotation toward gradient)
-          // For now, use neighbor's orientation as-is
         } else {
           // No solid neighbors within reach - remain liquid
           d_spin_next(i) = d_spin_current(i);

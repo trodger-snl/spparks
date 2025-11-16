@@ -1,6 +1,6 @@
 # Additive Manufacturing Kokkos Implementation Plan
 
-**Status:** Phase 3.1 Complete - Nucleation Implementation in Progress
+**Status:** Phase 3.3 Complete - Smoothing Implementation Next
 **Date Updated:** November 16, 2025
 **Target:** AppAdditiveExtTempTextureKokkos extending AppPottsQuaternionKokkos
 **Expected Speedup:** 30-70x for full AM simulations
@@ -8,7 +8,9 @@
 - Phase 1 (Quaternion Foundation) ✅ Complete
 - Phase 2 (Temperature/Gradients) ✅ Substantially Complete (timing issue documented)
 - Phase 3.1 (Melting Kernel + RNG) ✅ Complete
-- Phase 3.2 (Nucleation) 🔄 In Progress
+- Phase 3.2 (Nucleation + Fast-Forward) ✅ Complete
+- Phase 3.3 (Solidification + Texture) ✅ Complete
+- Phase 3.4 (Smoothing) 🔄 Next
 
 ---
 

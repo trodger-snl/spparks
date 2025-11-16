@@ -754,13 +754,195 @@ void AppAdditiveExtTempTextureKokkos::nucleation_kernel()
 }
 
 /* ----------------------------------------------------------------------
-   Solidification kernel: Stub for Phase 3.3
+   Solidification kernel: Epitaxial growth with texture weighting
+   Phase 3.3: Liquid sites captured by solid neighbors based on texture
 ------------------------------------------------------------------------- */
 
 void AppAdditiveExtTempTextureKokkos::solidification_kernel()
 {
-  // TODO Phase 3.3: Implement epitaxial growth with texture weighting
-  // For now, this is a placeholder
+  // Get device views
+  auto d_T_local = k_T.d_view;
+  auto d_spin_current = buffer_spin.get_current();
+  auto d_spin_next = buffer_spin.get_next();
+  auto d_q0_current = buffer_q0.get_current();
+  auto d_q0_next = buffer_q0.get_next();
+  auto d_qx_current = buffer_qx.get_current();
+  auto d_qx_next = buffer_qx.get_next();
+  auto d_qy_current = buffer_qy.get_current();
+  auto d_qy_next = buffer_qy.get_next();
+  auto d_qz_current = buffer_qz.get_current();
+  auto d_qz_next = buffer_qz.get_next();
+  auto d_active_flag_current = buffer_active_flag.get_current();
+  auto d_active_flag_next = buffer_active_flag.get_next();
+  auto d_solid_d_current = buffer_solid_d.get_current();
+  auto d_solid_d_next = buffer_solid_d.get_next();
+
+  auto k_numneigh_d = k_numneigh.d_view;
+  auto k_neighbor_d = k_neighbor.d_view;
+
+  // Capture parameters
+  double tl_local = this->tl;
+  double ts_local = this->ts;
+  double dt_local = this->dt;
+  int nlocal_local = this->nlocal;
+  int nrefine_local = this->nrefine;
+  double dx_local = this->dx;
+  auto d_solid_front_coeffs = this->d_solid_front_coeffs;
+  int solid_front_length_local = this->solid_front_length;
+  auto d_texture_params = this->d_texture_params;
+  auto d_G_local = this->d_G;
+  auto d_V_local = this->d_V;
+  auto d_grad_x_local = this->d_grad_x;
+  auto d_grad_y_local = this->d_grad_y;
+  auto d_grad_z_local = this->d_grad_z;
+  auto rand_pool_local = this->rand_pool;
+
+  // Neighbor distance lookup (26-neighbor sc lattice)
+  // Distance to each neighbor type in lattice units
+  constexpr double neigh_dist[26] = {
+    1.732050808, 1.414213562, 1.732050808,  // Layer z=-1: corners, edges, corners
+    1.414213562, 1.000000000, 1.414213562,
+    1.732050808, 1.414213562, 1.732050808,
+    1.414213562, 1.000000000, 1.414213562,  // Layer z=0: edges, faces, edges
+                 1.000000000,                // (skip center)
+    1.414213562, 1.000000000, 1.414213562,
+    1.732050808, 1.414213562, 1.732050808,  // Layer z=1: corners, edges, corners
+    1.414213562, 1.000000000, 1.414213562,
+    1.732050808, 1.414213562, 1.732050808
+  };
+
+  // Solidification kernel: parallel over all local sites
+  Kokkos::parallel_for("SolidificationKernel", nlocal_local,
+    KOKKOS_LAMBDA(int i) {
+      double T_i = d_T_local(i);
+      int active_flag_i = d_active_flag_current(i);
+
+      // Check if site is liquid and below liquidus
+      if (active_flag_i == 2 && T_i < tl_local) {
+        double Tcool = tl_local - T_i;
+        double solid_d_i = d_solid_d_current(i);
+
+        // Advance solid front distance: solid_d += V(Tcool) * dt
+        double V_advance = 0.0;
+        double Tcool_power = 1.0;
+        for (int k = solid_front_length_local - 1; k >= 0; k--) {
+          V_advance += d_solid_front_coeffs(k) * Tcool_power;
+          Tcool_power *= Tcool;
+        }
+        solid_d_i += V_advance * dt_local;
+
+        // Find solid neighbors within reach and calculate texture weights
+        int nn = k_numneigh_d(i);
+        int num_solid_neighbors = 0;
+        double cumulative_weight[26];  // Max 26 neighbors
+        int solid_neighbor_idx[26];
+
+        double cumulative_sum = 0.0;
+        for (int j = 0; j < nn && j < 26; j++) {
+          int nbr = k_neighbor_d(i, j);
+          int nbr_flag = d_active_flag_current(nbr);
+
+          // Check if neighbor is solid (active_flag == 1 or 3) and within reach
+          if ((nbr_flag == 1 || nbr_flag == 3) && neigh_dist[j] * dx_local <= solid_d_i) {
+            // Get neighbor quaternion
+            double q_nbr[4] = {
+              d_q0_current(nbr),
+              d_qx_current(nbr),
+              d_qy_current(nbr),
+              d_qz_current(nbr)
+            };
+
+            // Get gradient direction at this site (normalized)
+            double grad_dir[3] = {
+              d_grad_x_local(i),
+              d_grad_y_local(i),
+              d_grad_z_local(i)
+            };
+
+            // Compute texture weight: mobility = c1 + c2 * cos(c3 * theta)
+            // where theta is angle between crystal <100> and gradient
+            double c1 = d_texture_params(0);
+            double c2 = d_texture_params(1);
+            double c3 = d_texture_params(2);
+
+            // Use QuaternionOps from parent class to get cosine of min angle
+            // This finds the minimum angle between any <100> direction and gradient
+            double cos_min_angle = AppPottsQuaternionKokkos::QuaternionOps::get_cosine_angle_q_u(q_nbr, grad_dir);
+            double theta = Kokkos::acos(cos_min_angle);
+            double mobility = c1 + c2 * Kokkos::cos(c3 * theta);
+
+            // Accumulate weight (must be positive)
+            if (mobility > 0.0) {
+              cumulative_sum += mobility;
+              cumulative_weight[num_solid_neighbors] = cumulative_sum;
+              solid_neighbor_idx[num_solid_neighbors] = nbr;
+              num_solid_neighbors++;
+            }
+          }
+        }
+
+        // If we have solid neighbors, perform stochastic selection
+        if (num_solid_neighbors > 0) {
+          // Get RNG state
+          auto generator = rand_pool_local.get_state();
+          double rand_val = generator.drand() * cumulative_sum;
+
+          // Find selected neighbor using binary-like search
+          int selected_idx = 0;
+          for (int k = 0; k < num_solid_neighbors; k++) {
+            if (rand_val <= cumulative_weight[k]) {
+              selected_idx = k;
+              break;
+            }
+          }
+
+          int selected_nbr = solid_neighbor_idx[selected_idx];
+
+          // Solidify: copy grain ID and quaternion from selected neighbor
+          d_spin_next(i) = d_spin_current(selected_nbr);
+          d_q0_next(i) = d_q0_current(selected_nbr);
+          d_qx_next(i) = d_qx_current(selected_nbr);
+          d_qy_next(i) = d_qy_current(selected_nbr);
+          d_qz_next(i) = d_qz_current(selected_nbr);
+
+          // Set to solid state
+          d_active_flag_next(i) = 3;  // SOLID
+
+          // Set solid_d flag to trigger smoothing countdown
+          d_solid_d_next(i) = -1.0;
+
+          // Record solidification parameters
+          d_V_local(i) = V_advance;
+          // Gradient already computed by gradient kernel
+
+          // Return RNG state
+          rand_pool_local.free_state(generator);
+
+          // TODO Phase 3.3: Apply misorientation (rotation toward gradient)
+          // For now, use neighbor's orientation as-is
+        } else {
+          // No solid neighbors within reach - remain liquid
+          d_spin_next(i) = d_spin_current(i);
+          d_q0_next(i) = d_q0_current(i);
+          d_qx_next(i) = d_qx_current(i);
+          d_qy_next(i) = d_qy_current(i);
+          d_qz_next(i) = d_qz_current(i);
+          d_active_flag_next(i) = active_flag_i;  // Remain liquid
+          d_solid_d_next(i) = solid_d_i;  // Update advanced distance
+        }
+      } else {
+        // Not liquid or not undercooled - no change
+        d_spin_next(i) = d_spin_current(i);
+        d_q0_next(i) = d_q0_current(i);
+        d_qx_next(i) = d_qx_current(i);
+        d_qy_next(i) = d_qy_current(i);
+        d_qz_next(i) = d_qz_current(i);
+        d_active_flag_next(i) = active_flag_i;
+        d_solid_d_next(i) = d_solid_d_current(i);
+      }
+    });
+
+  Kokkos::fence();  // Ensure kernel completes before buffer swap
 }
 
 /* ----------------------------------------------------------------------
@@ -839,9 +1021,9 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   // particle_flipper_kernel();
   // swap_buffers();
 
-  // TODO Phase 3.3: Solidification kernel (epitaxial growth with texture weighting)
-  // solidification_kernel();
-  // swap_buffers();
+  // Phase 3.3: Solidification (epitaxial growth with texture weighting)
+  solidification_kernel();
+  swap_buffers();
 
   // TODO Phase 3.4: Smoothing kernel (Potts MC for boundary smoothing)
   // smoothing_kernel();

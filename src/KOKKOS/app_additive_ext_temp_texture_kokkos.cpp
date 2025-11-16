@@ -70,8 +70,12 @@ AppAdditiveExtTempTextureKokkos::AppAdditiveExtTempTextureKokkos(SPPARKS *spk, i
   nrefine = atoi(arg[4]); // Refinement MC steps after solidification
 
   // Configure array sizes (inherit from AppPottsQuaternion)
+  // Parent AppPottsQuaternionKokkos called recreate_arrays() with ndouble=4
+  // We need MORE arrays, so call recreate_arrays() again with larger ndouble
   ndouble = 9;  // q0, qx, qy, qz, mobility_out, T, solid_d, G, V
   ninteger = 2; // spin, active_flag
+  recreate_arrays();  // Reallocate iarray/darray pointers for ndouble=9
+
   allow_app_update = 1;
   app_update_only = 1;  // Skip solid-state growth for now
 
@@ -154,10 +158,18 @@ AppAdditiveExtTempTextureKokkos::~AppAdditiveExtTempTextureKokkos()
 
 void AppAdditiveExtTempTextureKokkos::grow_app()
 {
-  // Call parent to allocate spin and quaternion arrays
-  AppPottsQuaternionKokkos::grow_app();
+  // Follow same pattern as AppPottsQuaternionKokkos:
+  // Call AppPotts::grow_app() then manually set all pointers
+  // Don't call AppPottsQuaternion::grow_app() - it breaks the chain
+  AppPotts::grow_app();
 
-  // Map to darray/iarray (same indices as CPU version)
+  // Manually set quaternion pointers (from AppPottsQuaternion)
+  q0 = darray[0];
+  qx = darray[1];
+  qy = darray[2];
+  qz = darray[3];
+
+  // Set up additional AM pointers
   active_flag = iarray[1];
   mobility_out = darray[4];
   T = darray[5];
@@ -166,6 +178,20 @@ void AppAdditiveExtTempTextureKokkos::grow_app()
   V = darray[8];
 
   int nall = nlocal + nghost;
+
+  // Allocate Kokkos views for device computation
+  // Allocate neighbor arrays (same as AppPottsQuaternionKokkos)
+  k_numneigh = Kokkos::DualView<int*>("numneigh", nall);
+  if (maxneigh > 0) {
+    k_neighbor = Kokkos::DualView<int**>("neighbor", nall, maxneigh);
+  }
+
+  // Allocate double buffers for spin and quaternions (from parent)
+  buffer_spin.allocate("spin", nall);
+  buffer_q0.allocate("q0", nall);
+  buffer_qx.allocate("qx", nall);
+  buffer_qy.allocate("qy", nall);
+  buffer_qz.allocate("qz", nall);
 
   // Allocate DualView for temperature (CPU updates from HDF5, device reads)
   k_T = Kokkos::DualView<double*>("temperature", nall);
@@ -456,7 +482,7 @@ void AppAdditiveExtTempTextureKokkos::compute_gradients_kernel()
 
 void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
 {
-  // PHASE 2: Just temperature update and gradient computation
+  // PHASE 2: Temperature update and gradient computation for validation
   // PHASE 3 will add phase transition kernels (melting, nucleation, solidification)
 
   // 1. Update temperature from HDF5 source on CPU
@@ -467,6 +493,18 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
 
   // 3. Compute thermal gradients on device (cache for later use)
   compute_gradients_kernel();
+
+  // 4. Sync gradients back to host for validation/output
+  // This allows us to verify gradient computation against CPU version
+  int nall = nlocal + nghost;
+  auto h_G = Kokkos::create_mirror_view(d_G);
+  auto h_V = Kokkos::create_mirror_view(d_V);
+  Kokkos::deep_copy(h_G, d_G);
+  Kokkos::deep_copy(h_V, d_V);
+  for (int i = 0; i < nall; i++) {
+    G[i] = h_G(i);
+    V[i] = h_V(i);
+  }
 
   // TODO Phase 3: Add phase transition kernels here
   // - Melting kernel (T >= T_liquidus)

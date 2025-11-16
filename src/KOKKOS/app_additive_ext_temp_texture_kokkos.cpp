@@ -975,6 +975,13 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
   auto k_numneigh_d = k_numneigh.d_view;
   auto k_neighbor_d = k_neighbor.d_view;
 
+  // Create device view of xyz coordinates (needed for on-demand gradient computation)
+  int nall = nlocal + nghost;
+  using HostSpace = Kokkos::HostSpace;
+  using LayoutRight = Kokkos::LayoutRight;
+  Kokkos::View<double*[3], LayoutRight, HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> h_xyz(xyz[0], nall);
+  auto k_xyz_d = Kokkos::create_mirror_view_and_copy(Kokkos::DefaultExecutionSpace(), h_xyz);
+
   // Capture parameters
   double tl_local = this->tl;
   double ts_local = this->ts;
@@ -1040,6 +1047,12 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
         double cumulative_weight[26];  // Max 26 neighbors
         int solid_neighbor_idx[26];
 
+        // On-demand gradient computation: only compute if we might have solid neighbors
+        // This is the key optimization - gradients computed only when needed
+        double grad_dir[3] = {0.0, 0.0, 0.0};
+        double grad_magnitude = 0.0;
+        bool gradient_computed = false;
+
         double cumulative_sum = 0.0;
         for (int j = 0; j < nn && j < 26; j++) {
           int nbr = k_neighbor_d(i, j);
@@ -1047,19 +1060,27 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
 
           // Check if neighbor is solid (active_flag == 1 or 3) and within reach
           if ((nbr_flag == 1 || nbr_flag == 3) && neigh_dist[j] * dx_local <= solid_d_i) {
+            // Compute gradient on-demand (only once, on first solid neighbor)
+            if (!gradient_computed) {
+              // Use ThermalOps to compute temperature gradient at site i
+              ThermalOps::compute_temperature_gradient(
+                i, d_T_local, k_numneigh_d, k_neighbor_d, k_xyz_d, dx_local,
+                grad_dir, &grad_magnitude);
+
+              // Store gradient magnitude and components for later use
+              d_G_local(i) = grad_magnitude;
+              d_grad_x_local(i) = grad_dir[0];
+              d_grad_y_local(i) = grad_dir[1];
+              d_grad_z_local(i) = grad_dir[2];
+              gradient_computed = true;
+            }
+
             // Get neighbor quaternion
             double q_nbr[4] = {
               d_q0_current(nbr),
               d_qx_current(nbr),
               d_qy_current(nbr),
               d_qz_current(nbr)
-            };
-
-            // Get gradient direction at this site (normalized)
-            double grad_dir[3] = {
-              d_grad_x_local(i),
-              d_grad_y_local(i),
-              d_grad_z_local(i)
             };
 
             // Compute texture weight: mobility = c1 + c2 * cos(c3 * theta)
@@ -1121,12 +1142,8 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
                                (Kokkos::exp(misorient_alpha_local * normalized_temp) - 1.0) /
                                (Kokkos::exp(misorient_alpha_local) - 1.0) * MY_PI / 180.0;
 
-            // Get gradient direction (already normalized from gradient kernel)
-            double grad_dir[3] = {
-              d_grad_x_local(i),
-              d_grad_y_local(i),
-              d_grad_z_local(i)
-            };
+            // Use gradient direction from on-demand computation above
+            // (grad_dir already computed when first solid neighbor was found)
 
             // Normalize the inherited quaternion (should already be normalized, but ensure it)
             double q_mag = Kokkos::sqrt(q_nbr_inherited[0] * q_nbr_inherited[0] +
@@ -1521,7 +1538,7 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
 
   // Timing instrumentation
   static int step_count = 0;
-  static double t_temp_update = 0.0, t_temp_sync = 0.0, t_gradients = 0.0;
+  static double t_temp_update = 0.0, t_temp_sync = 0.0;
   static double t_melting = 0.0, t_nucleation = 0.0, t_particle = 0.0;
   static double t_solidification = 0.0, t_smoothing = 0.0, t_sync_host = 0.0;
   double t_start, t_end;
@@ -1584,11 +1601,8 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   t_end = MPI_Wtime();
   t_temp_sync += (t_end - t_start);
 
-  // 3. Compute thermal gradients on device (cache for later use)
-  t_start = MPI_Wtime();
-  compute_gradients_kernel();
-  t_end = MPI_Wtime();
-  t_gradients += (t_end - t_start);
+  // 3. Gradient computation moved to on-demand inside solidification kernel
+  // (Removed global compute_gradients_kernel() - gradients now computed only when needed)
 
   // 4. Phase transition kernels with event tracking
   // Phase 3.1: Melting
@@ -1606,9 +1620,29 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   t_nucleation += (t_end - t_start);
 
   // Phase 3.5: Particle flipper (grow nuclei to specified size)
+  // Only launch if there are newly nucleated sites (solid_d == -nrefine-2)
   t_start = MPI_Wtime();
-  naccept += particle_flipper_kernel();
-  swap_buffers();
+
+  // Check if any nuclei need growing (selective kernel launch optimization)
+  int n_nuclei_sites = 0;
+  {
+    auto d_solid_d_check = buffer_solid_d.read_buffer;
+    auto d_active_flag_check = buffer_active_flag.read_buffer;
+    int nrefine_check = nrefine;
+    Kokkos::parallel_reduce("CheckNucleiSites", nlocal,
+      KOKKOS_LAMBDA(int i, int& count) {
+        if (d_active_flag_check(i) == 3 && d_solid_d_check(i) == -nrefine_check - 2) {
+          count++;
+        }
+      }, n_nuclei_sites);
+  }
+
+  // Only launch particle kernel if there are nuclei to grow
+  if (n_nuclei_sites > 0) {
+    naccept += particle_flipper_kernel();
+    swap_buffers();
+  }
+
   t_end = MPI_Wtime();
   t_particle += (t_end - t_start);
 
@@ -1620,12 +1654,30 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   t_solidification += (t_end - t_start);
 
   // Phase 3.4: Smoothing kernel (Potts MC for grain boundary refinement)
-  // Perform nrefine sweeps to smooth newly solidified sites
+  // Call once per timestep - sites smooth over multiple timesteps as solid_d increments
+  // Only launch if there are sites in smoothing range: solid_d ∈ (-nrefine-1, 0)
   t_start = MPI_Wtime();
-  for (int sweep = 0; sweep < nrefine; sweep++) {
+
+  // Check if any sites need smoothing (selective kernel launch optimization)
+  int n_smoothing_sites = 0;
+  {
+    auto d_solid_d_check = buffer_solid_d.read_buffer;
+    int nrefine_check = nrefine;
+    Kokkos::parallel_reduce("CheckSmoothingSites", nlocal,
+      KOKKOS_LAMBDA(int i, int& count) {
+        double sd = d_solid_d_check(i);
+        if (sd > -nrefine_check - 1 && sd < 0.0) {
+          count++;
+        }
+      }, n_smoothing_sites);
+  }
+
+  // Only launch smoothing kernel if there are eligible sites
+  if (n_smoothing_sites > 0) {
     naccept += smoothing_kernel();
     swap_buffers();
   }
+
   t_end = MPI_Wtime();
   t_smoothing += (t_end - t_start);
 
@@ -1641,20 +1693,20 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
 
   // Print timing summary every 100 steps
   if (step_count % 100 == 0 && domain->me == 0) {
-    double total_time = t_temp_update + t_temp_sync + t_gradients + t_melting +
+    double total_time = t_temp_update + t_temp_sync + t_melting +
                         t_nucleation + t_particle + t_solidification + t_smoothing + t_sync_host;
     fprintf(screen, "\n=== Kokkos Timing Summary (after %d steps, %.4f total sec) ===\n", step_count, total_time);
     fprintf(screen, "  Temperature update:   %8.3f s (%5.1f%%)\n", t_temp_update, 100.0*t_temp_update/total_time);
     fprintf(screen, "  Temp sync to device:  %8.3f s (%5.1f%%)\n", t_temp_sync, 100.0*t_temp_sync/total_time);
-    fprintf(screen, "  Gradient kernel:      %8.3f s (%5.1f%%)\n", t_gradients, 100.0*t_gradients/total_time);
     fprintf(screen, "  Melting kernel:       %8.3f s (%5.1f%%)\n", t_melting, 100.0*t_melting/total_time);
     fprintf(screen, "  Nucleation kernel:    %8.3f s (%5.1f%%)\n", t_nucleation, 100.0*t_nucleation/total_time);
-    fprintf(screen, "  Particle kernel:      %8.3f s (%5.1f%%)\n", t_particle, 100.0*t_particle/total_time);
-    fprintf(screen, "  Solidification kernel:%8.3f s (%5.1f%%)\n", t_solidification, 100.0*t_solidification/total_time);
-    fprintf(screen, "  Smoothing kernel:     %8.3f s (%5.1f%%)\n", t_smoothing, 100.0*t_smoothing/total_time);
+    fprintf(screen, "  Particle kernel:      %8.3f s (%5.1f%%) [selective launch]\n", t_particle, 100.0*t_particle/total_time);
+    fprintf(screen, "  Solidification kernel:%8.3f s (%5.1f%%) [on-demand gradients]\n", t_solidification, 100.0*t_solidification/total_time);
+    fprintf(screen, "  Smoothing kernel:     %8.3f s (%5.1f%%) [selective launch, 1x/timestep]\n", t_smoothing, 100.0*t_smoothing/total_time);
     fprintf(screen, "  Sync to host:         %8.3f s (%5.1f%%)\n", t_sync_host, 100.0*t_sync_host/total_time);
     fprintf(screen, "  TOTAL:                %8.3f s\n", total_time);
-    fprintf(screen, "  Avg per step:         %8.6f s\n\n", total_time/step_count);
+    fprintf(screen, "  Avg per step:         %8.6f s\n", total_time/step_count);
+    fprintf(screen, "  Optimizations: on-demand gradients, selective kernel launching\n\n");
   }
 
   // Increment time

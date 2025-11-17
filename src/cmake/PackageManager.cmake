@@ -352,6 +352,8 @@ function(install_stitch_package)
     endif()
 
     # Step 3: Verify we can find the library
+    # Clear any cached NOTFOUND result from previous configurations
+    unset(STITCH_LIBRARY CACHE)
     find_library(STITCH_LIBRARY
         NAMES stitch
         PATHS "${STITCH_LIB_DIR}/liblink"

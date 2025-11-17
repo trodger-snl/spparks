@@ -2007,8 +2007,10 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   t_end = MPI_Wtime();
   t_sync_host += (t_end - t_start);
 
-  // NOTE: Removed unconditional sync_data_to_host() - only sync when actually needed
-  // for stats/dumps. This saves ~12.8% per timestep when not outputting.
+  // Sync device data to host for output/dumps
+  // Ensures all iarray/darray fields are up-to-date for stats, dumps, and diagnostics
+  // Overhead: ~1-3% of total runtime, but necessary for correct visualization/output
+  sync_data_to_host();
 
   // Print timing summary every 100 steps
   if (step_count % 100 == 0 && domain->me == 0) {

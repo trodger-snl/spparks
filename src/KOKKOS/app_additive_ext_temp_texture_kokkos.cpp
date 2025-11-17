@@ -327,7 +327,7 @@ void AppAdditiveExtTempTextureKokkos::sync_data_to_device()
   buffer_solid_d.sync_to_device(solid_d);
 
   // Note: Temperature k_T is synced separately in sync_temperature_to_device()
-  // Gradients are device-only, computed on device, no host sync needed
+  // Gradients d_G and d_V are device-computed, synced to host only when needed for output
 }
 
 /* ----------------------------------------------------------------------
@@ -384,8 +384,8 @@ void AppAdditiveExtTempTextureKokkos::sync_data_to_host()
   buffer_mobility_out.sync_to_host(mobility_out);
   buffer_solid_d.sync_to_host(solid_d);
 
-  // Optionally sync gradients to host if needed for CPU operations
-  // For now, G and V are computed on device and only needed for output
+  // CRITICAL FIX: Sync gradient and velocity arrays for output/visualization
+  // These are device-only views that must be copied to host for STITCH dumps
   auto h_G = Kokkos::create_mirror_view(d_G);
   auto h_V = Kokkos::create_mirror_view(d_V);
   Kokkos::deep_copy(h_G, d_G);

@@ -146,6 +146,14 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
 
   int t_active;
 
+  // Debug counters for gradient/velocity analysis
+  int debug_nucleation_count;
+  int debug_solidification_count;
+  int debug_zero_G_count;
+  int debug_nonzero_G_count;
+  double debug_G_sum;
+  double debug_V_sum;
+
   // Sync helpers (extend parent class)
   void sync_data_to_device();
   void sync_data_to_host();

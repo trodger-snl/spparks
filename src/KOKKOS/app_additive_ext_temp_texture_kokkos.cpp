@@ -142,6 +142,14 @@ AppAdditiveExtTempTextureKokkos::AppAdditiveExtTempTextureKokkos(SPPARKS *spk, i
   t_active = 0;
   time_step = dt;
 
+  // Initialize debug counters
+  debug_nucleation_count = 0;
+  debug_solidification_count = 0;
+  debug_zero_G_count = 0;
+  debug_nonzero_G_count = 0;
+  debug_G_sum = 0.0;
+  debug_V_sum = 0.0;
+
   // Initialize RNG pool (seed will be set in init_app() using ranapp->state())
   rand_pool = Kokkos::Random_XorShift64_Pool<>();
 }
@@ -689,6 +697,15 @@ int AppAdditiveExtTempTextureKokkos::nucleation_kernel()
   // Get device views
   auto d_T_local = k_T.d_view;
   auto d_spin_current = buffer_spin.read_buffer;
+  auto d_spin_next = buffer_spin.write_buffer;
+  auto d_q0_current = buffer_q0.read_buffer;
+  auto d_q0_next = buffer_q0.write_buffer;
+  auto d_qx_current = buffer_qx.read_buffer;
+  auto d_qx_next = buffer_qx.write_buffer;
+  auto d_qy_current = buffer_qy.read_buffer;
+  auto d_qy_next = buffer_qy.write_buffer;
+  auto d_qz_current = buffer_qz.read_buffer;
+  auto d_qz_next = buffer_qz.write_buffer;
   auto d_active_flag_current = buffer_active_flag.read_buffer;
   auto d_active_flag_next = buffer_active_flag.write_buffer;
   auto d_solid_d_current = buffer_solid_d.read_buffer;
@@ -697,7 +714,9 @@ int AppAdditiveExtTempTextureKokkos::nucleation_kernel()
   // Capture parameters for lambda
   double tl_local = this->tl;
   int nlocal_local = this->nlocal;
+  int nspins_local = this->nspins;
   int nrefine_local = this->nrefine;
+  auto rand_pool_local = this->rand_pool;
   auto d_nucleation_flags = this->d_nucleation_flags;
   auto d_nucleation_temps = this->d_nucleation_temps;
   auto d_nucleation_sizes = this->d_nucleation_sizes;
@@ -707,10 +726,16 @@ int AppAdditiveExtTempTextureKokkos::nucleation_kernel()
   auto d_V_local = this->d_V;
   double dx_local = this->dx;
 
+  // Debug counters for this kernel
+  int debug_zero_G_local = 0;
+  int debug_nonzero_G_local = 0;
+  double debug_G_sum_local = 0.0;
+  double debug_V_sum_local = 0.0;
+
   // Nucleation kernel: parallel over all local sites with event tracking
   int naccept_local = 0;
   Kokkos::parallel_reduce("NucleationKernel", nlocal_local,
-    KOKKOS_LAMBDA(int i, int& count) {
+    KOKKOS_LAMBDA(int i, int& count, int& zero_G_count, int& nonzero_G_count, double& G_sum, double& V_sum) {
       // Read current state
       double T_i = d_T_local(i);
       int active_flag_i = d_active_flag_current(i);
@@ -733,6 +758,33 @@ int AppAdditiveExtTempTextureKokkos::nucleation_kernel()
             // Negative value triggers smoothing countdown later
             d_solid_d_next(i) = -nrefine_local - 2;
 
+            // CRITICAL FIX: Update spin and quaternions to create complete nucleus
+            // Keep the assigned spin (already set during initialization)
+            d_spin_next(i) = spin_i;
+
+            // Generate random unit quaternion for new grain orientation
+            // Using Marsaglia method (same as melting kernel)
+            auto generator = rand_pool_local.get_state();
+            double x0, x1, x2, x3, r1, r2;
+            do {
+              x0 = 2.0 * generator.drand() - 1.0;
+              x1 = 2.0 * generator.drand() - 1.0;
+              r1 = x0*x0 + x1*x1;
+            } while (r1 >= 1.0);
+
+            do {
+              x2 = 2.0 * generator.drand() - 1.0;
+              x3 = 2.0 * generator.drand() - 1.0;
+              r2 = x2*x2 + x3*x3;
+            } while (r2 >= 1.0);
+
+            double s = Kokkos::sqrt((1.0 - r1) / r2);
+            d_q0_next(i) = x0;
+            d_qx_next(i) = x1;
+            d_qy_next(i) = x2 * s;
+            d_qz_next(i) = x3 * s;
+            rand_pool_local.free_state(generator);
+
             // Compute solidification velocity using polynomial: V = Σ coeffs[k] * Tcool^k
             double V_i = 0.0;
             double Tcool_power = 1.0;
@@ -745,6 +797,17 @@ int AppAdditiveExtTempTextureKokkos::nucleation_kernel()
             // Note: Gradient G is already computed by compute_gradients_kernel()
             // No need to recompute here
 
+            // DEBUG: Check G and V values after nucleation
+            double G_val = d_G_local(i);
+            double V_val = d_V_local(i);
+            if (G_val == 0.0) {
+              zero_G_count++;
+            } else {
+              nonzero_G_count++;
+              G_sum += G_val;
+              V_sum += V_val;
+            }
+
             // TODO Phase 3.2: Particle flipper to grow nucleus
             // For now, nucleus is single site
             // Will implement particle growth in separate kernel
@@ -752,20 +815,42 @@ int AppAdditiveExtTempTextureKokkos::nucleation_kernel()
             // Can nucleate but hasn't reached critical undercooling yet
             d_active_flag_next(i) = active_flag_i;  // Remain liquid
             d_solid_d_next(i) = d_solid_d_current(i);
+            d_spin_next(i) = d_spin_current(i);
+            d_q0_next(i) = d_q0_current(i);
+            d_qx_next(i) = d_qx_current(i);
+            d_qy_next(i) = d_qy_current(i);
+            d_qz_next(i) = d_qz_current(i);
           }
         } else {
           // This spin cannot nucleate
           d_active_flag_next(i) = active_flag_i;  // Remain liquid
           d_solid_d_next(i) = d_solid_d_current(i);
+          d_spin_next(i) = d_spin_current(i);
+          d_q0_next(i) = d_q0_current(i);
+          d_qx_next(i) = d_qx_current(i);
+          d_qy_next(i) = d_qy_current(i);
+          d_qz_next(i) = d_qz_current(i);
         }
       } else {
         // Not liquid or not undercooled - no change
         d_active_flag_next(i) = active_flag_i;
         d_solid_d_next(i) = d_solid_d_current(i);
+        d_spin_next(i) = d_spin_current(i);
+        d_q0_next(i) = d_q0_current(i);
+        d_qx_next(i) = d_qx_current(i);
+        d_qy_next(i) = d_qy_current(i);
+        d_qz_next(i) = d_qz_current(i);
       }
-    }, naccept_local);
+    }, naccept_local, debug_zero_G_local, debug_nonzero_G_local, debug_G_sum_local, debug_V_sum_local);
 
   // Fence removed - single fence at end of app_update() handles all kernels
+
+  // DEBUG: Accumulate kernel results into class members
+  debug_nucleation_count += naccept_local;
+  debug_zero_G_count += debug_zero_G_local;
+  debug_nonzero_G_count += debug_nonzero_G_local;
+  debug_G_sum += debug_G_sum_local;
+  debug_V_sum += debug_V_sum_local;
 
   return naccept_local;
 }
@@ -1023,10 +1108,16 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
     1.732050808, 1.414213562, 1.732050808
   };
 
+  // Debug counters for this kernel
+  int debug_zero_G_local = 0;
+  int debug_nonzero_G_local = 0;
+  double debug_G_sum_local = 0.0;
+  double debug_V_sum_local = 0.0;
+
   // Solidification kernel: parallel over all local sites with event tracking
   int naccept_local = 0;
   Kokkos::parallel_reduce("SolidificationKernel", nlocal_local,
-    KOKKOS_LAMBDA(int i, int& count) {
+    KOKKOS_LAMBDA(int i, int& count, int& zero_G_count, int& nonzero_G_count, double& G_sum, double& V_sum) {
       double T_i = d_T_local(i);
       int active_flag_i = d_active_flag_current(i);
 
@@ -1206,6 +1297,17 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
           d_V_local(i) = V_advance;
           // Gradient already computed by gradient kernel
 
+          // DEBUG: Check G and V values after solidification
+          double G_val = d_G_local(i);
+          double V_val = d_V_local(i);
+          if (G_val == 0.0) {
+            zero_G_count++;
+          } else {
+            nonzero_G_count++;
+            G_sum += G_val;
+            V_sum += V_val;
+          }
+
           // Return RNG state
           rand_pool_local.free_state(generator);
         } else {
@@ -1228,9 +1330,16 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
         d_active_flag_next(i) = active_flag_i;
         d_solid_d_next(i) = d_solid_d_current(i);
       }
-    }, naccept_local);
+    }, naccept_local, debug_zero_G_local, debug_nonzero_G_local, debug_G_sum_local, debug_V_sum_local);
 
   // Fence removed - single fence at end of app_update() handles all kernels
+
+  // DEBUG: Accumulate kernel results into class members
+  debug_solidification_count += naccept_local;
+  debug_zero_G_count += debug_zero_G_local;
+  debug_nonzero_G_count += debug_nonzero_G_local;
+  debug_G_sum += debug_G_sum_local;
+  debug_V_sum += debug_V_sum_local;
 
   return naccept_local;
 }
@@ -1312,9 +1421,10 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel()
         // Increment solid_d if in smoothing range
         if (solid_d_i < 0.0 && solid_d_i > -nrefine_local - 1) {
           d_solid_d_next(i) = solid_d_i + 1.0;
-          // If just reached 0, mark as ACTIVE
+          // CRITICAL FIX: Reset solid_d to 0 when smoothing completes
+          // Keep active_flag unchanged (should remain SOLID=3)
+          // CPU version does NOT change active_flag after smoothing
           if (d_solid_d_next(i) >= 0.0) {
-            d_active_flag_next(i) = 1;  // ACTIVE
             d_solid_d_next(i) = 0.0;
           }
         } else {
@@ -1392,8 +1502,10 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel()
         d_qz_next(i) = q_i[3];
         d_active_flag_next(i) = active_flag_i;
         d_solid_d_next(i) = solid_d_i + 1.0;
+        // CRITICAL FIX: Reset solid_d to 0 when smoothing completes
+        // Keep active_flag unchanged (should remain SOLID=3)
+        // CPU version does NOT change active_flag after smoothing
         if (d_solid_d_next(i) >= 0.0) {
-          d_active_flag_next(i) = 1;  // ACTIVE
           d_solid_d_next(i) = 0.0;
         }
         return;
@@ -1510,13 +1622,13 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel()
       // Increment solid_d counter (moves toward 0)
       d_solid_d_next(i) = solid_d_i + 1.0;
 
-      // If smoothing complete, mark as ACTIVE
+      // CRITICAL FIX: Keep active_flag = 3 (SOLID) when smoothing completes
+      // CPU version does NOT change active_flag after smoothing
+      // Sites remain solid (active_flag=3) permanently until melted
       if (d_solid_d_next(i) >= 0.0) {
-        d_active_flag_next(i) = 1;  // ACTIVE
-        d_solid_d_next(i) = 0.0;
-      } else {
-        d_active_flag_next(i) = active_flag_i;
+        d_solid_d_next(i) = 0.0;  // Reset counter
       }
+      d_active_flag_next(i) = active_flag_i;  // Keep current state (should be 3=SOLID)
 
       // Track acceptance for stats output
       if (accept) count++;
@@ -1658,8 +1770,10 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel_efficient(
         d_qz_next(i) = q_i[3];
         d_active_flag_next(i) = active_flag_i;
         d_solid_d_next(i) = solid_d_i + 1.0;
+        // CRITICAL FIX: Reset solid_d to 0 when smoothing completes
+        // Keep active_flag unchanged (should remain SOLID=3)
+        // CPU version does NOT change active_flag after smoothing
         if (d_solid_d_next(i) >= 0.0) {
-          d_active_flag_next(i) = 1;
           d_solid_d_next(i) = 0.0;
         }
         return;
@@ -1775,12 +1889,13 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel_efficient(
 
       // Increment solid_d counter
       d_solid_d_next(i) = solid_d_i + 1.0;
+      // CRITICAL FIX: Keep active_flag = 3 (SOLID) when smoothing completes
+      // CPU version does NOT change active_flag after smoothing
+      // Sites remain solid (active_flag=3) permanently until melted
       if (d_solid_d_next(i) >= 0.0) {
-        d_active_flag_next(i) = 1;  // ACTIVE
-        d_solid_d_next(i) = 0.0;
-      } else {
-        d_active_flag_next(i) = active_flag_i;
+        d_solid_d_next(i) = 0.0;  // Reset counter
       }
+      d_active_flag_next(i) = active_flag_i;  // Keep current state (should be 3=SOLID)
 
       rand_pool_local.free_state(generator);
     }, naccept_local);
@@ -1902,6 +2017,12 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   // OPTIMIZATION 2A: Check if any sites are in undercooled liquid state before launching
   t_start = MPI_Wtime();
 
+  // CRITICAL FIX: Always launch nucleation kernel (no conditional check)
+  // The kernel has internal active_flag checks, so it's safe to launch on all sites.
+  // Conditional launch prevents recovery once all liquid sites are depleted.
+  // Overhead of empty kernel << overhead of parallel_reduce pre-scan.
+
+  /* REMOVED: Conditional launch logic that prevented recovery
   int n_nucleation_candidates = 0;
   {
     auto d_T_check = k_T.d_view;
@@ -1921,9 +2042,10 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
 
   // Only launch nucleation kernel if there are undercooled liquid sites
   if (n_nucleation_candidates > 0) {
-    naccept += nucleation_kernel();
-    swap_buffers();
-  }
+  */
+
+  naccept += nucleation_kernel();
+  swap_buffers();
 
   t_end = MPI_Wtime();
   t_nucleation += (t_end - t_start);
@@ -2011,6 +2133,41 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   // Ensures all iarray/darray fields are up-to-date for stats, dumps, and diagnostics
   // Overhead: ~1-3% of total runtime, but necessary for correct visualization/output
   sync_data_to_host();
+
+  // MPI ghost communication - exchange boundary data between processors
+  // CRITICAL FIX: Without this, ghost sites retain stale data, causing rectangular
+  // boundary artifacts where active_flag values don't propagate across MPI boundaries
+  // This matches the CPU version's behavior (app_additive_ext_temp_texture.cpp:415)
+  if (nprocs > 1) {
+    timer->stamp();
+    comm->all();  // Exchange ghost site data (active_flag, spin, quaternions, etc.)
+    timer->stamp(TIME_COMM);
+
+    // Sync updated ghost data back to device for next timestep
+    // Comment at line 284 says "called after MPI ghost exchange" - this is it!
+    sync_data_to_device();
+  }
+
+  // DEBUG: Print gradient/velocity statistics every 10 steps
+  if (step_count % 10 == 0 && domain->me == 0) {
+    int total_events = debug_nucleation_count + debug_solidification_count;
+    double zero_fraction = (total_events > 0) ? (double)debug_zero_G_count / total_events : 0.0;
+    double avg_G = (debug_nonzero_G_count > 0) ? debug_G_sum / debug_nonzero_G_count : 0.0;
+    double avg_V = (debug_nonzero_G_count > 0) ? debug_V_sum / debug_nonzero_G_count : 0.0;
+
+    fprintf(screen, "DEBUG [t=%.6f, step=%d]: Nuc=%d, Solid=%d, ZeroG=%d (%.1f%%), NonZeroG=%d, AvgG=%.2e, AvgV=%.2e\n",
+            time, step_count, debug_nucleation_count, debug_solidification_count,
+            debug_zero_G_count, zero_fraction*100, debug_nonzero_G_count,
+            avg_G, avg_V);
+
+    // Reset counters for next interval
+    debug_nucleation_count = 0;
+    debug_solidification_count = 0;
+    debug_zero_G_count = 0;
+    debug_nonzero_G_count = 0;
+    debug_G_sum = 0.0;
+    debug_V_sum = 0.0;
+  }
 
   // Print timing summary every 100 steps
   if (step_count % 100 == 0 && domain->me == 0) {

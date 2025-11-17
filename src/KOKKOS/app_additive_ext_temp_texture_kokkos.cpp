@@ -477,6 +477,9 @@ void AppAdditiveExtTempTextureKokkos::compute_gradients_kernel()
   Kokkos::View<double*[3], LayoutRight, HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> h_xyz(xyz[0], nall);
   auto k_xyz_d = Kokkos::create_mirror_view_and_copy(Kokkos::DefaultExecutionSpace(), h_xyz);
 
+  // Get active_flag for melt surface detection
+  auto d_active_flag = buffer_active_flag.read_buffer;
+
   // Capture member variables for lambda
   double dx_lattice = this->dx;
   auto d_G_local = this->d_G;
@@ -491,7 +494,7 @@ void AppAdditiveExtTempTextureKokkos::compute_gradients_kernel()
       double gradient[3], magnitude;
 
       ThermalOps::compute_temperature_gradient(
-        i, d_T, k_numneigh_d, k_neighbor_d, k_xyz_d,
+        i, d_T, d_active_flag, k_numneigh_d, k_neighbor_d, k_xyz_d,
         dx_lattice, gradient, &magnitude);
 
       // Cache results for later use
@@ -1064,7 +1067,7 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
             if (!gradient_computed) {
               // Use ThermalOps to compute temperature gradient at site i
               ThermalOps::compute_temperature_gradient(
-                i, d_T_local, k_numneigh_d, k_neighbor_d, k_xyz_d, dx_local,
+                i, d_T_local, d_active_flag_current, k_numneigh_d, k_neighbor_d, k_xyz_d, dx_local,
                 grad_dir, &grad_magnitude);
 
               // Store gradient magnitude and components for later use

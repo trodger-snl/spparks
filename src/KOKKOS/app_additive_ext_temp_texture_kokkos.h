@@ -185,9 +185,12 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
     // squares system A*grad = b where A is [dx dy dz] and b is temperature
     // difference. Solve 3x3 system using Cramer's rule.
     //
+    // CRITICAL: Matches CPU version's two-path logic for melt surface handling
+    //
     // Args:
     //   i: Site index (0 <= i < nlocal)
     //   d_T: Temperature field (device view, read-only)
+    //   d_active_flag: Active flag array (0=inactive, 1=active, 2=molten, 3=solid, 5=void)
     //   numneigh: Number of neighbors per site
     //   neighbor: Neighbor list [site][neighbor_index] -> neighbor_site
     //   xyz: Site coordinates [site][dimension]
@@ -204,6 +207,7 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
     static void compute_temperature_gradient(
         int i,
         const Kokkos::View<const double*>& d_T,
+        const Kokkos::View<const int*>& d_active_flag,
         const Kokkos::View<const int*>& numneigh,
         const Kokkos::View<int**>& neighbor,
         const Kokkos::View<double*[3]>& xyz,
@@ -218,6 +222,18 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
         T_neigh[j] = d_T(neighbor(i,j));
       }
 
+      // Detect melt surface: check if neighbor directly above (index 13) is inactive or active
+      // Neighbor 13 corresponds to offset [0,0,1] (directly above current site)
+      // If active_flag[neighbor[13]] <= 1, we're at melt pool surface
+      bool is_melt_surface = false;
+      if (nn > 13) {
+        int neighbor_above = neighbor(i, 13);
+        is_melt_surface = (d_active_flag(neighbor_above) <= 1);
+      }
+
+      // Get current site z-coordinate for melt surface filtering
+      double site_z = xyz(i, 2);
+
       // Build weighted least squares matrices
       // A^T * W * A (3x3 symmetric matrix, store as 9 elements)
       double AtA[9] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
@@ -229,6 +245,12 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
       // Accumulate weighted least squares matrices
       for (int n = 0; n < nn && n < 26; n++) {
         int nbr = neighbor(i,n);
+
+        // CRITICAL FIX: At melt surface, only use neighbors at or below current z
+        // This matches CPU version lines 1211-1212
+        if (is_melt_surface && xyz(nbr, 2) > site_z) {
+          continue;  // Skip neighbors above current site
+        }
 
         // Get neighbor offset from lookup table
         double dx_n = offset_map[n][0] * dx_lattice;

@@ -373,6 +373,9 @@ void AppAdditiveExtTempTexture::app_update(double dt)
 
   // Common processing for both temperature systems
 
+  // Track if any melting occurs this timestep
+  bool melting_occurred = false;
+
   //iterate through all the sites for phase transitions (applies to both systems)
   for (int i=0; i<nlocal; i++) {
     // Skip void sites - they never change state
@@ -382,6 +385,7 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     //site's temperature has gone above tl. Only do this when melting the first time
     //to avoid repeated initialization
     if( (T[i] >= tl) && active_flag[i] != 2) {
+        melting_occurred = true;
         // Time: Melting operations
         t_start = MPI_Wtime();
         active_flag[i] = 2;
@@ -416,6 +420,18 @@ void AppAdditiveExtTempTexture::app_update(double dt)
             t_end = MPI_Wtime();
             t_smoothing += (t_end - t_start);
     }
+  }
+
+  // Activate powder if melting occurred and we haven't activated yet
+  // or if it's been a while since last activation (for layer changes without fast forward)
+  if (last_powder_activation_time < 0.0 && melting_occurred) {
+    // First time activation after melting starts
+    activate_powder_sites();
+    last_powder_activation_time = time;
+  } else if (time - last_powder_activation_time > 0.001) {
+    // Periodic reactivation every 1ms to catch layer changes
+    activate_powder_sites();
+    last_powder_activation_time = time;
   }
 
   //Communicate changes

@@ -282,9 +282,7 @@ void AppAdditiveExtTempTextureKokkos::init_app()
     temperature_source->update_temperatures(0.0, 0.0);
   }
 
-  // Initialize powder layer
-  activate_powder_sites();
-  last_powder_activation_time = 0.0;
+  // Note: Powder activation happens after meltpool appears, not during init
 }
 
 /* ----------------------------------------------------------------------
@@ -2255,21 +2253,47 @@ bool AppAdditiveExtTempTextureKokkos::is_powder_eligible_site(int i) {
 /* ----------------------------------------------------------------------
    Activate powder sites that are at or below the meltpool surface
 
+   Strategy: Find the maximum z-coordinate of all molten sites (meltpool top),
+   then set all inactive sites below that level to powder (active_flag = 1).
+
    This function should be called:
-   - At initialization (init_app)
    - After fast forwards > 1 second (new layer deposition)
+   - During app_update when meltpool is present
 
    Note: For Kokkos version, we use a simple CPU-side loop since this
    operation is infrequent (only at initialization and layer changes).
    Could be converted to a kernel for very large systems if needed.
 ------------------------------------------------------------------------- */
 void AppAdditiveExtTempTextureKokkos::activate_powder_sites() {
-  int powder_activated = 0;
+  // Find local maximum z-coordinate of molten sites
+  double local_max_molten_z = -1e100;  // Very negative initial value
+  bool has_molten_sites = false;
 
   for (int i = 0; i < nlocal; i++) {
-    // Only consider inactive sites
-    if (active_flag[i] == 0) {
-      if (is_powder_eligible_site(i)) {
+    if (active_flag[i] == 2) {  // Molten site
+      has_molten_sites = true;
+      double site_z = xyz[i][2];
+      if (site_z > local_max_molten_z) {
+        local_max_molten_z = site_z;
+      }
+    }
+  }
+
+  // Find global maximum z-coordinate of molten sites across all ranks
+  double global_max_molten_z = -1e100;
+  MPI_Allreduce(&local_max_molten_z, &global_max_molten_z, 1, MPI_DOUBLE, MPI_MAX, world);
+
+  // If no meltpool exists anywhere, don't activate powder
+  if (global_max_molten_z <= -1e99) {
+    return;
+  }
+
+  // Activate all inactive sites at or below meltpool top
+  int powder_activated = 0;
+  for (int i = 0; i < nlocal; i++) {
+    if (active_flag[i] == 0) {  // Inactive site
+      double site_z = xyz[i][2];
+      if (site_z <= global_max_molten_z) {
         active_flag[i] = 1;  // Set to POWDER state
         powder_activated++;
       }
@@ -2282,8 +2306,8 @@ void AppAdditiveExtTempTextureKokkos::activate_powder_sites() {
 
   // Report activation (rank 0 only)
   if (domain->me == 0 && global_powder_activated > 0) {
-    fprintf(screen, "Powder activation at t=%.6e s: activated %d sites globally\n",
-            time, global_powder_activated);
+    fprintf(screen, "Powder activation at t=%.6e s: activated %d sites (meltpool top at z=%.3f)\n",
+            time, global_powder_activated, global_max_molten_z);
   }
 }
 

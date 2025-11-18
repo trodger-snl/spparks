@@ -2148,9 +2148,17 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   sync_data_to_host();
 
   // Activate powder once when melting first occurs
-  if (last_powder_activation_time < 0.0 && melting_occurred) {
-    activate_powder_sites();
-    last_powder_activation_time = time;
+  // CRITICAL: Use MPI_Allreduce to check if ANY rank has melting, so all ranks call activate_powder_sites()
+  // This prevents MPI deadlock where only some ranks enter the function that contains MPI_Allreduce calls
+  if (last_powder_activation_time < 0.0) {
+    int local_melting = melting_occurred ? 1 : 0;
+    int global_melting = 0;
+    MPI_Allreduce(&local_melting, &global_melting, 1, MPI_INT, MPI_SUM, world);
+
+    if (global_melting > 0) {
+      activate_powder_sites();
+      last_powder_activation_time = time;
+    }
   }
 
   // MPI ghost communication - exchange boundary data between processors

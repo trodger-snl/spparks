@@ -423,9 +423,17 @@ void AppAdditiveExtTempTexture::app_update(double dt)
   }
 
   // Activate powder once when melting first occurs
-  if (last_powder_activation_time < 0.0 && melting_occurred) {
-    activate_powder_sites();
-    last_powder_activation_time = time;
+  // CRITICAL: Use MPI_Allreduce to check if ANY rank has melting, so all ranks call activate_powder_sites()
+  // This prevents MPI deadlock where only some ranks enter the function that contains MPI_Allreduce calls
+  if (last_powder_activation_time < 0.0) {
+    int local_melting = melting_occurred ? 1 : 0;
+    int global_melting = 0;
+    MPI_Allreduce(&local_melting, &global_melting, 1, MPI_INT, MPI_SUM, world);
+
+    if (global_melting > 0) {
+      activate_powder_sites();
+      last_powder_activation_time = time;
+    }
   }
 
   //Communicate changes
@@ -2052,7 +2060,7 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
   
   // Update temperature source (may load new data)
   temperature_source->update_temperatures(dt, simulation_time);
-  
+
   // Update temperature array for all local sites
   for (int i = 0; i < nlocal; i++) {
     // Get site coordinates in lattice units
@@ -2086,7 +2094,7 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
       T[i] = temperature_source->get_temperature_at_xyz_and_time(x_physical, y_physical, z_physical, simulation_time);
     }
   }
-  
+
   timer->stamp(TIME_APP);
 }
 

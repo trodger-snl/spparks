@@ -137,7 +137,10 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     temperature_source = nullptr;
     use_temperature_source = true;  // Always use modular temperature system
     fast_forward_search_window = 0.1;  // Default 100ms search window
-    
+
+    // Initialize powder activation tracking
+    last_powder_activation_time = -1.0;  // Force activation at init
+
     //add the double array
     recreate_arrays();  
 }
@@ -356,6 +359,12 @@ void AppAdditiveExtTempTexture::app_update(double dt)
 
         // Update temperatures at new time
         update_temperature_from_source(time);
+
+        // Activate powder after significant time skip (new layer deposition)
+        if (time_skip > 1.0) {
+          activate_powder_sites();
+          last_powder_activation_time = time;
+        }
       }
     }
     t_end = MPI_Wtime();
@@ -646,6 +655,10 @@ void AppAdditiveExtTempTexture::init_app()
   if (enable_voids) {
     generate_voids(ranapp);
   }
+
+  // Initialize powder layer
+  activate_powder_sites();
+  last_powder_activation_time = 0.0;
 
 	this->app_update(0.0);
 }
@@ -1602,6 +1615,85 @@ void AppAdditiveExtTempTexture::nucleation_init() {
         nucleation_temps[i] = dist_T(gen);
         nucleation_sizes[i] = dist_S(gen);
     }
+}
+
+/* ----------------------------------------------------------------------
+   Check if site is eligible to be activated as powder
+
+   Criteria:
+   - Site must not be void (active_flag == 5)
+   - Site must not be molten or solid (active_flag >= 2)
+   - Site is eligible if:
+     1. Temperature >= solidus (in thermal influence zone)
+     2. Has molten or solidified neighbor (adjacent to meltpool)
+     3. At bottom boundary (substrate)
+     4. Below meltpool surface (has active material above)
+------------------------------------------------------------------------- */
+bool AppAdditiveExtTempTexture::is_powder_eligible_site(int i) {
+  // Skip voids - they never participate
+  if (active_flag[i] == 5) return false;
+
+  // Skip already molten or solid sites
+  if (active_flag[i] >= 2) return false;
+
+  // Criterion 1: Hot enough (in thermal influence zone)
+  if (T[i] >= ts) return true;
+
+  // Criterion 2: Has solid or molten neighbor (adjacent to meltpool)
+  for (int j = 0; j < numneigh[i]; j++) {
+    int nj = neighbor[i][j];
+    if (active_flag[nj] == 2 || active_flag[nj] == 3) {
+      return true;  // Adjacent to meltpool/solidified region
+    }
+  }
+
+  // Criterion 3: At bottom boundary (substrate layer)
+  double site_z = xyz[i][2];
+  if (site_z <= domain->boxzlo + dx * 0.5) return true;
+
+  // Criterion 4: Below meltpool surface (has active material above)
+  for (int j = 0; j < numneigh[i]; j++) {
+    int nj = neighbor[i][j];
+    double neighbor_z = xyz[nj][2];
+
+    // Check if neighbor is above and is molten or solid
+    if (neighbor_z > site_z && active_flag[nj] >= 2) {
+      return true;  // Material exists above this site
+    }
+  }
+
+  return false;
+}
+
+/* ----------------------------------------------------------------------
+   Activate powder sites that are at or below the meltpool surface
+
+   This function should be called:
+   - At initialization (init_app)
+   - After fast forwards > 1 second (new layer deposition)
+------------------------------------------------------------------------- */
+void AppAdditiveExtTempTexture::activate_powder_sites() {
+  int powder_activated = 0;
+
+  for (int i = 0; i < nlocal; i++) {
+    // Only consider inactive sites
+    if (active_flag[i] == 0) {
+      if (is_powder_eligible_site(i)) {
+        active_flag[i] = 1;  // Set to POWDER state
+        powder_activated++;
+      }
+    }
+  }
+
+  // Sum across all MPI ranks
+  int global_powder_activated = 0;
+  MPI_Allreduce(&powder_activated, &global_powder_activated, 1, MPI_INT, MPI_SUM, world);
+
+  // Report activation (rank 0 only)
+  if (domain->me == 0 && global_powder_activated > 0) {
+    fprintf(screen, "Powder activation at t=%.6e s: activated %d sites globally\n",
+            time, global_powder_activated);
+  }
 }
 
 /* ----------------------------------------------------------------------

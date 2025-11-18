@@ -60,6 +60,10 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
   int smoothing_kernel();
   int smoothing_kernel_efficient(Kokkos::View<int*> d_smoothing_sites, int n_sites);  // Phase 1 optimization
 
+  // Powder phase activation methods
+  bool is_powder_eligible_site(int i);
+  void activate_powder_sites();
+
  protected:
   // Temperature fields (CPU-updated from HDF5, device-readable)
   // Uses DualView because temperature is read-only during device sweeps
@@ -145,6 +149,9 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
   int enable_voids;
 
   int t_active;
+
+  // Powder activation tracking
+  double last_powder_activation_time;  // Track when we last activated powder sites
 
   // Debug counters for gradient/velocity analysis
   int debug_nucleation_count;

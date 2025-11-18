@@ -53,6 +53,10 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   void smooth_site(int site);
   double site_energy_smooth(int site);
 
+  // Powder phase activation methods
+  bool is_powder_eligible_site(int i);
+  void activate_powder_sites();
+
   // Modular temperature source methods
   void setup_temperature_source_cmd(int narg, char **arg);
   void setup_scan_path_cmd(int narg, char **arg);
@@ -127,8 +131,11 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   std::unique_ptr<TemperatureSource> temperature_source;
   bool use_temperature_source;  // Flag to enable new modular system
   double fast_forward_search_window;  // Search window for fast-forward (default 0.1s)
-  
+
   int t_active;
+
+  // Powder activation tracking
+  double last_powder_activation_time;  // Track when we last activated powder sites
 
 };
 

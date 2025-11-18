@@ -137,7 +137,10 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     temperature_source = nullptr;
     use_temperature_source = true;  // Always use modular temperature system
     fast_forward_search_window = 0.1;  // Default 100ms search window
-    
+
+    // Initialize powder activation tracking
+    last_powder_activation_time = -1.0;  // Force activation at init
+
     //add the double array
     recreate_arrays();  
 }
@@ -299,56 +302,80 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
  ------------------------------------------------------------------------- */
 void AppAdditiveExtTempTexture::app_update(double dt)
 {
+  // CPU Performance Timing Instrumentation
+  static int step_count = 0;
+  static double t_temp_update = 0.0, t_fast_forward = 0.0;
+  static double t_melting = 0.0, t_mushy = 0.0, t_smoothing = 0.0;
+  static double t_comm = 0.0;
+  double t_start, t_end;
+  step_count++;
 
   //Reset t_active to assume we don't have a melt pool right now
   t_active = 0;
-  
+
   // Update temperature first to get current temperatures
   if (use_temperature_source) {
+    // Time: Temperature update from HDF5
+    t_start = MPI_Wtime();
     // Use new modular temperature source system
     update_temperature_from_source(time);
-    
+    t_end = MPI_Wtime();
+    t_temp_update += (t_end - t_start);
+
     // Check for active sites using temperature source's threshold
     double fast_forward_threshold = t_room; // Default to t_room
-    
+
     // If using HDF5 temperature source, use its threshold
-    HDF5UnstructuredTemperatureSource* hdf5_source = 
+    HDF5UnstructuredTemperatureSource* hdf5_source =
       dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
     if (hdf5_source) {
       fast_forward_threshold = hdf5_source->get_fast_forward_threshold();
     }
-    
+
     for (int i = 0; i < nlocal; i++) {
       if (T[i] > fast_forward_threshold) t_active = 1;
     }
-    
+
     // Use MPI_Allreduce to check if t_active is 0 on all processors
     int global_t_active;
     MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-    
-    
+
+
     // If no active sites and temperature source supports time queries, fast forward
+    // Time: Fast-forward logic
+    t_start = MPI_Wtime();
     if (global_t_active == 0 && time > 1e-6 && temperature_source->supports_time_queries()) {
       double next_thermal_time = temperature_source->get_next_time_with_temperature(time, fast_forward_threshold);
-      
+
       if (next_thermal_time > time && next_thermal_time < std::numeric_limits<double>::max()) {
         double time_skip = next_thermal_time - time;
         if (domain->me == 0 && time_skip > 1e-6) {  // Only report significant time skips
-          std::cout << "Fast-forward: Skipping " << time_skip << " seconds from time " 
+          std::cout << "Fast-forward: Skipping " << time_skip << " seconds from time "
                     << time << " to " << next_thermal_time << " (all temperatures < " << fast_forward_threshold << "K)" << std::endl;
         }
-        
+
         // Update simulation time
         time = next_thermal_time;
-        
+
         // Update temperatures at new time
         update_temperature_from_source(time);
+
+        // Activate powder after significant time skip (new layer deposition)
+        if (time_skip > 1.0) {
+          activate_powder_sites();
+          last_powder_activation_time = time;
+        }
       }
     }
+    t_end = MPI_Wtime();
+    t_fast_forward += (t_end - t_start);
   }
-  
+
   // Common processing for both temperature systems
-  
+
+  // Track if any melting occurs this timestep
+  bool melting_occurred = false;
+
   //iterate through all the sites for phase transitions (applies to both systems)
   for (int i=0; i<nlocal; i++) {
     // Skip void sites - they never change state
@@ -358,6 +385,9 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     //site's temperature has gone above tl. Only do this when melting the first time
     //to avoid repeated initialization
     if( (T[i] >= tl) && active_flag[i] != 2) {
+        melting_occurred = true;
+        // Time: Melting operations
+        t_start = MPI_Wtime();
         active_flag[i] = 2;
         spin[i] = (int) (nspins * ranapp->uniform());
         // Create random orientation as each site
@@ -369,31 +399,80 @@ void AppAdditiveExtTempTexture::app_update(double dt)
         solid_d[i] = 0;
         G[i] = 0;
         V[i] = 0;
+        t_end = MPI_Wtime();
+        t_melting += (t_end - t_start);
     }
     //If we're molten, call the mushy_phase function to figure out any phase change
     else if (active_flag[i] == 2 && T[i] <= tl) {
+        // Time: Mushy phase (includes nucleation + solidification + gradient computation)
+        t_start = MPI_Wtime();
         mushy_phase(i, ranapp);
-    } 
+        t_end = MPI_Wtime();
+        t_mushy += (t_end - t_start);
+    }
     //Call smoothing
     else if(solid_d[i] < 0 && solid_d[i] > -nrefine -1 && active_flag[i] == 3)    {
+            // Time: Smoothing operations
+            t_start = MPI_Wtime();
             mobility_out[i] = 1;
             smooth_site(i);
             solid_d[i]--;
+            t_end = MPI_Wtime();
+            t_smoothing += (t_end - t_start);
     }
   }
-    
+
+  // Activate powder once when melting first occurs
+  // CRITICAL: Use MPI_Allreduce to check if ANY rank has melting, so all ranks call activate_powder_sites()
+  // This prevents MPI deadlock where only some ranks enter the function that contains MPI_Allreduce calls
+  if (last_powder_activation_time < 0.0) {
+    int local_melting = melting_occurred ? 1 : 0;
+    int global_melting = 0;
+    MPI_Allreduce(&local_melting, &global_melting, 1, MPI_INT, MPI_SUM, world);
+
+    if (global_melting > 0) {
+      activate_powder_sites();
+      last_powder_activation_time = time;
+    }
+  }
+
   //Communicate changes
+  t_start = MPI_Wtime();
   timer->stamp();
   comm->all();
   timer->stamp(TIME_COMM);
-  
+
     // Use MPI_Allreduce to check if t_active is 0 on all processors
     int global_t_active;
     timer->stamp();
     MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
     timer->stamp(TIME_COMM);
+  t_end = MPI_Wtime();
+  t_comm += (t_end - t_start);
 
-    
+  // Print timing summary every 100 steps (on rank 0 only)
+  if (step_count % 100 == 0 && domain->me == 0) {
+    double total_time = t_temp_update + t_fast_forward + t_melting + t_mushy + t_smoothing + t_comm;
+
+    fprintf(screen, "\n=== CPU Timing Summary (after %d steps, %.4f total sec) ===\n",
+            step_count, total_time);
+    fprintf(screen, "  Temperature update:   %8.3f s (%5.1f%%)  [HDF5 loading]\n",
+            t_temp_update, 100.0*t_temp_update/total_time);
+    fprintf(screen, "  Fast-forward logic:   %8.3f s (%5.1f%%)  [Time skip checks]\n",
+            t_fast_forward, 100.0*t_fast_forward/total_time);
+    fprintf(screen, "  Melting:              %8.3f s (%5.1f%%)  [T >= Tl transitions]\n",
+            t_melting, 100.0*t_melting/total_time);
+    fprintf(screen, "  Mushy phase:          %8.3f s (%5.1f%%)  [Nucleation + solidification + gradients]\n",
+            t_mushy, 100.0*t_mushy/total_time);
+    fprintf(screen, "  Smoothing:            %8.3f s (%5.1f%%)  [Grain boundary smoothing]\n",
+            t_smoothing, 100.0*t_smoothing/total_time);
+    fprintf(screen, "  Communication:        %8.3f s (%5.1f%%)  [MPI comm]\n",
+            t_comm, 100.0*t_comm/total_time);
+    fprintf(screen, "  --------------------------------------------------------\n");
+    fprintf(screen, "  Average time/step:    %8.4f s\n", total_time / step_count);
+    fprintf(screen, "=========================================================\n\n");
+  }
+
     timer->stamp(TIME_UPDATE);
 }
 
@@ -594,6 +673,8 @@ void AppAdditiveExtTempTexture::init_app()
   if (enable_voids) {
     generate_voids(ranapp);
   }
+
+  // Note: Powder activation happens after meltpool appears, not during init
 
 	this->app_update(0.0);
 }
@@ -1553,6 +1634,111 @@ void AppAdditiveExtTempTexture::nucleation_init() {
 }
 
 /* ----------------------------------------------------------------------
+   Check if site is eligible to be activated as powder
+
+   Criteria:
+   - Site must not be void (active_flag == 5)
+   - Site must not be molten or solid (active_flag >= 2)
+   - Site is eligible if:
+     1. Temperature >= solidus (in thermal influence zone)
+     2. Has molten or solidified neighbor (adjacent to meltpool)
+     3. At bottom boundary (substrate)
+     4. Below meltpool surface (has active material above)
+------------------------------------------------------------------------- */
+bool AppAdditiveExtTempTexture::is_powder_eligible_site(int i) {
+  // Skip voids - they never participate
+  if (active_flag[i] == 5) return false;
+
+  // Skip already molten or solid sites
+  if (active_flag[i] >= 2) return false;
+
+  // Criterion 1: Hot enough (in thermal influence zone)
+  if (T[i] >= ts) return true;
+
+  // Criterion 2: Has solid or molten neighbor (adjacent to meltpool)
+  for (int j = 0; j < numneigh[i]; j++) {
+    int nj = neighbor[i][j];
+    if (active_flag[nj] == 2 || active_flag[nj] == 3) {
+      return true;  // Adjacent to meltpool/solidified region
+    }
+  }
+
+  // Criterion 3: At bottom boundary (substrate layer)
+  double site_z = xyz[i][2];
+  if (site_z <= domain->boxzlo + dx * 0.5) return true;
+
+  // Criterion 4: Below meltpool surface (has active material above)
+  for (int j = 0; j < numneigh[i]; j++) {
+    int nj = neighbor[i][j];
+    double neighbor_z = xyz[nj][2];
+
+    // Check if neighbor is above and is molten or solid
+    if (neighbor_z > site_z && active_flag[nj] >= 2) {
+      return true;  // Material exists above this site
+    }
+  }
+
+  return false;
+}
+
+/* ----------------------------------------------------------------------
+   Activate powder sites that are at or below the meltpool surface
+
+   Strategy: Find the maximum z-coordinate of all molten sites (meltpool top),
+   then set all inactive sites below that level to powder (active_flag = 1).
+
+   This function should be called:
+   - After fast forwards > 1 second (new layer deposition)
+   - During app_update when meltpool is present
+------------------------------------------------------------------------- */
+void AppAdditiveExtTempTexture::activate_powder_sites() {
+  // Find local maximum z-coordinate of molten sites
+  double local_max_molten_z = -1e100;  // Very negative initial value
+  bool has_molten_sites = false;
+
+  for (int i = 0; i < nlocal; i++) {
+    if (active_flag[i] == 2) {  // Molten site
+      has_molten_sites = true;
+      double site_z = xyz[i][2];
+      if (site_z > local_max_molten_z) {
+        local_max_molten_z = site_z;
+      }
+    }
+  }
+
+  // Find global maximum z-coordinate of molten sites across all ranks
+  double global_max_molten_z = -1e100;
+  MPI_Allreduce(&local_max_molten_z, &global_max_molten_z, 1, MPI_DOUBLE, MPI_MAX, world);
+
+  // If no meltpool exists anywhere, don't activate powder
+  if (global_max_molten_z <= -1e99) {
+    return;
+  }
+
+  // Activate all inactive sites at or below meltpool top
+  int powder_activated = 0;
+  for (int i = 0; i < nlocal; i++) {
+    if (active_flag[i] == 0) {  // Inactive site
+      double site_z = xyz[i][2];
+      if (site_z <= global_max_molten_z) {
+        active_flag[i] = 1;  // Set to POWDER state
+        powder_activated++;
+      }
+    }
+  }
+
+  // Sum across all MPI ranks
+  int global_powder_activated = 0;
+  MPI_Allreduce(&powder_activated, &global_powder_activated, 1, MPI_INT, MPI_SUM, world);
+
+  // Report activation (rank 0 only)
+  if (domain->me == 0 && global_powder_activated > 0) {
+    fprintf(screen, "Powder activation at t=%.6e s: activated %d sites (meltpool top at z=%.3f)\n",
+            time, global_powder_activated, global_max_molten_z);
+  }
+}
+
+/* ----------------------------------------------------------------------
    Generate spherical voids in the domain based on volumetric density
    and size distribution. Voids are represented by activeFlag = 5.
    Generation happens on rank 0, then void list is broadcast to all ranks.
@@ -1874,7 +2060,7 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
   
   // Update temperature source (may load new data)
   temperature_source->update_temperatures(dt, simulation_time);
-  
+
   // Update temperature array for all local sites
   for (int i = 0; i < nlocal; i++) {
     // Get site coordinates in lattice units
@@ -1908,7 +2094,7 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
       T[i] = temperature_source->get_temperature_at_xyz_and_time(x_physical, y_physical, z_physical, simulation_time);
     }
   }
-  
+
   timer->stamp(TIME_APP);
 }
 

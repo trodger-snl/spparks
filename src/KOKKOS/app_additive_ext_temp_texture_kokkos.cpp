@@ -2147,14 +2147,8 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   // Overhead: ~1-3% of total runtime, but necessary for correct visualization/output
   sync_data_to_host();
 
-  // Activate powder if melting occurred and we haven't activated yet
-  // or if it's been a while since last activation (for layer changes without fast forward)
+  // Activate powder once when melting first occurs
   if (last_powder_activation_time < 0.0 && melting_occurred) {
-    // First time activation after melting starts (active_flag already synced above)
-    activate_powder_sites();
-    last_powder_activation_time = time;
-  } else if (time - last_powder_activation_time > 0.001) {
-    // Periodic reactivation every 1ms to catch layer changes (active_flag already synced)
     activate_powder_sites();
     last_powder_activation_time = time;
   }

@@ -422,14 +422,8 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     }
   }
 
-  // Activate powder if melting occurred and we haven't activated yet
-  // or if it's been a while since last activation (for layer changes without fast forward)
+  // Activate powder once when melting first occurs
   if (last_powder_activation_time < 0.0 && melting_occurred) {
-    // First time activation after melting starts
-    activate_powder_sites();
-    last_powder_activation_time = time;
-  } else if (time - last_powder_activation_time > 0.001) {
-    // Periodic reactivation every 1ms to catch layer changes
     activate_powder_sites();
     last_powder_activation_time = time;
   }

@@ -107,6 +107,61 @@ function(check_package_sync PACKAGE_NAME)
     endif()
 endfunction()
 
+# Function to silently check if package files are in sync
+# Returns TRUE in OUT_FILES_DIFFER if files differ, FALSE otherwise
+# Also returns list of differing files in OUT_DIFFERING_FILES
+function(check_package_sync_silent PACKAGE_NAME OUT_FILES_DIFFER OUT_DIFFERING_FILES)
+    string(TOUPPER "${PACKAGE_NAME}" PKG_UPPER)
+    set(PKG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/${PKG_UPPER}")
+
+    if(NOT EXISTS "${PKG_DIR}")
+        set(${OUT_FILES_DIFFER} FALSE PARENT_SCOPE)
+        set(${OUT_DIFFERING_FILES} "" PARENT_SCOPE)
+        return()
+    endif()
+
+    # Find all .cpp and .h files in package directory
+    file(GLOB PKG_CPP_FILES "${PKG_DIR}/*.cpp")
+    file(GLOB PKG_H_FILES "${PKG_DIR}/*.h")
+    set(PKG_FILES ${PKG_CPP_FILES} ${PKG_H_FILES})
+
+    set(FILES_DIFFER FALSE)
+    set(DIFFERING_FILES "")
+
+    foreach(PKG_FILE ${PKG_FILES})
+        get_filename_component(FILENAME "${PKG_FILE}" NAME)
+        set(SRC_FILE "${CMAKE_CURRENT_SOURCE_DIR}/${FILENAME}")
+
+        if(EXISTS "${SRC_FILE}")
+            # Skip symlinks (dev mode)
+            if(IS_SYMLINK "${SRC_FILE}")
+                continue()
+            endif()
+
+            # Compare files
+            execute_process(
+                COMMAND ${CMAKE_COMMAND} -E compare_files "${PKG_FILE}" "${SRC_FILE}"
+                RESULT_VARIABLE FILES_ARE_DIFFERENT
+                OUTPUT_QUIET
+                ERROR_QUIET
+            )
+
+            if(FILES_ARE_DIFFERENT)
+                set(FILES_DIFFER TRUE)
+                list(APPEND DIFFERING_FILES "${FILENAME}")
+            endif()
+        else()
+            # File exists in package but not in src - needs installation
+            set(FILES_DIFFER TRUE)
+            list(APPEND DIFFERING_FILES "${FILENAME}")
+        endif()
+    endforeach()
+
+    # Set output variables
+    set(${OUT_FILES_DIFFER} ${FILES_DIFFER} PARENT_SCOPE)
+    set(${OUT_DIFFERING_FILES} "${DIFFERING_FILES}" PARENT_SCOPE)
+endfunction()
+
 # Function to install a package
 function(install_package PACKAGE_NAME)
     string(TOUPPER "${PACKAGE_NAME}" PKG_UPPER)
@@ -297,6 +352,8 @@ function(install_stitch_package)
     endif()
 
     # Step 3: Verify we can find the library
+    # Clear any cached NOTFOUND result from previous configurations
+    unset(STITCH_LIBRARY CACHE)
     find_library(STITCH_LIBRARY
         NAMES stitch
         PATHS "${STITCH_LIB_DIR}/liblink"
@@ -529,8 +586,26 @@ function(process_package_options)
                 install_package("${PKG}")
                 set(SPPARKS_PACKAGE_${PKG_UPPER}_CURRENT ON CACHE INTERNAL "")
             else()
-                # Package already installed - check sync status
-                check_package_sync("${PKG}")
+                # Package already installed - check if files are out of sync
+                check_package_sync_silent("${PKG}" FILES_DIFFER DIFFERING_FILES)
+
+                if(FILES_DIFFER)
+                    # Files differ - automatically reinstall
+                    list(LENGTH DIFFERING_FILES NUM_DIFFER)
+                    message(STATUS "Package '${PKG}' out of sync (${NUM_DIFFER} file(s) differ) - reinstalling...")
+
+                    # Call package-specific installer to update files
+                    if(PKG STREQUAL "kokkos")
+                        install_kokkos_package()
+                    elseif(PKG STREQUAL "stitch")
+                        install_stitch_package()
+                    endif()
+
+                    message(STATUS "Package '${PKG}' reinstalled successfully")
+                else()
+                    # Files are in sync - just report status
+                    check_package_sync("${PKG}")
+                endif()
             endif()
         else()
             # Check if package is currently installed

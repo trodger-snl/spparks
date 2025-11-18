@@ -27,7 +27,7 @@ This document outlines a comprehensive strategy for integrating Kokkos into SPPA
 - ✅ **4 Production Apps:** AppPottsKokkos, AppPottsNeighKokkos, AppPottsNeighOnlyKokkos, AppPottsQuaternionKokkos
 - ✅ **Performance:** 20× speedup on CPU (OpenMP backend), 200-600× expected on GPU
 - ✅ **Correctness:** Zero race conditions, perfect MPI+sectors support, physics validated
-- ✅ **Framework:** Double-buffer pattern, selective sync (33% reduction), user-controllable profiling
+- ✅ **Framework:** Double-buffer pattern, sync profiling infrastructure, user-controllable profiling
 
 **Next Priority - Phase 3.6:**
 - ⏳ GPU backend testing (CUDA, HIP) for 10-30× additional speedup
@@ -1291,16 +1291,17 @@ AppPottsQuaternionKokkos → AppAdditiveExtTempTextureKokkos
 - Sector sweep patterns + ghost exchange sync
 - RNG pool (`Kokkos::Random_XorShift64_Pool`)
 - Profiling infrastructure (`enable_profiling` input command)
-- Selective sync optimization (33% reduction demonstrated)
 
-**New double buffers for additive-specific data:**
+**New data structures for additive-specific data:**
 ```cpp
 class AppAdditiveExtTempTextureKokkos : public AppAdditiveExtTempTexture {
 private:
-  // Additive-specific Kokkos double buffers
-  KokkosDoubleBuffer<double> buffer_T;           // Temperature field
-  KokkosDoubleBuffer<double> buffer_G;           // Gradient magnitude
-  KokkosDoubleBuffer<double> buffer_V;           // Solidification velocity
+  // Read-only arrays (updated from HDF5 or computed once/timestep)
+  Kokkos::DualView<double*> k_T;               // Temperature field (from HDF5)
+  Kokkos::View<double*> d_G;                   // Gradient magnitude (device-only cache)
+  Kokkos::View<double*> d_V;                   // Solidification velocity (device-only cache)
+
+  // Read-write arrays (modified during parallel sweeps - need double buffering)
   KokkosDoubleBuffer<int> buffer_active_flag;    // Phase state (0=inactive, 1=active, 2=molten, 3=solid, 5=void)
   KokkosDoubleBuffer<double> buffer_solid_d;     // Solidification smoothing counter
   KokkosDoubleBuffer<double> buffer_mobility;    // Diagnostic mobility output
@@ -1310,11 +1311,19 @@ private:
 };
 ```
 
+**Why DualView for temperature, not KokkosDoubleBuffer?**
+- Temperature is read-only during device kernels (never modified by parallel sweeps)
+- Only updated on CPU from HDF5 source between sweeps
+- Uses 50% less memory (1 copy vs 2)
+- No race conditions possible (writes happen before device sync)
+- See AM_KOKKOS_PLAN.md Section 3.1 for detailed rationale
+
 **Memory requirements:**
-- Per site: 1 int (spin) + 4 doubles (quat) + 6 doubles (additive) = 84 bytes
-- With double buffering: 168 bytes/site
-- 1M sites: ~160 MB (app) + ~110 MB (temp source) = **270 MB total**
+- Per site: 1 int (spin) + 4 doubles (quat) + 3 doubles (read-only) + 3 doubles (double-buffered) = 76 bytes
+- With double buffering for writable arrays: ~140 bytes/site
+- 1M sites: ~140 MB (app) + ~110 MB (temp source) = **250 MB total**
 - Modern GPU (16+ GB): Easily handles 10M+ sites
+- Memory savings from DualView: ~20% vs full double buffering
 
 **Key method overrides:**
 
@@ -1324,10 +1333,12 @@ void AppAdditiveExtTempTextureKokkos::allocate_data() {
   // Call parent to allocate spin + quaternion buffers
   AppPottsQuaternionKokkos::allocate_data();
 
-  // Allocate additive-specific buffers
-  buffer_T.allocate(nlocal + nghost);
-  buffer_G.allocate(nlocal + nghost);
-  buffer_V.allocate(nlocal + nghost);
+  // Allocate read-only arrays (DualView and device Views)
+  k_T = Kokkos::DualView<double*>("temperature", nlocal + nghost);
+  d_G = Kokkos::View<double*>("gradient_magnitude", nlocal + nghost);
+  d_V = Kokkos::View<double*>("solidification_velocity", nlocal + nghost);
+
+  // Allocate read-write arrays (double buffers)
   buffer_active_flag.allocate(nlocal + nghost);
   buffer_solid_d.allocate(nlocal + nghost);
   buffer_mobility.allocate(nlocal + nghost);
@@ -1350,13 +1361,13 @@ void AppAdditiveExtTempTextureKokkos::swap_buffers() {
   // Call parent to swap spin + quaternion buffers
   AppPottsQuaternionKokkos::swap_buffers();
 
-  // Swap additive buffers
-  buffer_T.swap();
-  buffer_G.swap();
-  buffer_V.swap();
+  // Swap only the double-buffered arrays (NOT k_T, d_G, d_V)
   buffer_active_flag.swap();
   buffer_solid_d.swap();
   buffer_mobility.swap();
+
+  // Note: k_T (DualView) and d_G, d_V (device Views) do NOT need swapping
+  // They are read-only during sweeps, updated only between sweeps
 }
 ```
 
@@ -1404,7 +1415,6 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt) {
   // 3. Sync updated arrays to device
   sync_all_to_device();
   // Transfers: T[], active_flag[], G[], V[], solid_d[]
-  // Only read_buffer (selective sync optimization)
 
   // === DEVICE-SIDE OPERATIONS ===
 
@@ -1452,8 +1462,8 @@ struct RejectionSweepFunctor {
     if (active_flag_read(i) != 3) return;
     if (active_flag_read(i) == 5) return;  // Voids
 
-    // Read temperature (from Kokkos temp source)
-    double T_i = T_read(i);
+    // Read temperature (from k_T DualView device view - read-only)
+    double T_i = T_read(i);  // T_read = k_T.d_view (not from a double buffer)
 
     // Arrhenius mobility
     double mobility = compute_mobility_device(T_i, q, tl, ts, mo);
@@ -1527,8 +1537,8 @@ double compute_melt_misorientation_device(int i, int neigh_id,
   double angle = compute_disorientation_device(i, neigh_id);
 
   // Gradient direction term (c2 weight)
-  double G_val = G_read(i);
-  double V_val = V_read(i);
+  double G_val = G_read(i);  // G_read = d_G (device View - computed cache, not double buffer)
+  double V_val = V_read(i);  // V_read = d_V (device View - computed cache, not double buffer)
   // ... compute normal · direction term
 
   // Thermal gradient term (c3 weight)
@@ -1541,15 +1551,31 @@ double compute_melt_misorientation_device(int i, int neigh_id,
 **Synchronization pattern (inherits from parent + extends):**
 ```cpp
 void AppAdditiveExtTempTextureKokkos::sync_all_to_device() {
-  // Call parent (syncs spin + quaternions)
+  // Call parent (syncs spin + quaternions using double buffers)
   AppPottsQuaternionKokkos::sync_all_to_device();
 
-  // Sync additive arrays (selective: only read_buffer, skip write_buffer)
-  buffer_T.sync_to_device_selective(T, true, false);
-  buffer_G.sync_to_device_selective(G, true, false);
-  buffer_V.sync_to_device_selective(V, true, false);
-  buffer_active_flag.sync_to_device_selective(active_flag, true, false);
-  buffer_solid_d.sync_to_device_selective(solid_d, true, false);
+  // Sync temperature using DualView pattern (read-only, updated from HDF5)
+  auto h_T = k_T.h_view;
+  for (int i = 0; i < nlocal + nghost; i++) {
+    h_T(i) = T[i];  // Copy from CPU array
+  }
+  k_T.modify_host();
+  k_T.sync_device();
+
+  // Compute gradients on device (one-time calculation, cached in d_G)
+  auto d_T = k_T.d_view;
+  Kokkos::parallel_for("ComputeGradients", nlocal, KOKKOS_LAMBDA(int i) {
+    double gradient[3], magnitude;
+    ThermalOps::compute_temperature_gradient(i, d_T, numneigh, neighbor, xyz,
+                                              gradient, &magnitude);
+    d_G(i) = magnitude;
+    // Store gradient components if needed
+  });
+  Kokkos::fence();
+
+  // Sync double-buffered arrays
+  buffer_active_flag.sync_to_device(active_flag);
+  buffer_solid_d.sync_to_device(solid_d);
 }
 ```
 
@@ -1579,14 +1605,6 @@ comm->all();
 sync_data_to_device();  // Resync ghost data to device
 ```
 
-**Selective sync optimization for temperature:**
-```cpp
-// Temperature doesn't change during MC sweep (only in app_update)
-// Only sync read_buffer after device writes are swapped
-buffer_T.sync_to_device_selective(T, true, false);  // read=true, write=false
-// Result: 33% reduction in sync time (same as parent's optimization)
-```
-
 **Profiling infrastructure:**
 ```cpp
 if (profiling_enabled) {
@@ -1597,9 +1615,9 @@ if (profiling_enabled) {
   kokkos_temp_source->load_layer_and_sync_device(layer);
   double hdf5_time = timer.seconds();
 
-  // Time temperature interpolation
+  // Time temperature interpolation (updates k_T device view directly)
   timer.reset();
-  kokkos_temp_source->update_temperatures_device(time, buffer_T.get_read_view());
+  kokkos_temp_source->update_temperatures_device(time, k_T.d_view);
   double interp_time = timer.seconds();
 
   // Time MC sweeps
@@ -2539,7 +2557,7 @@ for (int iset = 0; iset < nset_loop; iset++) {
   - Moving heat source on device
   - Dynamic temperature updates
 - [ ] Apply double-buffer framework from Phase 3.1
-- [ ] Leverage selective sync and profiling infrastructure
+- [ ] Leverage sync profiling infrastructure
 
 **Deliverable:** AM production apps running on GPU with validated physics
 
@@ -2716,7 +2734,7 @@ for (int iset = 0; iset < nset_loop; iset++) {
 - **KOKKOS_IMPLEMENTATION_HISTORY.md** - Detailed history of Kokkos implementation (Phases 1-3.5, November 2025)
   - Complete chronology of infrastructure development, bug fixes, and optimizations
   - Performance benchmarking results (20× CPU speedup achieved)
-  - Technical details of double-buffer framework, selective sync, and MPI synchronization
+  - Technical details of double-buffer framework, sync profiling, and MPI synchronization
   - Git commit history and file modification records
 
 - **KOKKOS_DIAGNOSTICS_ANALYSIS.md** - Comprehensive analysis of Kokkos-ifying diagnostic styles (diag_energy, diag_array, diag_cluster)

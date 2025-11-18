@@ -1,10 +1,17 @@
 # Additive Manufacturing Kokkos Implementation Plan
 
-**Status:** Phase 1 Complete - In Progress
-**Date Updated:** November 14, 2025
+**Status:** Phase 3.5 Complete - All Core Features Implemented
+**Date Updated:** November 16, 2025
 **Target:** AppAdditiveExtTempTextureKokkos extending AppPottsQuaternionKokkos
 **Expected Speedup:** 30-70x for full AM simulations
-**Progress:** Phase 1 (Quaternion Foundation) ✅ Complete
+**Progress:**
+- Phase 1 (Quaternion Foundation) ✅ Complete
+- Phase 2 (Temperature/Gradients) ✅ Substantially Complete (timing issue documented)
+- Phase 3.1 (Melting Kernel + RNG) ✅ Complete
+- Phase 3.2 (Nucleation + Fast-Forward) ✅ Complete
+- Phase 3.3 (Solidification + Texture) ✅ Complete
+- Phase 3.4 (Smoothing + Integration) ✅ Complete
+- Phase 3.5 (Particle Flipper) ✅ Complete
 
 ---
 
@@ -17,7 +24,35 @@ This document outlines the plan for adding Kokkos GPU acceleration to `app_addit
 - ✅ Double-buffer framework prevents race conditions
 - ✅ MPI + sectors support working correctly
 - ✅ **Phase 1 Complete:** Advanced quaternion operations implemented (Nov 14, 2025)
-- ❌ AM-specific features (temperature, texture, nucleation) still CPU-only
+- ✅ **Phase 2 Substantially Complete:** Temperature and gradient kernels on device (Nov 16, 2025)
+  - ✅ Temperature field loading and device sync
+  - ✅ Thermal gradient computation kernel
+  - ✅ Data structures for phase transitions
+  - ⚠️  Known timing issue documented (see `KOKKOS_TIMING_ISSUE.md`)
+- ✅ **Phase 3.1 Complete:** Melting kernel and RNG infrastructure (Nov 16, 2025)
+  - ✅ Kokkos Random_XorShift64_Pool for thread-safe device RNG
+  - ✅ Per-spin nucleation parameters on device
+  - ✅ Melting kernel (T >= liquidus transition)
+  - ✅ Random quaternion generation (Marsaglia method)
+  - ✅ Double buffering for phase state updates
+- ✅ **Phase 3.2 Complete:** Nucleation kernel and fast-forward logic (Nov 16, 2025)
+  - ✅ Stochastic nucleation in undercooled melt
+  - ✅ Fast-forward logic to skip inactive thermal periods
+  - ✅ Solidification velocity computation
+- ✅ **Phase 3.3 Complete:** Solidification kernel with texture weighting (Nov 16, 2025)
+  - ✅ Epitaxial growth from solid neighbors
+  - ✅ Texture-dependent selection (mobility = c1 + c2*cos(c3*θ))
+  - ✅ Stochastic neighbor selection weighted by gradient alignment
+- ✅ **Phase 3.4 Complete:** Smoothing kernel with Metropolis MC (Nov 16, 2025)
+  - ✅ Potts Monte Carlo for grain boundary refinement
+  - ✅ Metropolis acceptance based on quaternion misorientation energy
+  - ✅ Texture-weighted neighbor selection during smoothing
+  - ✅ Full app_update() integration with all phase transition kernels
+- ✅ **Phase 3.5 Complete:** Particle flipper for nucleus growth (Nov 16, 2025)
+  - ✅ Grows newly nucleated grains to specified volume
+  - ✅ Flips liquid neighbors in randomized order
+  - ✅ Avoids lattice-size dependency for nucleation
+  - ✅ Parallel-safe implementation with neighbor conflict handling
 
 **Key Challenge:** Converting 450+ lines of thermal gradient computation and texture modeling to device-compatible code while maintaining physics accuracy.
 
@@ -77,8 +112,7 @@ struct QuaternionOps {
 
 **Framework Features:**
 - `KokkosDoubleBuffer<T>` class - Race-free read/write buffer separation
-- Selective synchronization - 33% reduction in device memory copies
-- Profiling infrastructure - User-controllable via `sync_profiling yes`
+- Sync profiling infrastructure - User-controllable via `sync_profiling yes`
 - Random number generation - `Kokkos::Random_XorShift64_Pool`
 
 **Performance Achievements:**
@@ -312,14 +346,14 @@ struct QuaternionOps {
 **Add to AppAdditiveExtTempTextureKokkos:**
 
 ```cpp
-// Temperature and phase field arrays
-KokkosDoubleBuffer<double> buffer_T;            // Temperature field
-KokkosDoubleBuffer<double> buffer_G;            // Gradient magnitude
-KokkosDoubleBuffer<double> buffer_V;            // Solidification velocity
+// Read-only arrays (updated from HDF5, not modified during sweeps)
+Kokkos::DualView<double*> k_T;                  // Temperature field (from HDF5)
+Kokkos::View<double*> d_G;                      // Gradient magnitude (computed once/timestep)
+Kokkos::View<double*> d_V;                      // Solidification velocity (computed once/timestep)
+
+// Read-write arrays (modified during parallel sweeps - need double buffering)
 KokkosDoubleBuffer<double> buffer_mobility_out; // Arrhenius mobility
 KokkosDoubleBuffer<double> buffer_solid_d;      // Solid front distance
-
-// Site state tracking
 KokkosDoubleBuffer<int> buffer_active_flag;     // 0=inactive, 1=active,
                                                  // 2=molten, 3=solidified, 5=void
 
@@ -329,6 +363,19 @@ Kokkos::View<double*> d_nucleation_temps;       // Nucleation temperature
 Kokkos::View<double*> d_nucleation_sizes;       // Nucleation particle size
 ```
 
+**Why DualView for temperature instead of KokkosDoubleBuffer?**
+- Temperature is read-only during all device kernels (never modified by parallel sweeps)
+- Only updated on CPU from HDF5 source between sweeps
+- No race conditions possible since writes happen before device sync
+- Uses 50% less memory than double buffering (important for large simulations)
+- Matches established pattern for read-only data (k_numneigh, k_neighbor)
+
+**Why simple View for gradients instead of KokkosDoubleBuffer?**
+- Gradients are computed once per timestep on device, then read multiple times
+- No neighbor-dependent writes during sweeps (unlike spin, quaternions)
+- Device-only data (no host-device sync needed after initial computation)
+- Simpler structure for pure device-to-device data flow
+
 ### 3.2 Synchronization Strategy
 
 **Key Principle:** Temperature updates come from HDF5 (CPU) → must sync to device
@@ -337,34 +384,24 @@ Kokkos::View<double*> d_nucleation_sizes;       // Nucleation particle size
 
 ```
 1. [CPU] Update temperature from HDF5: T[i] = hdf5_source.get_temp(xyz[i], time)
-2. [CPU→GPU] Sync temperature to device: buffer_T.sync_to_device()
-3. [GPU] Phase transition kernel: identify molten sites (T > T_melt)
-4. [GPU] Nucleation kernel: create new grains (undercooled liquid)
-5. [CPU↔CPU] MPI sector communication:
-   a. [GPU→CPU] buffer_*.sync_to_host()
+2. [CPU→GPU] Sync temperature to device: k_T.modify_host(); k_T.sync_device()
+3. [GPU] Compute gradients: d_G, d_V (one-time calculation, cached for sweep)
+4. [GPU] Phase transition kernel: identify molten sites (T > T_melt)
+5. [GPU] Nucleation kernel: create new grains (undercooled liquid)
+6. [CPU↔CPU] MPI sector communication:
+   a. [GPU→CPU] buffer_*.sync_to_host() (double-buffered arrays only)
    b. [CPU] MPI exchange ghost sites
-   c. [CPU→GPU] buffer_*.sync_to_device_selective() ← OPTIMIZATION
-6. [GPU] Grain growth kernel: solidification with texture weighting
-7. [GPU] Swap buffers: buffer_*.swap()
+   c. [CPU→GPU] buffer_*.sync_to_device()
+7. [GPU] Grain growth kernel: solidification with texture weighting
+8. [GPU] Swap buffers: buffer_*.swap() (double-buffered arrays only)
 ```
 
-**Selective Sync Optimization:**
+**Key differences from double-buffered arrays:**
+- Temperature (`k_T`): DualView synced once per timestep, no swap needed
+- Gradients (`d_G`, `d_V`): Device-only, no sync needed after initial computation
+- Active flag, spin, quaternions: KokkosDoubleBuffer with sync + swap after MPI
 
-After MPI, only READ buffers need sync (write buffers will be overwritten):
-
-```cpp
-// After MPI ghost exchange (host data is updated)
-buffer_spin.sync_to_device_selective(/*sync_read=*/true, /*sync_write=*/false);
-buffer_q0.sync_to_device_selective(true, false);
-buffer_qx.sync_to_device_selective(true, false);
-buffer_qy.sync_to_device_selective(true, false);
-buffer_qz.sync_to_device_selective(true, false);
-buffer_T.sync_to_device_selective(true, false);
-buffer_active_flag.sync_to_device_selective(true, false);
-// Write buffers don't need sync - kernel will overwrite them
-```
-
-**Expected Impact:** 33% reduction in device memory transfers
+**Note:** Only double-buffered arrays need swap() after sweeps. Read-only arrays like temperature are updated between sweeps and never participate in buffer swapping.
 
 ### 3.3 Temperature Source Handling
 
@@ -383,11 +420,13 @@ for (int i = 0; i < nlocal; i++) {
 **Option A: Host update + sync (simpler, recommended for Phase 2)**
 ```cpp
 // Update on CPU (HDF5 library is CPU-only)
+auto h_T = k_T.h_view;  // Get host mirror
 for (int i = 0; i < nlocal + nghost; i++) {
-  T[i] = temperature_source->get_temperature_at_time(...);
+  h_T(i) = temperature_source->get_temperature_at_time(...);
 }
-// Copy to device
-buffer_T.sync_to_device();
+// Mark host as modified and sync to device
+k_T.modify_host();
+k_T.sync_device();
 ```
 
 **Option B: Device interpolation (future optimization)**
@@ -395,9 +434,11 @@ buffer_T.sync_to_device();
 // Pre-load HDF5 data to device memory
 Kokkos::View<double***> d_temp_field;  // [time][z][y][x]
 // Interpolate on device in parallel
+auto d_T = k_T.d_view;  // Get device view
 Kokkos::parallel_for(nlocal, KOKKOS_LAMBDA(int i) {
-  T_write(i) = interpolate_temperature(xyz(i,0), xyz(i,1), xyz(i,2), time);
+  d_T(i) = interpolate_temperature(xyz(i,0), xyz(i,1), xyz(i,2), time);
 });
+k_T.modify_device();  // Mark device as modified
 ```
 
 **Recommendation:** Option A for initial implementation (minimize code changes)
@@ -458,7 +499,7 @@ struct ThermalOps {
   KOKKOS_INLINE_FUNCTION
   static void compute_temperature_gradient(
       int i,
-      const view_double_type& T_read,
+      const Kokkos::View<const double*>& d_T,  // DualView device view (read-only)
       const view_int_type& numneigh,
       const Kokkos::View<int**>& neighbor,
       const Kokkos::View<double**>& xyz,
@@ -469,7 +510,7 @@ struct ThermalOps {
     const int nn = numneigh(i);
     double T_neigh[26];  // Max FCC neighbors
     for (int j = 0; j < nn; j++) {
-      T_neigh[j] = T_read(neighbor(i,j));
+      T_neigh[j] = d_T(neighbor(i,j));
     }
 
     // Direction counters
@@ -535,20 +576,32 @@ struct ThermalOps {
 
 ```cpp
 // In NucleationFunctor or SolidificationFunctor
-KOKKOS_INLINE_FUNCTION
-void operator()(const int i) const {
-  double gradient[3], magnitude;
+struct SomeFunctor {
+  Kokkos::View<const double*> d_T;  // From k_T.d_view
+  // ... other views
 
-  ThermalOps::compute_temperature_gradient(
-      i, T_read, numneigh, neighbor, xyz,
-      gradient, &magnitude);
+  KOKKOS_INLINE_FUNCTION
+  void operator()(const int i) const {
+    double gradient[3], magnitude;
 
-  // Use gradient for texture-weighted selection
-  double texture_weight = melt_misorientation_device(
-      i, gradient[0], gradient[1], gradient[2]);
+    ThermalOps::compute_temperature_gradient(
+        i, d_T, numneigh, neighbor, xyz,
+        gradient, &magnitude);
 
-  // ...
-}
+    // Use gradient for texture-weighted selection
+    double texture_weight = melt_misorientation_device(
+        i, gradient[0], gradient[1], gradient[2]);
+
+    // ...
+  }
+};
+
+// Launch example:
+auto d_T = k_T.d_view;  // Get device view from DualView
+SomeFunctor functor;
+functor.d_T = d_T;
+// ... set other views
+Kokkos::parallel_for("SomeFunctor", nlocal, functor);
 ```
 
 ---
@@ -593,7 +646,7 @@ struct TextureOps {
       const view_double_type& qx_read,
       const view_double_type& qy_read,
       const view_double_type& qz_read,
-      const view_double_type& T_read,
+      const Kokkos::View<const double*>& d_T,  // DualView device view
       const view_int_type& numneigh,
       const Kokkos::View<int**>& neighbor,
       const Kokkos::View<double**>& xyz,
@@ -602,7 +655,7 @@ struct TextureOps {
     // Compute thermal gradient
     double gradient[3], magnitude;
     ThermalOps::compute_temperature_gradient(
-        i, T_read, numneigh, neighbor, xyz,
+        i, d_T, numneigh, neighbor, xyz,
         gradient, &magnitude);
 
     // Normalize gradient
@@ -643,7 +696,7 @@ int select_texture_weighted_neighbor(
     const view_double_type& qx_read,
     const view_double_type& qy_read,
     const view_double_type& qz_read,
-    const view_double_type& T_read,
+    const Kokkos::View<const double*>& d_T,  // DualView device view
     const view_int_type& numneigh,
     const Kokkos::View<int**>& neighbor,
     const Kokkos::View<double**>& xyz,
@@ -681,7 +734,7 @@ int select_texture_weighted_neighbor(
       // Get gradient at neighbor site
       double grad_nbr[3], mag_nbr;
       ThermalOps::compute_temperature_gradient(
-          nbr, T_read, numneigh, neighbor, xyz,
+          nbr, d_T, numneigh, neighbor, xyz,
           grad_nbr, &mag_nbr);
 
       // Normalize
@@ -734,8 +787,8 @@ int select_texture_weighted_neighbor(
 
 ```cpp
 struct MushyPhaseFunctor {
-  // Views (read buffers)
-  view_double_type T_read;
+  // Views (read-only)
+  Kokkos::View<const double*> d_T;  // Temperature from DualView
   view_int_type active_flag_read;
   view_int_type spin_read;
 
@@ -770,7 +823,7 @@ struct MushyPhaseFunctor {
       return;
     }
 
-    double T_site = T_read(i);
+    double T_site = d_T(i);
 
     // Check if solidified
     if (T_site < T_melt) {
@@ -819,7 +872,7 @@ struct MushyPhaseFunctor {
 ```cpp
 void AppAdditiveExtTempTextureKokkos::mushy_phase_kernel() {
   MushyPhaseFunctor functor;
-  functor.T_read = buffer_T.get_read_view();
+  functor.d_T = k_T.d_view;  // Get device view from DualView (read-only, no buffer)
   functor.active_flag_read = buffer_active_flag.get_read_view();
   functor.spin_read = buffer_spin.get_read_view();
   // ... set write views, parameters
@@ -827,13 +880,14 @@ void AppAdditiveExtTempTextureKokkos::mushy_phase_kernel() {
   Kokkos::parallel_for("MushyPhase", nlocal, functor);
   Kokkos::fence();
 
-  // Swap buffers
+  // Swap buffers (only for double-buffered arrays, NOT temperature)
   buffer_active_flag.swap();
   buffer_spin.swap();
   buffer_q0.swap();
   buffer_qx.swap();
   buffer_qy.swap();
   buffer_qz.swap();
+  // Note: k_T does NOT need swap() - it's a DualView, not a double buffer
 }
 ```
 
@@ -845,8 +899,11 @@ void AppAdditiveExtTempTextureKokkos::mushy_phase_kernel() {
 
 ```cpp
 struct SolidificationFunctor {
-  // Similar view setup as MushyPhaseFunctor
-  // Plus texture parameters
+  // Views (read-only)
+  Kokkos::View<const double*> d_T;  // Temperature from DualView
+  // ... other views similar to MushyPhaseFunctor
+
+  // Texture parameters
   double texture_c1, texture_c2, texture_c3;
 
   KOKKOS_INLINE_FUNCTION
@@ -858,7 +915,7 @@ struct SolidificationFunctor {
     }
 
     // Check if temperature is in solidification range
-    double T_site = T_read(i);
+    double T_site = d_T(i);
     if (T_site >= T_melt || T_site < T_lower) {
       return;
     }
@@ -882,7 +939,7 @@ struct SolidificationFunctor {
     auto rand_gen = rand_pool.get_state();
 
     int selected = select_texture_weighted_neighbor(
-        i, q0_read, qx_read, qy_read, qz_read, T_read,
+        i, q0_read, qx_read, qy_read, qz_read, d_T,
         numneigh, neighbor, xyz,
         texture_c1, texture_c2, texture_c3,
         rand_gen);
@@ -998,33 +1055,44 @@ int nbr = neighbor_list(j);
 
 **Problem:** `compute_temperature_gradient()` called multiple times per site per timestep
 
-**Solution:** Cache results in buffer_G
+**Solution:** Cache results in device Views (d_G, d_grad_x, d_grad_y, d_grad_z)
 
 ```cpp
+// Declare device-only gradient caches
+Kokkos::View<double*> d_G("gradient_magnitude", nall);
+Kokkos::View<double*> d_grad_x("gradient_x", nall);
+Kokkos::View<double*> d_grad_y("gradient_y", nall);
+Kokkos::View<double*> d_grad_z("gradient_z", nall);
+
 // In app_update(), before kernels:
+auto d_T = k_T.d_view;  // Get temperature from DualView
 Kokkos::parallel_for("ComputeGradients", nlocal,
   KOKKOS_LAMBDA(int i) {
     double gradient[3], magnitude;
     ThermalOps::compute_temperature_gradient(
-        i, T_read, numneigh, neighbor, xyz,
+        i, d_T, numneigh, neighbor, xyz,
         gradient, &magnitude);
 
-    // Store for later use
-    G_write(i) = magnitude;
-    grad_x_write(i) = gradient[0];
-    grad_y_write(i) = gradient[1];
-    grad_z_write(i) = gradient[2];
+    // Store for later use (device-only, no sync needed)
+    d_G(i) = magnitude;
+    d_grad_x(i) = gradient[0];
+    d_grad_y(i) = gradient[1];
+    d_grad_z(i) = gradient[2];
   });
-buffer_G.swap();
-// ... other gradient buffers swap
+Kokkos::fence();  // Ensure gradients computed before next kernel
 ```
 
 Then in solidification kernel:
 ```cpp
-// Just read cached gradient
-double grad[3] = {grad_x_read(i), grad_y_read(i), grad_z_read(i)};
-double magnitude = G_read(i);
+// Just read cached gradient (no recomputation)
+double grad[3] = {d_grad_x(i), d_grad_y(i), d_grad_z(i)};
+double magnitude = d_G(i);
 ```
+
+**Key advantage over double buffering:**
+- No swap() needed (device-only data, computed once per timestep)
+- No MPI sync needed (local computation, not exchanged)
+- Uses 50% less memory than KokkosDoubleBuffer
 
 **Expected impact:** 5-10x speedup for texture calculations
 
@@ -1146,10 +1214,9 @@ int team_size = 256;
 **Goal:** Enable temperature field on device
 
 **Tasks:**
-1. ⬜ Add double-buffer arrays:
-   - `buffer_T`, `buffer_G`, `buffer_V`
-   - `buffer_mobility_out`, `buffer_solid_d`
-   - `buffer_active_flag`
+1. ⬜ Add data structures:
+   - Read-only: `k_T` (DualView), `d_G`, `d_V` (device Views)
+   - Read-write: `buffer_mobility_out`, `buffer_solid_d`, `buffer_active_flag` (double buffers)
 
 2. ⬜ Update `grow_app()` to allocate arrays
 
@@ -1160,18 +1227,14 @@ int team_size = 256;
 
 4. ⬜ Modify `app_update()`:
    - Update temperature on CPU (HDF5)
-   - Sync `buffer_T` to device
-   - Update MPI ghost exchange to include new arrays
-
-5. ⬜ Implement selective synchronization:
-   - Use `sync_to_device_selective()` after MPI
-   - Profile memory transfer reduction
+   - Sync `k_T` to device (modify_host() + sync_device())
+   - Compute gradients on device, cache in d_G/d_grad_x/d_grad_y/d_grad_z
+   - Update MPI ghost exchange to include double-buffered arrays
 
 **Testing:**
 - Small test case: 10x10x10 voxels, simple temperature field
 - Verify gradient calculation matches CPU (tolerance: 1e-6)
 - Check ghost exchange correctness (MPI test)
-- Profile synchronization overhead
 
 **Deliverables:**
 - Modified `app_additive_ext_temp_texture_kokkos.{h,cpp}` (create these files)
@@ -1180,7 +1243,6 @@ int team_size = 256;
 
 **Success criteria:**
 - Temperature gradient accuracy within 0.1%
-- 33% reduction in sync overhead (via profiling)
 - MPI correctness test passes
 
 ---
@@ -1560,7 +1622,6 @@ mpirun -np 1 spk_kokkos < in.additive_200
 **Probability:** Medium (many host-device transfers)
 **Mitigation:**
 - Minimize sync points (batch operations)
-- Use selective sync (read vs write buffers)
 - Profile to quantify overhead
 - Consider CUDA-aware MPI (zero-copy)
 
@@ -1630,14 +1691,17 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
   void app_update(double dt) override;
 
  private:
-  // Temperature field buffers
-  KokkosDoubleBuffer<double> buffer_T;
-  KokkosDoubleBuffer<double> buffer_G;
-  KokkosDoubleBuffer<double> buffer_V;
+  // Read-only arrays (updated from HDF5 or computed once/timestep)
+  Kokkos::DualView<double*> k_T;          // Temperature field
+  Kokkos::View<double*> d_G;              // Gradient magnitude (device-only)
+  Kokkos::View<double*> d_grad_x;         // Gradient x-component
+  Kokkos::View<double*> d_grad_y;         // Gradient y-component
+  Kokkos::View<double*> d_grad_z;         // Gradient z-component
+  Kokkos::View<double*> d_V;              // Solidification velocity
+
+  // Read-write arrays (modified during parallel sweeps - need double buffering)
   KokkosDoubleBuffer<double> buffer_mobility_out;
   KokkosDoubleBuffer<double> buffer_solid_d;
-
-  // Phase field buffers
   KokkosDoubleBuffer<int> buffer_active_flag;
 
   // Nucleation data (device, read-only)
@@ -1993,7 +2057,6 @@ dt_fast / dt_slow = 100
 
 3. **Minimize synchronization**
    - Batch operations
-   - Use selective sync
    - Profile to quantify overhead
 
 4. **Leverage existing code**

@@ -3,10 +3,14 @@
 # This file defines a portable environment for building SPPARKS across
 # different platforms (macOS ARM, Linux x86).
 #
-# Quick Start:
-#   spack env create spparks-dev spack.yaml
-#   spack env activate spparks-dev
-#   spack install
+# Quick Start (run once per machine):
+#   1. Install Spack: git clone https://github.com/spack/spack.git ~/spack
+#   2. Initialize: source ~/spack/share/spack/setup-env.sh  # or .fish for fish shell
+#   3. Find compilers: spack compiler find
+#   4. Find externals: spack external find cmake gmake zlib
+#   5. Create env: spack env create spparks-dev spack.yaml
+#   6. Activate: spack env activate spparks-dev
+#   7. Install: spack install
 #
 # See README_SPACK.md for detailed instructions.
 
@@ -36,25 +40,10 @@ spack:
   - gmake
 
   # Package-level configuration
+  # NOTE: Compiler externals are NOT defined here for portability.
+  # Run 'spack compiler find' and 'spack external find' on each machine
+  # to detect local compilers and system packages automatically.
   packages:
-    apple-clang:
-      externals:
-      - spec: apple-clang@17.0.0
-        prefix: /usr
-        extra_attributes:
-          compilers:
-            c: /usr/bin/clang
-            cxx: /usr/bin/clang++
-    gcc:
-      externals:
-      - spec: gcc@15.2.0 languages:='c,c++,fortran'
-        prefix: /opt/homebrew
-        extra_attributes:
-          compilers:
-            c: /opt/homebrew/bin/gcc-15
-            cxx: /opt/homebrew/bin/g++-15
-            fortran: /opt/homebrew/bin/gfortran
-
     # Ensure OpenMPI is used consistently across all MPI-dependent packages
     mpi:
       require: ['openmpi@4.1:']

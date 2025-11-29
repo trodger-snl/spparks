@@ -484,10 +484,11 @@ void AppAdditiveExtTempTextureKokkos::compute_gradients_kernel()
 
   // Create temporary device view for xyz (xyz comes from CPU parent, not Kokkos)
   // Use unmanaged view wrapped around host xyz array
+  // Use device's default layout to ensure compatibility with GPU backends (HIP uses LayoutLeft)
   int nall = nlocal + nghost;
   using HostSpace = Kokkos::HostSpace;
-  using LayoutRight = Kokkos::LayoutRight;
-  Kokkos::View<double*[3], LayoutRight, HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> h_xyz(xyz[0], nall);
+  using DeviceLayout = typename Kokkos::DefaultExecutionSpace::array_layout;
+  Kokkos::View<double*[3], DeviceLayout, HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> h_xyz(xyz[0], nall);
   auto k_xyz_d = Kokkos::create_mirror_view_and_copy(Kokkos::DefaultExecutionSpace(), h_xyz);
 
   // Get active_flag for melt surface detection
@@ -1069,10 +1070,11 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
   auto k_neighbor_d = k_neighbor.d_view;
 
   // Create device view of xyz coordinates (needed for on-demand gradient computation)
+  // Use device's default layout to ensure compatibility with GPU backends (HIP uses LayoutLeft)
   int nall = nlocal + nghost;
   using HostSpace = Kokkos::HostSpace;
-  using LayoutRight = Kokkos::LayoutRight;
-  Kokkos::View<double*[3], LayoutRight, HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> h_xyz(xyz[0], nall);
+  using DeviceLayout = typename Kokkos::DefaultExecutionSpace::array_layout;
+  Kokkos::View<double*[3], DeviceLayout, HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> h_xyz(xyz[0], nall);
   auto k_xyz_d = Kokkos::create_mirror_view_and_copy(Kokkos::DefaultExecutionSpace(), h_xyz);
 
   // Capture parameters

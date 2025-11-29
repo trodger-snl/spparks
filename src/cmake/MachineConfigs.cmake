@@ -4,6 +4,20 @@
 # Function to apply machine-specific settings
 function(apply_machine_config MACHINE_NAME)
     message(STATUS "Applying machine configuration: ${MACHINE_NAME}")
+
+    # Don't override compiler for GPU backends (HIP, CUDA, SYCL)
+    # These require their specific compilers (hipcc, nvcc, etc.)
+    if(SPPARKS_KOKKOS_BACKEND STREQUAL "HIP" OR
+       SPPARKS_KOKKOS_BACKEND STREQUAL "CUDA" OR
+       SPPARKS_KOKKOS_BACKEND STREQUAL "SYCL")
+        message(STATUS "GPU backend detected - keeping user-specified compiler")
+        # Only apply non-compiler settings from machine config
+        if(MACHINE_NAME STREQUAL "linux" OR MACHINE_NAME STREQUAL "mpi" OR
+           MACHINE_NAME STREQUAL "serial" OR MACHINE_NAME STREQUAL "debug")
+            add_compile_definitions(SPPARKS_GZIP)
+        endif()
+        return()
+    endif()
     
     if(MACHINE_NAME STREQUAL "mac")
         # macOS configuration (no MPI)

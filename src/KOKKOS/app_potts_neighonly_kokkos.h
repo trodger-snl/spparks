@@ -23,53 +23,42 @@ AppStyle(potts/neighonly/kk,AppPottsNeighOnlyKokkos)
 #ifndef SPK_APP_POTTS_NEIGHONLY_KOKKOS_H
 #define SPK_APP_POTTS_NEIGHONLY_KOKKOS_H
 
-#include "app_potts_neighonly.h"
-#include "kokkos_double_buffer.h"
-#include <Kokkos_Core.hpp>
-#include <Kokkos_DualView.hpp>
-#include <Kokkos_Random.hpp>
+#include "app_lattice_kokkos.h"
 
 namespace SPPARKS_NS {
 
-class AppPottsNeighOnlyKokkos : public AppPottsNeighOnly {
- public:
-  using pool_type = Kokkos::Random_XorShift64_Pool<>;
-
+class AppPottsNeighOnlyKokkos : public AppLatticeKokkos {
+public:
   AppPottsNeighOnlyKokkos(class SPPARKS *, int, char **);
   virtual ~AppPottsNeighOnlyKokkos();
 
-  // Kokkos-specific data
-  KokkosDoubleBuffer<int> buffer_spin;
-  Kokkos::DualView<int*> k_numneigh;
-  Kokkos::DualView<int**> k_neighbor;
-  Kokkos::DualView<double*> k_propensity;
+  // App-specific data
+  int nspins;
+  int *spin;                              // Host pointer (from iarray[0])
+  Kokkos::View<int*> d_spin;              // Device view
 
-  // Random number generation pool
-  pool_type *rand_pool;
+  // Override base class methods
+  virtual void grow_app() override;
+  virtual void init_app() override;
 
-  // Override base class methods with Kokkos versions
-  virtual void grow_app();
-  virtual void init_app();
-  virtual void iterate_rejection(double);
+  // Implement required virtual methods from AppLatticeKokkos
+  virtual void sync_app_data_to_device() override;
+  virtual void sync_app_data_to_host() override;
+  virtual void allocate_app_views() override;
+  virtual void sweep_color_kokkos(int color, int start, int count) override;
 
-  // Kokkos-specific kernel implementations
-  void sweep_rejection_kokkos();
-  void sweep_rejection_kokkos(int, int *);
-
-  // Profiling helpers
-  void enable_sync_profiling(bool enable = true) { buffer_spin.enable_profiling(enable); }
-  void reset_sync_profiling() { buffer_spin.reset_profiling(); }
-  void print_sync_profiling_stats(FILE* fp) { buffer_spin.print_profiling_stats(fp, "spin"); }
+  // Site methods (required by AppLattice base)
+  virtual double site_energy(int) override;
+  virtual void site_event_rejection(int, class RandomPark *) override;
+  virtual double site_propensity(int) override;
+  virtual void site_event(int, class RandomPark *) override;
 
 private:
-  // Device-side helper functors
-  struct RejectionSweepFunctor;
+  // Sweep functor
+  struct ColorSweepFunctor;
 
-  // Sync helpers
-  void sync_data_to_device();           // MPI version - updates both buffers
-  void sync_data_to_device_full();      // Full version - updates both buffers (initialization)
-  void sync_data_to_host();
-  void swap_buffers();
+  // Temporary arrays for KMC
+  int *sites, *unique;
 };
 
 }
@@ -90,5 +79,10 @@ E: One or more sites have invalid values
 
 The application only allows sites to be initialized with specific
 values.
+
+E: Kokkos app requires 'sweep color' or 'sweep color/strict' for correct GPU execution
+
+GPU execution requires coloring to prevent race conditions. Add 'sweep color'
+to your input script.
 
 */

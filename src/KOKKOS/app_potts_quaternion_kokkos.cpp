@@ -16,32 +16,40 @@
 ------------------------------------------------------------------------- */
 
 #include "math.h"
+#include "string.h"
+#include "stdlib.h"
 #include "app_potts_quaternion_kokkos.h"
 #include "random_park.h"
 #include "error.h"
-#include "timer.h"
-#include "output.h"
-#include "comm_lattice.h"
+#include "memory.h"
 #include "crystalline_orientations/cubic_symmetries.h"
 #include "crystalline_orientations/hcp_symmetries.h"
+#include "crystalline_orientations/quaternion.h"
+#include "crystalline_orientations/disorientation.h"
 
 using namespace SPPARKS_NS;
-
-enum{NOSWEEP,RANDOM,RASTER,COLOR,COLOR_STRICT};
 
 /* ---------------------------------------------------------------------- */
 
 AppPottsQuaternionKokkos::AppPottsQuaternionKokkos(SPPARKS *spk, int narg, char **arg) :
-  AppPottsQuaternion(spk, narg, arg), rand_pool(nullptr), num_symmetries(0),
-  sync_profiling_enabled(false)
+  AppLatticeKokkos(spk, narg, arg), num_symmetries(0), theta_cut(15.0)
 {
-  // Parent constructor returns early for child classes (style != "potts/quaternion")
-  // So we need to parse arguments ourselves
+  // Quaternion Potts setup
+  ninteger = 1;
+  ndouble = 4;
+  delpropensity = 1;
+  delevent = 0;
+  allow_kmc = 1;
+  allow_rejection = 1;
+  allow_masking = 1;
+  numrandom = 2;
 
+  create_arrays();
+
+  // Parse arguments
   if (narg != 3 && narg != 4)
     error->all(FLERR, "Illegal 'potts/quaternion/kk' command");
 
-  // Parse nspins
   nspins = atoi(arg[1]);
   if (nspins <= 0)
     error->all(FLERR, "Illegal app_style command");
@@ -52,35 +60,30 @@ AppPottsQuaternionKokkos::AppPottsQuaternionKokkos(SPPARKS *spk, int narg, char 
   } else if (strcmp(arg[2], "hcp") == 0) {
     symmetries = HCP::get_symmetries();
   } else {
-    error->all(FLERR, "Illegal 'potts/quaternion/kk' command; expected "
-                      "'cubic' or 'hcp'");
+    error->all(FLERR, "Illegal 'potts/quaternion/kk' command; expected 'cubic' or 'hcp'");
   }
 
   // Parse optional theta_cut
-  if (4 == narg) {
+  if (narg == 4) {
     theta_cut = atof(arg[3]);
     if (theta_cut <= 0.0)
       error->all(FLERR, "Illegal 'potts/quaternion/kk' command; theta_cut must be positive");
     if (strcmp(arg[2], "cubic") == 0 && theta_cut > 62.7) {
       error->all(FLERR, "Illegal 'potts/quaternion/kk' command; "
-                        "theta_cut for 'cubic' must "
-                        "be between 0.0 and 62.7 degrees");
+                        "theta_cut for 'cubic' must be between 0.0 and 62.7 degrees");
     } else if (strcmp(arg[2], "hcp") == 0 && theta_cut > 93.8) {
       error->all(FLERR, "Illegal 'potts/quaternion/kk' command; "
-                        "theta_cut for 'hcp' must "
-                        "be between 0.0 and 93.8 degrees");
+                        "theta_cut for 'hcp' must be between 0.0 and 93.8 degrees");
     }
   }
-  // theta_cut already has default value of 15.0 from parent class
 
-  // Set up quaternion arrays (parent constructor skipped this)
-  ndouble = 4;
-  recreate_arrays();
+  dt_sweep = 1.0/nspins;
 
-  // Initialize RNG pool with a seed using world rank
-  int me;
-  MPI_Comm_rank(world, &me);
-  rand_pool = new pool_type(12345 + me);
+  // Initialize pointers
+  spin = nullptr;
+  q0 = qx = qy = qz = nullptr;
+  sites = nullptr;
+  unique_neigh = nullptr;
 
   // Copy symmetries to device
   num_symmetries = symmetries.size() / 4;
@@ -96,7 +99,8 @@ AppPottsQuaternionKokkos::AppPottsQuaternionKokkos(SPPARKS *spk, int narg, char 
 
 AppPottsQuaternionKokkos::~AppPottsQuaternionKokkos()
 {
-  if (rand_pool) delete rand_pool;
+  memory->destroy(sites);
+  memory->destroy(unique_neigh);
 }
 
 /* ----------------------------------------------------------------------
@@ -105,32 +109,31 @@ AppPottsQuaternionKokkos::~AppPottsQuaternionKokkos()
 
 void AppPottsQuaternionKokkos::grow_app()
 {
-  // Don't call AppPottsQuaternion::grow_app() - it doesn't call parent chain
-  // Instead, manually set pointers after parent classes allocate arrays
-  // Call AppPotts::grow_app which will set spin pointer
-  AppPotts::grow_app();
+  // Set spin pointer to iarray[0]
+  spin = iarray[0];
 
-  // Set quaternion pointers to darray (parent constructor allocated these)
+  // Set quaternion pointers to darray
   q0 = darray[0];
   qx = darray[1];
   qy = darray[2];
   qz = darray[3];
 
-  // Allocate/resize Kokkos views
+  // Call parent (allocates neighbors and calls allocate_app_views)
+  AppLatticeKokkos::grow_app();
+}
+
+/* ----------------------------------------------------------------------
+   allocate app-specific Kokkos views
+------------------------------------------------------------------------- */
+
+void AppPottsQuaternionKokkos::allocate_app_views()
+{
   int nall = nlocal + nghost;
-
-  // Allocate neighbor arrays
-  k_numneigh = Kokkos::DualView<int*>("numneigh", nall);
-  if (maxneigh > 0) {
-    k_neighbor = Kokkos::DualView<int**>("neighbor", nall, maxneigh);
-  }
-
-  // Allocate double buffers using generalized framework
-  buffer_spin.allocate("spin", nall);
-  buffer_q0.allocate("q0", nall);
-  buffer_qx.allocate("qx", nall);
-  buffer_qy.allocate("qy", nall);
-  buffer_qz.allocate("qz", nall);
+  d_spin = Kokkos::View<int*>("spin", nall);
+  d_q0 = Kokkos::View<double*>("q0", nall);
+  d_qx = Kokkos::View<double*>("qx", nall);
+  d_qy = Kokkos::View<double*>("qy", nall);
+  d_qz = Kokkos::View<double*>("qz", nall);
 }
 
 /* ----------------------------------------------------------------------
@@ -139,327 +142,350 @@ void AppPottsQuaternionKokkos::grow_app()
 
 void AppPottsQuaternionKokkos::init_app()
 {
-  // Call parent initialization (sets up sites array, random orientations, etc.)
-  AppPottsQuaternion::init_app();
+  // Validate spin values
+  int flag = 0;
+  for (int i = 0; i < nlocal; i++)
+    if (spin[i] < 1 || spin[i] > nspins) flag = 1;
+  int flagall;
+  MPI_Allreduce(&flag, &flagall, 1, MPI_INT, MPI_SUM, world);
+  if (flagall) error->all(FLERR,"One or more sites have invalid values");
 
-  // Sync neighbor arrays to device
-  int nall = nlocal + nghost;
-  auto h_numneigh = k_numneigh.h_view;
-  for (int i = 0; i < nall; i++) {
-    h_numneigh(i) = numneigh[i];
-  }
-  k_numneigh.modify_host();
-
-  if (maxneigh > 0) {
-    auto h_neighbor = k_neighbor.h_view;
-    for (int i = 0; i < nall; i++) {
-      for (int j = 0; j < numneigh[i]; j++) {
-        h_neighbor(i, j) = neighbor[i][j];
-      }
+  // Initialize random quaternions for sites that don't have one
+  for (int i = 0; i < nlocal; i++) {
+    double norm = sqrt(q0[i]*q0[i] + qx[i]*qx[i] + qy[i]*qy[i] + qz[i]*qz[i]);
+    if (norm < 1.0e-6) {
+      // Generate random quaternion using host-side library
+      std::vector<double> quat = quaternion::generate_random_unit_quaternions(1);
+      q0[i] = quat[0];
+      qx[i] = quat[1];
+      qy[i] = quat[2];
+      qz[i] = quat[3];
     }
-    k_neighbor.modify_host();
   }
 
-  // Sync site data to device - use full version to initialize both buffers
-  sync_data_to_device_full();
-
-  // Reset sync profiling counters if enabled (via sync_profiling command)
-  if (sync_profiling_enabled) {
-    reset_sync_profiling();
+  // Allocate temp arrays for KMC if needed
+  if (allow_kmc) {
+    memory->destroy(sites);
+    memory->destroy(unique_neigh);
+    memory->create(sites, 1 + maxneigh, "app:sites");
+    memory->create(unique_neigh, 1 + maxneigh, "app:unique_neigh");
   }
+
+  // Call parent (validates coloring, sets up color lists, syncs neighbors)
+  AppLatticeKokkos::init_app();
+
+  // Initial sync of data to device
+  sync_app_data_to_device();
 }
 
 /* ----------------------------------------------------------------------
-   sync all site data to device
+   sync spin and quaternion data to device
 ------------------------------------------------------------------------- */
 
-/* ----------------------------------------------------------------------
-   sync all site data to device - FULL VERSION (both buffers)
-   Used only during initialization
-------------------------------------------------------------------------- */
-
-void AppPottsQuaternionKokkos::sync_data_to_device_full()
+void AppPottsQuaternionKokkos::sync_app_data_to_device()
 {
   int nall = nlocal + nghost;
 
-  // Sync spin directly (no transformation needed)
-  buffer_spin.sync_to_device_full(spin);
+  // Sync spin
+  auto h_spin = Kokkos::create_mirror_view(d_spin);
+  for (int i = 0; i < nall; i++) {
+    h_spin(i) = spin[i];
+  }
+  Kokkos::deep_copy(d_spin, h_spin);
 
-  // Sync quaternions with normalization to prevent drift
-  // Allocate temporary normalized arrays
-  double* q0_norm = new double[nall];
-  double* qx_norm = new double[nall];
-  double* qy_norm = new double[nall];
-  double* qz_norm = new double[nall];
+  // Sync quaternions with normalization
+  auto h_q0 = Kokkos::create_mirror_view(d_q0);
+  auto h_qx = Kokkos::create_mirror_view(d_qx);
+  auto h_qy = Kokkos::create_mirror_view(d_qy);
+  auto h_qz = Kokkos::create_mirror_view(d_qz);
 
-  // Use helper to normalize quaternion arrays
-  normalize_quaternion_arrays(q0_norm, qx_norm, qy_norm, qz_norm,
-                               q0, qx, qy, qz, nall);
+  for (int i = 0; i < nall; i++) {
+    double norm = sqrt(q0[i]*q0[i] + qx[i]*qx[i] + qy[i]*qy[i] + qz[i]*qz[i]);
+    if (norm > 1.0e-15) {
+      double inv_norm = 1.0 / norm;
+      h_q0(i) = q0[i] * inv_norm;
+      h_qx(i) = qx[i] * inv_norm;
+      h_qy(i) = qy[i] * inv_norm;
+      h_qz(i) = qz[i] * inv_norm;
+    } else {
+      h_q0(i) = q0[i];
+      h_qx(i) = qx[i];
+      h_qy(i) = qy[i];
+      h_qz(i) = qz[i];
+    }
+  }
 
-  // Use framework to sync normalized data
-  buffer_q0.sync_to_device_full(q0_norm);
-  buffer_qx.sync_to_device_full(qx_norm);
-  buffer_qy.sync_to_device_full(qy_norm);
-  buffer_qz.sync_to_device_full(qz_norm);
-
-  delete[] q0_norm;
-  delete[] qx_norm;
-  delete[] qy_norm;
-  delete[] qz_norm;
+  Kokkos::deep_copy(d_q0, h_q0);
+  Kokkos::deep_copy(d_qx, h_qx);
+  Kokkos::deep_copy(d_qy, h_qy);
+  Kokkos::deep_copy(d_qz, h_qz);
 }
 
 /* ----------------------------------------------------------------------
-   sync all site data to device
-   Used after MPI communication to update ALL sites from host
-   Must update all sites because after MPI comm, host has the authoritative data
+   sync data from device to host
 ------------------------------------------------------------------------- */
 
-void AppPottsQuaternionKokkos::sync_data_to_device()
+void AppPottsQuaternionKokkos::sync_app_data_to_host()
 {
-  int nall = nlocal + nghost;
+  // Sync spin
+  auto h_spin = Kokkos::create_mirror_view(d_spin);
+  Kokkos::deep_copy(h_spin, d_spin);
+  for (int i = 0; i < nlocal; i++) {
+    spin[i] = h_spin(i);
+  }
 
-  // MUST sync both buffers because ghost sites are never written by kernel!
-  // After buffer swap, write_buffer needs updated ghost data for next iteration.
-  // Only nlocal sites are updated by kernel, so ghost sites in write_buffer
-  // would become stale without this sync.
+  // Sync quaternions with normalization
+  auto h_q0 = Kokkos::create_mirror_view(d_q0);
+  auto h_qx = Kokkos::create_mirror_view(d_qx);
+  auto h_qy = Kokkos::create_mirror_view(d_qy);
+  auto h_qz = Kokkos::create_mirror_view(d_qz);
 
-  // Sync spin directly (no transformation needed)
-  buffer_spin.sync_to_device(spin);
+  Kokkos::deep_copy(h_q0, d_q0);
+  Kokkos::deep_copy(h_qx, d_qx);
+  Kokkos::deep_copy(h_qy, d_qy);
+  Kokkos::deep_copy(h_qz, d_qz);
 
-  // Sync quaternions with normalization to prevent drift
-  // Allocate temporary normalized arrays
-  double* q0_norm = new double[nall];
-  double* qx_norm = new double[nall];
-  double* qy_norm = new double[nall];
-  double* qz_norm = new double[nall];
-
-  // Use helper to normalize quaternion arrays
-  normalize_quaternion_arrays(q0_norm, qx_norm, qy_norm, qz_norm,
-                               q0, qx, qy, qz, nall);
-
-  // Use framework to sync normalized data to BOTH buffers (ghost sites requirement)
-  buffer_q0.sync_to_device(q0_norm);
-  buffer_qx.sync_to_device(qx_norm);
-  buffer_qy.sync_to_device(qy_norm);
-  buffer_qz.sync_to_device(qz_norm);
-
-  delete[] q0_norm;
-  delete[] qx_norm;
-  delete[] qy_norm;
-  delete[] qz_norm;
-}
-
-/* ----------------------------------------------------------------------
-   sync all site data to host
-------------------------------------------------------------------------- */
-
-void AppPottsQuaternionKokkos::sync_data_to_host()
-{
-  int nall = nlocal + nghost;
-
-  // Sync spin directly (no transformation needed)
-  buffer_spin.sync_to_host(spin);
-
-  // Sync quaternions with normalization to prevent accumulation of errors
-  // Allocate temporary arrays
-  double* q0_temp = new double[nall];
-  double* qx_temp = new double[nall];
-  double* qy_temp = new double[nall];
-  double* qz_temp = new double[nall];
-
-  // Get data from device
-  buffer_q0.sync_to_host(q0_temp);
-  buffer_qx.sync_to_host(qx_temp);
-  buffer_qy.sync_to_host(qy_temp);
-  buffer_qz.sync_to_host(qz_temp);
-
-  // Use helper to normalize and copy to final host arrays
-  normalize_quaternion_arrays(q0, qx, qy, qz,
-                               q0_temp, qx_temp, qy_temp, qz_temp,
-                               nall);
-
-  delete[] q0_temp;
-  delete[] qx_temp;
-  delete[] qy_temp;
-  delete[] qz_temp;
-}
-
-/* ----------------------------------------------------------------------
-   swap read/write buffers after each sweep
-   prevents race conditions from concurrent read/write to same data
-------------------------------------------------------------------------- */
-
-void AppPottsQuaternionKokkos::swap_buffers()
-{
-  // Use framework to swap all buffers
-  buffer_spin.swap();
-  buffer_q0.swap();
-  buffer_qx.swap();
-  buffer_qy.swap();
-  buffer_qz.swap();
+  for (int i = 0; i < nlocal; i++) {
+    double norm = sqrt(h_q0(i)*h_q0(i) + h_qx(i)*h_qx(i) + h_qy(i)*h_qy(i) + h_qz(i)*h_qz(i));
+    if (norm > 1.0e-15) {
+      double inv_norm = 1.0 / norm;
+      q0[i] = h_q0(i) * inv_norm;
+      qx[i] = h_qx(i) * inv_norm;
+      qy[i] = h_qy(i) * inv_norm;
+      qz[i] = h_qz(i) * inv_norm;
+    } else {
+      q0[i] = h_q0(i);
+      qx[i] = h_qx(i);
+      qy[i] = h_qy(i);
+      qz[i] = h_qz(i);
+    }
+  }
 }
 
 /* ----------------------------------------------------------------------
    normalize quaternion arrays on host
-   prevents accumulation of numerical errors
 ------------------------------------------------------------------------- */
 
 void AppPottsQuaternionKokkos::normalize_quaternion_arrays(
     double* q0_out, double* qx_out, double* qy_out, double* qz_out,
     const double* q0_in, const double* qx_in,
-    const double* qy_in, const double* qz_in,
-    int n)
+    const double* qy_in, const double* qz_in, int n)
 {
   for (int i = 0; i < n; i++) {
-    double q[4] = {q0_in[i], qx_in[i], qy_in[i], qz_in[i]};
-    double norm = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
+    double norm = sqrt(q0_in[i]*q0_in[i] + qx_in[i]*qx_in[i] +
+                       qy_in[i]*qy_in[i] + qz_in[i]*qz_in[i]);
 
     if (norm > 1.0e-15) {
       double inv_norm = 1.0 / norm;
-      q0_out[i] = q[0] * inv_norm;
-      qx_out[i] = q[1] * inv_norm;
-      qy_out[i] = q[2] * inv_norm;
-      qz_out[i] = q[3] * inv_norm;
+      q0_out[i] = q0_in[i] * inv_norm;
+      qx_out[i] = qx_in[i] * inv_norm;
+      qy_out[i] = qy_in[i] * inv_norm;
+      qz_out[i] = qz_in[i] * inv_norm;
     } else {
-      q0_out[i] = q[0];
-      qx_out[i] = q[1];
-      qy_out[i] = q[2];
-      qz_out[i] = q[3];
+      q0_out[i] = q0_in[i];
+      qx_out[i] = qx_in[i];
+      qy_out[i] = qy_in[i];
+      qz_out[i] = qz_in[i];
     }
   }
 }
 
 /* ----------------------------------------------------------------------
-   compute energy of site - calls base class for now
+   compute energy of site using Read-Shockley equation
 ------------------------------------------------------------------------- */
 
 double AppPottsQuaternionKokkos::site_energy(int i)
 {
-  return AppPottsQuaternion::site_energy(i);
+  double eng = 0.0;
+  std::vector<double> qi = {q0[i], qx[i], qy[i], qz[i]};
+
+  for (int j = 0; j < numneigh[i]; j++) {
+    int nj = neighbor[i][j];
+    std::vector<double> qj = {q0[nj], qx[nj], qy[nj], qz[nj]};
+
+    // Compute disorientation using host-side quaternion library
+    double di = disorientation::compute_disorientation(symmetries, qi, qj);
+
+    double ratio = di / theta_cut;
+
+    if (ratio <= 0.0) {
+      continue;
+    } else if (ratio < 1.0) {
+      eng += ratio * (1.0 - log(ratio));
+    } else {
+      eng += 1.0;
+    }
+  }
+
+  return 0.5 * eng;
 }
 
 /* ----------------------------------------------------------------------
-   rKMC method - calls base class for now
+   rKMC method - pick random neighbor orientation
 ------------------------------------------------------------------------- */
 
 void AppPottsQuaternionKokkos::site_event_rejection(int i, RandomPark *random)
 {
-  AppPottsQuaternion::site_event_rejection(i, random);
+  int oldstate = spin[i];
+  double q_old[4] = {q0[i], qx[i], qy[i], qz[i]};
+  double einitial = site_energy(i);
+
+  // Build list of unique neighbor spins
+  int nevent = 0;
+  for (int j = 0; j < numneigh[i]; j++) {
+    int nj = neighbor[i][j];
+    int value = spin[nj];
+    if (value == oldstate) continue;
+
+    // Check if already in unique list
+    bool found = false;
+    for (int m = 0; m < nevent; m++) {
+      if (value == sites[m]) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      sites[nevent] = value;
+      unique_neigh[nevent] = nj;
+      nevent++;
+    }
+  }
+
+  if (nevent == 0) return;
+
+  // Pick random unique neighbor
+  int iran = (int)(nevent * random->uniform());
+  if (iran >= nevent) iran = nevent - 1;
+
+  int neighran = unique_neigh[iran];
+  int newstate = sites[iran];
+  double q_new[4] = {q0[neighran], qx[neighran], qy[neighran], qz[neighran]};
+
+  // Apply new state temporarily
+  spin[i] = newstate;
+  q0[i] = q_new[0];
+  qx[i] = q_new[1];
+  qy[i] = q_new[2];
+  qz[i] = q_new[3];
+
+  double efinal = site_energy(i);
+
+  // Metropolis acceptance
+  if (efinal <= einitial) {
+    // accept
+  } else if (temperature == 0.0) {
+    spin[i] = oldstate;
+    q0[i] = q_old[0];
+    qx[i] = q_old[1];
+    qy[i] = q_old[2];
+    qz[i] = q_old[3];
+  } else if (random->uniform() > exp((einitial - efinal) * t_inverse)) {
+    spin[i] = oldstate;
+    q0[i] = q_old[0];
+    qx[i] = q_old[1];
+    qy[i] = q_old[2];
+    qz[i] = q_old[3];
+  }
+
+  if (spin[i] != oldstate) naccept++;
 }
 
 /* ----------------------------------------------------------------------
-   Energy calculation functor for Kokkos parallel_for
+   KMC propensity
 ------------------------------------------------------------------------- */
 
-struct AppPottsQuaternionKokkos::ComputeEnergyFunctor {
-  typedef Kokkos::View<int*, Kokkos::DefaultExecutionSpace::memory_space> view_int_type;
-  typedef Kokkos::View<double*, Kokkos::DefaultExecutionSpace::memory_space> view_double_type;
+double AppPottsQuaternionKokkos::site_propensity(int i)
+{
+  // Count unique neighbor spins different from mine
+  int isite = spin[i];
+  int nunique = 0;
 
-  view_int_type spin;
-  view_int_type numneigh;
-  Kokkos::View<int**, Kokkos::DefaultExecutionSpace::memory_space> neighbor;
-  view_double_type q0, qx, qy, qz;
-  view_double_type symmetries;
-  int num_symmetries;
-  double theta_cut;
-  view_double_type energy;
+  for (int j = 0; j < numneigh[i]; j++) {
+    int value = spin[neighbor[i][j]];
+    if (value == isite) continue;
 
-  ComputeEnergyFunctor(view_int_type spin_, view_int_type numneigh_,
-                       Kokkos::View<int**> neighbor_,
-                       view_double_type q0_, view_double_type qx_,
-                       view_double_type qy_, view_double_type qz_,
-                       view_double_type symmetries_, int num_sym_,
-                       double theta_cut_, view_double_type energy_) :
-    spin(spin_), numneigh(numneigh_), neighbor(neighbor_),
-    q0(q0_), qx(qx_), qy(qy_), qz(qz_),
-    symmetries(symmetries_), num_symmetries(num_sym_),
-    theta_cut(theta_cut_), energy(energy_) {}
-
-  KOKKOS_INLINE_FUNCTION
-  void operator()(const int i) const {
-    double eng = 0.0;
-    double qi[4] = {q0(i), qx(i), qy(i), qz(i)};
-
-    for (int j = 0; j < numneigh(i); j++) {
-      int nj = neighbor(i, j);
-      double qj[4] = {q0(nj), qx(nj), qy(nj), qz(nj)};
-
-      // Compute disorientation
-      double di = QuaternionOps::compute_disorientation(
-        symmetries.data(), num_symmetries, qi, qj);
-
-      double ratio = di / theta_cut;
-
-      // Read-Shockley equation logic
-      if (ratio <= 0.0) {
-        continue;
-      } else if (ratio < 1.0) {
-        eng += ratio * (1.0 - Kokkos::log(ratio));
-      } else {
-        eng += 1.0;
+    bool found = false;
+    for (int m = 0; m < nunique; m++) {
+      if (value == sites[m]) {
+        found = true;
+        break;
       }
     }
-
-    // Each site carries half the grain boundary energy
-    energy(i) = 0.5 * eng;
+    if (!found) sites[nunique++] = value;
   }
-};
+
+  return (double) nunique;
+}
 
 /* ----------------------------------------------------------------------
-   Rejection KMC sweep functor
+   KMC event - pick random neighbor orientation
 ------------------------------------------------------------------------- */
 
-struct AppPottsQuaternionKokkos::RejectionSweepFunctor {
-  typedef Kokkos::View<int*, Kokkos::DefaultExecutionSpace::memory_space> view_int_type;
-  typedef Kokkos::View<double*, Kokkos::DefaultExecutionSpace::memory_space> view_double_type;
-  typedef int value_type;  // For parallel_reduce
-  typedef Kokkos::Random_XorShift64_Pool<> pool_type;
+void AppPottsQuaternionKokkos::site_event(int i, RandomPark *random)
+{
+  int oldstate = spin[i];
 
-  // Double-buffer approach: read from one, write to other
-  view_int_type spin_read, spin_write;
-  view_int_type numneigh;
-  Kokkos::View<int**, Kokkos::DefaultExecutionSpace::memory_space> neighbor;
-  view_double_type q0_read, q0_write;
-  view_double_type qx_read, qx_write;
-  view_double_type qy_read, qy_write;
-  view_double_type qz_read, qz_write;
-  view_double_type symmetries;
+  // Build list of unique neighbor spins
+  int nevent = 0;
+  for (int j = 0; j < numneigh[i]; j++) {
+    int nj = neighbor[i][j];
+    int value = spin[nj];
+    if (value == oldstate) continue;
+
+    bool found = false;
+    for (int m = 0; m < nevent; m++) {
+      if (value == sites[m]) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      sites[nevent] = value;
+      unique_neigh[nevent] = nj;
+      nevent++;
+    }
+  }
+
+  if (nevent == 0) return;
+
+  // Pick random unique neighbor
+  int m = (int)(nevent * random->uniform());
+  if (m >= nevent) m = nevent - 1;
+
+  int neighran = unique_neigh[m];
+  spin[i] = sites[m];
+  q0[i] = q0[neighran];
+  qx[i] = qx[neighran];
+  qy[i] = qy[neighran];
+  qz[i] = qz[neighran];
+}
+
+/* ----------------------------------------------------------------------
+   Kokkos sweep functor for one color
+------------------------------------------------------------------------- */
+
+struct AppPottsQuaternionKokkos::ColorSweepFunctor {
+  Kokkos::View<int*> spin;
+  Kokkos::View<double*> q0, qx, qy, qz;
+  Kokkos::View<int*> numneigh;
+  Kokkos::View<int**> neighbor;
+  Kokkos::View<int*> color_sites;
+  Kokkos::View<double*> symmetries;
+  int color_start;
   int num_symmetries;
   double theta_cut;
   pool_type rand_pool;
   double temperature;
   double t_inverse;
-  int maxneigh;
-
-  RejectionSweepFunctor(view_int_type spin_read_, view_int_type spin_write_,
-                        view_int_type numneigh_,
-                        Kokkos::View<int**> neighbor_,
-                        view_double_type q0_read_, view_double_type q0_write_,
-                        view_double_type qx_read_, view_double_type qx_write_,
-                        view_double_type qy_read_, view_double_type qy_write_,
-                        view_double_type qz_read_, view_double_type qz_write_,
-                        view_double_type symmetries_, int num_sym_,
-                        double theta_cut_,
-                        pool_type& rand_pool_,
-                        double temp_, double t_inv_, int maxneigh_) :
-    spin_read(spin_read_), spin_write(spin_write_),
-    numneigh(numneigh_), neighbor(neighbor_),
-    q0_read(q0_read_), q0_write(q0_write_),
-    qx_read(qx_read_), qx_write(qx_write_),
-    qy_read(qy_read_), qy_write(qy_write_),
-    qz_read(qz_read_), qz_write(qz_write_),
-    symmetries(symmetries_), num_symmetries(num_sym_),
-    theta_cut(theta_cut_), rand_pool(rand_pool_),
-    temperature(temp_), t_inverse(t_inv_), maxneigh(maxneigh_) {}
 
   KOKKOS_INLINE_FUNCTION
-  double compute_site_energy(int i, const double* qi) const {
+  double compute_energy(int i, const double* qi) const {
     double eng = 0.0;
 
     for (int j = 0; j < numneigh(i); j++) {
       int nj = neighbor(i, j);
-      // Read neighbor quaternion from read buffer
-      double qj[4] = {q0_read(nj), qx_read(nj), qy_read(nj), qz_read(nj)};
+      double qj[4] = {q0(nj), qx(nj), qy(nj), qz(nj)};
 
       double di = QuaternionOps::compute_disorientation(
         symmetries.data(), num_symmetries, qi, qj);
@@ -479,29 +505,25 @@ struct AppPottsQuaternionKokkos::RejectionSweepFunctor {
   }
 
   KOKKOS_INLINE_FUNCTION
-  void operator()(const int i, int& accepted) const {
-    // Each thread gets its own RNG state from the pool
+  void operator()(const int idx, int& accepted) const {
+    int i = color_sites(color_start + idx);
     auto rand_gen = rand_pool.get_state();
 
-    // Get current state from READ buffer
-    int oldstate = spin_read(i);
-    double q_old[4] = {q0_read(i), qx_read(i), qy_read(i), qz_read(i)};
+    int oldstate = spin(i);
+    double q_old[4] = {q0(i), qx(i), qy(i), qz(i)};
 
-    // Calculate current energy
-    double einitial = compute_site_energy(i, q_old);
+    double einitial = compute_energy(i, q_old);
 
-    // Build list of unique neighboring spins
-    int unique[100];  // Stack array, should be large enough
-    int unique_neigh[100];
+    // Build list of unique neighbor spins (stack allocated)
+    int unique[64];
+    int unique_neigh[64];
     int nevent = 0;
 
     for (int j = 0; j < numneigh(i); j++) {
       int nj = neighbor(i, j);
-      // Read neighbor spin from READ buffer
-      int value = spin_read(nj);
+      int value = spin(nj);
       if (value == oldstate) continue;
 
-      // Check if this spin value is already in unique list
       bool found = false;
       for (int m = 0; m < nevent; m++) {
         if (value == unique[m]) {
@@ -509,522 +531,75 @@ struct AppPottsQuaternionKokkos::RejectionSweepFunctor {
           break;
         }
       }
-
-      if (!found && nevent < 100) {
+      if (!found && nevent < 64) {
         unique[nevent] = value;
         unique_neigh[nevent] = nj;
         nevent++;
       }
     }
 
-    // If no unique neighbors, no event possible
-    // Still must write current state to write_buffer to prevent data corruption
+    // No unique neighbors - nothing to do
     if (nevent == 0) {
-      spin_write(i) = oldstate;
-      q0_write(i) = q_old[0];
-      qx_write(i) = q_old[1];
-      qy_write(i) = q_old[2];
-      qz_write(i) = q_old[3];
       rand_pool.free_state(rand_gen);
       return;
     }
 
-    // Randomly select one unique neighbor
-    double rand_val = rand_gen.drand();
-    int iran = static_cast<int>(nevent * rand_val);
+    // Pick random unique neighbor
+    int iran = static_cast<int>(nevent * rand_gen.drand());
     if (iran >= nevent) iran = nevent - 1;
 
     int neighran = unique_neigh[iran];
-
-    // Read neighbor's state from READ buffer
     int newstate = unique[iran];
-    double q_new[4] = {q0_read(neighran), qx_read(neighran), qy_read(neighran), qz_read(neighran)};
-
-    // Normalize to ensure unit quaternion
+    double q_new[4] = {q0(neighran), qx(neighran), qy(neighran), qz(neighran)};
     QuaternionOps::normalize(q_new);
 
-    // Calculate new energy (using temp quaternion, not modifying site yet)
-    // We need to compute energy as if site i had q_new
-    // This is tricky - we need to swap temporarily for energy calculation
-    double efinal = 0.0;
-    for (int j = 0; j < numneigh(i); j++) {
-      int nj = neighbor(i, j);
-      // Read neighbor quaternion from READ buffer
-      double qj[4] = {q0_read(nj), qx_read(nj), qy_read(nj), qz_read(nj)};
-
-      double di = QuaternionOps::compute_disorientation(
-        symmetries.data(), num_symmetries, q_new, qj);
-
-      double ratio = di / theta_cut;
-
-      if (ratio <= 0.0) {
-        continue;
-      } else if (ratio < 1.0) {
-        efinal += ratio * (1.0 - Kokkos::log(ratio));
-      } else {
-        efinal += 1.0;
-      }
-    }
-    efinal *= 0.5;
+    // Compute new energy
+    double efinal = compute_energy(i, q_new);
 
     // Metropolis acceptance
-    int move_accepted = 0;
+    bool accept = false;
     if (efinal <= einitial) {
-      move_accepted = 1;
+      accept = true;
     } else if (temperature > 0.0) {
       double prob = Kokkos::exp((einitial - efinal) * t_inverse);
-      if (rand_gen.drand() < prob) {
-        move_accepted = 1;
-      }
+      if (rand_gen.drand() < prob) accept = true;
     }
 
-    // Write to WRITE buffer (either new state if accepted, or old state if rejected)
-    if (move_accepted) {
-      spin_write(i) = newstate;
-      q0_write(i) = q_new[0];
-      qx_write(i) = q_new[1];
-      qy_write(i) = q_new[2];
-      qz_write(i) = q_new[3];
-    } else {
-      // Copy old state to write buffer
-      spin_write(i) = oldstate;
-      q0_write(i) = q_old[0];
-      qx_write(i) = q_old[1];
-      qy_write(i) = q_old[2];
-      qz_write(i) = q_old[3];
+    if (accept) {
+      spin(i) = newstate;
+      q0(i) = q_new[0];
+      qx(i) = q_new[1];
+      qy(i) = q_new[2];
+      qz(i) = q_new[3];
+      accepted++;
     }
 
-    // Return RNG state to pool
     rand_pool.free_state(rand_gen);
-
-    accepted += move_accepted;
   }
 };
 
 /* ----------------------------------------------------------------------
-   Override main iteration loop to use device kernels
-   Phase 2: Full sector and MPI support
+   sweep all sites of one color on device
 ------------------------------------------------------------------------- */
 
-void AppPottsQuaternionKokkos::iterate_rejection(double stoptime)
+void AppPottsQuaternionKokkos::sweep_color_kokkos(int color, int start, int count)
 {
-  int i, icolor, nselect, nrange, jset;
-  int *site2i;
-
-  // Set loop is over:
-  // sectors if there are sectors and no colors
-  // colors if there are colors and no sectors
-  // first nsector sets if there are both sectors and colors
-
-  int nset_loop = nset;
-  if (bothflag) nset_loop = nsector;
-
-  int done = 0;
-  while (!done) {
-    for (int iset = 0; iset < nset_loop; iset++) {
-      // Sync device to host before MPI communication
-      // MPI operates on host data, so we need current device state
-      if (nprocs > 1 && iset > 0) {
-        timer->stamp();
-        sync_data_to_host();
-        timer->stamp(TIME_SOLVE);
-      }
-
-      // MPI communication for this sector
-      if (nprocs > 1) {
-        timer->stamp();
-        if (sectorflag) comm->sector(iset);
-        else comm->all();
-        timer->stamp(TIME_COMM);
-      }
-
-      if (Lmask) boundary_clear_mask(iset);
-
-      timer->stamp();
-
-      // Sync data to device after MPI communication
-      // Need to get updated ghost sites from MPI
-      sync_data_to_device();
-      if (iset == 0) {
-        // Fix: Remove inverted logic - sync when we NEED to sync (host was modified)
-        if (k_numneigh.need_sync_device()) k_numneigh.sync_device();
-        if (k_neighbor.need_sync_device()) k_neighbor.sync_device();
-      }
-
-      // Sectors but no colors (could also be no sectors)
-      // Random selection of sites in iset
-      if (sweepflag == RANDOM) {
-        site2i = set[iset].site2i;
-        nrange = set[iset].nlocal;
-        nselect = set[iset].nselect;
-        for (i = 0; i < nselect; i++)
-          sitelist[i] = site2i[ranapp->irandom(nrange) - 1];
-        sweep_rejection_kokkos(nselect, sitelist);
-        nattempt += nselect;
-
-      // Sectors but no colors, or colors but no sectors
-      // Ordered sweep over all sites in iset
-      } else if (bothflag == 0) {
-        for (i = 0; i < set[iset].nloop; i++)
-          sweep_rejection_kokkos(set[iset].nlocal, set[iset].site2i);
-        nattempt += set[iset].nselect;
-
-      // Sectors and colors
-      // icolor loop is over all colors in a sector
-      // jset = set that contains sites of one color in one sector
-      // Ordered sweep over all sites in jset
-      } else {
-        for (icolor = 0; icolor < ncolors; icolor++) {
-          jset = nsector + iset*ncolors + icolor;
-          for (i = 0; i < set[jset].nloop; i++)
-            sweep_rejection_kokkos(set[jset].nlocal, set[jset].site2i);
-          nattempt += set[jset].nselect;
-        }
-      }
-
-      timer->stamp(TIME_SOLVE);
-
-      // Sync device to host before reverse MPI communication
-      timer->stamp();
-      sync_data_to_host();
-      timer->stamp(TIME_SOLVE);
-
-      if (nprocs > 1) {
-        if (sectorflag) comm->reverse_sector(iset);
-        else comm->all_reverse();
-        timer->stamp(TIME_COMM);
-      }
-    }
-
-    // Time advancement
-    if (allow_app_update) app_update(dt_rkmc);
-
-    nsweeps++;
-    time += dt_rkmc;
-
-    if (time >= stoptime) done = 1;
-    if (done || time >= nextoutput) nextoutput = output->compute(time,done);
-    timer->stamp(TIME_OUTPUT);
-  }
-
-  // Print sync profiling statistics at end of run
-  if (sync_profiling_enabled && screen) {
-    fprintf(screen, "\n=== Kokkos Sync Profiling Statistics ===\n");
-    print_sync_profiling_stats(screen);
-    fprintf(screen, "========================================\n\n");
-  }
-}
-
-/* ----------------------------------------------------------------------
-   Perform rejection KMC sweep on device - all local sites
-------------------------------------------------------------------------- */
-
-void AppPottsQuaternionKokkos::sweep_rejection_kokkos()
-{
-  // Note: sync is handled in iterate_rejection after MPI communication
-  // Don't re-sync here as it would overwrite device data with stale host data
-
-  // Launch kernel with reduction to count accepted moves
-  RejectionSweepFunctor functor(
-    buffer_spin.read_buffer,      // Read from read buffer
-    buffer_spin.write_buffer,     // Write to write buffer
+  ColorSweepFunctor functor{
+    d_spin,
+    d_q0, d_qx, d_qy, d_qz,
     k_numneigh.d_view,
     k_neighbor.d_view,
-    buffer_q0.read_buffer, buffer_q0.write_buffer,
-    buffer_qx.read_buffer, buffer_qx.write_buffer,
-    buffer_qy.read_buffer, buffer_qy.write_buffer,
-    buffer_qz.read_buffer, buffer_qz.write_buffer,
+    d_color_sites,
     d_symmetries,
+    start,
     num_symmetries,
     theta_cut,
     *rand_pool,
     temperature,
-    t_inverse,
-    maxneigh
-  );
-
-  // Use device view for reduction, then copy to host
-  Kokkos::View<int> d_naccept_local("naccept_local");
-  Kokkos::deep_copy(d_naccept_local, 0);
-  Kokkos::parallel_reduce("AppPottsQuaternion::RejectionSweep", nlocal, functor, d_naccept_local);
-  Kokkos::fence();
-
-  // Copy result to host
-  int naccept_local;
-  Kokkos::deep_copy(naccept_local, d_naccept_local);
-
-  // Swap read/write buffers so next iteration reads the just-written data
-  swap_buffers();
-
-  // Update global acceptance counter
-  naccept += naccept_local;
-}
-
-/* ----------------------------------------------------------------------
-   Perform rejection KMC sweep on device - specific site list (for sectors)
-------------------------------------------------------------------------- */
-
-void AppPottsQuaternionKokkos::sweep_rejection_kokkos(int nsite, int *site_list)
-{
-  // Note: sync is handled in iterate_rejection after MPI communication
-  // Don't re-sync here as it would overwrite device data with stale host data
-
-  // Copy site list to device
-  Kokkos::View<int*> d_site_list("sector_sites", nsite);
-  auto h_site_list = Kokkos::create_mirror_view(d_site_list);
-  for (int i = 0; i < nsite; i++) {
-    h_site_list(i) = site_list[i];
-  }
-  Kokkos::deep_copy(d_site_list, h_site_list);
-
-  // Create sector sweep functor
-  struct SectorSweepFunctor {
-    typedef Kokkos::View<int*, Kokkos::DefaultExecutionSpace::memory_space> view_int_type;
-    typedef Kokkos::View<double*, Kokkos::DefaultExecutionSpace::memory_space> view_double_type;
-    typedef int value_type;
-    typedef Kokkos::Random_XorShift64_Pool<> pool_type;
-
-    view_int_type spin_read, spin_write;
-    view_int_type numneigh;
-    Kokkos::View<int**, Kokkos::DefaultExecutionSpace::memory_space> neighbor;
-    view_double_type q0_read, q0_write, qx_read, qx_write, qy_read, qy_write, qz_read, qz_write;
-    view_double_type symmetries;
-    int num_symmetries;
-    double theta_cut;
-    view_int_type site_indices;
-    pool_type rand_pool;
-    double temperature;
-    double t_inverse;
-    int maxneigh;
-
-    SectorSweepFunctor(view_int_type spin_read_, view_int_type spin_write_,
-                       view_int_type numneigh_,
-                       Kokkos::View<int**> neighbor_,
-                       view_double_type q0_read_, view_double_type q0_write_,
-                       view_double_type qx_read_, view_double_type qx_write_,
-                       view_double_type qy_read_, view_double_type qy_write_,
-                       view_double_type qz_read_, view_double_type qz_write_,
-                       view_double_type symmetries_, int num_sym_,
-                       double theta_cut_,
-                       view_int_type site_indices_,
-                       pool_type& rand_pool_,
-                       double temp_, double t_inv_, int maxneigh_) :
-      spin_read(spin_read_), spin_write(spin_write_),
-      numneigh(numneigh_), neighbor(neighbor_),
-      q0_read(q0_read_), q0_write(q0_write_),
-      qx_read(qx_read_), qx_write(qx_write_),
-      qy_read(qy_read_), qy_write(qy_write_),
-      qz_read(qz_read_), qz_write(qz_write_),
-      symmetries(symmetries_), num_symmetries(num_sym_),
-      theta_cut(theta_cut_), site_indices(site_indices_),
-      rand_pool(rand_pool_), temperature(temp_), t_inverse(t_inv_),
-      maxneigh(maxneigh_) {}
-
-    KOKKOS_INLINE_FUNCTION
-    double compute_site_energy(int i, const double* qi) const {
-      double eng = 0.0;
-
-      for (int j = 0; j < numneigh(i); j++) {
-        int nj = neighbor(i, j);
-        double qj[4] = {q0_read(nj), qx_read(nj), qy_read(nj), qz_read(nj)};
-
-        double di = QuaternionOps::compute_disorientation(
-          symmetries.data(), num_symmetries, qi, qj);
-
-        double ratio = di / theta_cut;
-
-        if (ratio <= 0.0) {
-          continue;
-        } else if (ratio < 1.0) {
-          eng += ratio * (1.0 - Kokkos::log(ratio));
-        } else {
-          eng += 1.0;
-        }
-      }
-
-      return 0.5 * eng;
-    }
-
-    KOKKOS_INLINE_FUNCTION
-    void operator()(const int idx, int& accepted) const {
-      // idx is index into site_indices array
-      // i is the actual site index
-      int i = site_indices(idx);
-
-      // Each thread gets its own RNG state from the pool
-      auto rand_gen = rand_pool.get_state();
-
-      // Get current state from READ buffer
-      int oldstate = spin_read(i);
-      double q_old[4] = {q0_read(i), qx_read(i), qy_read(i), qz_read(i)};
-
-      // Calculate current energy
-      double einitial = compute_site_energy(i, q_old);
-
-      // Build list of unique neighboring spins
-      int unique[100];
-      int unique_neigh[100];
-      int nevent = 0;
-
-      for (int j = 0; j < numneigh(i); j++) {
-        int nj = neighbor(i, j);
-        int value = spin_read(nj);
-        if (value == oldstate) continue;
-
-        bool found = false;
-        for (int m = 0; m < nevent; m++) {
-          if (value == unique[m]) {
-            found = true;
-            break;
-          }
-        }
-
-        if (!found && nevent < 100) {
-          unique[nevent] = value;
-          unique_neigh[nevent] = nj;
-          nevent++;
-        }
-      }
-
-      // If no unique neighbors, no event possible
-      // Still must write current state to write_buffer to prevent data corruption
-      if (nevent == 0) {
-        spin_write(i) = oldstate;
-        q0_write(i) = q_old[0];
-        qx_write(i) = q_old[1];
-        qy_write(i) = q_old[2];
-        qz_write(i) = q_old[3];
-        rand_pool.free_state(rand_gen);
-        return;
-      }
-
-      // Randomly select one unique neighbor
-      double rand_val = rand_gen.drand();
-      int iran = static_cast<int>(nevent * rand_val);
-      if (iran >= nevent) iran = nevent - 1;
-
-      int neighran = unique_neigh[iran];
-      int newstate = unique[iran];
-      double q_new[4] = {q0_read(neighran), qx_read(neighran), qy_read(neighran), qz_read(neighran)};
-
-      // Normalize to ensure unit quaternion
-      QuaternionOps::normalize(q_new);
-
-      // Calculate new energy
-      double efinal = 0.0;
-      for (int j = 0; j < numneigh(i); j++) {
-        int nj = neighbor(i, j);
-        double qj[4] = {q0_read(nj), qx_read(nj), qy_read(nj), qz_read(nj)};
-
-        double di = QuaternionOps::compute_disorientation(
-          symmetries.data(), num_symmetries, q_new, qj);
-
-        double ratio = di / theta_cut;
-
-        if (ratio <= 0.0) {
-          continue;
-        } else if (ratio < 1.0) {
-          efinal += ratio * (1.0 - Kokkos::log(ratio));
-        } else {
-          efinal += 1.0;
-        }
-      }
-      efinal *= 0.5;
-
-      // Metropolis acceptance
-      int move_accepted = 0;
-      if (efinal <= einitial) {
-        move_accepted = 1;
-      } else if (temperature > 0.0) {
-        double prob = Kokkos::exp((einitial - efinal) * t_inverse);
-        if (rand_gen.drand() < prob) {
-          move_accepted = 1;
-        }
-      }
-
-      // Write to WRITE buffer (either new state if accepted, or old state if rejected)
-      if (move_accepted) {
-        spin_write(i) = newstate;
-        q0_write(i) = q_new[0];
-        qx_write(i) = q_new[1];
-        qy_write(i) = q_new[2];
-        qz_write(i) = q_new[3];
-      } else {
-        // Copy old state to write buffer
-        spin_write(i) = oldstate;
-        q0_write(i) = q_old[0];
-        qx_write(i) = q_old[1];
-        qy_write(i) = q_old[2];
-        qz_write(i) = q_old[3];
-      }
-
-      rand_pool.free_state(rand_gen);
-
-      accepted += move_accepted;
-    }
-
-    // Need access to QuaternionOps
-    typedef AppPottsQuaternionKokkos::QuaternionOps QuaternionOps;
+    t_inverse
   };
 
-  // Launch kernel over site list
-  SectorSweepFunctor functor(
-    buffer_spin.read_buffer,      // Read from read buffer
-    buffer_spin.write_buffer,     // Write to write buffer
-    k_numneigh.d_view,
-    k_neighbor.d_view,
-    buffer_q0.read_buffer, buffer_q0.write_buffer,
-    buffer_qx.read_buffer, buffer_qx.write_buffer,
-    buffer_qy.read_buffer, buffer_qy.write_buffer,
-    buffer_qz.read_buffer, buffer_qz.write_buffer,
-    d_symmetries,
-    num_symmetries,
-    theta_cut,
-    d_site_list,
-    *rand_pool,
-    temperature,
-    t_inverse,
-    maxneigh
-  );
-
-  // Use device view for reduction, then copy to host
-  Kokkos::View<int> d_naccept_local("naccept_local");
-  Kokkos::deep_copy(d_naccept_local, 0);
-  Kokkos::parallel_reduce("AppPottsQuaternion::SectorSweep", nsite, functor, d_naccept_local);
-  Kokkos::fence();
-
-  // Copy result to host
-  int naccept_local;
-  Kokkos::deep_copy(naccept_local, d_naccept_local);
-
-  // Swap read/write buffers so next iteration reads the just-written data
-  swap_buffers();
-
-  // Update global acceptance counter
-  naccept += naccept_local;
-}
-
-/* ----------------------------------------------------------------------
-   handle app-specific input commands
-------------------------------------------------------------------------- */
-
-void AppPottsQuaternionKokkos::input_app(char *command, int narg, char **arg)
-{
-  if (strcmp(command,"sync_profiling") == 0) {
-    if (narg != 1) error->all(FLERR,"Illegal sync_profiling command");
-
-    if (strcmp(arg[0],"yes") == 0 || strcmp(arg[0],"on") == 0) {
-      sync_profiling_enabled = true;
-      enable_sync_profiling(true);
-    } else if (strcmp(arg[0],"no") == 0 || strcmp(arg[0],"off") == 0) {
-      sync_profiling_enabled = false;
-      enable_sync_profiling(false);
-    } else {
-      error->all(FLERR,"Illegal sync_profiling command: expected yes/no or on/off");
-    }
-
-  } else {
-    // Call parent class input_app to handle other commands
-    AppPottsQuaternion::input_app(command, narg, arg);
-  }
+  int naccept_color = 0;
+  Kokkos::parallel_reduce("QuaternionSweep", count, functor, naccept_color);
+  naccept += naccept_color;
 }

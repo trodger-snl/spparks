@@ -15,14 +15,17 @@ create_box	 box
 create_sites	 box
 set		 site range 1 ${Q}
 
-sweep		 random
+sweep		 color
 sector		 yes
 
-diag_style       energy
+diag_style       energy 
+diag_style	 cluster stats yes
 
 temperature	 0.25
 
 stats            1.0
 dump             1 text 10.0 dump.potts_quaternion.kk
+dump		 2 image 2.0 dump.potts-kk.*.jpg site site crange 1 100 drange 1 1 shape cube box no 1
+#dump_modify	 2 
 
 run              30.0

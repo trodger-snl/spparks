@@ -12,9 +12,7 @@ create_box	 box
 create_sites	 box
 set		 site range 1 100
 
-sweep		 random
-#sweep		 raster mask yes
-#solve_style      tree
+sweep		 color
 sector		 yes
 
 #solve_style      tree
@@ -27,6 +25,8 @@ temperature	 0.0
 
 stats            10.0
 dump             1 text 10.0 dump.potts.kk
+
 diag_style       cluster delt 1.0 stats no logfreq 9 10.0 filename cluster.kk.dat
+dump		 2 image 1.0 dump.potts-kk.*.jpg site site crange 1 100 drange 1 1 shape cube box no 1
 
 run              100.0

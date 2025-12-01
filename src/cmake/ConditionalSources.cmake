@@ -42,7 +42,8 @@ function(configure_conditional_sources)
             app_potts_neigh_kokkos.cpp
             app_potts_neighonly_kokkos.cpp
             app_potts_quaternion_kokkos.cpp
-            app_additive_ext_temp_texture_kokkos.cpp
+            # TODO: app_additive_ext_temp_texture_kokkos.cpp needs to be updated
+            # to use the new AppLatticeKokkos coloring infrastructure
         )
         message(STATUS "Added KOKKOS package sources")
     endif()

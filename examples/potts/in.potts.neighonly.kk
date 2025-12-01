@@ -22,6 +22,7 @@ temperature	 0.0
 
 stats            10.0
 dump             1 text 10.0 dump.potts.neighonly.kk
-diag_style       cluster delt 1.0 stats no logfreq 9 10.0 filename cluster.neighonly.kk.dat
+dump		 2 image 1.0 dump.potts-kk.*.jpg site site crange 1 100 drange 1 1 shape cube box no 1
+#diag_style       cluster delt 1.0 stats no logfreq 9 10.0 filename cluster.neighonly.kk.dat
 
 run              100.0

@@ -16,40 +16,52 @@
 ------------------------------------------------------------------------- */
 
 #include "math.h"
+#include "string.h"
+#include "stdlib.h"
 #include "app_potts_kokkos.h"
 #include "random_park.h"
 #include "error.h"
-#include "timer.h"
-#include "output.h"
-#include "comm_lattice.h"
+#include "memory.h"
 
 using namespace SPPARKS_NS;
-
-enum{NOSWEEP,RANDOM,RASTER,COLOR,COLOR_STRICT};
 
 /* ---------------------------------------------------------------------- */
 
 AppPottsKokkos::AppPottsKokkos(SPPARKS *spk, int narg, char **arg) :
-  AppPotts(spk, narg, arg), rand_pool(nullptr), sync_profiling_enabled(false)
+  AppLatticeKokkos(spk, narg, arg)
 {
-  // Parse arguments for potts/kk - parent skips this for child classes
+  // Potts-specific setup (from AppPotts constructor)
+  ninteger = 1;
+  ndouble = 0;
+  delpropensity = 1;
+  delevent = 0;
+  allow_kmc = 1;
+  allow_rejection = 1;
+  allow_masking = 1;
+  numrandom = 1;
+
+  create_arrays();
+
+  // Parse arguments
   if (narg != 2) error->all(FLERR,"Illegal app_style command");
 
   nspins = atoi(arg[1]);
   if (nspins <= 0) error->all(FLERR,"Illegal app_style command");
   dt_sweep = 1.0/nspins;
 
-  // Initialize RNG pool with a seed using world rank
-  int me;
-  MPI_Comm_rank(world, &me);
-  rand_pool = new pool_type(12345 + me);
+  // Initialize pointers
+  spin = nullptr;
+  sites = nullptr;
+  unique = nullptr;
 }
 
 /* ---------------------------------------------------------------------- */
 
 AppPottsKokkos::~AppPottsKokkos()
 {
-  if (rand_pool) delete rand_pool;
+  // Memory cleanup for temp arrays
+  memory->destroy(sites);
+  memory->destroy(unique);
 }
 
 /* ----------------------------------------------------------------------
@@ -58,21 +70,21 @@ AppPottsKokkos::~AppPottsKokkos()
 
 void AppPottsKokkos::grow_app()
 {
-  // Call parent
-  AppPotts::grow_app();
+  // Set spin pointer to iarray[0]
+  spin = iarray[0];
 
-  // Allocate/resize Kokkos views
+  // Call parent (allocates neighbors and calls allocate_app_views)
+  AppLatticeKokkos::grow_app();
+}
+
+/* ----------------------------------------------------------------------
+   allocate app-specific Kokkos views
+------------------------------------------------------------------------- */
+
+void AppPottsKokkos::allocate_app_views()
+{
   int nall = nlocal + nghost;
-
-  // Allocate double buffer for spin using generalized framework
-  buffer_spin.allocate("spin", nall);
-
-  // Allocate neighbor arrays
-  k_numneigh = Kokkos::DualView<int*>("numneigh", nall);
-  if (maxneigh > 0) {
-    k_neighbor = Kokkos::DualView<int**>("neighbor", nall, maxneigh);
-  }
-  k_propensity = Kokkos::DualView<double*>("propensity", nall);
+  d_spin = Kokkos::View<int*>("spin", nall);
 }
 
 /* ----------------------------------------------------------------------
@@ -81,563 +93,230 @@ void AppPottsKokkos::grow_app()
 
 void AppPottsKokkos::init_app()
 {
-  // Call parent initialization
-  AppPotts::init_app();
+  // Validate spin values
+  int flag = 0;
+  for (int i = 0; i < nlocal; i++)
+    if (spin[i] < 1 || spin[i] > nspins) flag = 1;
+  int flagall;
+  MPI_Allreduce(&flag, &flagall, 1, MPI_INT, MPI_SUM, world);
+  if (flagall) error->all(FLERR,"One or more sites have invalid values");
 
-  // Sync neighbor arrays to device
+  // Allocate temp arrays for KMC if needed
+  if (allow_kmc) {
+    memory->destroy(sites);
+    memory->destroy(unique);
+    memory->create(sites, 1 + maxneigh, "app:sites");
+    memory->create(unique, 1 + maxneigh, "app:unique");
+  }
+
+  // Call parent (validates coloring, sets up color lists, syncs neighbors)
+  AppLatticeKokkos::init_app();
+
+  // Initial sync of spin data to device
+  sync_app_data_to_device();
+}
+
+/* ----------------------------------------------------------------------
+   sync spin data to device
+------------------------------------------------------------------------- */
+
+void AppPottsKokkos::sync_app_data_to_device()
+{
   int nall = nlocal + nghost;
-  auto h_numneigh = k_numneigh.h_view;
+  auto h_spin = Kokkos::create_mirror_view(d_spin);
   for (int i = 0; i < nall; i++) {
-    h_numneigh(i) = numneigh[i];
+    h_spin(i) = spin[i];
   }
-  k_numneigh.modify_host();
-
-  if (maxneigh > 0) {
-    auto h_neighbor = k_neighbor.h_view;
-    for (int i = 0; i < nall; i++) {
-      for (int j = 0; j < numneigh[i]; j++) {
-        h_neighbor(i, j) = neighbor[i][j];
-      }
-    }
-    k_neighbor.modify_host();
-  }
-
-  // Sync spin data to device (full sync for initialization)
-  sync_data_to_device_full();
-
-  // Reset sync profiling counters if enabled (via sync_profiling command)
-  if (sync_profiling_enabled) {
-    reset_sync_profiling();
-  }
-}
-
-/* ----------------------------------------------------------------------
-   sync spin data to device - FULL VERSION (both buffers)
-   Used only during initialization
-------------------------------------------------------------------------- */
-
-void AppPottsKokkos::sync_data_to_device_full()
-{
-  buffer_spin.sync_to_device_full(spin);
-}
-
-/* ----------------------------------------------------------------------
-   sync spin data to device - MPI VERSION (both buffers)
-   Used after MPI communication to update ghost sites
-------------------------------------------------------------------------- */
-
-void AppPottsKokkos::sync_data_to_device()
-{
-  // OPTIMIZATION: Only sync read_buffer after MPI communication
-  // write_buffer will be overwritten in next sweep anyway
-  // This reduces device memory copies by 33%
-  buffer_spin.sync_to_device_selective(spin, true, false);
+  Kokkos::deep_copy(d_spin, h_spin);
 }
 
 /* ----------------------------------------------------------------------
    sync spin data to host
 ------------------------------------------------------------------------- */
 
-void AppPottsKokkos::sync_data_to_host()
+void AppPottsKokkos::sync_app_data_to_host()
 {
-  buffer_spin.sync_to_host(spin);
+  auto h_spin = Kokkos::create_mirror_view(d_spin);
+  Kokkos::deep_copy(h_spin, d_spin);
+  for (int i = 0; i < nlocal; i++) {
+    spin[i] = h_spin(i);
+  }
 }
 
 /* ----------------------------------------------------------------------
-   swap read/write buffers after each sweep
-------------------------------------------------------------------------- */
-
-void AppPottsKokkos::swap_buffers()
-{
-  buffer_spin.swap();
-}
-
-/* ----------------------------------------------------------------------
-   compute energy of site - calls base class for now
+   compute energy of site i
 ------------------------------------------------------------------------- */
 
 double AppPottsKokkos::site_energy(int i)
 {
-  return AppPotts::site_energy(i);
+  int isite = spin[i];
+  int eng = 0;
+  for (int j = 0; j < numneigh[i]; j++)
+    if (isite != spin[neighbor[i][j]]) eng++;
+  return (double) eng;
 }
 
 /* ----------------------------------------------------------------------
-   Kokkos version of site energy
-------------------------------------------------------------------------- */
-
-double AppPottsKokkos::site_energy_kokkos(int i)
-{
-  return site_energy(i);
-}
-
-/* ----------------------------------------------------------------------
-   rKMC method - calls base class for now
+   rKMC method - pick random spin
 ------------------------------------------------------------------------- */
 
 void AppPottsKokkos::site_event_rejection(int i, RandomPark *random)
 {
-  AppPotts::site_event_rejection(i, random);
+  int oldstate = spin[i];
+  double einitial = site_energy(i);
+
+  // Pick random spin
+  int iran = (int) (nspins*random->uniform()) + 1;
+  if (iran > nspins) iran = nspins;
+  spin[i] = iran;
+  double efinal = site_energy(i);
+
+  // Metropolis acceptance
+  if (efinal <= einitial) {
+    // accept
+  } else if (temperature == 0.0) {
+    spin[i] = oldstate;
+  } else if (random->uniform() > exp((einitial-efinal)*t_inverse)) {
+    spin[i] = oldstate;
+  }
+
+  if (spin[i] != oldstate) naccept++;
 }
 
 /* ----------------------------------------------------------------------
-   Kokkos version of rejection event
-------------------------------------------------------------------------- */
-
-void AppPottsKokkos::site_event_rejection_kokkos(int i, RandomPark *random)
-{
-  site_event_rejection(i, random);
-}
-
-/* ----------------------------------------------------------------------
-   KMC method - calls base class for now
+   KMC propensity - number of unique neighbor spins != my spin
 ------------------------------------------------------------------------- */
 
 double AppPottsKokkos::site_propensity(int i)
 {
-  return AppPotts::site_propensity(i);
+  int j,k,value;
+  int isite = spin[i];
+
+  // Count unique neighbor spins different from mine
+  int nunique = 0;
+  for (j = 0; j < numneigh[i]; j++) {
+    value = spin[neighbor[i][j]];
+    if (value == isite) continue;
+    for (k = 0; k < nunique; k++)
+      if (value == unique[k]) break;
+    if (k == nunique) unique[nunique++] = value;
+  }
+
+  return (double) nunique;
 }
 
 /* ----------------------------------------------------------------------
-   Kokkos version of propensity
-------------------------------------------------------------------------- */
-
-double AppPottsKokkos::site_propensity_kokkos(int i)
-{
-  return site_propensity(i);
-}
-
-/* ----------------------------------------------------------------------
-   KMC method - calls base class for now
+   KMC method - pick random spin from neighbors
 ------------------------------------------------------------------------- */
 
 void AppPottsKokkos::site_event(int i, RandomPark *random)
 {
-  AppPotts::site_event(i, random);
-}
+  int j,k,value,m;
+  int isite = spin[i];
 
-/* ----------------------------------------------------------------------
-   Energy calculation functor for Kokkos parallel_for
-------------------------------------------------------------------------- */
-
-struct AppPottsKokkos::ComputeEnergyFunctor {
-  typedef Kokkos::View<int*, Kokkos::DefaultExecutionSpace::memory_space> view_type;
-
-  view_type spin;
-  view_type numneigh;
-  Kokkos::View<int**, Kokkos::DefaultExecutionSpace::memory_space> neighbor;
-  Kokkos::View<double*, Kokkos::DefaultExecutionSpace::memory_space> energy;
-
-  ComputeEnergyFunctor(view_type spin_, view_type numneigh_,
-                       Kokkos::View<int**> neighbor_,
-                       Kokkos::View<double*> energy_) :
-    spin(spin_), numneigh(numneigh_), neighbor(neighbor_), energy(energy_) {}
-
-  KOKKOS_INLINE_FUNCTION
-  void operator()(const int i) const {
-    int isite = spin(i);
-    int eng = 0;
-
-    for (int j = 0; j < numneigh(i); j++) {
-      int jsite = neighbor(i, j);
-      if (isite != spin(jsite)) eng++;
-    }
-
-    energy(i) = static_cast<double>(eng);
+  // Count unique neighbor spins different from mine
+  int nunique = 0;
+  for (j = 0; j < numneigh[i]; j++) {
+    value = spin[neighbor[i][j]];
+    if (value == isite) continue;
+    for (k = 0; k < nunique; k++)
+      if (value == unique[k]) break;
+    if (k == nunique) unique[nunique++] = value;
   }
-};
 
-/* ----------------------------------------------------------------------
-   Compute all energies in parallel on device
-------------------------------------------------------------------------- */
+  // Pick random unique neighbor spin
+  m = static_cast<int>(nunique * random->uniform());
+  if (m >= nunique) m = nunique - 1;
+  spin[i] = unique[m];
 
-void AppPottsKokkos::compute_all_energies_kokkos()
-{
-  // Sync data to device
-  k_numneigh.sync_device();
-  k_neighbor.sync_device();
-
-  // Allocate energy array on device
-  Kokkos::View<double*> d_energy("energy", nlocal);
-
-  // Launch kernel (use read_buffer for reading spin data)
-  ComputeEnergyFunctor functor(
-    buffer_spin.read_buffer,
-    k_numneigh.d_view,
-    k_neighbor.d_view,
-    d_energy
-  );
-
-  Kokkos::parallel_for("AppPotts::ComputeEnergies", nlocal, functor);
-  Kokkos::fence();
-
-  // Results are in d_energy - could copy back if needed
+  // Compute propensity changes for neighbors
+  int nsites = 0;
+  sites[nsites++] = i;
+  for (j = 0; j < numneigh[i]; j++)
+    sites[nsites++] = neighbor[i][j];
 }
 
 /* ----------------------------------------------------------------------
-   Rejection KMC sweep functor
+   Kokkos sweep functor for one color
 ------------------------------------------------------------------------- */
 
-struct AppPottsKokkos::RejectionSweepFunctor {
-  typedef Kokkos::View<int*, Kokkos::DefaultExecutionSpace::memory_space> view_type;
-  typedef int value_type;  // For parallel_reduce
-  typedef Kokkos::Random_XorShift64_Pool<> pool_type;
-
-  view_type spin_read;   // Read from this buffer (immutable)
-  view_type spin_write;  // Write to this buffer
-  view_type numneigh;
-  Kokkos::View<int**, Kokkos::DefaultExecutionSpace::memory_space> neighbor;
+struct AppPottsKokkos::ColorSweepFunctor {
+  Kokkos::View<int*> spin;
+  Kokkos::View<int*> numneigh;
+  Kokkos::View<int**> neighbor;
+  Kokkos::View<int*> color_sites;
+  int color_start;
   pool_type rand_pool;
-  int nspins;
   double temperature;
   double t_inverse;
-
-  RejectionSweepFunctor(view_type spin_read_, view_type spin_write_,
-                        view_type numneigh_,
-                        Kokkos::View<int**> neighbor_,
-                        pool_type& rand_pool_,
-                        int nspins_, double temp_, double t_inv_) :
-    spin_read(spin_read_), spin_write(spin_write_), numneigh(numneigh_), neighbor(neighbor_),
-    rand_pool(rand_pool_), nspins(nspins_), temperature(temp_), t_inverse(t_inv_) {}
+  int nspins;
 
   KOKKOS_INLINE_FUNCTION
-  void operator()(const int i, int& accepted) const {
-    // Each thread gets its own RNG state from the pool
+  void operator()(const int idx, int& accepted) const {
+    int i = color_sites(color_start + idx);
     auto rand_gen = rand_pool.get_state();
 
-    // Get current spin from read buffer
-    int oldstate = spin_read(i);
+    int oldstate = spin(i);
 
-    // Calculate current energy (read neighbors from read buffer)
-    int eng_before = 0;
+    // Compute initial energy (count unlike neighbors)
+    int einitial = 0;
     for (int j = 0; j < numneigh(i); j++) {
-      if (oldstate != spin_read(neighbor(i, j))) eng_before++;
+      if (spin(neighbor(i,j)) != oldstate) einitial++;
     }
 
-    // Propose random new spin
-    double rand_val = rand_gen.drand();
-    int iran = static_cast<int>(nspins * rand_val) + 1;
+    // Pick random new spin
+    int iran = static_cast<int>(rand_gen.drand() * nspins) + 1;
     if (iran > nspins) iran = nspins;
 
-    // Calculate new energy (read neighbors from read buffer)
-    int eng_after = 0;
+    // If same as old, nothing to do
+    if (iran == oldstate) {
+      rand_pool.free_state(rand_gen);
+      return;
+    }
+
+    // Compute final energy
+    int efinal = 0;
     for (int j = 0; j < numneigh(i); j++) {
-      if (iran != spin_read(neighbor(i, j))) eng_after++;
+      if (spin(neighbor(i,j)) != iran) efinal++;
     }
 
     // Metropolis acceptance
-    double delta = eng_after - eng_before;
-    int move_accepted = 0;
-    int newstate = oldstate;  // Default: keep old state
-
-    if (delta <= 0.0) {
-      newstate = iran;
-      move_accepted = 1;
+    bool accept = false;
+    if (efinal <= einitial) {
+      accept = true;
     } else if (temperature > 0.0) {
-      double prob = exp(-delta * t_inverse);
-      if (rand_gen.drand() < prob) {
-        newstate = iran;
-        move_accepted = 1;
-      }
+      double prob = Kokkos::exp((einitial - efinal) * t_inverse);
+      if (rand_gen.drand() < prob) accept = true;
     }
 
-    // ALWAYS write to write buffer (accepted OR rejected state)
-    spin_write(i) = newstate;
+    if (accept) {
+      spin(i) = iran;  // Safe - no same-color neighbors!
+      accepted++;
+    }
 
-    // Return RNG state to pool
     rand_pool.free_state(rand_gen);
-
-    accepted += move_accepted;
   }
 };
 
 /* ----------------------------------------------------------------------
-   Override main iteration loop to use device kernels
-   Phase 2: Full sector and MPI support
+   sweep all sites of one color on device
 ------------------------------------------------------------------------- */
 
-void AppPottsKokkos::iterate_rejection(double stoptime)
+void AppPottsKokkos::sweep_color_kokkos(int color, int start, int count)
 {
-  int i, icolor, nselect, nrange, jset;
-  int *site2i;
-
-  // Set loop is over:
-  // sectors if there are sectors and no colors
-  // colors if there are colors and no sectors
-  // first nsector sets if there are both sectors and colors
-
-  int nset_loop = nset;
-  if (bothflag) nset_loop = nsector;
-
-  int done = 0;
-  while (!done) {
-    for (int iset = 0; iset < nset_loop; iset++) {
-      // Sync device to host before MPI communication
-      // MPI operates on host data, so we need current device state
-      if (nprocs > 1 && iset > 0) {
-        timer->stamp();
-        sync_data_to_host();
-        timer->stamp(TIME_SOLVE);
-      }
-
-      // MPI communication for this sector
-      if (nprocs > 1) {
-        timer->stamp();
-        if (sectorflag) comm->sector(iset);
-        else comm->all();
-        timer->stamp(TIME_COMM);
-      }
-
-      if (Lmask) boundary_clear_mask(iset);
-
-      timer->stamp();
-
-      // Sync data to device after MPI communication
-      // Need to get updated ghost sites from MPI (both buffers)
-      sync_data_to_device();
-      if (iset == 0) {
-        if (!k_numneigh.need_sync_device()) k_numneigh.sync_device();
-        if (!k_neighbor.need_sync_device()) k_neighbor.sync_device();
-      }
-
-      // Sectors but no colors (could also be no sectors)
-      // Random selection of sites in iset
-      if (sweepflag == RANDOM) {
-        site2i = set[iset].site2i;
-        nrange = set[iset].nlocal;
-        nselect = set[iset].nselect;
-        for (i = 0; i < nselect; i++)
-          sitelist[i] = site2i[ranapp->irandom(nrange) - 1];
-        sweep_rejection_kokkos(nselect, sitelist);
-        nattempt += nselect;
-
-      // Sectors but no colors, or colors but no sectors
-      // Ordered sweep over all sites in iset
-      } else if (bothflag == 0) {
-        for (i = 0; i < set[iset].nloop; i++)
-          sweep_rejection_kokkos(set[iset].nlocal, set[iset].site2i);
-        nattempt += set[iset].nselect;
-
-      // Sectors and colors
-      // icolor loop is over all colors in a sector
-      // jset = set that contains sites of one color in one sector
-      // Ordered sweep over all sites in jset
-      } else {
-        for (icolor = 0; icolor < ncolors; icolor++) {
-          jset = nsector + iset*ncolors + icolor;
-          for (i = 0; i < set[jset].nloop; i++)
-            sweep_rejection_kokkos(set[jset].nlocal, set[jset].site2i);
-          nattempt += set[jset].nselect;
-        }
-      }
-
-      timer->stamp(TIME_SOLVE);
-
-      // Sync device to host before reverse MPI communication
-      timer->stamp();
-      sync_data_to_host();
-      timer->stamp(TIME_SOLVE);
-
-      if (nprocs > 1) {
-        if (sectorflag) comm->reverse_sector(iset);
-        else comm->all_reverse();
-        timer->stamp(TIME_COMM);
-      }
-    }
-
-    // Time advancement
-    if (allow_app_update) app_update(dt_rkmc);
-
-    nsweeps++;
-    time += dt_rkmc;
-
-    if (time >= stoptime) done = 1;
-    if (done || time >= nextoutput) nextoutput = output->compute(time,done);
-    timer->stamp(TIME_OUTPUT);
-  }
-
-  // Print sync profiling statistics at end of run
-  if (sync_profiling_enabled && screen) {
-    fprintf(screen, "\n=== Kokkos Sync Profiling Statistics ===\n");
-    print_sync_profiling_stats(screen);
-    fprintf(screen, "========================================\n\n");
-  }
-}
-
-/* ----------------------------------------------------------------------
-   Perform rejection KMC sweep on device - all local sites
-------------------------------------------------------------------------- */
-
-void AppPottsKokkos::sweep_rejection_kokkos()
-{
-  // Sync to device (caller already does this, but check for safety)
-  if (k_numneigh.need_sync_device()) k_numneigh.sync_device();
-  if (k_neighbor.need_sync_device()) k_neighbor.sync_device();
-
-  // Launch kernel with double-buffer: read from read_buffer, write to write_buffer
-  RejectionSweepFunctor functor(
-    buffer_spin.read_buffer,   // Read from immutable read buffer
-    buffer_spin.write_buffer,  // Write to write buffer
+  ColorSweepFunctor functor{
+    d_spin,
     k_numneigh.d_view,
     k_neighbor.d_view,
+    d_color_sites,
+    start,
     *rand_pool,
-    nspins,
     temperature,
-    t_inverse
-  );
-
-  int naccept_local = 0;
-  Kokkos::parallel_reduce("AppPotts::RejectionSweep", nlocal, functor, naccept_local);
-  Kokkos::fence();
-
-  // Update global acceptance counter
-  naccept += naccept_local;
-
-  // Swap buffers: write_buffer becomes new read_buffer for next sweep
-  swap_buffers();
-}
-
-/* ----------------------------------------------------------------------
-   Perform rejection KMC sweep on device - specific site list (for sectors)
-------------------------------------------------------------------------- */
-
-void AppPottsKokkos::sweep_rejection_kokkos(int nsite, int *site_list)
-{
-  // Sync to device (caller already does this once per timestep)
-  if (k_numneigh.need_sync_device()) k_numneigh.sync_device();
-  if (k_neighbor.need_sync_device()) k_neighbor.sync_device();
-
-  // Copy site list to device
-  Kokkos::View<int*> d_site_list("sector_sites", nsite);
-  auto h_site_list = Kokkos::create_mirror_view(d_site_list);
-  for (int i = 0; i < nsite; i++) {
-    h_site_list(i) = site_list[i];
-  }
-  Kokkos::deep_copy(d_site_list, h_site_list);
-
-  // Create functor that operates on site list with double-buffer
-  typedef Kokkos::View<int*, Kokkos::DefaultExecutionSpace::memory_space> view_type;
-
-  struct SectorSweepFunctor {
-    typedef int value_type;
-    typedef Kokkos::Random_XorShift64_Pool<> pool_type;
-
-    view_type spin_read;   // Read from this buffer
-    view_type spin_write;  // Write to this buffer
-    view_type numneigh;
-    Kokkos::View<int**, Kokkos::DefaultExecutionSpace::memory_space> neighbor;
-    view_type site_indices;
-    pool_type rand_pool;
-    int nspins;
-    double temperature;
-    double t_inverse;
-
-    SectorSweepFunctor(view_type spin_read_, view_type spin_write_,
-                       view_type numneigh_,
-                       Kokkos::View<int**> neighbor_,
-                       view_type site_indices_,
-                       pool_type& rand_pool_,
-                       int nspins_, double temp_, double t_inv_) :
-      spin_read(spin_read_), spin_write(spin_write_), numneigh(numneigh_), neighbor(neighbor_),
-      site_indices(site_indices_),
-      rand_pool(rand_pool_), nspins(nspins_),
-      temperature(temp_), t_inverse(t_inv_) {}
-
-    KOKKOS_INLINE_FUNCTION
-    void operator()(const int idx, int& accepted) const {
-      int i = site_indices(idx);
-
-      auto rand_gen = rand_pool.get_state();
-
-      // Get current spin from read buffer
-      int oldstate = spin_read(i);
-
-      // Calculate current energy (read neighbors from read buffer)
-      int eng_before = 0;
-      for (int j = 0; j < numneigh(i); j++) {
-        if (oldstate != spin_read(neighbor(i, j))) eng_before++;
-      }
-
-      // Propose random new spin
-      double rand_val = rand_gen.drand();
-      int iran = static_cast<int>(nspins * rand_val) + 1;
-      if (iran > nspins) iran = nspins;
-
-      // Calculate new energy (read neighbors from read buffer)
-      int eng_after = 0;
-      for (int j = 0; j < numneigh(i); j++) {
-        if (iran != spin_read(neighbor(i, j))) eng_after++;
-      }
-
-      // Metropolis acceptance
-      double delta = eng_after - eng_before;
-      int move_accepted = 0;
-      int newstate = oldstate;  // Default: keep old state
-
-      if (delta <= 0.0) {
-        newstate = iran;
-        move_accepted = 1;
-      } else if (temperature > 0.0) {
-        double prob = exp(-delta * t_inverse);
-        if (rand_gen.drand() < prob) {
-          newstate = iran;
-          move_accepted = 1;
-        }
-      }
-
-      // ALWAYS write to write buffer (accepted OR rejected state)
-      spin_write(i) = newstate;
-
-      rand_pool.free_state(rand_gen);
-
-      accepted += move_accepted;
-    }
+    t_inverse,
+    nspins
   };
 
-  // Launch kernel over site list
-  SectorSweepFunctor functor(
-    buffer_spin.read_buffer,   // Read from immutable read buffer
-    buffer_spin.write_buffer,  // Write to write buffer
-    k_numneigh.d_view,
-    k_neighbor.d_view,
-    d_site_list,
-    *rand_pool,
-    nspins,
-    temperature,
-    t_inverse
-  );
-
-  int naccept_local = 0;
-  Kokkos::parallel_reduce("AppPotts::SectorSweep", nsite, functor, naccept_local);
-  Kokkos::fence();
-
-  naccept += naccept_local;
-
-  // Swap buffers: write_buffer becomes new read_buffer for next sweep
-  swap_buffers();
-}
-
-/* ----------------------------------------------------------------------
-   handle app-specific input commands
-------------------------------------------------------------------------- */
-
-void AppPottsKokkos::input_app(char *command, int narg, char **arg)
-{
-  if (strcmp(command,"sync_profiling") == 0) {
-    if (narg != 1) error->all(FLERR,"Illegal sync_profiling command");
-
-    if (strcmp(arg[0],"yes") == 0 || strcmp(arg[0],"on") == 0) {
-      sync_profiling_enabled = true;
-      enable_sync_profiling(true);
-      if (screen) fprintf(screen, "Sync profiling enabled for AppPottsKokkos\n");
-    } else if (strcmp(arg[0],"no") == 0 || strcmp(arg[0],"off") == 0) {
-      sync_profiling_enabled = false;
-      enable_sync_profiling(false);
-    } else {
-      error->all(FLERR,"Illegal sync_profiling command: expected yes/no or on/off");
-    }
-
-  } else {
-    // Call parent class input_app to handle other commands
-    AppPotts::input_app(command, narg, arg);
-  }
+  int naccept_color = 0;
+  Kokkos::parallel_reduce("PottsSweep", count, functor, naccept_color);
+  naccept += naccept_color;
 }

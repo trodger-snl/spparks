@@ -19,7 +19,9 @@
 #define SPK_APP_LATTICE_KOKKOS_H
 
 #include "app_lattice.h"
-#include "app_kokkos.h"
+#include <Kokkos_Core.hpp>
+#include <Kokkos_DualView.hpp>
+#include <Kokkos_Random.hpp>
 
 namespace SPPARKS_NS {
 
@@ -28,35 +30,42 @@ public:
   AppLatticeKokkos(class SPPARKS *, int, char **);
   virtual ~AppLatticeKokkos();
 
-  // Kokkos neighbor data
+  // === Kokkos type aliases ===
+  using pool_type = Kokkos::Random_XorShift64_Pool<>;
+  using view_int = Kokkos::View<int*, Kokkos::DefaultExecutionSpace::memory_space>;
+  using view_double = Kokkos::View<double*, Kokkos::DefaultExecutionSpace::memory_space>;
+
+  // === Shared Kokkos data (all derived classes use these) ===
   Kokkos::DualView<int*> k_numneigh;
   Kokkos::DualView<int**> k_neighbor;
-  Kokkos::DualView<double*> k_propensity;
-
-  // Random number generation pool
-  using pool_type = Kokkos::Random_XorShift64_Pool<>;
   pool_type *rand_pool;
 
-  // Virtual functions to override with Kokkos implementations
-  // These are the core computational kernels that apps must implement
-  virtual double site_energy_kokkos(int) = 0;
-  virtual void site_event_rejection_kokkos(int, class RandomPark *) = 0;
-  virtual double site_propensity_kokkos(int) = 0;
+  // === Color-based site lists for GPU ===
+  int kokkos_ncolors;                    // Number of colors (8 for 26-neighbor)
+  Kokkos::View<int*> d_color_offsets;    // CSR offsets [ncolors+1]
+  Kokkos::View<int*> d_color_sites;      // Site indices by color [nlocal]
+  bool color_lists_initialized;
 
-  // Bulk operations on device - to be implemented by derived classes
-  virtual void compute_all_energies_kokkos() {}
-  virtual void compute_all_propensities_kokkos() {}
-  virtual void sweep_rejection_kokkos() {}
+  // === Shared methods ===
+  virtual void init_app() override;
+  virtual void grow_app() override;
+  void setup_color_lists_kokkos();
+  virtual void iterate_rejection(double stoptime) override;
 
-  // Sync helpers
-  void sync_neighbor_data_to_device();
-  void sync_neighbor_data_to_host();
-  void allocate_kokkos_neighbor_arrays();
-  void sync_neighbor_arrays_host_to_device();
+  // === Virtual methods derived classes MUST implement ===
+  // Sync app-specific data (spin, quaternions, etc.)
+  virtual void sync_app_data_to_device() = 0;
+  virtual void sync_app_data_to_host() = 0;
+
+  // Allocate app-specific Kokkos views
+  virtual void allocate_app_views() = 0;
+
+  // The actual sweep kernel for one color
+  virtual void sweep_color_kokkos(int color, int start, int count) = 0;
 
 protected:
-  // Helper to copy data between host arrays and DualViews
-  void copy_neighbor_data_to_host();
+  // Shared neighbor sync
+  void sync_neighbors_to_device();
 };
 
 }

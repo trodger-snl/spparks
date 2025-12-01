@@ -47,7 +47,7 @@ AppPottsNeighKokkos::AppPottsNeighKokkos(SPPARKS *spk, int narg, char **arg) :
 
   nspins = atoi(arg[1]);
   if (nspins <= 0) error->all(FLERR,"Illegal app_style command");
-  dt_sweep = 1.0/nspins;
+  // dt_sweep set in init_app() when maxneigh is known
 
   // Initialize pointers
   spin = nullptr;
@@ -92,6 +92,9 @@ void AppPottsNeighKokkos::allocate_app_views()
 
 void AppPottsNeighKokkos::init_app()
 {
+  // Set dt_sweep now that maxneigh is known (matches CPU version)
+  dt_sweep = 1.0/maxneigh;
+
   // Validate spin values
   int flag = 0;
   for (int i = 0; i < nlocal; i++)

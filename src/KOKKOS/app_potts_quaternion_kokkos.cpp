@@ -77,7 +77,7 @@ AppPottsQuaternionKokkos::AppPottsQuaternionKokkos(SPPARKS *spk, int narg, char 
     }
   }
 
-  dt_sweep = 1.0/nspins;
+  // dt_sweep set in init_app() when maxneigh is known
 
   // Initialize pointers
   spin = nullptr;
@@ -142,6 +142,9 @@ void AppPottsQuaternionKokkos::allocate_app_views()
 
 void AppPottsQuaternionKokkos::init_app()
 {
+  // Set dt_sweep now that maxneigh is known (matches CPU version)
+  dt_sweep = 1.0/maxneigh;
+
   // Validate spin values
   int flag = 0;
   for (int i = 0; i < nlocal; i++)

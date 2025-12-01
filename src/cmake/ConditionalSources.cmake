@@ -42,9 +42,11 @@ function(configure_conditional_sources)
             app_potts_neigh_kokkos.cpp
             app_potts_neighonly_kokkos.cpp
             app_potts_quaternion_kokkos.cpp
-            # TODO: app_additive_ext_temp_texture_kokkos.cpp needs to be updated
-            # to use the new AppLatticeKokkos coloring infrastructure
         )
+        # Add additive kokkos source if HDF5 is enabled
+        if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
+            list(APPEND SPPARKS_SOURCES app_additive_ext_temp_texture_kokkos.cpp)
+        endif()
         message(STATUS "Added KOKKOS package sources")
     endif()
 

@@ -197,6 +197,145 @@ protected:
 
       normalize(q);
     }
+
+    // Convert quaternion to rotation matrix (row-major 3x3)
+    KOKKOS_INLINE_FUNCTION
+    static void to_rotation_matrix(const double* q, double* m) {
+      const double q0 = q[0], qx = q[1], qy = q[2], qz = q[3];
+      const double q00 = q0 * q0;
+      const double q0x = q0 * qx;
+      const double q0y = q0 * qy;
+      const double q0z = q0 * qz;
+      const double qxx = qx * qx;
+      const double qxy = qx * qy;
+      const double qxz = qx * qz;
+      const double qyy = qy * qy;
+      const double qyz = qy * qz;
+      const double qzz = qz * qz;
+      m[0] = q00 + qxx - qyy - qzz;  // r11
+      m[1] = 2 * (qxy - q0z);        // r12
+      m[2] = 2 * (qxz + q0y);        // r13
+      m[3] = 2 * (qxy + q0z);        // r21
+      m[4] = q00 - qxx + qyy - qzz;  // r22
+      m[5] = 2 * (qyz - q0x);        // r23
+      m[6] = 2 * (qxz - q0y);        // r31
+      m[7] = 2 * (qyz + q0x);        // r32
+      m[8] = q00 - qxx - qyy + qzz;  // r33
+    }
+
+    // Get cosine of minimum angle between quaternion's <100> directions and vector u
+    // Used for texture weighting in solidification
+    KOKKOS_INLINE_FUNCTION
+    static double get_cosine_angle_q_u(const double* q, const double* u) {
+      // Normalize the target vector
+      double n[3] = {u[0], u[1], u[2]};
+      double d = Kokkos::sqrt(n[0]*n[0] + n[1]*n[1] + n[2]*n[2]);
+      if (d > 1.0e-15) {
+        double inv_d = 1.0 / d;
+        n[0] *= inv_d;
+        n[1] *= inv_d;
+        n[2] *= inv_d;
+      }
+
+      // Get rotation matrix from quaternion
+      double m[9];
+      to_rotation_matrix(q, m);
+
+      // Dot columns of 'm' with 'n' (matrix transpose times vector)
+      // Find maximum absolute dot product across all 3 columns
+      double max_dot = 0.0;
+      for (int col = 0; col < 3; col++) {
+        double dot = 0.0;
+        for (int row = 0; row < 3; row++) {
+          int ptr = col + 3 * row;
+          dot += m[ptr] * n[row];
+        }
+        dot = Kokkos::fabs(dot);
+        if (dot > max_dot) max_dot = dot;
+      }
+      return max_dot;
+    }
+
+    // Rotate quaternion q towards vector u by given angle (in radians)
+    // If angle exceeds the misorientation, stops at alignment
+    KOKKOS_INLINE_FUNCTION
+    static void rotate_q_towards_u(const double* q, const double* u, double angle, double* result) {
+      // Normalize the target vector
+      double n[3] = {u[0], u[1], u[2]};
+      double d = Kokkos::sqrt(n[0]*n[0] + n[1]*n[1] + n[2]*n[2]);
+      if (d < 1.0e-15) {
+        // Zero magnitude target, return original quaternion
+        result[0] = q[0]; result[1] = q[1]; result[2] = q[2]; result[3] = q[3];
+        return;
+      }
+      double inv_d = 1.0 / d;
+      n[0] *= inv_d;
+      n[1] *= inv_d;
+      n[2] *= inv_d;
+
+      // Get reference direction from the quaternion (rotate z-axis)
+      double ref_axis[3] = {0.0, 0.0, 1.0};
+      double current_dir[3];
+      rotate_vector(q, ref_axis, current_dir);
+
+      // Calculate the current misorientation angle
+      double dot_product = current_dir[0]*n[0] + current_dir[1]*n[1] + current_dir[2]*n[2];
+      dot_product = Kokkos::fmax(-1.0, Kokkos::fmin(1.0, dot_product));
+      double current_misorientation = Kokkos::acos(dot_product);
+
+      // Check if already aligned (within tolerance)
+      if (current_misorientation < 1.0e-10) {
+        result[0] = q[0]; result[1] = q[1]; result[2] = q[2]; result[3] = q[3];
+        return;
+      }
+
+      // Limit the rotation angle to not exceed the current misorientation
+      double actual_angle = Kokkos::fmin(Kokkos::fabs(angle), current_misorientation);
+
+      // Calculate the rotation axis as the cross product
+      double rot_axis[3];
+      vector_cross_product(current_dir, n, rot_axis);
+
+      // Check if vectors are parallel (cross product near zero)
+      double axis_norm = Kokkos::sqrt(rot_axis[0]*rot_axis[0] + rot_axis[1]*rot_axis[1] + rot_axis[2]*rot_axis[2]);
+      if (axis_norm < 1.0e-10) {
+        // Vectors are parallel
+        if (dot_product > 0.99999) {
+          // Same direction, return original quaternion
+          result[0] = q[0]; result[1] = q[1]; result[2] = q[2]; result[3] = q[3];
+          return;
+        } else {
+          // Opposite directions (180° apart), find a perpendicular axis
+          if (Kokkos::fabs(n[0]) < 0.9) {
+            double tmp[3] = {1.0, 0.0, 0.0};
+            vector_cross_product(n, tmp, rot_axis);
+          } else {
+            double tmp[3] = {0.0, 1.0, 0.0};
+            vector_cross_product(n, tmp, rot_axis);
+          }
+          axis_norm = Kokkos::sqrt(rot_axis[0]*rot_axis[0] + rot_axis[1]*rot_axis[1] + rot_axis[2]*rot_axis[2]);
+        }
+      }
+
+      // Normalize the rotation axis
+      double inv_axis_norm = 1.0 / axis_norm;
+      rot_axis[0] *= inv_axis_norm;
+      rot_axis[1] *= inv_axis_norm;
+      rot_axis[2] *= inv_axis_norm;
+
+      // Create the rotation quaternion for the actual angle
+      double half_angle = actual_angle * 0.5;
+      double cos_half = Kokkos::cos(half_angle);
+      double sin_half = Kokkos::sin(half_angle);
+
+      double rot_q[4] = {cos_half, sin_half * rot_axis[0], sin_half * rot_axis[1], sin_half * rot_axis[2]};
+
+      // Apply the rotation to the original quaternion
+      composition(rot_q, q, result);
+
+      // Normalize the result
+      normalize(result);
+    }
   };
 
 private:

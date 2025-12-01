@@ -518,7 +518,13 @@ struct AppPottsQuaternionKokkos::RejectionSweepFunctor {
     }
 
     // If no unique neighbors, no event possible
+    // Still must write current state to write_buffer to prevent data corruption
     if (nevent == 0) {
+      spin_write(i) = oldstate;
+      q0_write(i) = q_old[0];
+      qx_write(i) = q_old[1];
+      qy_write(i) = q_old[2];
+      qz_write(i) = q_old[3];
       rand_pool.free_state(rand_gen);
       return;
     }
@@ -640,8 +646,9 @@ void AppPottsQuaternionKokkos::iterate_rejection(double stoptime)
       // Need to get updated ghost sites from MPI
       sync_data_to_device();
       if (iset == 0) {
-        if (!k_numneigh.need_sync_device()) k_numneigh.sync_device();
-        if (!k_neighbor.need_sync_device()) k_neighbor.sync_device();
+        // Fix: Remove inverted logic - sync when we NEED to sync (host was modified)
+        if (k_numneigh.need_sync_device()) k_numneigh.sync_device();
+        if (k_neighbor.need_sync_device()) k_neighbor.sync_device();
       }
 
       // Sectors but no colors (could also be no sectors)
@@ -736,9 +743,15 @@ void AppPottsQuaternionKokkos::sweep_rejection_kokkos()
     maxneigh
   );
 
-  int naccept_local = 0;
-  Kokkos::parallel_reduce("AppPottsQuaternion::RejectionSweep", nlocal, functor, naccept_local);
+  // Use device view for reduction, then copy to host
+  Kokkos::View<int> d_naccept_local("naccept_local");
+  Kokkos::deep_copy(d_naccept_local, 0);
+  Kokkos::parallel_reduce("AppPottsQuaternion::RejectionSweep", nlocal, functor, d_naccept_local);
   Kokkos::fence();
+
+  // Copy result to host
+  int naccept_local;
+  Kokkos::deep_copy(naccept_local, d_naccept_local);
 
   // Swap read/write buffers so next iteration reads the just-written data
   swap_buffers();
@@ -873,7 +886,14 @@ void AppPottsQuaternionKokkos::sweep_rejection_kokkos(int nsite, int *site_list)
         }
       }
 
+      // If no unique neighbors, no event possible
+      // Still must write current state to write_buffer to prevent data corruption
       if (nevent == 0) {
+        spin_write(i) = oldstate;
+        q0_write(i) = q_old[0];
+        qx_write(i) = q_old[1];
+        qy_write(i) = q_old[2];
+        qz_write(i) = q_old[3];
         rand_pool.free_state(rand_gen);
         return;
       }
@@ -967,9 +987,15 @@ void AppPottsQuaternionKokkos::sweep_rejection_kokkos(int nsite, int *site_list)
     maxneigh
   );
 
-  int naccept_local = 0;
-  Kokkos::parallel_reduce("AppPottsQuaternion::SectorSweep", nsite, functor, naccept_local);
+  // Use device view for reduction, then copy to host
+  Kokkos::View<int> d_naccept_local("naccept_local");
+  Kokkos::deep_copy(d_naccept_local, 0);
+  Kokkos::parallel_reduce("AppPottsQuaternion::SectorSweep", nsite, functor, d_naccept_local);
   Kokkos::fence();
+
+  // Copy result to host
+  int naccept_local;
+  Kokkos::deep_copy(naccept_local, d_naccept_local);
 
   // Swap read/write buffers so next iteration reads the just-written data
   swap_buffers();

@@ -22,6 +22,7 @@
 #include <Kokkos_Core.hpp>
 #include <Kokkos_DualView.hpp>
 #include <Kokkos_Random.hpp>
+#include <vector>
 
 namespace SPPARKS_NS {
 
@@ -41,9 +42,16 @@ public:
   pool_type *rand_pool;
 
   // === Color-based site lists for GPU ===
+  // When bothflag=1 (sectors + colors), we have per-sector color lists
+  // When bothflag=0, we have a single set of color lists (sector 0 only)
   int kokkos_ncolors;                    // Number of colors (8 for 26-neighbor)
-  Kokkos::View<int*> d_color_offsets;    // CSR offsets [ncolors+1]
-  Kokkos::View<int*> d_color_sites;      // Site indices by color [nlocal]
+  int kokkos_nsectors;                   // Number of sectors to track (1 if !bothflag)
+  // Per-sector color lists stored in vectors
+  std::vector<Kokkos::View<int*>> d_color_offsets_vec;  // CSR offsets [sector][ncolors+1]
+  std::vector<Kokkos::View<int*>> d_color_sites_vec;    // Site indices [sector][sites_in_sector]
+  // Current sector's color sites view (set in iterate_rejection before calling sweep_color_kokkos)
+  // Derived classes use this in their sweep functors
+  Kokkos::View<int*> d_color_sites;
   bool color_lists_initialized;
 
   // === Shared methods ===

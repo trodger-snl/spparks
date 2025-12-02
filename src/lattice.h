@@ -36,7 +36,9 @@ class Lattice : protected Pointers {
   Lattice(class SPPARKS *, int, char **);
   ~Lattice();
   int ncolors(int);
+  int ncolors_any(int);      // ncolors without dimension divisibility check
   int id2color(tagint, int);
+  int xyz2color(double, double, double, int);  // color from coordinates
 
 private:
   double latconst;                     // lattice constant

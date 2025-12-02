@@ -228,6 +228,108 @@ int Lattice::ncolors(int delcolor)
 }
 
 /* ----------------------------------------------------------------------
+   # of colors to partition lattice into (any box size)
+   Unlike ncolors(), this does not require dimensions divisible by color block
+   Used for non-periodic boundaries where site IDs may not be contiguous
+------------------------------------------------------------------------- */
+
+int Lattice::ncolors_any(int delcolor)
+{
+  int n = 0;
+
+  if (style == LINE_2N) {
+    if (delcolor == 1) n = 2;
+  } else if (style == SQ_4N) {
+    if (delcolor == 1) n = 2;
+  } else if (style == SQ_8N) {
+    n = (delcolor+1)*(delcolor+1);
+  } else if (style == TRI) {
+    if (delcolor == 1) n = 4;
+  } else if (style == SC_6N) {
+    if (delcolor == 1) n = 2;
+  } else if (style == SC_26N) {
+    n = (delcolor+1)*(delcolor+1)*(delcolor+1);
+  } else if (style == FCC) {
+    if (delcolor == 1) n = 4;
+  } else if (style == BCC) {
+    if (delcolor == 1) n = 2;
+  }
+
+  return n;
+}
+
+/* ----------------------------------------------------------------------
+   convert xyz coordinates to a color (1 to Ncolor)
+   Works for any box size, does not require contiguous site IDs
+   Uses lattice spacing and box origin to compute grid position
+------------------------------------------------------------------------- */
+
+int Lattice::xyz2color(double x, double y, double z, int delcolor)
+{
+  int ncolor1d,icolor;
+
+  // compute grid indices from coordinates using lattice spacing
+  // use box lower bounds as origin reference
+  int i = static_cast<int>(floor((x - domain->boxxlo) / xlattice + 0.5));
+  int j = static_cast<int>(floor((y - domain->boxylo) / ylattice + 0.5));
+  int k = static_cast<int>(floor((z - domain->boxzlo) / zlattice + 0.5));
+
+  if (style == LINE_2N) {
+    icolor = i % 2;
+
+  } else if (style == SQ_4N) {
+    icolor = (i+j) % 2;
+
+  } else if (style == SQ_8N) {
+    ncolor1d = delcolor+1;
+    // ensure positive modulo for negative indices
+    int ii = ((i % ncolor1d) + ncolor1d) % ncolor1d;
+    int jj = ((j % ncolor1d) + ncolor1d) % ncolor1d;
+    icolor = ncolor1d*jj + ii;
+
+  } else if (style == TRI) {
+    // TRI lattice has 2 basis atoms per unit cell, use position within cell
+    // color based on both grid position and sub-lattice
+    int ii = ((i % 2) + 2) % 2;
+    int jj = ((j % 2) + 2) % 2;
+    icolor = 2*jj + ii;
+
+  } else if (style == SC_6N) {
+    icolor = (((i % 2) + 2) % 2 + ((j % 2) + 2) % 2 + ((k % 2) + 2) % 2) % 2;
+
+  } else if (style == SC_26N) {
+    ncolor1d = delcolor+1;
+    // ensure positive modulo for negative indices
+    int ii = ((i % ncolor1d) + ncolor1d) % ncolor1d;
+    int jj = ((j % ncolor1d) + ncolor1d) % ncolor1d;
+    int kk = ((k % ncolor1d) + ncolor1d) % ncolor1d;
+    icolor = ncolor1d*ncolor1d*kk + ncolor1d*jj + ii;
+
+  } else if (style == FCC) {
+    // FCC has 4 basis atoms - determine which based on fractional position
+    double fx = (x - domain->boxxlo) / xlattice - i;
+    double fy = (y - domain->boxylo) / ylattice - j;
+    double fz = (z - domain->boxzlo) / zlattice - k;
+    // basis atoms at (0,0,0), (0,0.5,0.5), (0.5,0,0.5), (0.5,0.5,0)
+    if (fabs(fx) < 0.25 && fabs(fy) < 0.25 && fabs(fz) < 0.25) icolor = 0;
+    else if (fabs(fx) < 0.25 && fabs(fy-0.5) < 0.25 && fabs(fz-0.5) < 0.25) icolor = 1;
+    else if (fabs(fx-0.5) < 0.25 && fabs(fy) < 0.25 && fabs(fz-0.5) < 0.25) icolor = 2;
+    else icolor = 3;
+
+  } else if (style == BCC) {
+    // BCC has 2 basis atoms - determine which based on fractional position
+    double fx = (x - domain->boxxlo) / xlattice - i;
+    double fy = (y - domain->boxylo) / ylattice - j;
+    double fz = (z - domain->boxzlo) / zlattice - k;
+    // basis atoms at (0,0,0) and (0.5,0.5,0.5)
+    if (fabs(fx) < 0.25 && fabs(fy) < 0.25 && fabs(fz) < 0.25) icolor = 0;
+    else icolor = 1;
+  }
+
+  return icolor+1;
+}
+
+/* ----------------------------------------------------------------------
    convert a lattice ID (1 to Nsites) to a color (1 to Ncolor)
 ------------------------------------------------------------------------- */
 

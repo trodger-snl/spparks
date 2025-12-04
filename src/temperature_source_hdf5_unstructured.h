@@ -20,6 +20,11 @@
 #include <vector>
 #include <string>
 #include <stdexcept>
+#include <chrono>
+
+#ifdef H5_HAVE_PARALLEL
+#include <mpi.h>
+#endif
 
 namespace HighFive {
   class File;
@@ -142,7 +147,16 @@ private:
   std::vector<unsigned> node_offsets;
   std::vector<unsigned> elem_offsets;
   std::vector<std::vector<double>> elem_bboxes;
-  
+
+  // Parallel HDF5 state
+#ifdef H5_HAVE_PARALLEL
+  bool use_parallel_hdf5;
+#endif
+
+  // Timing statistics for performance monitoring
+  double total_layer_load_time;
+  int layer_load_count;
+
   // Helper methods from reference implementation
   void load_layer(unsigned layerIdx);
   

@@ -31,9 +31,14 @@ HDF5UnstructuredTemperatureSource::HDF5UnstructuredTemperatureSource(SPPARKS *sp
   TemperatureSource(spk),
   current_time(std::numeric_limits<double>::lowest()),
   active_layer(std::numeric_limits<unsigned>::max()),
-  cache_valid(false)
+  cache_valid(false),
+  total_layer_load_time(0.0),
+  layer_load_count(0)
 {
   source_initialized = false;
+#ifdef H5_HAVE_PARALLEL
+  use_parallel_hdf5 = false;
+#endif
 }
 
 /* ---------------------------------------------------------------------- */
@@ -58,9 +63,24 @@ void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vect
   default_temp = std::stod(args[3]);    // Default/ambient temperature
   bounds_check_mode = (args.size() > 4) ? std::stoi(args[4]) : 0;
 
-  // Open HDF5 file
+  // Open HDF5 file with parallel I/O when available
   try {
+#ifdef H5_HAVE_PARALLEL
+    // Create file access property list with MPI-IO
+    HighFive::FileAccessProps fapl;
+    fapl.add(HighFive::MPIOFileAccess(universe->uworld, MPI_INFO_NULL));
+    fapl.add(HighFive::MPIOCollectiveMetadata(true));
+    file = std::make_shared<HighFive::File>(filename, HighFive::File::ReadOnly, fapl);
+    use_parallel_hdf5 = true;
+    if (universe->me == 0) {
+      fprintf(screen, "  Parallel HDF5: ENABLED (MPI-IO)\n");
+    }
+#else
     file = std::make_shared<HighFive::File>(filename, HighFive::File::ReadOnly);
+    if (universe->me == 0) {
+      fprintf(screen, "  Parallel HDF5: DISABLED (serial build)\n");
+    }
+#endif
   } catch (const std::exception& e) {
     error->all(FLERR, (std::string("Failed to open HDF5 file: ") + e.what()).c_str());
   }
@@ -277,6 +297,8 @@ void HDF5UnstructuredTemperatureSource::print_source_info() const
 
 void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
 {
+  auto load_start = std::chrono::high_resolution_clock::now();
+
   if (universe->me == 0) {
     fprintf(screen, "Loading layer %u at time %.6e s\n", layerIdx,
             (layerIdx < layerTimes.size()) ? layerTimes[layerIdx] : -1.0);
@@ -457,6 +479,17 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   
   // Compute thermal intervals for efficient time queries
   compute_thermal_intervals_for_layer(layerIdx, threshold_temp);
+
+  // Record timing for performance monitoring
+  auto load_end = std::chrono::high_resolution_clock::now();
+  double load_time = std::chrono::duration<double>(load_end - load_start).count();
+  total_layer_load_time += load_time;
+  layer_load_count++;
+
+  if (universe->me == 0) {
+    fprintf(screen, "  Layer load time: %.3f s (avg: %.3f s over %d loads)\n",
+            load_time, total_layer_load_time / layer_load_count, layer_load_count);
+  }
 }
 
 /* ---------------------------------------------------------------------- */

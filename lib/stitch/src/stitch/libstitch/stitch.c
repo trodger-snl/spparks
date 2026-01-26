@@ -2313,35 +2313,76 @@ int stitch_delete_oldest_timestep (const StitchFile * file, int64_t * deleted_co
         rc = sqlite3_finalize (stmt);
         stmt = NULL;
 
-        // Find the next oldest time to update globals.first_time
-        do
+        // Aggressive safe delete: Find the oldest timestamp where ALL blocks are
+        // geometrically contained within newer blocks. A block is "covered" if a newer
+        // block fully contains it (b2.min <= b1.min AND b2.max >= b1.max for all dims).
+        // This allows deletion even with varying MPI decomposition or partial overlap.
+        //
+        // Unlike the old approach which only tried the oldest timestamp, we find the
+        // oldest DELETABLE timestamp - skipping any that have uncovered blocks.
+        // This allows trimming to continue past timestamps with unique spatial coverage.
         {
-            rc = sqlite3_prepare_v2 (file->db, "select time from times where time > ? order by time asc limit 1", -1, &stmt, &tail);
-            if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY)
+            int64_t deletable_timestamp = -1;
+            double deletable_time = 0.0;
+
+            // Find oldest timestamp where ALL blocks have geometric coverage from newer blocks
+            const char * find_deletable_sql =
+                "SELECT t.timestamp, t.time FROM times t "
+                "WHERE NOT EXISTS ("
+                "  SELECT 1 FROM blocks b1 "
+                "  WHERE b1.timestamp = t.timestamp "
+                "  AND NOT EXISTS ("
+                "    SELECT 1 FROM blocks b2 "
+                "    JOIN times t2 ON b2.timestamp = t2.timestamp "
+                "    WHERE t2.time > t.time "
+                "    AND b2.field_id = b1.field_id "
+                "    AND b2.x_min <= b1.x_min AND b2.x_max >= b1.x_max "
+                "    AND b2.y_min <= b1.y_min AND b2.y_max >= b1.y_max "
+                "    AND b2.z_min <= b1.z_min AND b2.z_max >= b1.z_max"
+                "  )"
+                ") "
+                "ORDER BY t.time ASC LIMIT 1";
+
+            do
             {
-                fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
+                rc = sqlite3_prepare_v2 (file->db, find_deletable_sql, -1, &stmt, &tail);
+                if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY)
+                {
+                    fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
+                    goto cleanup;
+                }
+            } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+
+            do
+            {
+                rc = sqlite3_step (stmt);
+                if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY && rc != SQLITE_ROW && rc != SQLITE_DONE)
+                {
+                    fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
+                    goto cleanup;
+                }
+            } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+
+            if (rc == SQLITE_ROW)
+            {
+                deletable_timestamp = sqlite3_column_int64 (stmt, 0);
+                deletable_time = sqlite3_column_double (stmt, 1);
+            }
+            rc = sqlite3_finalize (stmt);
+            stmt = NULL;
+
+            if (deletable_timestamp < 0)
+            {
+                // No fully-covered timestamps found - nothing can be safely deleted
+                *deleted_count = 0;
+                rc = SQLITE_OK;
                 goto cleanup;
             }
-        } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
-        rc = sqlite3_bind_double (stmt, 1, oldest_time);
 
-        do
-        {
-            rc = sqlite3_step (stmt);
-            if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY && rc != SQLITE_ROW && rc != SQLITE_DONE)
-            {
-                fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
-                goto cleanup;
-            }
-        } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
-
-        if (rc == SQLITE_ROW)
-        {
-            new_first_time = sqlite3_column_double (stmt, 0);
-            have_new_first = 1;
+            // Use the deletable timestamp instead of just oldest
+            oldest_timestamp = deletable_timestamp;
+            oldest_time = deletable_time;
         }
-        rc = sqlite3_finalize (stmt);
-        stmt = NULL;
 
         // Delete blocks associated with this timestamp
         do
@@ -2391,12 +2432,42 @@ int stitch_delete_oldest_timestep (const StitchFile * file, int64_t * deleted_co
         rc = sqlite3_finalize (stmt);
         stmt = NULL;
 
+        // Find the actual oldest remaining time (may differ from "next after deleted"
+        // since we may have skipped older timestamps with uncovered data)
+        do
+        {
+            rc = sqlite3_prepare_v2 (file->db, "SELECT time FROM times ORDER BY time ASC LIMIT 1", -1, &stmt, &tail);
+            if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY)
+            {
+                fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
+                goto cleanup;
+            }
+        } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+
+        do
+        {
+            rc = sqlite3_step (stmt);
+            if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY && rc != SQLITE_ROW && rc != SQLITE_DONE)
+            {
+                fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
+                goto cleanup;
+            }
+        } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+
+        if (rc == SQLITE_ROW)
+        {
+            new_first_time = sqlite3_column_double (stmt, 0);
+            have_new_first = 1;
+        }
+        rc = sqlite3_finalize (stmt);
+        stmt = NULL;
+
         // Update globals.first_time
         if (have_new_first)
         {
             do
             {
-                rc = sqlite3_prepare_v2 (file->db, "update globals set first_time = ?", -1, &stmt, &tail);
+                rc = sqlite3_prepare_v2 (file->db, "UPDATE globals SET first_time = ?", -1, &stmt, &tail);
                 if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY)
                 {
                     fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
@@ -2419,10 +2490,10 @@ int stitch_delete_oldest_timestep (const StitchFile * file, int64_t * deleted_co
         }
         else
         {
-            // No more timesteps, set first_time to NULL
+            // No more timesteps, set first_time and last_time to NULL
             do
             {
-                rc = sqlite3_prepare_v2 (file->db, "update globals set first_time = NULL, last_time = NULL", -1, &stmt, &tail);
+                rc = sqlite3_prepare_v2 (file->db, "UPDATE globals SET first_time = NULL, last_time = NULL", -1, &stmt, &tail);
                 if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY)
                 {
                     fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));

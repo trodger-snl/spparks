@@ -211,15 +211,30 @@ or "outside" of a geometric shape, and it can be the "union" or
 
 The {retain} keyword applies only to the {stitch} dump style.  It
 limits the number of timesteps retained in the STITCH database file.
-By default (N = 0), all timesteps are retained.  If N > 0, only the N
-most recent timesteps are kept; older timesteps and their associated
-data blocks are automatically deleted after each dump.
+By default (N = 0), all timesteps are retained.  If N > 0, the system
+attempts to keep only the N most recent timesteps by deleting older
+ones after each dump.
+
+Deletion uses a "safe delete" algorithm that preserves data integrity:
+a timestep is only deleted if all its data blocks are geometrically
+covered by newer blocks.  A block is "covered" if a newer block fully
+contains its spatial bounds (newer min <= older min and newer max >=
+older max for all dimensions).  This allows deletion even when MPI
+decomposition varies between simulations.
+
+If a timestep contains data with unique spatial coverage (not covered
+by any newer data), it is preserved regardless of the retain limit.
+This commonly occurs with sequential simulations that cover different
+regions.  For example, if Sim 1 covers x=[0,100] and Sim 2 covers
+x=[80,180], Sim 1's data in x=[0,80) has no coverage from Sim 2 and
+will be preserved.  The algorithm skips over such protected timesteps
+and continues deleting intermediate states that can be safely removed.
 
 Setting {retain} to 1 provides an "overwrite mode" where only the
-latest timestep is kept, which is useful for long simulations where
-only the final state is needed.  This can reduce file size by 97% or
-more compared to unlimited retention, with approximately 5% runtime
-overhead for the deletion operations.
+latest state for each spatial region is kept.  This is useful for long
+simulations where only the final state is needed.  This can reduce file
+size by 97% or more compared to unlimited retention, with approximately
+5% runtime overhead for the deletion operations.
 
 :line
 

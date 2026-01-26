@@ -64,6 +64,7 @@ DumpStitch::DumpStitch(SPPARKS *spk, int narg, char **arg)
   vtype = new int[size_one];
   vindex = new int[size_one];
   stitch_field_ids = new int64_t[size_one];
+  retain_count = 0;  // default: keep all timesteps
 
   parse_fields(narg, arg);
   create_stitch_field_ids();
@@ -261,6 +262,12 @@ void DumpStitch::write(double time) {
       // TODO: process err
     }
   }
+
+  // Trim old timesteps if retain_count is set
+  if (retain_count > 0) {
+    int64_t deleted_count = 0;
+    err = stitch_trim_timesteps(fid, retain_count, &deleted_count);
+  }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -317,4 +324,18 @@ int DumpStitch::parse_fields(int narg, char **arg) {
   }
 
   return narg;
+}
+
+/* ---------------------------------------------------------------------- */
+
+int DumpStitch::modify_param(int narg, char **arg)
+{
+  if (strcmp(arg[0], "retain") == 0) {
+    if (narg < 2) error->all(FLERR, "Illegal dump_modify command");
+    retain_count = atoi(arg[1]);
+    if (retain_count < 0)
+      error->all(FLERR, "Dump_modify retain value must be >= 0");
+    return 2;
+  }
+  return 0;
 }

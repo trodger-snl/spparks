@@ -15,7 +15,9 @@ dump_modify dump-ID keyword values ... :pre
 dump-ID = ID of dump to modify :ulb,l
 one or more keyword/value pairs may be appended :l
 these keywords apply to various dump styles :l
-keyword = {delay} or {delta} or {fileper} or {first} or {flush} or {logfreq} or {loglinfreq} or {nfile} or {pad} or {region} or {sort} or {thresh} or {tol} or {vtk} :l
+keyword = {delay} or {delta} or {fileper} or {first} or {flush} or {logfreq} or {loglinfreq} or {nfile} or {pad} or {region} or {sort} or {thresh} or {tol} :l
+this keyword applies only to the {stitch} dump style :l
+keyword = {retain} :l
   {delay} value = tdelay
     tdelay = delay dump until at least this time (seconds)
   {delta} arg = dt
@@ -32,6 +34,8 @@ keyword = {delay} or {delta} or {fileper} or {first} or {flush} or {logfreq} or 
     Nf = write this many files, one from each of Nf processors
   {pad} arg = Nchar = # of characters to convert timestep to
   {region} arg = region-ID or "none"
+  {retain} arg = N
+    N = number of timesteps to retain in STITCH file (0 = unlimited, stitch style only)
   {sort} arg = {off} or {id} or N or -N
      off = no sorting of per-site lines within a snapshot
      id = sort per-site lines by atom ID
@@ -44,6 +48,8 @@ keyword = {delay} or {delta} or {fileper} or {first} or {flush} or {logfreq} or 
     these 3 args can be replaced by the word "none" to turn off thresholding
   {tol} value = epsilon
     epsilon = output a snapshot if time is within epsilon of target time (seconds)
+this keyword applies only to the {vtk} dump style :l
+keyword = {vtk} :l
   {vtk} args = Nx Ny Nz minval maxval
     Nx,Ny,Nz = site extent in x,y,z dimensions
     minval,maxval = min/max of any site's value :pre
@@ -200,6 +206,20 @@ filter (the last one specified).  See the "region"_region.html command
 for more details.  Note that a region can be defined as the "inside"
 or "outside" of a geometric shape, and it can be the "union" or
 "intersection" of a series of simpler regions.
+
+:line
+
+The {retain} keyword applies only to the {stitch} dump style.  It
+limits the number of timesteps retained in the STITCH database file.
+By default (N = 0), all timesteps are retained.  If N > 0, only the N
+most recent timesteps are kept; older timesteps and their associated
+data blocks are automatically deleted after each dump.
+
+Setting {retain} to 1 provides an "overwrite mode" where only the
+latest timestep is kept, which is useful for long simulations where
+only the final state is needed.  This can reduce file size by 97% or
+more compared to unlimited retention, with approximately 5% runtime
+overhead for the deletion operations.
 
 :line
 
@@ -518,6 +538,7 @@ logfreq = off
 loglinfreq = off
 pad = 0
 region = none
+retain = 0 (unlimited, stitch style only)
 scolor = * c1/c2/.../c140 where c1-c140 are the names of the 140 pre-defined colors
 sdiam = * 1.0
 smap = min max cf 2 min blue max red

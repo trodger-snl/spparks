@@ -44,6 +44,7 @@ private:
   int *vtype;                // type of each vector (INT, DOUBLE)
   int *vindex;               // index into int,double columns
   int64_t *stitch_field_ids; // stitch field ids
+  int retain_count;          // 0 = unlimited, n = keep n most recent timesteps
 
   class AppLattice *applattice;
   StitchFile *fid;
@@ -57,6 +58,7 @@ private:
   virtual void write_data(int, double *) {}
   int parse_fields(int, char **);
   void create_stitch_field_ids();
+  int modify_param(int, char **);
 };
 
 } // namespace SPPARKS_NS

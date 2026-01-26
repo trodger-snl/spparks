@@ -120,6 +120,14 @@ int stitch_read_block_float64 (const StitchFile * file, int64_t field_id, double
 // discover the global bounds (in 3D) written so far
 int stitch_get_global_bounds(const StitchFile * file, int64_t field_id, int32_t * bb);
 
+// delete the oldest timestep and all associated blocks
+// returns the number of timesteps deleted (0 or 1) in deleted_count
+int stitch_delete_oldest_timestep(const StitchFile * file, int64_t * deleted_count);
+
+// trim timesteps to keep only the most recent keep_count timesteps
+// returns the number of timesteps deleted in deleted_count
+int stitch_trim_timesteps(const StitchFile * file, int64_t keep_count, int64_t * deleted_count);
+
 #ifdef __cplusplus
 }
 #endif

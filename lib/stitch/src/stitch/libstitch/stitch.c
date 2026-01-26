@@ -2260,3 +2260,245 @@ cleanup:
 
     return 0;
 }
+
+int stitch_delete_oldest_timestep (const StitchFile * file, int64_t * deleted_count)
+{
+    int rc = 0;
+    sqlite3_stmt * stmt = NULL;
+    const char * tail = NULL;
+    int64_t oldest_timestamp = -1;
+    double oldest_time = 0.0;
+    double new_first_time = 0.0;
+    int have_new_first = 0;
+
+    *deleted_count = 0;
+
+#ifdef STITCH_PARALLEL
+    if (file->rank == 0)
+    {
+#endif
+        // Find the oldest timestamp (smallest time value)
+        do
+        {
+            rc = sqlite3_prepare_v2 (file->db, "select timestamp, time from times order by time asc limit 1", -1, &stmt, &tail);
+            if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY)
+            {
+                fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
+                goto cleanup;
+            }
+        } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+
+        do
+        {
+            rc = sqlite3_step (stmt);
+            if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY && rc != SQLITE_ROW && rc != SQLITE_DONE)
+            {
+                fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
+                goto cleanup;
+            }
+        } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+
+        if (rc == SQLITE_ROW)
+        {
+            oldest_timestamp = sqlite3_column_int64 (stmt, 0);
+            oldest_time = sqlite3_column_double (stmt, 1);
+        }
+        else
+        {
+            // No timesteps to delete
+            rc = sqlite3_finalize (stmt);
+            stmt = NULL;
+            goto cleanup;
+        }
+        rc = sqlite3_finalize (stmt);
+        stmt = NULL;
+
+        // Find the next oldest time to update globals.first_time
+        do
+        {
+            rc = sqlite3_prepare_v2 (file->db, "select time from times where time > ? order by time asc limit 1", -1, &stmt, &tail);
+            if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY)
+            {
+                fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
+                goto cleanup;
+            }
+        } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+        rc = sqlite3_bind_double (stmt, 1, oldest_time);
+
+        do
+        {
+            rc = sqlite3_step (stmt);
+            if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY && rc != SQLITE_ROW && rc != SQLITE_DONE)
+            {
+                fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
+                goto cleanup;
+            }
+        } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+
+        if (rc == SQLITE_ROW)
+        {
+            new_first_time = sqlite3_column_double (stmt, 0);
+            have_new_first = 1;
+        }
+        rc = sqlite3_finalize (stmt);
+        stmt = NULL;
+
+        // Delete blocks associated with this timestamp
+        do
+        {
+            rc = sqlite3_prepare_v2 (file->db, "delete from blocks where timestamp = ?", -1, &stmt, &tail);
+            if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY)
+            {
+                fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
+                goto cleanup;
+            }
+        } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+        rc = sqlite3_bind_int64 (stmt, 1, oldest_timestamp);
+
+        do
+        {
+            rc = sqlite3_step (stmt);
+            if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY && rc != SQLITE_ROW && rc != SQLITE_DONE)
+            {
+                fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
+                goto cleanup;
+            }
+        } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+        rc = sqlite3_finalize (stmt);
+        stmt = NULL;
+
+        // Delete the timestamp entry
+        do
+        {
+            rc = sqlite3_prepare_v2 (file->db, "delete from times where timestamp = ?", -1, &stmt, &tail);
+            if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY)
+            {
+                fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
+                goto cleanup;
+            }
+        } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+        rc = sqlite3_bind_int64 (stmt, 1, oldest_timestamp);
+
+        do
+        {
+            rc = sqlite3_step (stmt);
+            if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY && rc != SQLITE_ROW && rc != SQLITE_DONE)
+            {
+                fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
+                goto cleanup;
+            }
+        } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+        rc = sqlite3_finalize (stmt);
+        stmt = NULL;
+
+        // Update globals.first_time
+        if (have_new_first)
+        {
+            do
+            {
+                rc = sqlite3_prepare_v2 (file->db, "update globals set first_time = ?", -1, &stmt, &tail);
+                if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY)
+                {
+                    fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
+                    goto cleanup;
+                }
+            } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+            rc = sqlite3_bind_double (stmt, 1, new_first_time);
+
+            do
+            {
+                rc = sqlite3_step (stmt);
+                if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY && rc != SQLITE_ROW && rc != SQLITE_DONE)
+                {
+                    fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
+                    goto cleanup;
+                }
+            } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+            rc = sqlite3_finalize (stmt);
+            stmt = NULL;
+        }
+        else
+        {
+            // No more timesteps, set first_time to NULL
+            do
+            {
+                rc = sqlite3_prepare_v2 (file->db, "update globals set first_time = NULL, last_time = NULL", -1, &stmt, &tail);
+                if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY)
+                {
+                    fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
+                    goto cleanup;
+                }
+            } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+
+            do
+            {
+                rc = sqlite3_step (stmt);
+                if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY && rc != SQLITE_ROW && rc != SQLITE_DONE)
+                {
+                    fprintf (stderr, "Line: %d SQL error (%d): %s\n", __LINE__, rc, sqlite3_errmsg (file->db));
+                    goto cleanup;
+                }
+            } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+            rc = sqlite3_finalize (stmt);
+            stmt = NULL;
+        }
+
+        *deleted_count = 1;
+        rc = SQLITE_OK;
+
+cleanup:
+        if (stmt != NULL)
+        {
+            sqlite3_finalize (stmt);
+        }
+#ifdef STITCH_PARALLEL
+    }
+
+    MPI_Bcast (deleted_count, 1, MPI_INT64_T, 0, file->comm);
+#endif
+
+    return (rc == SQLITE_OK || rc == SQLITE_DONE) ? 0 : rc;
+}
+
+int stitch_trim_timesteps (const StitchFile * file, int64_t keep_count, int64_t * deleted_count)
+{
+    int rc = 0;
+    int64_t current_count = 0;
+    int64_t single_deleted = 0;
+
+    *deleted_count = 0;
+
+    if (keep_count <= 0)
+    {
+        // keep_count <= 0 means keep all, nothing to do
+        return 0;
+    }
+
+    // Get current timestep count
+    // Note: stitch_get_times_count returns SQLITE_DONE (101) on success
+    rc = stitch_get_times_count (file, &current_count);
+    if (rc != SQLITE_OK && rc != SQLITE_DONE)
+    {
+        fprintf(stderr, "stitch_trim_timesteps: stitch_get_times_count failed with rc=%d\n", rc);
+        return rc;
+    }
+
+    // Delete oldest timesteps until we have keep_count or fewer
+    while (current_count > keep_count)
+    {
+        rc = stitch_delete_oldest_timestep (file, &single_deleted);
+        if (rc != 0)
+        {
+            return rc;
+        }
+        if (single_deleted == 0)
+        {
+            // No more timesteps to delete
+            break;
+        }
+        (*deleted_count)++;
+        current_count--;
+    }
+
+    return 0;
+}

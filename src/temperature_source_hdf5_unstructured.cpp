@@ -853,8 +853,13 @@ double HDF5UnstructuredTemperatureSource::get_next_time_with_temperature(double 
     return current_time;
   }
 
-  // Check remaining intervals in current layer
+  // Check intervals in current layer
   for (const auto& interval : layer_thermal_intervals[current_layer]) {
+    // If we're currently within this interval, return current_time to signal activity NOW
+    if (current_time >= interval.start_time && current_time <= interval.end_time) {
+      return current_time;
+    }
+    // If this interval starts after current time, return its start time
     if (interval.start_time > current_time) {
       return interval.start_time;
     }

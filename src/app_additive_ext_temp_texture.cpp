@@ -348,22 +348,36 @@ void AppAdditiveExtTempTexture::app_update(double dt)
       double next_thermal_time = temperature_source->get_next_time_with_temperature(time, fast_forward_threshold);
 
       if (next_thermal_time > time && next_thermal_time < std::numeric_limits<double>::max()) {
-        double time_skip = next_thermal_time - time;
-        if (domain->me == 0 && time_skip > 1e-6) {  // Only report significant time skips
-          std::cout << "Fast-forward: Skipping " << time_skip << " seconds from time "
-                    << time << " to " << next_thermal_time << " (all temperatures < " << fast_forward_threshold << "K)" << std::endl;
-        }
+        // Fast-forward to whichever comes first: next thermal activity or run end time
+        // This prevents skipping past the intended end of the run while still
+        // efficiently skipping idle periods with no thermal activity
+        double target_time = std::min(next_thermal_time, stoptime);
+        double time_skip = target_time - time;
 
-        // Update simulation time
-        time = next_thermal_time;
+        if (time_skip > 1e-6) {  // Only skip if meaningful time difference
+          if (domain->me == 0) {
+            if (target_time < next_thermal_time) {
+              std::cout << "Fast-forward: Skipping " << time_skip << " seconds from time "
+                        << time << " to run end " << target_time
+                        << " (next thermal activity at " << next_thermal_time << ")" << std::endl;
+            } else {
+              std::cout << "Fast-forward: Skipping " << time_skip << " seconds from time "
+                        << time << " to " << target_time
+                        << " (all temperatures < " << fast_forward_threshold << "K)" << std::endl;
+            }
+          }
 
-        // Update temperatures at new time
-        update_temperature_from_source(time);
+          // Update simulation time
+          time = target_time;
 
-        // Activate powder after significant time skip (new layer deposition)
-        if (time_skip > 1.0) {
-          activate_powder_sites();
-          last_powder_activation_time = time;
+          // Update temperatures at new time
+          update_temperature_from_source(time);
+
+          // Activate powder after significant time skip (new layer deposition)
+          if (time_skip > 1.0) {
+            activate_powder_sites();
+            last_powder_activation_time = time;
+          }
         }
       }
     }

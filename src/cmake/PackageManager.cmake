@@ -190,11 +190,31 @@ function(install_stitch_package)
     message(STATUS "Checking for STITCH library...")
     message(STATUS "STITCH build directory: ${STITCH_BUILD_DIR}")
 
-    # Check if library exists
+    # Check if library exists and is up to date
     set(STITCH_LIB_PATH "${STITCH_BUILD_DIR}/libstitch.a")
 
+    set(STITCH_NEEDS_BUILD FALSE)
     if(NOT EXISTS "${STITCH_LIB_PATH}")
-        message(STATUS "STITCH library not found, building it now...")
+        set(STITCH_NEEDS_BUILD TRUE)
+        message(STATUS "STITCH library not found, will build it now...")
+    else()
+        # Check if any source files are newer than the library
+        file(GLOB STITCH_SOURCES "${STITCH_BUILD_DIR}/*.c" "${STITCH_BUILD_DIR}/*.h")
+        foreach(src ${STITCH_SOURCES})
+            if("${src}" IS_NEWER_THAN "${STITCH_LIB_PATH}")
+                set(STITCH_NEEDS_BUILD TRUE)
+                message(STATUS "STITCH source file changed: ${src}")
+                break()
+            endif()
+        endforeach()
+        if(STITCH_NEEDS_BUILD)
+            message(STATUS "STITCH sources are newer than library, rebuilding...")
+        else()
+            message(STATUS "STITCH library is up to date at ${STITCH_LIB_PATH}")
+        endif()
+    endif()
+
+    if(STITCH_NEEDS_BUILD)
         message(STATUS "Building STITCH library in ${STITCH_BUILD_DIR}")
 
         # Build the library using the existing Makefile
@@ -206,6 +226,13 @@ function(install_stitch_package)
             set(STITCH_CC "${CMAKE_C_COMPILER}")
             set(STITCH_CXX "${CMAKE_CXX_COMPILER}")
         endif()
+
+        # Clean before rebuild to ensure no stale objects
+        execute_process(
+            COMMAND ${CMAKE_MAKE_PROGRAM} clean
+            WORKING_DIRECTORY "${STITCH_BUILD_DIR}"
+            OUTPUT_QUIET ERROR_QUIET
+        )
 
         # Use CMAKE_MAKE_PROGRAM for portability (instead of hardcoded make)
         execute_process(
@@ -235,8 +262,6 @@ function(install_stitch_package)
         endif()
 
         message(STATUS "STITCH library built successfully")
-    else()
-        message(STATUS "STITCH library found at ${STITCH_LIB_PATH}")
     endif()
 
     # Step 2: Create symlinks if they don't exist

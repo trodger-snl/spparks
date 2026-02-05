@@ -409,36 +409,6 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   node_offsets = nodeOffsets;
   elem_offsets = elemOffsets;
 
-  // Build hyperslabs for selective reading
-  auto build_hyperslab = [](const std::vector<std::array<size_t, 2>>& slices, 
-                           const std::array<size_t, 2>& cols) -> HighFive::HyperSlab {
-    if (slices.empty()) throw std::runtime_error("No slices for hyperslab");
-    
-    HighFive::HyperSlab result(HighFive::RegularHyperSlab(
-      {slices[0][0], cols[0]}, 
-      {slices[0][1] - slices[0][0], cols[1] - cols[0]}));
-    
-    for (size_t r = 1; r < slices.size(); r++) {
-      result |= HighFive::RegularHyperSlab(
-        {slices[r][0], cols[0]}, 
-        {slices[r][1] - slices[r][0], cols[1] - cols[0]});
-    }
-    return result;
-  };
-  
-  auto build_hyperslab_1d = [](const std::vector<std::array<size_t, 2>>& slices) -> HighFive::HyperSlab {
-    if (slices.empty()) throw std::runtime_error("No slices for hyperslab");
-    
-    HighFive::HyperSlab result(HighFive::RegularHyperSlab(
-      {slices[0][0]}, {slices[0][1] - slices[0][0]}));
-    
-    for (size_t r = 1; r < slices.size(); r++) {
-      result |= HighFive::RegularHyperSlab(
-        {slices[r][0]}, {slices[r][1] - slices[r][0]});
-    }
-    return result;
-  };
-  
   // Read element connectivity
   std::vector<unsigned> elemNodeData;
   grp->getDataSet("elementToNode").select(
@@ -455,22 +425,8 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   grp->getDataSet("dataCounts").select(
     build_hyperslab_1d(nodeSlices)).read(dataCounts);
 
-  // Find maximum data count
-  unsigned maxData = 0;
-  for (auto cnt : dataCounts) {
-    maxData = std::max(maxData, cnt);
-  }
-
-  // Read time and temperature data
-  auto dataHyperSlab = build_hyperslab(nodeSlices, {0, maxData});
-
-  std::vector<double> timesData;
-  grp->getDataSet("times").select(dataHyperSlab).read(timesData);
-  times = Array2D<double>(maxData, std::move(timesData));
-
-  std::vector<double> tempData;
-  grp->getDataSet("temperatures").select(dataHyperSlab).read(tempData);
-  temperatures = Array2D<double>(maxData, std::move(tempData));
+  // Read time and temperature data (virtual — overridden by CSR subclass)
+  read_time_temperature_data(*grp, nodeSlices);
   
   // Build element bounding boxes for spatial queries
   elem_bboxes = build_elem_bounding_boxes(overlappingChunks.size(), 
@@ -490,6 +446,68 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
     fprintf(screen, "  Layer load time: %.3f s (avg: %.3f s over %d loads)\n",
             load_time, total_layer_load_time / layer_load_count, layer_load_count);
   }
+}
+
+/* ---------------------------------------------------------------------- */
+
+HighFive::HyperSlab HDF5UnstructuredTemperatureSource::build_hyperslab(
+  const std::vector<std::array<size_t, 2>>& slices,
+  const std::array<size_t, 2>& cols)
+{
+  if (slices.empty()) throw std::runtime_error("No slices for hyperslab");
+
+  HighFive::HyperSlab result(HighFive::RegularHyperSlab(
+    {slices[0][0], cols[0]},
+    {slices[0][1] - slices[0][0], cols[1] - cols[0]}));
+
+  for (size_t r = 1; r < slices.size(); r++) {
+    result |= HighFive::RegularHyperSlab(
+      {slices[r][0], cols[0]},
+      {slices[r][1] - slices[r][0], cols[1] - cols[0]});
+  }
+  return result;
+}
+
+/* ---------------------------------------------------------------------- */
+
+HighFive::HyperSlab HDF5UnstructuredTemperatureSource::build_hyperslab_1d(
+  const std::vector<std::array<size_t, 2>>& slices)
+{
+  if (slices.empty()) throw std::runtime_error("No slices for hyperslab");
+
+  HighFive::HyperSlab result(HighFive::RegularHyperSlab(
+    {slices[0][0]}, {slices[0][1] - slices[0][0]}));
+
+  for (size_t r = 1; r < slices.size(); r++) {
+    result |= HighFive::RegularHyperSlab(
+      {slices[r][0]}, {slices[r][1] - slices[r][0]});
+  }
+  return result;
+}
+
+/* ---------------------------------------------------------------------- */
+
+void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
+  HighFive::Group& grp,
+  const std::vector<std::array<size_t, 2>>& nodeSlices)
+{
+  // Base implementation: read rectangular 2D datasets and compact into CSR
+
+  // Find maximum data count for rectangular read
+  unsigned maxData = 0;
+  for (auto cnt : dataCounts) {
+    maxData = std::max(maxData, cnt);
+  }
+
+  auto dataHyperSlab = build_hyperslab(nodeSlices, {0, maxData});
+
+  std::vector<double> timesData;
+  grp.getDataSet("times").select(dataHyperSlab).read(timesData);
+  times = CompressedArray2D<double>(maxData, std::move(timesData), dataCounts);
+
+  std::vector<double> tempData;
+  grp.getDataSet("temperatures").select(dataHyperSlab).read(tempData);
+  temperatures = CompressedArray2D<double>(maxData, std::move(tempData), dataCounts);
 }
 
 /* ---------------------------------------------------------------------- */

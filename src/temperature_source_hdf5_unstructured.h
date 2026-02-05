@@ -28,6 +28,8 @@
 
 namespace HighFive {
   class File;
+  class Group;
+  class HyperSlab;
 }
 
 namespace SPPARKS_NS {
@@ -50,17 +52,17 @@ namespace SPPARKS_NS {
 template <typename T>
 class Array2D {
 public:
-  Array2D() {}
-  Array2D(unsigned ncols_, std::vector<T>&& data_) : 
+  Array2D() : ncols(0), nrows(0) {}
+  Array2D(unsigned ncols_, std::vector<T>&& data_) :
     ncols(ncols_), data(std::move(data_)) {
-    if (data.size() % ncols != 0) 
+    if (data.size() % ncols != 0)
       throw std::runtime_error("Data size must be multiple of number of columns");
     nrows = data.size() / ncols;
   }
 
   const T& operator()(unsigned i, unsigned j) const { return data[i*ncols + j]; }
   T& operator()(unsigned i, unsigned j) { return data[i*ncols + j]; }
-  
+
   auto row_iterator(unsigned i) { return data.begin() + i*ncols; }
   const auto row_iterator(unsigned i) const { return data.begin() + i*ncols; }
 
@@ -68,6 +70,54 @@ private:
   unsigned ncols;
   unsigned nrows;
   std::vector<T> data;
+};
+
+// CSR-style compressed 2D array — stores ragged rows without padding.
+// Each row i has (offsets[i+1] - offsets[i]) elements.
+template <typename T>
+class CompressedArray2D {
+public:
+  CompressedArray2D() {}
+
+  // Construct from rectangular Array2D data by compacting rows in-place.
+  // ncols_rect: number of columns in the source rectangular layout
+  // rect_data:  row-major rectangular data (nrows * ncols_rect elements)
+  // row_lengths: actual element count per row (dataCounts)
+  CompressedArray2D(unsigned ncols_rect,
+                    std::vector<T>&& rect_data,
+                    const std::vector<unsigned>& row_lengths)
+  {
+    unsigned nrows = row_lengths.size();
+    offsets.resize(nrows + 1);
+    offsets[0] = 0;
+    for (unsigned i = 0; i < nrows; i++)
+      offsets[i + 1] = offsets[i] + row_lengths[i];
+
+    size_t total = offsets[nrows];
+    data.resize(total);
+    for (unsigned i = 0; i < nrows; i++) {
+      std::copy(rect_data.begin() + i * ncols_rect,
+                rect_data.begin() + i * ncols_rect + row_lengths[i],
+                data.begin() + offsets[i]);
+    }
+  }
+
+  // Construct directly from flat CSR data (zero-copy move).
+  CompressedArray2D(std::vector<T>&& flat_data,
+                    std::vector<size_t>&& row_offsets)
+    : data(std::move(flat_data)), offsets(std::move(row_offsets)) {}
+
+  const T& operator()(unsigned i, unsigned j) const { return data[offsets[i] + j]; }
+  T& operator()(unsigned i, unsigned j) { return data[offsets[i] + j]; }
+
+  auto row_iterator(unsigned i) { return data.begin() + offsets[i]; }
+  const auto row_iterator(unsigned i) const { return data.begin() + offsets[i]; }
+
+  size_t total_elements() const { return data.size(); }
+
+private:
+  std::vector<T> data;
+  std::vector<size_t> offsets;
 };
 
 class HDF5UnstructuredTemperatureSource : public TemperatureSource {
@@ -117,6 +167,35 @@ public:
     ElementCache() : nodeIndices{0,0,0,0}, weights{0.0,0.0,0.0}, valid(false) {}
   };
 
+protected:
+  // Data storage accessible to subclasses for CSR override
+  std::vector<unsigned> dataCounts;
+  CompressedArray2D<double> times;
+  CompressedArray2D<double> temperatures;
+
+  // HDF5 file handle
+  std::shared_ptr<HighFive::File> file;
+
+  // Parallel HDF5 state
+#ifdef H5_HAVE_PARALLEL
+  bool use_parallel_hdf5;
+#endif
+
+  // Virtual hook: read time/temperature arrays for the loaded node slices.
+  // Base implementation reads rectangular 2D datasets and compacts via CompressedArray2D.
+  // CSR subclass overrides to read flat 1D data + nodeOffsets directly.
+  virtual void read_time_temperature_data(
+      HighFive::Group& grp,
+      const std::vector<std::array<size_t, 2>>& nodeSlices);
+
+  // Hyperslab construction helpers (promoted from lambdas for subclass access)
+  static HighFive::HyperSlab build_hyperslab(
+      const std::vector<std::array<size_t, 2>>& slices,
+      const std::array<size_t, 2>& cols);
+
+  static HighFive::HyperSlab build_hyperslab_1d(
+      const std::vector<std::array<size_t, 2>>& slices);
+
 private:
   // File and coordinate parameters
   std::string filename;
@@ -125,22 +204,15 @@ private:
   double default_temp;    // Default/ambient temperature (K)
   int bounds_check_mode;  // 0 = exact, 1 = subvolume
 
-  
-  // HDF5 file handle
-  std::shared_ptr<HighFive::File> file;
-  
   // Layer management
   std::vector<double> layerTimes;
   double current_time;
   unsigned active_layer;
-  
-  // Data storage for current layer
-  std::vector<unsigned> dataCounts;
-  Array2D<double> times;
-  Array2D<double> temperatures;
+
+  // Data storage for current layer (non-CSR members stay private)
   Array2D<unsigned> elemNode;
   Array2D<double> nodeCoords;
-  
+
   // Chunk data for spatial queries
   std::vector<std::vector<double>> chunk_bboxes;
   std::vector<unsigned> selected_chunks;
@@ -148,32 +220,27 @@ private:
   std::vector<unsigned> elem_offsets;
   std::vector<std::vector<double>> elem_bboxes;
 
-  // Parallel HDF5 state
-#ifdef H5_HAVE_PARALLEL
-  bool use_parallel_hdf5;
-#endif
-
   // Timing statistics for performance monitoring
   double total_layer_load_time;
   int layer_load_count;
 
   // Helper methods from reference implementation
   void load_layer(unsigned layerIdx);
-  
+
   // Anonymous namespace functions (now as private methods)
   std::array<double, 3> get_parametric_coordinates_of_point(
-    const std::vector<std::vector<double>>& tet_coords, 
+    const std::vector<std::vector<double>>& tet_coords,
     const std::array<double, 3>& pt) const;
-  
+
   unsigned get_active_layer(double t) const;
-  
-  bool do_boxes_overlap(const std::vector<double>& b1, 
+
+  bool do_boxes_overlap(const std::vector<double>& b1,
                        const std::vector<double>& b2) const;
-  
-  bool point_in_bbox(const std::array<double, 3>& pt, 
+
+  bool point_in_bbox(const std::array<double, 3>& pt,
                     const std::vector<double>& bbox) const;
-  
-  std::pair<std::array<unsigned, 4>, std::array<double, 3>> 
+
+  std::pair<std::array<unsigned, 4>, std::array<double, 3>>
   find_element_point_is_in(const std::vector<unsigned>& selectedChunks,
                           const std::vector<std::vector<double>>& chunkBboxes,
                           const std::vector<unsigned>& nodeOffsets,
@@ -182,21 +249,21 @@ private:
                           const Array2D<double>& nodeCoords,
                           const std::vector<std::vector<double>>& elemBboxes,
                           const std::array<double, 3>& pt) const;
-  
+
   std::vector<std::vector<double>> build_elem_bounding_boxes(
     unsigned nChunks,
     const std::vector<unsigned>& nodeOffsets,
     const std::vector<unsigned>& elemOffsets,
     const Array2D<unsigned>& elemNode,
     const Array2D<double>& nodeCoords) const;
-  
+
   // Thermal interval management for efficient time queries
   std::vector<std::vector<ThermalInterval>> layer_thermal_intervals;
-  
+
   void compute_thermal_intervals_for_layer(unsigned layerIdx, double threshold_temp);
   std::vector<ThermalInterval> merge_overlapping_intervals(const std::vector<ThermalInterval>& intervals) const;
   bool is_point_in_spparks_domain(double x, double y, double z) const;
-  
+
   // Element cache management
   mutable std::vector<ElementCache> site_element_cache;
   mutable bool cache_valid;

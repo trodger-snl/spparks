@@ -13,6 +13,7 @@ function(configure_conditional_sources)
                 temperature_source.cpp
                 temperature_source_rosenthal.cpp
                 temperature_source_hdf5_unstructured.cpp
+                temperature_source_hdf5_csr.cpp
             )
             message(STATUS "Added HDF5+MPI temperature source files")
         else()

@@ -14,6 +14,7 @@
 #include "temperature_source.h"
 #include "temperature_source_rosenthal.h"
 #include "temperature_source_hdf5_unstructured.h"
+#include "temperature_source_hdf5_csr.h"
 #include "domain.h"
 #include "lattice.h"
 #include "error.h"
@@ -77,6 +78,8 @@ std::unique_ptr<TemperatureSource> SPPARKS_NS::create_temperature_source(
     return std::make_unique<RosenthalTemperatureSource>(spk);
   } else if (type == "hdf5_unstructured") {
     return std::make_unique<HDF5UnstructuredTemperatureSource>(spk);
+  } else if (type == "hdf5_csr") {
+    return std::make_unique<HDF5CSRTemperatureSource>(spk);
   } else if (type == "finitediff") {
     // Will be implemented when FiniteDifferenceTemperatureSource is extracted
     spk->error->all(FLERR,"Finite difference temperature source not yet implemented");

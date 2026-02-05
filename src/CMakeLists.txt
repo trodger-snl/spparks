@@ -340,8 +340,9 @@ if(SPPARKS_MACHINE)
     apply_machine_config("${SPPARKS_MACHINE}")
 endif()
 
-# Command line options should override machine config
-# (This happens automatically since CMake cache variables take precedence)
+# Note: Machine configs use set(... PARENT_SCOPE) which creates normal variables
+# that shadow cache variables. auto_detect_machine() accounts for explicit flags
+# like --mpi to select the correct machine config.
 
 # Configure MPI after machine configuration
 # Note: This ordering is intentional - machine configs can set SPPARKS_ENABLE_MPI,

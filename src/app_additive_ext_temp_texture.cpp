@@ -56,6 +56,8 @@ using namespace MathConst;
 // (accessible from both app_update and update_temperature_from_source)
 static double g_t_temp_prepare = 0.0;   // Time in prepare_for_timestep()
 static double g_t_temp_site_loop = 0.0; // Time in site temperature loop
+static double g_t_cache_build = 0.0;    // One-time cache build time (per layer)
+static bool g_cache_was_built = false;  // Flag to detect cache build in current call
 
 /* ---------------------------------------------------------------------- */
 
@@ -471,13 +473,18 @@ void AppAdditiveExtTempTexture::app_update(double dt)
   // Print timing summary every 100 steps (on rank 0 only)
   if (step_count % 100 == 0 && domain->me == 0) {
     double total_time = t_temp_update + t_fast_forward + t_melting + t_mushy + t_smoothing + t_comm;
-    double t_temp_other = t_temp_update - g_t_temp_prepare - g_t_temp_site_loop;
+    double t_temp_other = t_temp_update - g_t_temp_prepare - g_t_temp_site_loop - g_t_cache_build;
+    double steady_state_time = total_time - g_t_cache_build;
 
     fprintf(screen, "\n=== CPU Timing Summary (after %d steps, %.4f total sec) ===\n",
             step_count, total_time);
     fprintf(screen, "  Temperature update:   %8.3f s (%5.1f%%)\n",
             t_temp_update, 100.0*t_temp_update/total_time);
-    fprintf(screen, "    - Prepare/cache:    %8.3f s (%5.1f%%)  [Nodal temp precompute]\n",
+    if (g_t_cache_build > 0.001) {
+      fprintf(screen, "    - Cache build:      %8.3f s (%5.1f%%)  [One-time per layer]\n",
+              g_t_cache_build, 100.0*g_t_cache_build/total_time);
+    }
+    fprintf(screen, "    - Prepare:          %8.3f s (%5.1f%%)  [Nodal temp precompute]\n",
             g_t_temp_prepare, 100.0*g_t_temp_prepare/total_time);
     fprintf(screen, "    - Site loop:        %8.3f s (%5.1f%%)  [Per-site interpolation]\n",
             g_t_temp_site_loop, 100.0*g_t_temp_site_loop/total_time);
@@ -496,7 +503,8 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     fprintf(screen, "  Communication:        %8.3f s (%5.1f%%)  [MPI comm]\n",
             t_comm, 100.0*t_comm/total_time);
     fprintf(screen, "  --------------------------------------------------------\n");
-    fprintf(screen, "  Average time/step:    %8.4f s\n", total_time / step_count);
+    fprintf(screen, "  Average time/step:    %8.4f s (overall)\n", total_time / step_count);
+    fprintf(screen, "  Steady-state avg:     %8.4f s (excl. cache build)\n", steady_state_time / step_count);
     fprintf(screen, "=========================================================\n\n");
   }
 
@@ -2103,7 +2111,16 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
       T[i] = hdf5_source->get_temperature_at_site_fast(i);
     }
     double t2 = MPI_Wtime();
-    g_t_temp_prepare += (t1 - t0);
+
+    double prepare_time = t1 - t0;
+    // Detect cache build: if prepare takes > 1 second, it's building cache
+    if (prepare_time > 1.0) {
+      g_t_cache_build += prepare_time;
+      g_cache_was_built = true;
+    } else {
+      g_t_temp_prepare += prepare_time;
+      g_cache_was_built = false;
+    }
     g_t_temp_site_loop += (t2 - t1);
   } else {
     // Fallback for non-HDF5 sources

@@ -2103,25 +2103,14 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
 
   // Update temperature array for all local sites
   if (hdf5_source) {
-    // Fast path: prepare once, then use inline fast lookup for all sites
+    // Lazy path: use per-site lookup with element cache (no nodal precomputation)
+    // This avoids the overhead of precomputing all active node temperatures
     double t0 = MPI_Wtime();
-    hdf5_source->prepare_for_timestep(simulation_time);
-    double t1 = MPI_Wtime();
     for (int i = 0; i < nlocal; i++) {
-      T[i] = hdf5_source->get_temperature_at_site_fast(i);
+      T[i] = hdf5_source->get_temperature_at_site(i, simulation_time);
     }
-    double t2 = MPI_Wtime();
-
-    double prepare_time = t1 - t0;
-    // Detect cache build: if prepare takes > 1 second, it's building cache
-    if (prepare_time > 1.0) {
-      g_t_cache_build += prepare_time;
-      g_cache_was_built = true;
-    } else {
-      g_t_temp_prepare += prepare_time;
-      g_cache_was_built = false;
-    }
-    g_t_temp_site_loop += (t2 - t1);
+    double t1 = MPI_Wtime();
+    g_t_temp_site_loop += (t1 - t0);
   } else {
     // Fallback for non-HDF5 sources
     for (int i = 0; i < nlocal; i++) {

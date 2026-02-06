@@ -2066,12 +2066,12 @@ void AppAdditiveExtTempTexture::setup_scan_path_cmd(int narg, char **arg)
 void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation_time)
 {
   timer->stamp();
-  
+
   if (!use_temperature_source || !temperature_source) {
     timer->stamp(TIME_APP);
     return; // No temperature source configured
   }
-  
+
   // Update temperature source (may load new data)
   temperature_source->update_temperatures(dt, simulation_time);
 
@@ -2079,13 +2079,17 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
   // for subclasses (CSR) due to RTTI string comparisons on every call.
   HDF5UnstructuredTemperatureSource* hdf5_source =
     dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-  double source_dx = hdf5_source ? hdf5_source->get_dx() : 0.0;
 
   // Update temperature array for all local sites
-  for (int i = 0; i < nlocal; i++) {
-    if (hdf5_source) {
-      T[i] = temperature_source->get_temperature_at_site(i, simulation_time);
-    } else {
+  if (hdf5_source) {
+    // Fast path: prepare once, then use inline fast lookup for all sites
+    hdf5_source->prepare_for_timestep(simulation_time);
+    for (int i = 0; i < nlocal; i++) {
+      T[i] = hdf5_source->get_temperature_at_site_fast(i);
+    }
+  } else {
+    // Fallback for non-HDF5 sources
+    for (int i = 0; i < nlocal; i++) {
       double x_physical = xyz[i][0];
       double y_physical = xyz[i][1];
       double z_physical = xyz[i][2];

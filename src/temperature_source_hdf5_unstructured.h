@@ -157,7 +157,20 @@ public:
 
   // Site-based temperature access optimized for lattice
   virtual double get_temperature_at_site(int site_index, double time) override;
-  
+
+  // High-performance batch temperature access:
+  // 1. Call prepare_for_timestep() once at start of timestep
+  // 2. Call get_temperature_at_site_fast() for each site (no redundant checks)
+  void prepare_for_timestep(double time);
+  inline double get_temperature_at_site_fast(int site_index) const {
+    const ElementCache& cache = site_element_cache[site_index];
+    if (!cache.valid) return default_temp;
+    return cached_nodal_temps[cache.nodeIndices[0]] +
+           cache.weights[0] * (cached_nodal_temps[cache.nodeIndices[1]] - cached_nodal_temps[cache.nodeIndices[0]]) +
+           cache.weights[1] * (cached_nodal_temps[cache.nodeIndices[2]] - cached_nodal_temps[cache.nodeIndices[0]]) +
+           cache.weights[2] * (cached_nodal_temps[cache.nodeIndices[3]] - cached_nodal_temps[cache.nodeIndices[0]]);
+  }
+
   // Element cache for performance optimization
   struct ElementCache {
     std::array<unsigned, 4> nodeIndices;

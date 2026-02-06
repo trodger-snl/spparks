@@ -882,12 +882,12 @@ bool HDF5UnstructuredTemperatureSource::all_temperatures_below_threshold(double 
 
 /* ---------------------------------------------------------------------- */
 
-double HDF5UnstructuredTemperatureSource::get_temperature_at_site(int site_index, double time)
+void HDF5UnstructuredTemperatureSource::prepare_for_timestep(double time)
 {
   if (!source_initialized) {
     error->all(FLERR, "Temperature source not initialized");
   }
-  
+
   // Check if we need to load new layer data
   constexpr double tol = 5.0 * std::numeric_limits<double>::epsilon();
   if (std::fabs(time - current_time) / (std::fabs(time) + tol) > tol) {
@@ -895,38 +895,30 @@ double HDF5UnstructuredTemperatureSource::get_temperature_at_site(int site_index
     if (currentLayer != active_layer) {
       load_layer(currentLayer);
       active_layer = currentLayer;
-      cache_valid = false;  // Invalidate cache when layer changes
-      nodal_cache_valid = false;  // Also invalidate nodal temperature cache
+      cache_valid = false;
+      nodal_cache_valid = false;
     }
     current_time = time;
   }
-  
+
   // Build element cache if needed
   if (!cache_valid) {
     build_site_element_cache();
   }
 
-  // Precompute nodal temperatures for this timestep (36x reduction in time searches)
+  // Precompute nodal temperatures for this timestep
   precompute_nodal_temperatures(time);
+}
 
-  // Get cached element for this site
-  const ElementCache& cache = get_cached_element(site_index);
+/* ---------------------------------------------------------------------- */
 
-  if (!cache.valid) {
-    return default_temp;  // Site not in any element
-  }
+double HDF5UnstructuredTemperatureSource::get_temperature_at_site(int site_index, double time)
+{
+  // Ensure caches are ready (for standalone calls)
+  prepare_for_timestep(time);
 
-  // Look up precomputed nodal temperatures (O(1) instead of time search)
-  const double T0 = cached_nodal_temps[cache.nodeIndices[0]];
-  const double T1 = cached_nodal_temps[cache.nodeIndices[1]];
-  const double T2 = cached_nodal_temps[cache.nodeIndices[2]];
-  const double T3 = cached_nodal_temps[cache.nodeIndices[3]];
-
-  // Tetrahedral interpolation using cached barycentric coordinates
-  return T0 +
-         cache.weights[0] * (T1 - T0) +
-         cache.weights[1] * (T2 - T0) +
-         cache.weights[2] * (T3 - T0);
+  // Use fast path
+  return get_temperature_at_site_fast(site_index);
 }
 
 /* ---------------------------------------------------------------------- */

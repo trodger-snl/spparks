@@ -22,8 +22,27 @@
 #include <stdexcept>
 #include <cmath>
 #include <set>
+#include <fstream>
+#include <sstream>
 
 using namespace SPPARKS_NS;
+
+// Helper function to get current memory usage (Linux only)
+static size_t get_memory_usage_kb() {
+#ifdef __linux__
+  std::ifstream status("/proc/self/status");
+  std::string line;
+  while (std::getline(status, line)) {
+    if (line.compare(0, 6, "VmRSS:") == 0) {
+      std::istringstream iss(line.substr(6));
+      size_t kb;
+      iss >> kb;
+      return kb;
+    }
+  }
+#endif
+  return 0;
+}
 
 /* ---------------------------------------------------------------------- */
 
@@ -300,10 +319,12 @@ void HDF5UnstructuredTemperatureSource::print_source_info() const
 void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
 {
   auto load_start = std::chrono::high_resolution_clock::now();
+  size_t mem_start = get_memory_usage_kb();
 
   if (universe->me == 0) {
     fprintf(screen, "Loading layer %u at time %.6e s\n", layerIdx,
             (layerIdx < layerTimes.size()) ? layerTimes[layerIdx] : -1.0);
+    fprintf(screen, "  [MEM] Start: %zu MB (rank 0)\n", mem_start / 1024);
   }
 
   // Try to open the layer group with error handling
@@ -422,26 +443,59 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
     build_hyperslab(elemSlices, {0, NODES_PER_ELEM})).read(elemNodeData);
   elemNode = Array2D<unsigned>(NODES_PER_ELEM, std::move(elemNodeData));
 
+  if (universe->me == 0) {
+    fprintf(screen, "  [MEM] After elemNode (%u elems): %zu MB\n",
+            elemOffsets.back(), get_memory_usage_kb() / 1024);
+  }
+
   // Read node coordinates
   std::vector<double> nodeCoordsData;
   grp->getDataSet("nodeCoords").select(
     build_hyperslab(nodeSlices, {0, DIM})).read(nodeCoordsData);
   nodeCoords = Array2D<double>(DIM, std::move(nodeCoordsData));
 
+  if (universe->me == 0) {
+    fprintf(screen, "  [MEM] After nodeCoords (%u nodes): %zu MB\n",
+            nodeOffsets.back(), get_memory_usage_kb() / 1024);
+  }
+
   // Read data counts
   grp->getDataSet("dataCounts").select(
     build_hyperslab_1d(nodeSlices)).read(dataCounts);
 
+  if (universe->me == 0) {
+    fprintf(screen, "  [MEM] After dataCounts: %zu MB\n", get_memory_usage_kb() / 1024);
+  }
+
   // Read time and temperature data (virtual — overridden by CSR subclass)
   read_time_temperature_data(*grp, nodeSlices);
+
+  if (universe->me == 0) {
+    size_t times_mem = times.total_elements() * sizeof(double) / 1024 / 1024;
+    size_t temps_mem = temperatures.total_elements() * sizeof(double) / 1024 / 1024;
+    fprintf(screen, "  [MEM] After CSR data (times: %zu MB, temps: %zu MB): %zu MB total\n",
+            times_mem, temps_mem, get_memory_usage_kb() / 1024);
+  }
 
   // Build element bounding boxes for spatial queries
   elem_bboxes = build_elem_bounding_boxes(overlappingChunks.size(),
                                          nodeOffsets, elemOffsets,
                                          elemNode, nodeCoords);
 
+  if (universe->me == 0) {
+    size_t bbox_mem = elem_bboxes.size() * sizeof(std::array<double, 6>) / 1024 / 1024;
+    fprintf(screen, "  [MEM] After elem_bboxes (%zu elems, %zu MB array): %zu MB total\n",
+            elem_bboxes.size(), bbox_mem, get_memory_usage_kb() / 1024);
+  }
+
   // Build spatial acceleration grid (cell size ~20x lattice spacing, or ~100 microns)
   build_spatial_grid(dx * 20.0);
+
+  if (universe->me == 0) {
+    size_t grid_cells = spatial_grid.dims[0] * spatial_grid.dims[1] * spatial_grid.dims[2];
+    fprintf(screen, "  [MEM] After spatial_grid (%zu cells): %zu MB total\n",
+            grid_cells, get_memory_usage_kb() / 1024);
+  }
 
   // Compute thermal intervals for efficient time queries
   compute_thermal_intervals_for_layer(layerIdx, threshold_temp);
@@ -453,6 +507,9 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   layer_load_count++;
 
   if (universe->me == 0) {
+    size_t mem_end = get_memory_usage_kb();
+    fprintf(screen, "  [MEM] Final: %zu MB (delta: %+zd MB)\n",
+            mem_end / 1024, (long)(mem_end - mem_start) / 1024);
     fprintf(screen, "  Layer load time: %.3f s (avg: %.3f s over %d loads)\n",
             load_time, total_layer_load_time / layer_load_count, layer_load_count);
   }
@@ -938,9 +995,16 @@ double HDF5UnstructuredTemperatureSource::get_temperature_at_site(int site_index
 void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
 {
   auto start_time = std::chrono::high_resolution_clock::now();
+  size_t mem_before = get_memory_usage_kb();
 
   // Get total number of sites from app
   int nlocal = app->nlocal;
+
+  if (universe->me == 0) {
+    size_t cache_size_mb = nlocal * sizeof(ElementCache) / 1024 / 1024;
+    fprintf(screen, "  [MEM] Building site cache for %d sites (%zu MB), current: %zu MB\n",
+            nlocal, cache_size_mb, mem_before / 1024);
+  }
 
   // Resize cache to match number of local sites
   site_element_cache.resize(nlocal);
@@ -972,7 +1036,10 @@ void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
   double cache_build_time = std::chrono::duration<double>(end_time - start_time).count();
 
   if (universe->me == 0) {
+    size_t mem_after = get_memory_usage_kb();
     fprintf(screen, "  Built element cache for %d sites in %.3f s\n", nlocal, cache_build_time);
+    fprintf(screen, "  [MEM] After site cache: %zu MB (delta: %+zd MB)\n",
+            mem_after / 1024, (long)(mem_after - mem_before) / 1024);
   }
 }
 

@@ -227,11 +227,11 @@ private:
   Array2D<double> nodeCoords;
 
   // Chunk data for spatial queries
-  std::vector<std::vector<double>> chunk_bboxes;
+  std::vector<std::array<double, 6>> chunk_bboxes;  // [xmin,ymin,zmin,xmax,ymax,zmax]
   std::vector<unsigned> selected_chunks;
   std::vector<unsigned> node_offsets;
   std::vector<unsigned> elem_offsets;
-  std::vector<std::vector<double>> elem_bboxes;
+  std::vector<std::array<double, 6>> elem_bboxes;  // [xmin,ymin,zmin,xmax,ymax,zmax]
 
   // Spatial acceleration grid for fast element lookup
   struct SpatialGrid {
@@ -278,19 +278,19 @@ private:
                        const std::vector<double>& b2) const;
 
   bool point_in_bbox(const std::array<double, 3>& pt,
-                    const std::vector<double>& bbox) const;
+                    const std::array<double, 6>& bbox) const;
 
   std::pair<std::array<unsigned, 4>, std::array<double, 3>>
   find_element_point_is_in(const std::vector<unsigned>& selectedChunks,
-                          const std::vector<std::vector<double>>& chunkBboxes,
+                          const std::vector<std::array<double, 6>>& chunkBboxes,
                           const std::vector<unsigned>& nodeOffsets,
                           const std::vector<unsigned>& elemOffsets,
                           const Array2D<unsigned>& elemNode,
                           const Array2D<double>& nodeCoords,
-                          const std::vector<std::vector<double>>& elemBboxes,
+                          const std::vector<std::array<double, 6>>& elemBboxes,
                           const std::array<double, 3>& pt) const;
 
-  std::vector<std::vector<double>> build_elem_bounding_boxes(
+  std::vector<std::array<double, 6>> build_elem_bounding_boxes(
     unsigned nChunks,
     const std::vector<unsigned>& nodeOffsets,
     const std::vector<unsigned>& elemOffsets,

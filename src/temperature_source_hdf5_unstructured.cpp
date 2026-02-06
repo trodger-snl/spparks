@@ -394,7 +394,12 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   }
   
   // Store chunk info for later use in point queries
-  chunk_bboxes = bboxes;
+  // Convert from HDF5 vector<vector<double>> to efficient array storage
+  chunk_bboxes.clear();
+  chunk_bboxes.reserve(bboxes.size());
+  for (const auto& bb : bboxes) {
+    chunk_bboxes.push_back({bb[0], bb[1], bb[2], bb[3], bb[4], bb[5]});
+  }
   selected_chunks = overlappingChunks;
   
   if (universe->me == 0 && overlappingChunks.size() > 0) {
@@ -603,11 +608,11 @@ bool HDF5UnstructuredTemperatureSource::do_boxes_overlap(
 /* ---------------------------------------------------------------------- */
 
 bool HDF5UnstructuredTemperatureSource::point_in_bbox(
-  const std::array<double, 3>& pt, 
-  const std::vector<double>& bbox) const
+  const std::array<double, 3>& pt,
+  const std::array<double, 6>& bbox) const
 {
-  return pt[0] >= bbox[0] && pt[0] <= bbox[3] && 
-         pt[1] >= bbox[1] && pt[1] <= bbox[4] && 
+  return pt[0] >= bbox[0] && pt[0] <= bbox[3] &&
+         pt[1] >= bbox[1] && pt[1] <= bbox[4] &&
          pt[2] >= bbox[2] && pt[2] <= bbox[5];
 }
 
@@ -616,12 +621,12 @@ bool HDF5UnstructuredTemperatureSource::point_in_bbox(
 std::pair<std::array<unsigned, 4>, std::array<double, 3>>
 HDF5UnstructuredTemperatureSource::find_element_point_is_in(
   const std::vector<unsigned>& selectedChunks,
-  const std::vector<std::vector<double>>& chunkBboxes,
+  const std::vector<std::array<double, 6>>& chunkBboxes,
   const std::vector<unsigned>& nodeOffsets,
   const std::vector<unsigned>& elemOffsets,
   const Array2D<unsigned>& elemNode,
   const Array2D<double>& nodeCoords,
-  const std::vector<std::vector<double>>& elemBboxes,
+  const std::vector<std::array<double, 6>>& elemBboxes,
   const std::array<double, 3>& pt) const
 {
   std::array<unsigned, 4> nodeIds;
@@ -729,7 +734,7 @@ HDF5UnstructuredTemperatureSource::find_element_point_is_in(
 
 /* ---------------------------------------------------------------------- */
 
-std::vector<std::vector<double>> HDF5UnstructuredTemperatureSource::build_elem_bounding_boxes(
+std::vector<std::array<double, 6>> HDF5UnstructuredTemperatureSource::build_elem_bounding_boxes(
   unsigned nChunks,
   const std::vector<unsigned>& nodeOffsets,
   const std::vector<unsigned>& elemOffsets,
@@ -738,14 +743,21 @@ std::vector<std::vector<double>> HDF5UnstructuredTemperatureSource::build_elem_b
 {
   constexpr double maxVal = std::numeric_limits<double>::max();
   constexpr double minVal = std::numeric_limits<double>::lowest();
-  
-  std::vector<std::vector<double>> result;
-  
+
+  // Pre-calculate total element count and reserve to avoid reallocations
+  size_t totalElems = 0;
+  for (unsigned c = 0; c < nChunks; c++) {
+    totalElems += elemOffsets[c+1] - elemOffsets[c];
+  }
+
+  std::vector<std::array<double, 6>> result;
+  result.reserve(totalElems);
+
   for (unsigned c = 0; c < nChunks; c++) {
     for (unsigned e = elemOffsets[c]; e < elemOffsets[c+1]; e++) {
       std::array<double, 3> bmin{maxVal, maxVal, maxVal};
       std::array<double, 3> bmax{minVal, minVal, minVal};
-      
+
       for (unsigned n = 0; n < NODES_PER_ELEM; n++) {
         for (unsigned d = 0; d < DIM; d++) {
           const double coordVal = nodeCoords(elemNode(e, n) + nodeOffsets[c], d);
@@ -753,11 +765,11 @@ std::vector<std::vector<double>> HDF5UnstructuredTemperatureSource::build_elem_b
           bmax[d] = std::fmax(bmax[d], coordVal);
         }
       }
-      
+
       result.push_back({bmin[0], bmin[1], bmin[2], bmax[0], bmax[1], bmax[2]});
     }
   }
-  
+
   return result;
 }
 

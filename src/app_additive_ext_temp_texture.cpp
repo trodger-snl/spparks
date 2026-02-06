@@ -2080,12 +2080,29 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
   HDF5UnstructuredTemperatureSource* hdf5_source =
     dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
 
+  // Detailed timing breakdown
+  static int temp_call_count = 0;
+  static double t_prepare = 0.0, t_site_loop = 0.0;
+  temp_call_count++;
+
   // Update temperature array for all local sites
   if (hdf5_source) {
     // Fast path: prepare once, then use inline fast lookup for all sites
+    double t0 = MPI_Wtime();
     hdf5_source->prepare_for_timestep(simulation_time);
+    double t1 = MPI_Wtime();
     for (int i = 0; i < nlocal; i++) {
       T[i] = hdf5_source->get_temperature_at_site_fast(i);
+    }
+    double t2 = MPI_Wtime();
+    t_prepare += (t1 - t0);
+    t_site_loop += (t2 - t1);
+
+    // Print breakdown every 100 calls
+    if (temp_call_count % 100 == 0 && domain->me == 0) {
+      fprintf(screen, "  [TIMING] After %d calls: prepare=%.3f s (%.4f ms/call), site_loop=%.3f s (%.4f ms/call)\n",
+              temp_call_count, t_prepare, 1000.0*t_prepare/temp_call_count,
+              t_site_loop, 1000.0*t_site_loop/temp_call_count);
     }
   } else {
     // Fallback for non-HDF5 sources

@@ -1106,9 +1106,18 @@ void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double tim
     return;
   }
 
+  // Performance diagnostics
+  static int precompute_call_count = 0;
+  static double t_total = 0.0;
+  static size_t total_nodes_processed = 0, total_nodes_interpolated = 0;
+  precompute_call_count++;
+  auto t_start = std::chrono::high_resolution_clock::now();
+
   const size_t num_nodes = dataCounts.size();
   cached_nodal_temps.resize(num_nodes);
   constexpr unsigned LINEAR_SEARCH_THRESHOLD = 32;
+
+  size_t nodes_interpolated = 0;
 
   // Precompute interpolated temperature at each loaded node
   for (size_t nodeIdx = 0; nodeIdx < num_nodes; nodeIdx++) {
@@ -1121,6 +1130,8 @@ void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double tim
       cached_nodal_temps[nodeIdx] = default_temp;
       continue;
     }
+
+    nodes_interpolated++;
 
     // Find time index - use linear search for small arrays, binary for large
     unsigned idx;
@@ -1140,6 +1151,22 @@ void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double tim
                                   (tempIter[idx] - tempIter[idx-1]) /
                                   (timeIter[idx] - timeIter[idx-1]) *
                                   (time - timeIter[idx-1]);
+  }
+
+  auto t_end = std::chrono::high_resolution_clock::now();
+  double elapsed = std::chrono::duration<double>(t_end - t_start).count();
+  t_total += elapsed;
+  total_nodes_processed += num_nodes;
+  total_nodes_interpolated += nodes_interpolated;
+
+  // Print diagnostics every 100 calls
+  if (precompute_call_count % 100 == 0 && universe->me == 0) {
+    fprintf(screen, "  [PRECOMPUTE] After %d calls: total=%.3f s (%.3f ms/call), "
+            "nodes: %zu processed, %zu interpolated (%.1f%%)\n",
+            precompute_call_count, t_total, 1000.0*t_total/precompute_call_count,
+            total_nodes_processed/precompute_call_count,
+            total_nodes_interpolated/precompute_call_count,
+            100.0*total_nodes_interpolated/total_nodes_processed);
   }
 
   cached_nodal_time = time;

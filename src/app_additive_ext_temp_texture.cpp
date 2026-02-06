@@ -52,6 +52,10 @@
 using namespace SPPARKS_NS;
 using namespace MathConst;
 
+// File-scope timing variables for temperature update breakdown
+// (accessible from both app_update and update_temperature_from_source)
+static double g_t_temp_prepare = 0.0;   // Time in prepare_for_timestep()
+static double g_t_temp_site_loop = 0.0; // Time in site temperature loop
 
 /* ---------------------------------------------------------------------- */
 
@@ -467,11 +471,20 @@ void AppAdditiveExtTempTexture::app_update(double dt)
   // Print timing summary every 100 steps (on rank 0 only)
   if (step_count % 100 == 0 && domain->me == 0) {
     double total_time = t_temp_update + t_fast_forward + t_melting + t_mushy + t_smoothing + t_comm;
+    double t_temp_other = t_temp_update - g_t_temp_prepare - g_t_temp_site_loop;
 
     fprintf(screen, "\n=== CPU Timing Summary (after %d steps, %.4f total sec) ===\n",
             step_count, total_time);
-    fprintf(screen, "  Temperature update:   %8.3f s (%5.1f%%)  [HDF5 loading]\n",
+    fprintf(screen, "  Temperature update:   %8.3f s (%5.1f%%)\n",
             t_temp_update, 100.0*t_temp_update/total_time);
+    fprintf(screen, "    - Prepare/cache:    %8.3f s (%5.1f%%)  [Nodal temp precompute]\n",
+            g_t_temp_prepare, 100.0*g_t_temp_prepare/total_time);
+    fprintf(screen, "    - Site loop:        %8.3f s (%5.1f%%)  [Per-site interpolation]\n",
+            g_t_temp_site_loop, 100.0*g_t_temp_site_loop/total_time);
+    if (t_temp_other > 0.001) {
+      fprintf(screen, "    - Other:            %8.3f s (%5.1f%%)  [Layer load, etc.]\n",
+              t_temp_other, 100.0*t_temp_other/total_time);
+    }
     fprintf(screen, "  Fast-forward logic:   %8.3f s (%5.1f%%)  [Time skip checks]\n",
             t_fast_forward, 100.0*t_fast_forward/total_time);
     fprintf(screen, "  Melting:              %8.3f s (%5.1f%%)  [T >= Tl transitions]\n",
@@ -2080,11 +2093,6 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
   HDF5UnstructuredTemperatureSource* hdf5_source =
     dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
 
-  // Detailed timing breakdown
-  static int temp_call_count = 0;
-  static double t_prepare = 0.0, t_site_loop = 0.0;
-  temp_call_count++;
-
   // Update temperature array for all local sites
   if (hdf5_source) {
     // Fast path: prepare once, then use inline fast lookup for all sites
@@ -2095,15 +2103,8 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
       T[i] = hdf5_source->get_temperature_at_site_fast(i);
     }
     double t2 = MPI_Wtime();
-    t_prepare += (t1 - t0);
-    t_site_loop += (t2 - t1);
-
-    // Print breakdown every 100 calls
-    if (temp_call_count % 100 == 0 && domain->me == 0) {
-      fprintf(screen, "  [TIMING] After %d calls: prepare=%.3f s (%.4f ms/call), site_loop=%.3f s (%.4f ms/call)\n",
-              temp_call_count, t_prepare, 1000.0*t_prepare/temp_call_count,
-              t_site_loop, 1000.0*t_site_loop/temp_call_count);
-    }
+    g_t_temp_prepare += (t1 - t0);
+    g_t_temp_site_loop += (t2 - t1);
   } else {
     // Fallback for non-HDF5 sources
     for (int i = 0; i < nlocal; i++) {

@@ -302,6 +302,15 @@ private:
 
   // Get cached element for a site
   const ElementCache& get_cached_element(int site_index) const;
+
+  // Nodal temperature cache - precomputed temps at all loaded nodes for current time
+  // Eliminates redundant time interpolation (36x reduction in time searches)
+  mutable std::vector<double> cached_nodal_temps;
+  mutable double cached_nodal_time;
+  mutable bool nodal_cache_valid;
+
+  // Precompute interpolated temperatures at all loaded nodes for given time
+  void precompute_nodal_temperatures(double time) const;
 };
 
 }

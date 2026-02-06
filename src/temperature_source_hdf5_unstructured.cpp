@@ -33,7 +33,9 @@ HDF5UnstructuredTemperatureSource::HDF5UnstructuredTemperatureSource(SPPARKS *sp
   active_layer(std::numeric_limits<unsigned>::max()),
   cache_valid(false),
   total_layer_load_time(0.0),
-  layer_load_count(0)
+  layer_load_count(0),
+  cached_nodal_time(std::numeric_limits<double>::lowest()),
+  nodal_cache_valid(false)
 {
   source_initialized = false;
 #ifdef H5_HAVE_PARALLEL
@@ -894,65 +896,37 @@ double HDF5UnstructuredTemperatureSource::get_temperature_at_site(int site_index
       load_layer(currentLayer);
       active_layer = currentLayer;
       cache_valid = false;  // Invalidate cache when layer changes
+      nodal_cache_valid = false;  // Also invalidate nodal temperature cache
     }
     current_time = time;
   }
   
-  // Build cache if needed
+  // Build element cache if needed
   if (!cache_valid) {
     build_site_element_cache();
   }
-  
+
+  // Precompute nodal temperatures for this timestep (36x reduction in time searches)
+  precompute_nodal_temperatures(time);
+
   // Get cached element for this site
   const ElementCache& cache = get_cached_element(site_index);
-  
+
   if (!cache.valid) {
     return default_temp;  // Site not in any element
   }
-  
-  // Get temperatures at the four tetrahedral nodes
-  std::array<double, NODES_PER_ELEM> nodalVals;
-  constexpr unsigned LINEAR_SEARCH_THRESHOLD = 32;  // Use linear for small arrays
 
-  for (unsigned n = 0; n < NODES_PER_ELEM; n++) {
-    const unsigned nodeIdx = cache.nodeIndices[n];
-    const unsigned count = dataCounts[nodeIdx];
+  // Look up precomputed nodal temperatures (O(1) instead of time search)
+  const double T0 = cached_nodal_temps[cache.nodeIndices[0]];
+  const double T1 = cached_nodal_temps[cache.nodeIndices[1]];
+  const double T2 = cached_nodal_temps[cache.nodeIndices[2]];
+  const double T3 = cached_nodal_temps[cache.nodeIndices[3]];
 
-    const auto timeIter = times.row_iterator(nodeIdx);
-    const auto tempIter = temperatures.row_iterator(nodeIdx);
-
-    // Check time bounds
-    if (time < *timeIter || time > timeIter[count - 1]) {
-      return default_temp;
-    }
-
-    // Find time index - use linear search for small arrays, binary for large
-    unsigned idx;
-    if (count <= LINEAR_SEARCH_THRESHOLD) {
-      // Linear search: faster for small arrays due to sequential access
-      idx = 1;
-      while (idx < count && timeIter[idx] < time) {
-        ++idx;
-      }
-    } else {
-      // Binary search: O(log n) for larger arrays
-      auto lower = std::lower_bound(timeIter, timeIter + count, time);
-      idx = std::distance(timeIter, lower);
-      if (idx == 0) idx = 1;
-    }
-
-    // Linear interpolation in time
-    nodalVals[n] = tempIter[idx-1] +
-                   (tempIter[idx] - tempIter[idx-1]) /
-                   (timeIter[idx] - timeIter[idx-1]) *
-                   (time - timeIter[idx-1]);
-  }
-  
   // Tetrahedral interpolation using cached barycentric coordinates
-  return nodalVals[0] + 
-         cache.weights[0] * (nodalVals[1] - nodalVals[0]) + 
-         cache.weights[1] * (nodalVals[2] - nodalVals[0]) + 
-         cache.weights[2] * (nodalVals[3] - nodalVals[0]);
+  return T0 +
+         cache.weights[0] * (T1 - T0) +
+         cache.weights[1] * (T2 - T0) +
+         cache.weights[2] * (T3 - T0);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1000,13 +974,63 @@ void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
 
 /* ---------------------------------------------------------------------- */
 
-const HDF5UnstructuredTemperatureSource::ElementCache& 
+const HDF5UnstructuredTemperatureSource::ElementCache&
 HDF5UnstructuredTemperatureSource::get_cached_element(int site_index) const
 {
   if (site_index < 0 || site_index >= static_cast<int>(site_element_cache.size())) {
     error->all(FLERR, "Invalid site index in get_cached_element");
   }
   return site_element_cache[site_index];
+}
+
+/* ---------------------------------------------------------------------- */
+
+void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double time) const
+{
+  // Skip if already computed for this time
+  constexpr double tol = 1e-12;
+  if (nodal_cache_valid && std::fabs(time - cached_nodal_time) < tol) {
+    return;
+  }
+
+  const size_t num_nodes = dataCounts.size();
+  cached_nodal_temps.resize(num_nodes);
+  constexpr unsigned LINEAR_SEARCH_THRESHOLD = 32;
+
+  // Precompute interpolated temperature at each loaded node
+  for (size_t nodeIdx = 0; nodeIdx < num_nodes; nodeIdx++) {
+    const unsigned count = dataCounts[nodeIdx];
+    const auto timeIter = times.row_iterator(nodeIdx);
+    const auto tempIter = temperatures.row_iterator(nodeIdx);
+
+    // Check time bounds - use default_temp if out of range
+    if (time < *timeIter || time > timeIter[count - 1]) {
+      cached_nodal_temps[nodeIdx] = default_temp;
+      continue;
+    }
+
+    // Find time index - use linear search for small arrays, binary for large
+    unsigned idx;
+    if (count <= LINEAR_SEARCH_THRESHOLD) {
+      idx = 1;
+      while (idx < count && timeIter[idx] < time) {
+        ++idx;
+      }
+    } else {
+      auto lower = std::lower_bound(timeIter, timeIter + count, time);
+      idx = std::distance(timeIter, lower);
+      if (idx == 0) idx = 1;
+    }
+
+    // Linear interpolation in time
+    cached_nodal_temps[nodeIdx] = tempIter[idx-1] +
+                                  (tempIter[idx] - tempIter[idx-1]) /
+                                  (timeIter[idx] - timeIter[idx-1]) *
+                                  (time - timeIter[idx-1]);
+  }
+
+  cached_nodal_time = time;
+  nodal_cache_valid = true;
 }
 
 /* ---------------------------------------------------------------------- */

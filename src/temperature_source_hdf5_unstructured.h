@@ -220,6 +220,33 @@ private:
   std::vector<unsigned> elem_offsets;
   std::vector<std::vector<double>> elem_bboxes;
 
+  // Spatial acceleration grid for fast element lookup
+  struct SpatialGrid {
+    std::vector<std::vector<unsigned>> cells;  // Each cell contains element indices
+    std::vector<unsigned> elem_to_chunk;       // Maps element index to chunk index
+    std::array<double, 3> origin;              // Grid origin (min corner)
+    std::array<double, 3> cell_size;           // Size of each cell
+    std::array<unsigned, 3> dims;              // Number of cells in each dimension
+    bool valid;
+
+    SpatialGrid() : valid(false) {}
+
+    // Convert point to cell index, returns -1 if outside grid
+    int point_to_cell(const std::array<double, 3>& pt) const {
+      if (!valid) return -1;
+      int ix = static_cast<int>((pt[0] - origin[0]) / cell_size[0]);
+      int iy = static_cast<int>((pt[1] - origin[1]) / cell_size[1]);
+      int iz = static_cast<int>((pt[2] - origin[2]) / cell_size[2]);
+      if (ix < 0 || ix >= static_cast<int>(dims[0]) ||
+          iy < 0 || iy >= static_cast<int>(dims[1]) ||
+          iz < 0 || iz >= static_cast<int>(dims[2])) {
+        return -1;
+      }
+      return ix + iy * dims[0] + iz * dims[0] * dims[1];
+    }
+  };
+  SpatialGrid spatial_grid;
+
   // Timing statistics for performance monitoring
   double total_layer_load_time;
   int layer_load_count;
@@ -256,6 +283,8 @@ private:
     const std::vector<unsigned>& elemOffsets,
     const Array2D<unsigned>& elemNode,
     const Array2D<double>& nodeCoords) const;
+
+  void build_spatial_grid(double target_cell_size);
 
   // Thermal interval management for efficient time queries
   std::vector<std::vector<ThermalInterval>> layer_thermal_intervals;

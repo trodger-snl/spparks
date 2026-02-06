@@ -429,10 +429,13 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   read_time_temperature_data(*grp, nodeSlices);
 
   // Build element bounding boxes for spatial queries
-  elem_bboxes = build_elem_bounding_boxes(overlappingChunks.size(), 
-                                         nodeOffsets, elemOffsets, 
+  elem_bboxes = build_elem_bounding_boxes(overlappingChunks.size(),
+                                         nodeOffsets, elemOffsets,
                                          elemNode, nodeCoords);
-  
+
+  // Build spatial acceleration grid (cell size ~20x lattice spacing, or ~100 microns)
+  build_spatial_grid(dx * 20.0);
+
   // Compute thermal intervals for efficient time queries
   compute_thermal_intervals_for_layer(layerIdx, threshold_temp);
 
@@ -608,7 +611,7 @@ bool HDF5UnstructuredTemperatureSource::point_in_bbox(
 
 /* ---------------------------------------------------------------------- */
 
-std::pair<std::array<unsigned, 4>, std::array<double, 3>> 
+std::pair<std::array<unsigned, 4>, std::array<double, 3>>
 HDF5UnstructuredTemperatureSource::find_element_point_is_in(
   const std::vector<unsigned>& selectedChunks,
   const std::vector<std::vector<double>>& chunkBboxes,
@@ -621,20 +624,82 @@ HDF5UnstructuredTemperatureSource::find_element_point_is_in(
 {
   std::array<unsigned, 4> nodeIds;
   std::array<double, 3> parCoords;
-  
+
   constexpr double tol = 1e-14;
   constexpr unsigned invalidId = std::numeric_limits<unsigned>::max();
-  
+
   // Validate input data
-  if (selectedChunks.empty() || chunkBboxes.empty() || 
+  if (selectedChunks.empty() || chunkBboxes.empty() ||
       nodeOffsets.empty() || elemOffsets.empty() || elemBboxes.empty()) {
     return std::make_pair(
       std::array<unsigned, 4>{invalidId, invalidId, invalidId, invalidId},
       std::array<double, 3>{0.0, 0.0, 0.0}
     );
   }
-  
-  // Find possible chunks
+
+  // Reusable storage for tetrahedron coordinates
+  std::vector<std::vector<double>> tetCoords(NODES_PER_ELEM, std::vector<double>(DIM));
+
+  // Lambda to test a single element and return true if point is inside
+  auto test_element = [&](unsigned e) -> bool {
+    if (e >= elemBboxes.size()) return false;
+    if (!point_in_bbox(pt, elemBboxes[e])) return false;
+
+    // Find which chunk this element belongs to (for node offset mapping)
+    // Use O(1) precomputed mapping when spatial grid is valid, else O(n) search
+    unsigned c;
+    if (spatial_grid.valid && e < spatial_grid.elem_to_chunk.size()) {
+      c = spatial_grid.elem_to_chunk[e];
+    } else {
+      c = 0;
+      for (unsigned i = 0; i < elemOffsets.size() - 1; i++) {
+        if (e >= elemOffsets[i] && e < elemOffsets[i + 1]) {
+          c = i;
+          break;
+        }
+      }
+    }
+
+    // Get tetrahedron node coordinates
+    bool validElement = true;
+    for (unsigned n = 0; n < NODES_PER_ELEM; n++) {
+      unsigned localNodeId = elemNode(e, n);
+      if (c >= nodeOffsets.size() - 1) {
+        validElement = false;
+        break;
+      }
+      nodeIds[n] = localNodeId + nodeOffsets[c];
+      for (unsigned d = 0; d < DIM; d++) {
+        tetCoords[n][d] = nodeCoords(nodeIds[n], d);
+      }
+    }
+    if (!validElement) return false;
+
+    parCoords = get_parametric_coordinates_of_point(tetCoords, pt);
+
+    // Check if point is inside tetrahedron
+    return (parCoords[0] > -tol && parCoords[1] > -tol && parCoords[2] > -tol &&
+            1.0 - parCoords[0] - parCoords[1] - parCoords[2] > -tol);
+  };
+
+  // Use spatial grid if available (O(1) cell lookup vs O(n) brute force)
+  if (spatial_grid.valid) {
+    int cell_idx = spatial_grid.point_to_cell(pt);
+    if (cell_idx >= 0 && cell_idx < static_cast<int>(spatial_grid.cells.size())) {
+      for (unsigned e : spatial_grid.cells[cell_idx]) {
+        if (test_element(e)) {
+          return std::make_pair(nodeIds, parCoords);
+        }
+      }
+    }
+    // Point not in grid or not found in cell - return not found
+    return std::make_pair(
+      std::array<unsigned, 4>{invalidId, invalidId, invalidId, invalidId},
+      std::array<double, 3>{0.0, 0.0, 0.0}
+    );
+  }
+
+  // Fallback: brute force search through chunks (used if grid not built)
   std::vector<unsigned> possibleChunks;
   for (unsigned c = 0; c < selectedChunks.size(); c++) {
     if (selectedChunks[c] >= chunkBboxes.size()) continue;
@@ -643,43 +708,16 @@ HDF5UnstructuredTemperatureSource::find_element_point_is_in(
       possibleChunks.push_back(c);
     }
   }
-  
-  // Reusable storage for tetrahedron coordinates (avoid allocation in inner loop)
-  std::vector<std::vector<double>> tetCoords(NODES_PER_ELEM, std::vector<double>(DIM));
 
-  // Search elements in possible chunks
   for (auto c : possibleChunks) {
     if (c + 1 >= elemOffsets.size()) continue;
-    for (unsigned e = elemOffsets[c]; e < elemOffsets[c+1]; e++) {
-      if (e >= elemBboxes.size()) continue;
-      if (point_in_bbox(pt, elemBboxes[e])) {
-        // Validate array bounds before accessing
-        bool validElement = true;
-        for (unsigned n = 0; n < NODES_PER_ELEM; n++) {
-          unsigned localNodeId = elemNode(e, n);
-          if (c >= nodeOffsets.size() - 1) {
-            validElement = false;
-            break;
-          }
-          nodeIds[n] = localNodeId + nodeOffsets[c];
-          for (unsigned d = 0; d < DIM; d++) {
-            tetCoords[n][d] = nodeCoords(nodeIds[n], d);
-          }
-        }
-        
-        if (!validElement) continue;
-        
-        parCoords = get_parametric_coordinates_of_point(tetCoords, pt);
-        
-        // Check if point is inside tetrahedron
-        if (parCoords[0] > -tol && parCoords[1] > -tol && parCoords[2] > -tol && 
-            1.0 - parCoords[0] - parCoords[1] - parCoords[2] > -tol) {
-          return std::make_pair(nodeIds, parCoords);
-        }
+    for (unsigned e = elemOffsets[c]; e < elemOffsets[c + 1]; e++) {
+      if (test_element(e)) {
+        return std::make_pair(nodeIds, parCoords);
       }
     }
   }
-  
+
   // Point not found in any element
   return std::make_pair(
     std::array<unsigned, 4>{invalidId, invalidId, invalidId, invalidId},
@@ -719,6 +757,102 @@ std::vector<std::vector<double>> HDF5UnstructuredTemperatureSource::build_elem_b
   }
   
   return result;
+}
+
+/* ---------------------------------------------------------------------- */
+
+void HDF5UnstructuredTemperatureSource::build_spatial_grid(double target_cell_size)
+{
+  spatial_grid.valid = false;
+
+  if (elem_bboxes.empty()) return;
+
+  // Find overall bounds from element bounding boxes
+  constexpr double maxVal = std::numeric_limits<double>::max();
+  constexpr double minVal = std::numeric_limits<double>::lowest();
+  std::array<double, 3> domain_min{maxVal, maxVal, maxVal};
+  std::array<double, 3> domain_max{minVal, minVal, minVal};
+
+  for (const auto& bbox : elem_bboxes) {
+    for (unsigned d = 0; d < DIM; d++) {
+      domain_min[d] = std::fmin(domain_min[d], bbox[d]);
+      domain_max[d] = std::fmax(domain_max[d], bbox[d + 3]);
+    }
+  }
+
+  // Add small padding to avoid edge cases
+  for (unsigned d = 0; d < DIM; d++) {
+    double pad = target_cell_size * 0.01;
+    domain_min[d] -= pad;
+    domain_max[d] += pad;
+  }
+
+  // Compute grid dimensions
+  spatial_grid.origin = domain_min;
+  for (unsigned d = 0; d < DIM; d++) {
+    double extent = domain_max[d] - domain_min[d];
+    spatial_grid.dims[d] = std::max(1u, static_cast<unsigned>(std::ceil(extent / target_cell_size)));
+    spatial_grid.cell_size[d] = extent / spatial_grid.dims[d];
+  }
+
+  size_t total_cells = static_cast<size_t>(spatial_grid.dims[0]) *
+                       spatial_grid.dims[1] * spatial_grid.dims[2];
+  spatial_grid.cells.clear();
+  spatial_grid.cells.resize(total_cells);
+
+  // Build element-to-chunk mapping for O(1) chunk lookup
+  spatial_grid.elem_to_chunk.resize(elem_bboxes.size());
+  for (unsigned c = 0; c < elem_offsets.size() - 1; c++) {
+    for (unsigned e = elem_offsets[c]; e < elem_offsets[c + 1]; e++) {
+      spatial_grid.elem_to_chunk[e] = c;
+    }
+  }
+
+  // Insert each element into all cells it overlaps
+  for (unsigned e = 0; e < elem_bboxes.size(); e++) {
+    const auto& bbox = elem_bboxes[e];
+
+    // Find cell range this element overlaps
+    int ix_min = static_cast<int>((bbox[0] - spatial_grid.origin[0]) / spatial_grid.cell_size[0]);
+    int iy_min = static_cast<int>((bbox[1] - spatial_grid.origin[1]) / spatial_grid.cell_size[1]);
+    int iz_min = static_cast<int>((bbox[2] - spatial_grid.origin[2]) / spatial_grid.cell_size[2]);
+    int ix_max = static_cast<int>((bbox[3] - spatial_grid.origin[0]) / spatial_grid.cell_size[0]);
+    int iy_max = static_cast<int>((bbox[4] - spatial_grid.origin[1]) / spatial_grid.cell_size[1]);
+    int iz_max = static_cast<int>((bbox[5] - spatial_grid.origin[2]) / spatial_grid.cell_size[2]);
+
+    // Clamp to grid bounds
+    ix_min = std::max(0, ix_min);
+    iy_min = std::max(0, iy_min);
+    iz_min = std::max(0, iz_min);
+    ix_max = std::min(static_cast<int>(spatial_grid.dims[0]) - 1, ix_max);
+    iy_max = std::min(static_cast<int>(spatial_grid.dims[1]) - 1, iy_max);
+    iz_max = std::min(static_cast<int>(spatial_grid.dims[2]) - 1, iz_max);
+
+    // Add element to all overlapping cells
+    for (int iz = iz_min; iz <= iz_max; iz++) {
+      for (int iy = iy_min; iy <= iy_max; iy++) {
+        for (int ix = ix_min; ix <= ix_max; ix++) {
+          int cell_idx = ix + iy * spatial_grid.dims[0] +
+                         iz * spatial_grid.dims[0] * spatial_grid.dims[1];
+          spatial_grid.cells[cell_idx].push_back(e);
+        }
+      }
+    }
+  }
+
+  spatial_grid.valid = true;
+
+  if (universe->me == 0) {
+    size_t total_refs = 0;
+    size_t max_per_cell = 0;
+    for (const auto& cell : spatial_grid.cells) {
+      total_refs += cell.size();
+      max_per_cell = std::max(max_per_cell, cell.size());
+    }
+    fprintf(screen, "  Spatial grid: %u×%u×%u cells, %.1f elements/cell avg, %zu max\n",
+            spatial_grid.dims[0], spatial_grid.dims[1], spatial_grid.dims[2],
+            static_cast<double>(total_refs) / total_cells, max_per_cell);
+  }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -811,12 +945,14 @@ double HDF5UnstructuredTemperatureSource::get_temperature_at_site(int site_index
 
 void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
 {
+  auto start_time = std::chrono::high_resolution_clock::now();
+
   // Get total number of sites from app
   int nlocal = app->nlocal;
-  
+
   // Resize cache to match number of local sites
   site_element_cache.resize(nlocal);
-  
+
   // For each site, find its containing element and cache the result
   for (int i = 0; i < nlocal; i++) {
     // Get site coordinates 
@@ -839,9 +975,12 @@ void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
   }
   
   cache_valid = true;
-  
+
+  auto end_time = std::chrono::high_resolution_clock::now();
+  double cache_build_time = std::chrono::duration<double>(end_time - start_time).count();
+
   if (universe->me == 0) {
-    fprintf(screen, "  Built element cache for %d sites\n", nlocal);
+    fprintf(screen, "  Built element cache for %d sites in %.3f s\n", nlocal, cache_build_time);
   }
 }
 

@@ -54,7 +54,8 @@ HDF5UnstructuredTemperatureSource::HDF5UnstructuredTemperatureSource(SPPARKS *sp
   total_layer_load_time(0.0),
   layer_load_count(0),
   cached_nodal_time(std::numeric_limits<double>::lowest()),
-  nodal_cache_valid(false)
+  nodal_cache_valid(false),
+  grid_cell_size_multiplier(100.0)
 {
   source_initialized = false;
 #ifdef H5_HAVE_PARALLEL
@@ -73,16 +74,17 @@ HDF5UnstructuredTemperatureSource::~HDF5UnstructuredTemperatureSource()
 
 void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vector<std::string> &args)
 {
-  // Parse arguments: filename dx threshold_temp default_temp [bounds_check_mode]
+  // Parse arguments: filename dx threshold_temp default_temp [bounds_check_mode] [grid_cell_mult]
   if (args.size() < 4) {
-    error->all(FLERR, "HDF5 unstructured temperature source requires: filename dx threshold_temp default_temp [bounds_check_mode]");
+    error->all(FLERR, "HDF5 unstructured temperature source requires: filename dx threshold_temp default_temp [bounds_check_mode] [grid_cell_mult]");
   }
-  
+
   filename = args[0];
   dx = std::stod(args[1]);  // Grid spacing in meters
   threshold_temp = std::stod(args[2]);  // Threshold temperature for fast-forward
   default_temp = std::stod(args[3]);    // Default/ambient temperature
   bounds_check_mode = (args.size() > 4) ? std::stoi(args[4]) : 0;
+  grid_cell_size_multiplier = (args.size() > 5) ? std::stod(args[5]) : 100.0;
 
   // Open HDF5 file with parallel I/O when available
   try {
@@ -490,8 +492,8 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
 
   // Build spatial acceleration grid
   // Larger cells = less memory but more elements per cell to search
-  // Using 50x lattice spacing (~250 microns) balances memory vs lookup speed
-  build_spatial_grid(dx * 50.0);
+  // Default 50x lattice spacing (~250 microns), user-configurable via grid_cell_mult parameter
+  build_spatial_grid(dx * grid_cell_size_multiplier);
 
   if (universe->me == 0) {
     size_t grid_cells = spatial_grid.dims[0] * spatial_grid.dims[1] * spatial_grid.dims[2];

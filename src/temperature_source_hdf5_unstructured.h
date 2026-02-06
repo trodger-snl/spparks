@@ -216,6 +216,7 @@ private:
   double threshold_temp;  // Threshold temperature for fast-forward (K)
   double default_temp;    // Default/ambient temperature (K)
   int bounds_check_mode;  // 0 = exact, 1 = subvolume
+  double grid_cell_size_multiplier;  // Spatial grid cell size = dx * multiplier (default 50)
 
   // Layer management
   std::vector<double> layerTimes;

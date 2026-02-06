@@ -912,25 +912,39 @@ double HDF5UnstructuredTemperatureSource::get_temperature_at_site(int site_index
   
   // Get temperatures at the four tetrahedral nodes
   std::array<double, NODES_PER_ELEM> nodalVals;
+  constexpr unsigned LINEAR_SEARCH_THRESHOLD = 32;  // Use linear for small arrays
+
   for (unsigned n = 0; n < NODES_PER_ELEM; n++) {
     const unsigned nodeIdx = cache.nodeIndices[n];
-    
+    const unsigned count = dataCounts[nodeIdx];
+
     const auto timeIter = times.row_iterator(nodeIdx);
     const auto tempIter = temperatures.row_iterator(nodeIdx);
-    
+
     // Check time bounds
-    if (time < *timeIter || time > timeIter[dataCounts[nodeIdx] - 1]) {
+    if (time < *timeIter || time > timeIter[count - 1]) {
       return default_temp;
     }
-    
+
+    // Find time index - use linear search for small arrays, binary for large
+    unsigned idx;
+    if (count <= LINEAR_SEARCH_THRESHOLD) {
+      // Linear search: faster for small arrays due to sequential access
+      idx = 1;
+      while (idx < count && timeIter[idx] < time) {
+        ++idx;
+      }
+    } else {
+      // Binary search: O(log n) for larger arrays
+      auto lower = std::lower_bound(timeIter, timeIter + count, time);
+      idx = std::distance(timeIter, lower);
+      if (idx == 0) idx = 1;
+    }
+
     // Linear interpolation in time
-    auto lower = std::lower_bound(timeIter, timeIter + dataCounts[nodeIdx], time);
-    auto idx = std::distance(timeIter, lower);
-    idx = (idx == 0) ? 1 : idx;
-    
-    nodalVals[n] = tempIter[idx-1] + 
-                   (tempIter[idx] - tempIter[idx-1]) / 
-                   (timeIter[idx] - timeIter[idx-1]) * 
+    nodalVals[n] = tempIter[idx-1] +
+                   (tempIter[idx] - tempIter[idx-1]) /
+                   (timeIter[idx] - timeIter[idx-1]) *
                    (time - timeIter[idx-1]);
   }
   

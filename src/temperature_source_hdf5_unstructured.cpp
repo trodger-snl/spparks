@@ -488,8 +488,10 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
             elem_bboxes.size(), bbox_mem, get_memory_usage_kb() / 1024);
   }
 
-  // Build spatial acceleration grid (cell size ~20x lattice spacing, or ~100 microns)
-  build_spatial_grid(dx * 20.0);
+  // Build spatial acceleration grid
+  // Larger cells = less memory but more elements per cell to search
+  // Using 50x lattice spacing (~250 microns) balances memory vs lookup speed
+  build_spatial_grid(dx * 50.0);
 
   if (universe->me == 0) {
     size_t grid_cells = spatial_grid.dims[0] * spatial_grid.dims[1] * spatial_grid.dims[2];
@@ -749,9 +751,12 @@ HDF5UnstructuredTemperatureSource::find_element_point_is_in(
   // Use spatial grid if available (O(1) cell lookup vs O(n) brute force)
   if (spatial_grid.valid) {
     int cell_idx = spatial_grid.point_to_cell(pt);
-    if (cell_idx >= 0 && cell_idx < static_cast<int>(spatial_grid.cells.size())) {
-      for (unsigned e : spatial_grid.cells[cell_idx]) {
-        if (test_element(e)) {
+    if (cell_idx >= 0 && static_cast<size_t>(cell_idx) < spatial_grid.cell_offsets.size() - 1) {
+      // Iterate over elements in this cell using CSR-style access
+      const unsigned* elem_begin = spatial_grid.cell_begin(cell_idx);
+      const unsigned* elem_end = spatial_grid.cell_end(cell_idx);
+      for (const unsigned* ep = elem_begin; ep != elem_end; ++ep) {
+        if (test_element(*ep)) {
           return std::make_pair(nodeIds, parCoords);
         }
       }
@@ -868,8 +873,6 @@ void HDF5UnstructuredTemperatureSource::build_spatial_grid(double target_cell_si
 
   size_t total_cells = static_cast<size_t>(spatial_grid.dims[0]) *
                        spatial_grid.dims[1] * spatial_grid.dims[2];
-  spatial_grid.cells.clear();
-  spatial_grid.cells.resize(total_cells);
 
   // Build element-to-chunk mapping for O(1) chunk lookup
   spatial_grid.elem_to_chunk.resize(elem_bboxes.size());
@@ -879,33 +882,68 @@ void HDF5UnstructuredTemperatureSource::build_spatial_grid(double target_cell_si
     }
   }
 
-  // Insert each element into all cells it overlaps
-  for (unsigned e = 0; e < elem_bboxes.size(); e++) {
-    const auto& bbox = elem_bboxes[e];
-
-    // Find cell range this element overlaps
-    int ix_min = static_cast<int>((bbox[0] - spatial_grid.origin[0]) / spatial_grid.cell_size[0]);
-    int iy_min = static_cast<int>((bbox[1] - spatial_grid.origin[1]) / spatial_grid.cell_size[1]);
-    int iz_min = static_cast<int>((bbox[2] - spatial_grid.origin[2]) / spatial_grid.cell_size[2]);
-    int ix_max = static_cast<int>((bbox[3] - spatial_grid.origin[0]) / spatial_grid.cell_size[0]);
-    int iy_max = static_cast<int>((bbox[4] - spatial_grid.origin[1]) / spatial_grid.cell_size[1]);
-    int iz_max = static_cast<int>((bbox[5] - spatial_grid.origin[2]) / spatial_grid.cell_size[2]);
-
-    // Clamp to grid bounds
+  // Lambda to compute cell range for an element's bounding box
+  auto get_cell_range = [&](const std::array<double, 6>& bbox,
+                            int& ix_min, int& iy_min, int& iz_min,
+                            int& ix_max, int& iy_max, int& iz_max) {
+    ix_min = static_cast<int>((bbox[0] - spatial_grid.origin[0]) / spatial_grid.cell_size[0]);
+    iy_min = static_cast<int>((bbox[1] - spatial_grid.origin[1]) / spatial_grid.cell_size[1]);
+    iz_min = static_cast<int>((bbox[2] - spatial_grid.origin[2]) / spatial_grid.cell_size[2]);
+    ix_max = static_cast<int>((bbox[3] - spatial_grid.origin[0]) / spatial_grid.cell_size[0]);
+    iy_max = static_cast<int>((bbox[4] - spatial_grid.origin[1]) / spatial_grid.cell_size[1]);
+    iz_max = static_cast<int>((bbox[5] - spatial_grid.origin[2]) / spatial_grid.cell_size[2]);
     ix_min = std::max(0, ix_min);
     iy_min = std::max(0, iy_min);
     iz_min = std::max(0, iz_min);
     ix_max = std::min(static_cast<int>(spatial_grid.dims[0]) - 1, ix_max);
     iy_max = std::min(static_cast<int>(spatial_grid.dims[1]) - 1, iy_max);
     iz_max = std::min(static_cast<int>(spatial_grid.dims[2]) - 1, iz_max);
+  };
 
-    // Add element to all overlapping cells
+  // === CSR-style flat storage: two-pass approach ===
+
+  // Pass 1: Count elements per cell
+  std::vector<size_t> cell_counts(total_cells, 0);
+  for (unsigned e = 0; e < elem_bboxes.size(); e++) {
+    int ix_min, iy_min, iz_min, ix_max, iy_max, iz_max;
+    get_cell_range(elem_bboxes[e], ix_min, iy_min, iz_min, ix_max, iy_max, iz_max);
+
     for (int iz = iz_min; iz <= iz_max; iz++) {
       for (int iy = iy_min; iy <= iy_max; iy++) {
         for (int ix = ix_min; ix <= ix_max; ix++) {
-          int cell_idx = ix + iy * spatial_grid.dims[0] +
-                         iz * spatial_grid.dims[0] * spatial_grid.dims[1];
-          spatial_grid.cells[cell_idx].push_back(e);
+          size_t cell_idx = ix + iy * spatial_grid.dims[0] +
+                            iz * spatial_grid.dims[0] * spatial_grid.dims[1];
+          cell_counts[cell_idx]++;
+        }
+      }
+    }
+  }
+
+  // Build prefix sum to get offsets
+  spatial_grid.cell_offsets.resize(total_cells + 1);
+  spatial_grid.cell_offsets[0] = 0;
+  for (size_t i = 0; i < total_cells; i++) {
+    spatial_grid.cell_offsets[i + 1] = spatial_grid.cell_offsets[i] + cell_counts[i];
+  }
+
+  // Allocate flat element array
+  size_t total_refs = spatial_grid.cell_offsets[total_cells];
+  spatial_grid.cell_elements.resize(total_refs);
+
+  // Pass 2: Fill the flat array (reuse cell_counts as write positions)
+  std::fill(cell_counts.begin(), cell_counts.end(), 0);
+  for (unsigned e = 0; e < elem_bboxes.size(); e++) {
+    int ix_min, iy_min, iz_min, ix_max, iy_max, iz_max;
+    get_cell_range(elem_bboxes[e], ix_min, iy_min, iz_min, ix_max, iy_max, iz_max);
+
+    for (int iz = iz_min; iz <= iz_max; iz++) {
+      for (int iy = iy_min; iy <= iy_max; iy++) {
+        for (int ix = ix_min; ix <= ix_max; ix++) {
+          size_t cell_idx = ix + iy * spatial_grid.dims[0] +
+                            iz * spatial_grid.dims[0] * spatial_grid.dims[1];
+          size_t write_pos = spatial_grid.cell_offsets[cell_idx] + cell_counts[cell_idx];
+          spatial_grid.cell_elements[write_pos] = e;
+          cell_counts[cell_idx]++;
         }
       }
     }
@@ -914,15 +952,17 @@ void HDF5UnstructuredTemperatureSource::build_spatial_grid(double target_cell_si
   spatial_grid.valid = true;
 
   if (universe->me == 0) {
-    size_t total_refs = 0;
     size_t max_per_cell = 0;
-    for (const auto& cell : spatial_grid.cells) {
-      total_refs += cell.size();
-      max_per_cell = std::max(max_per_cell, cell.size());
+    for (size_t i = 0; i < total_cells; i++) {
+      max_per_cell = std::max(max_per_cell, spatial_grid.cell_count(i));
     }
-    fprintf(screen, "  Spatial grid: %u×%u×%u cells, %.1f elements/cell avg, %zu max\n",
+    // Memory: offsets array + elements array + elem_to_chunk
+    size_t grid_mem_kb = (spatial_grid.cell_offsets.size() * sizeof(size_t) +
+                          spatial_grid.cell_elements.size() * sizeof(unsigned) +
+                          spatial_grid.elem_to_chunk.size() * sizeof(unsigned)) / 1024;
+    fprintf(screen, "  Spatial grid: %u×%u×%u cells, %.1f elements/cell avg, %zu max, %zu KB\n",
             spatial_grid.dims[0], spatial_grid.dims[1], spatial_grid.dims[2],
-            static_cast<double>(total_refs) / total_cells, max_per_cell);
+            static_cast<double>(total_refs) / total_cells, max_per_cell, grid_mem_kb);
   }
 }
 

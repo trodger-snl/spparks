@@ -234,8 +234,10 @@ private:
   std::vector<std::array<double, 6>> elem_bboxes;  // [xmin,ymin,zmin,xmax,ymax,zmax]
 
   // Spatial acceleration grid for fast element lookup
+  // Uses CSR-style flat storage to minimize memory overhead
   struct SpatialGrid {
-    std::vector<std::vector<unsigned>> cells;  // Each cell contains element indices
+    std::vector<unsigned> cell_elements;       // Flat array of element indices (CSR data)
+    std::vector<size_t> cell_offsets;          // Offset into cell_elements for each cell (CSR offsets)
     std::vector<unsigned> elem_to_chunk;       // Maps element index to chunk index
     std::array<double, 3> origin;              // Grid origin (min corner)
     std::array<double, 3> cell_size;           // Size of each cell
@@ -256,6 +258,17 @@ private:
         return -1;
       }
       return ix + iy * dims[0] + iz * dims[0] * dims[1];
+    }
+
+    // Get elements in a cell (CSR-style access)
+    const unsigned* cell_begin(size_t cell_idx) const {
+      return cell_elements.data() + cell_offsets[cell_idx];
+    }
+    const unsigned* cell_end(size_t cell_idx) const {
+      return cell_elements.data() + cell_offsets[cell_idx + 1];
+    }
+    size_t cell_count(size_t cell_idx) const {
+      return cell_offsets[cell_idx + 1] - cell_offsets[cell_idx];
     }
   };
   SpatialGrid spatial_grid;

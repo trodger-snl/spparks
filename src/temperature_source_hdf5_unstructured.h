@@ -322,6 +322,7 @@ private:
 
   // Element cache management
   mutable std::vector<ElementCache> site_element_cache;
+  mutable std::vector<unsigned> active_node_indices;  // Nodes actually used by cached sites
   mutable bool cache_valid;
 
   // Build element cache for all sites

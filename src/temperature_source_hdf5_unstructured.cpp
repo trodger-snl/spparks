@@ -1071,7 +1071,19 @@ void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
     site_element_cache[i].weights = result.second;
     site_element_cache[i].valid = (result.first[0] != std::numeric_limits<unsigned>::max());
   }
-  
+
+  // Collect unique node indices from valid cached elements
+  // This allows precompute_nodal_temperatures to skip unused nodes
+  std::set<unsigned> unique_nodes;
+  for (int i = 0; i < nlocal; i++) {
+    if (site_element_cache[i].valid) {
+      for (int j = 0; j < 4; j++) {
+        unique_nodes.insert(site_element_cache[i].nodeIndices[j]);
+      }
+    }
+  }
+  active_node_indices.assign(unique_nodes.begin(), unique_nodes.end());
+
   cache_valid = true;
 
   auto end_time = std::chrono::high_resolution_clock::now();
@@ -1080,6 +1092,9 @@ void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
   if (universe->me == 0) {
     size_t mem_after = get_memory_usage_kb();
     fprintf(screen, "  Built element cache for %d sites in %.3f s\n", nlocal, cache_build_time);
+    fprintf(screen, "  Active nodes: %zu / %zu (%.1f%% of loaded nodes)\n",
+            active_node_indices.size(), dataCounts.size(),
+            100.0 * active_node_indices.size() / dataCounts.size());
     fprintf(screen, "  [MEM] After site cache: %zu MB (delta: %+zd MB)\n",
             mem_after / 1024, (long)(mem_after - mem_before) / 1024);
   }
@@ -1119,8 +1134,16 @@ void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double tim
 
   size_t nodes_interpolated = 0;
 
-  // Precompute interpolated temperature at each loaded node
-  for (size_t nodeIdx = 0; nodeIdx < num_nodes; nodeIdx++) {
+  // Only process nodes that are actually used by cached sites
+  // This provides major speedup when only a fraction of loaded nodes are needed
+  const std::vector<unsigned>& nodes_to_process =
+      active_node_indices.empty() ? std::vector<unsigned>() : active_node_indices;
+
+  // If no active nodes collected (cache not built), fall back to all nodes
+  const size_t num_to_process = nodes_to_process.empty() ? num_nodes : nodes_to_process.size();
+
+  for (size_t i = 0; i < num_to_process; i++) {
+    const size_t nodeIdx = nodes_to_process.empty() ? i : nodes_to_process[i];
     const unsigned count = dataCounts[nodeIdx];
     const auto timeIter = times.row_iterator(nodeIdx);
     const auto tempIter = temperatures.row_iterator(nodeIdx);
@@ -1156,15 +1179,15 @@ void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double tim
   auto t_end = std::chrono::high_resolution_clock::now();
   double elapsed = std::chrono::duration<double>(t_end - t_start).count();
   t_total += elapsed;
-  total_nodes_processed += num_nodes;
+  total_nodes_processed += num_to_process;
   total_nodes_interpolated += nodes_interpolated;
 
   // Print diagnostics every 100 calls
   if (precompute_call_count % 100 == 0 && universe->me == 0) {
     fprintf(screen, "  [PRECOMPUTE] After %d calls: total=%.3f s (%.3f ms/call), "
-            "nodes: %zu processed, %zu interpolated (%.1f%%)\n",
+            "active: %zu/%zu nodes (%.1f%%), interpolated: %zu (%.1f%%)\n",
             precompute_call_count, t_total, 1000.0*t_total/precompute_call_count,
-            total_nodes_processed/precompute_call_count,
+            num_to_process, num_nodes, 100.0*num_to_process/num_nodes,
             total_nodes_interpolated/precompute_call_count,
             100.0*total_nodes_interpolated/total_nodes_processed);
   }

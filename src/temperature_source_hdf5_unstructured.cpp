@@ -644,14 +644,15 @@ HDF5UnstructuredTemperatureSource::find_element_point_is_in(
     }
   }
   
+  // Reusable storage for tetrahedron coordinates (avoid allocation in inner loop)
+  std::vector<std::vector<double>> tetCoords(NODES_PER_ELEM, std::vector<double>(DIM));
+
   // Search elements in possible chunks
   for (auto c : possibleChunks) {
     if (c + 1 >= elemOffsets.size()) continue;
     for (unsigned e = elemOffsets[c]; e < elemOffsets[c+1]; e++) {
       if (e >= elemBboxes.size()) continue;
       if (point_in_bbox(pt, elemBboxes[e])) {
-        std::vector<std::vector<double>> tetCoords(4, std::vector<double>(DIM));
-        
         // Validate array bounds before accessing
         bool validElement = true;
         for (unsigned n = 0; n < NODES_PER_ELEM; n++) {

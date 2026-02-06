@@ -2075,36 +2075,20 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
   // Update temperature source (may load new data)
   temperature_source->update_temperatures(dt, simulation_time);
 
+  // Cache the dynamic_cast result outside the loop — this cast is expensive
+  // for subclasses (CSR) due to RTTI string comparisons on every call.
+  HDF5UnstructuredTemperatureSource* hdf5_source =
+    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+  double source_dx = hdf5_source ? hdf5_source->get_dx() : 0.0;
+
   // Update temperature array for all local sites
   for (int i = 0; i < nlocal; i++) {
-    // Get site coordinates in lattice units
-    double x_lattice = xyz[i][0];
-    double y_lattice = xyz[i][1];
-    double z_lattice = xyz[i][2];
-    
-    // Convert to physical coordinates (meters) using dx from temperature source
-    // For HDF5 unstructured source, dx is the lattice spacing in meters
-    HDF5UnstructuredTemperatureSource* hdf5_source = 
-      dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-    
-    double x_physical, y_physical, z_physical;
-    if (hdf5_source) {
-      // HDF5 source expects physical coordinates in meters
-      double dx = hdf5_source->get_dx();
-      x_physical = x_lattice * dx;
-      y_physical = y_lattice * dx;
-      z_physical = z_lattice * dx;
-    } else {
-      // Other temperature sources might expect lattice coordinates
-      x_physical = x_lattice;
-      y_physical = y_lattice;
-      z_physical = z_lattice;
-    }
-    
-    // Use site-based temperature access for HDF5 unstructured source (uses caching)
     if (hdf5_source) {
       T[i] = temperature_source->get_temperature_at_site(i, simulation_time);
     } else {
+      double x_physical = xyz[i][0];
+      double y_physical = xyz[i][1];
+      double z_physical = xyz[i][2];
       T[i] = temperature_source->get_temperature_at_xyz_and_time(x_physical, y_physical, z_physical, simulation_time);
     }
   }

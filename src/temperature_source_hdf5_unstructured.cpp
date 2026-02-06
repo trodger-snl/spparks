@@ -427,7 +427,7 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
 
   // Read time and temperature data (virtual — overridden by CSR subclass)
   read_time_temperature_data(*grp, nodeSlices);
-  
+
   // Build element bounding boxes for spatial queries
   elem_bboxes = build_elem_bounding_boxes(overlappingChunks.size(), 
                                          nodeOffsets, elemOffsets, 

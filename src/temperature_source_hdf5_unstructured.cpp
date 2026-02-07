@@ -55,7 +55,9 @@ HDF5UnstructuredTemperatureSource::HDF5UnstructuredTemperatureSource(SPPARKS *sp
   layer_load_count(0),
   cached_nodal_time(std::numeric_limits<double>::lowest()),
   nodal_cache_valid(false),
-  grid_cell_size_multiplier(100.0)
+  grid_cell_size_multiplier(100.0),
+  use_spatial_grid(true),
+  use_element_cache(true)
 {
   source_initialized = false;
 #ifdef H5_HAVE_PARALLEL
@@ -490,15 +492,22 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
             elem_bboxes.size(), bbox_mem, get_memory_usage_kb() / 1024);
   }
 
-  // Build spatial acceleration grid
+  // Build spatial acceleration grid (optional, controlled by use_spatial_grid flag)
   // Larger cells = less memory but more elements per cell to search
   // Default 50x lattice spacing (~250 microns), user-configurable via grid_cell_mult parameter
-  build_spatial_grid(dx * grid_cell_size_multiplier);
+  if (use_spatial_grid) {
+    build_spatial_grid(dx * grid_cell_size_multiplier);
 
-  if (universe->me == 0) {
-    size_t grid_cells = spatial_grid.dims[0] * spatial_grid.dims[1] * spatial_grid.dims[2];
-    fprintf(screen, "  [MEM] After spatial_grid (%zu cells): %zu MB total\n",
-            grid_cells, get_memory_usage_kb() / 1024);
+    if (universe->me == 0) {
+      size_t grid_cells = spatial_grid.dims[0] * spatial_grid.dims[1] * spatial_grid.dims[2];
+      fprintf(screen, "  [MEM] After spatial_grid (%zu cells): %zu MB total\n",
+              grid_cells, get_memory_usage_kb() / 1024);
+    }
+  } else {
+    spatial_grid.valid = false;
+    if (universe->me == 0) {
+      fprintf(screen, "  Spatial grid: DISABLED\n");
+    }
   }
 
   // Compute thermal intervals for efficient time queries

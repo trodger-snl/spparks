@@ -144,6 +144,11 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     use_temperature_source = true;  // Always use modular temperature system
     fast_forward_search_window = 0.1;  // Default 100ms search window
 
+    // Temperature optimization flags (all enabled by default)
+    opt_use_spatial_grid = true;
+    opt_use_element_cache = true;
+    opt_use_nodal_precompute = true;
+
     // Initialize powder activation tracking
     last_powder_activation_time = -1.0;  // Force activation at init
 
@@ -253,6 +258,36 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
      fast_forward_search_window = atof(arg[0]);
      if (fast_forward_search_window <= 0.0)
        error->all(FLERR,"Illegal fast_forward_search_window value: must be > 0");
+  }
+  else if (strcmp(command,"temperature_optimization") == 0) {
+     // Usage: temperature_optimization <option> <on|off>
+     // Options: spatial_grid, element_cache, nodal_precompute
+     if (narg != 2) error->all(FLERR,"Illegal temperature_optimization command: requires 2 args (option on/off)");
+     bool enable = (strcmp(arg[1],"on") == 0 || strcmp(arg[1],"1") == 0 || strcmp(arg[1],"true") == 0);
+
+     // Get HDF5 source if available to pass flags
+     HDF5UnstructuredTemperatureSource* hdf5_source = nullptr;
+     if (temperature_source) {
+       hdf5_source = dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+     }
+
+     if (strcmp(arg[0],"spatial_grid") == 0) {
+       opt_use_spatial_grid = enable;
+       if (hdf5_source) hdf5_source->set_use_spatial_grid(enable);
+       if (domain->me == 0) fprintf(screen,"Temperature optimization: spatial_grid = %s\n", enable ? "ON" : "OFF");
+     } else if (strcmp(arg[0],"element_cache") == 0) {
+       opt_use_element_cache = enable;
+       if (!enable) opt_use_nodal_precompute = false;  // nodal_precompute requires element_cache
+       if (hdf5_source) hdf5_source->set_use_element_cache(enable);
+       if (domain->me == 0) fprintf(screen,"Temperature optimization: element_cache = %s\n", enable ? "ON" : "OFF");
+     } else if (strcmp(arg[0],"nodal_precompute") == 0) {
+       if (enable && !opt_use_element_cache)
+         error->all(FLERR,"nodal_precompute requires element_cache to be enabled");
+       opt_use_nodal_precompute = enable;
+       if (domain->me == 0) fprintf(screen,"Temperature optimization: nodal_precompute = %s\n", enable ? "ON" : "OFF");
+     } else {
+       error->all(FLERR,"Unknown temperature_optimization option (use: spatial_grid, element_cache, nodal_precompute)");
+     }
   }
 
   // Void generation commands
@@ -2013,13 +2048,21 @@ void AppAdditiveExtTempTexture::setup_temperature_source_cmd(int narg, char **ar
   if (!temperature_source) {
     error->all(FLERR,"Failed to create temperature source");
   }
-  
+
+  // Pass optimization flags to temperature source before setup
+  HDF5UnstructuredTemperatureSource* hdf5_source =
+    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+  if (hdf5_source) {
+    hdf5_source->set_use_spatial_grid(opt_use_spatial_grid);
+    hdf5_source->set_use_element_cache(opt_use_element_cache);
+  }
+
   // Setup the temperature source with provided arguments
   temperature_source->setup_temperature_source(source_args);
-  
+
   // Enable the new temperature source system
   use_temperature_source = true;
-  
+
   if (domain->me == 0) {
     std::cout << "Modular temperature source (" << source_type << ") enabled" << std::endl;
   }
@@ -2102,23 +2145,52 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
     dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
 
   // Update temperature array for all local sites
-  if (hdf5_source) {
-    // Lazy path: use per-site lookup with element cache (no nodal precomputation)
-    // This avoids the overhead of precomputing all active node temperatures
+  // Three paths based on optimization flags:
+  // 1. No element_cache: xyz-based lookup (slowest, no caching)
+  // 2. element_cache but no nodal_precompute: lazy per-site lookup
+  // 3. Both enabled: prepare + fast inline lookup (fastest steady-state)
+
+  if (hdf5_source && opt_use_element_cache && opt_use_nodal_precompute) {
+    // Path 3: Fast path with nodal precomputation
+    double t0 = MPI_Wtime();
+    hdf5_source->prepare_for_timestep(simulation_time);
+    double t1 = MPI_Wtime();
+    for (int i = 0; i < nlocal; i++) {
+      T[i] = hdf5_source->get_temperature_at_site_fast(i);
+    }
+    double t2 = MPI_Wtime();
+
+    double prepare_time = t1 - t0;
+    // Detect cache build: if prepare takes > 1 second, it's building cache
+    if (prepare_time > 1.0) {
+      g_t_cache_build += prepare_time;
+      g_cache_was_built = true;
+    } else {
+      g_t_temp_prepare += prepare_time;
+      g_cache_was_built = false;
+    }
+    g_t_temp_site_loop += (t2 - t1);
+
+  } else if (hdf5_source && opt_use_element_cache) {
+    // Path 2: Lazy per-site lookup with element cache (no nodal precomputation)
     double t0 = MPI_Wtime();
     for (int i = 0; i < nlocal; i++) {
       T[i] = hdf5_source->get_temperature_at_site(i, simulation_time);
     }
     double t1 = MPI_Wtime();
     g_t_temp_site_loop += (t1 - t0);
+
   } else {
-    // Fallback for non-HDF5 sources
+    // Path 1: XYZ-based lookup (no element cache)
+    double t0 = MPI_Wtime();
     for (int i = 0; i < nlocal; i++) {
-      double x_physical = xyz[i][0];
-      double y_physical = xyz[i][1];
-      double z_physical = xyz[i][2];
+      double x_physical = xyz[i][0] * hdf5_source->get_dx();
+      double y_physical = xyz[i][1] * hdf5_source->get_dx();
+      double z_physical = xyz[i][2] * hdf5_source->get_dx();
       T[i] = temperature_source->get_temperature_at_xyz_and_time(x_physical, y_physical, z_physical, simulation_time);
     }
+    double t1 = MPI_Wtime();
+    g_t_temp_site_loop += (t1 - t0);
   }
 
   timer->stamp(TIME_APP);

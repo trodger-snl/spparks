@@ -132,6 +132,11 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   bool use_temperature_source;  // Flag to enable new modular system
   double fast_forward_search_window;  // Search window for fast-forward (default 0.1s)
 
+  // Temperature optimization flags (for performance testing)
+  bool opt_use_spatial_grid;    // Use spatial grid for element lookup (default: true)
+  bool opt_use_element_cache;   // Cache element per site (default: true)
+  bool opt_use_nodal_precompute; // Precompute nodal temps each step (default: true, requires element_cache)
+
   int t_active;
 
   // Powder activation tracking

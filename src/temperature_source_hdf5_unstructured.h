@@ -142,6 +142,10 @@ public:
   bool all_temperatures_below_threshold(double time);
   double get_fast_forward_threshold() const { return threshold_temp; }
   double get_dx() const { return dx; }
+
+  // Optimization control flags
+  void set_use_spatial_grid(bool enable) { use_spatial_grid = enable; }
+  void set_use_element_cache(bool enable) { use_element_cache = enable; }
   
   // Time query interface implementation
   virtual bool supports_time_queries() const override { return true; }
@@ -217,6 +221,10 @@ private:
   double default_temp;    // Default/ambient temperature (K)
   int bounds_check_mode;  // 0 = exact, 1 = subvolume
   double grid_cell_size_multiplier;  // Spatial grid cell size = dx * multiplier (default 50)
+
+  // Optimization control flags
+  bool use_spatial_grid;   // Use spatial grid for element lookup (default: true)
+  bool use_element_cache;  // Use element cache per site (default: true)
 
   // Layer management
   std::vector<double> layerTimes;

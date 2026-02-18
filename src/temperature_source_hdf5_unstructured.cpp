@@ -571,23 +571,101 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
   HighFive::Group& grp,
   const std::vector<std::array<size_t, 2>>& nodeSlices)
 {
-  // Base implementation: read rectangular 2D datasets and compact into CSR
+  // Streaming implementation: read one chunk at a time from the padded 2D
+  // datasets, stripping padding on the fly into pre-allocated CSR arrays.
+  // Peak temporary buffer = max_chunk_rows × readCols × 8 bytes.
 
-  // Find maximum data count for rectangular read
+  auto t_start = std::chrono::high_resolution_clock::now();
+
+  // Determine how many columns to read per row
+  auto timesDset = grp.getDataSet("times");
+  auto timesDims = timesDset.getDimensions();
+  unsigned datasetCols = static_cast<unsigned>(timesDims[1]);
+
   unsigned maxData = 0;
-  for (auto cnt : dataCounts) {
+  for (auto cnt : dataCounts)
     maxData = std::max(maxData, cnt);
+
+  unsigned readCols = std::min(datasetCols, maxData);
+
+  // Build CSR offsets from dataCounts
+  size_t nrows = dataCounts.size();
+  std::vector<size_t> offsets(nrows + 1);
+  offsets[0] = 0;
+  for (size_t i = 0; i < nrows; i++)
+    offsets[i + 1] = offsets[i] + dataCounts[i];
+
+  size_t totalElements = offsets[nrows];
+
+  // Pre-allocate flat output arrays to exact CSR size
+  std::vector<double> timesFlat(totalElements);
+  std::vector<double> tempsFlat(totalElements);
+
+  if (universe->me == 0) {
+    size_t rectMB = nrows * static_cast<size_t>(readCols) * sizeof(double) / (1024 * 1024);
+    fprintf(screen, "  Streaming 2D read: %zu nodes, %u readCols, %zu total elements\n",
+            nrows, readCols, totalElements);
+    fprintf(screen, "  [MEM] Rectangular would need: %zu MB per dataset (%zu MB total)\n",
+            rectMB, rectMB * 2);
   }
 
-  auto dataHyperSlab = build_hyperslab(nodeSlices, {0, maxData});
+  // Reusable chunk buffer — grows to largest chunk, then stays put
+  std::vector<double> buf;
+  auto tempsDset = grp.getDataSet("temperatures");
+  size_t dcPos = 0;  // read cursor into dataCounts / offsets
 
-  std::vector<double> timesData;
-  grp.getDataSet("times").select(dataHyperSlab).read(timesData);
-  times = CompressedArray2D<double>(maxData, std::move(timesData), dataCounts);
+  for (size_t s = 0; s < nodeSlices.size(); s++) {
+    size_t rowStart  = nodeSlices[s][0];
+    size_t rowEnd    = nodeSlices[s][1];
+    size_t chunkRows = rowEnd - rowStart;
+    if (chunkRows == 0) continue;
 
-  std::vector<double> tempData;
-  grp.getDataSet("temperatures").select(dataHyperSlab).read(tempData);
-  temperatures = CompressedArray2D<double>(maxData, std::move(tempData), dataCounts);
+    buf.resize(chunkRows * static_cast<size_t>(readCols));
+
+    // --- Read & strip times ---
+    timesDset.select(HighFive::HyperSlab(HighFive::RegularHyperSlab(
+        {rowStart, 0}, {chunkRows, static_cast<size_t>(readCols)})))
+      .read(buf);
+
+    for (size_t r = 0; r < chunkRows; r++) {
+      unsigned count = dataCounts[dcPos + r];
+      std::copy_n(buf.data() + r * readCols, count,
+                  timesFlat.data() + offsets[dcPos + r]);
+    }
+
+    // --- Read & strip temperatures (reuse buf) ---
+    tempsDset.select(HighFive::HyperSlab(HighFive::RegularHyperSlab(
+        {rowStart, 0}, {chunkRows, static_cast<size_t>(readCols)})))
+      .read(buf);
+
+    for (size_t r = 0; r < chunkRows; r++) {
+      unsigned count = dataCounts[dcPos + r];
+      std::copy_n(buf.data() + r * readCols, count,
+                  tempsFlat.data() + offsets[dcPos + r]);
+    }
+
+    if (universe->me == 0) {
+      fprintf(screen, "    Chunk %zu/%zu: %zu rows, buf %.1f MB, [MEM] %zu MB\n",
+              s + 1, nodeSlices.size(), chunkRows,
+              chunkRows * static_cast<size_t>(readCols) * sizeof(double) / (1024.0 * 1024.0),
+              get_memory_usage_kb() / 1024);
+    }
+
+    dcPos += chunkRows;
+  }
+
+  // Build CompressedArray2D via zero-copy move
+  auto offsets2 = offsets;  // copy before first move
+  times = CompressedArray2D<double>(std::move(timesFlat), std::move(offsets));
+  temperatures = CompressedArray2D<double>(std::move(tempsFlat), std::move(offsets2));
+
+  auto t_end = std::chrono::high_resolution_clock::now();
+  double elapsed = std::chrono::duration<double>(t_end - t_start).count();
+
+  if (universe->me == 0) {
+    fprintf(screen, "  [TIMING] Streaming 2D read: %.3f s (%zu elements)\n",
+            elapsed, totalElements);
+  }
 }
 
 /* ---------------------------------------------------------------------- */

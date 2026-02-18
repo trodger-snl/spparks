@@ -32,6 +32,8 @@ void HDF5CSRTemperatureSource::read_time_temperature_data(
   HighFive::Group& grp,
   const std::vector<std::array<size_t, 2>>& nodeSlices)
 {
+  auto t_start = std::chrono::high_resolution_clock::now();
+
   // ------------------------------------------------------------------
   // 1. Build offset slices from nodeSlices.  Each node slice [a,b)
   //    needs nodeOffsets[a..b] (inclusive), i.e. range [a, b+1).
@@ -132,8 +134,13 @@ void HDF5CSRTemperatureSource::read_time_temperature_data(
   }
   temperatures = CompressedArray2D<double>(std::move(tempsFlat), std::move(localOffsets2));
 
+  auto t_end = std::chrono::high_resolution_clock::now();
+  double elapsed = std::chrono::duration<double>(t_end - t_start).count();
+
   if (universe->me == 0) {
     fprintf(screen, "  CSR read: %zu data elements (no rectangular expansion)\n",
             totalDataElements);
+    fprintf(screen, "  [TIMING] CSR read: %.3f s (%zu elements)\n",
+            elapsed, totalDataElements);
   }
 }

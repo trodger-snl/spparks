@@ -143,6 +143,33 @@ void CommLattice::all()
 }
 
 /* ----------------------------------------------------------------------
+   acquire ghost values for entire proc sub-domain
+   communicate only the first ni integer and nd double arrays
+   ni must be <= ninteger, nd must be <= ndouble
+   buffers were allocated at init() with full counts, so partial is safe
+------------------------------------------------------------------------- */
+
+void CommLattice::all_partial(int ni, int nd)
+{
+  int save_ninteger = ninteger;
+  int save_ndouble = ndouble;
+  int save_site_only = site_only;
+
+  ninteger = ni;
+  ndouble = nd;
+  site_only = (ni == 1 && nd == 0) ? 1 : 0;
+
+  if (site_only) perform_swap_site(allswap);
+  else if (ndouble == 0) perform_swap_int(allswap);
+  else if (ninteger == 0) perform_swap_double(allswap);
+  else perform_swap_general(allswap);
+
+  ninteger = save_ninteger;
+  ndouble = save_ndouble;
+  site_only = save_site_only;
+}
+
+/* ----------------------------------------------------------------------
    reverse communicate changed border values for entire proc sub-domain
 ------------------------------------------------------------------------- */
 

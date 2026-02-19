@@ -506,10 +506,12 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     }
   }
 
-  //Communicate changes
+  //Communicate changes - only KMC-relevant arrays:
+  //  iarray[0..1] = spin, active_flag
+  //  darray[0..3] = q0, qx, qy, qz
   t_start = MPI_Wtime();
   timer->stamp();
-  comm->all();
+  comm->all_partial(2, 4);
   timer->stamp(TIME_COMM);
   t_end = MPI_Wtime();
   t_comm += (t_end - t_start);

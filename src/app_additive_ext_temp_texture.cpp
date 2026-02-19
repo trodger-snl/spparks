@@ -90,11 +90,17 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     dt = atof(arg[3]); //The source timestep (in seconds)
     nrefine = atoi(arg[4]); //How many refinement MC steps to perform after a site solidifies
     
-    //I think we need all of these variables still!
+    // Integer arrays (iarray): 0=spin, 1=active_flag
+    // Double arrays (darray):  0=q0, 1=qx, 2=qy, 3=qz,
+    //   4=mobility_out, 5=T, 6=solid_d, 7=G, 8=V
+    // Arrays 0..nghostint-1 (int) and 0..nghostdbl-1 (dbl) are communicated
+    // to ghost sites for KMC; the rest are local-only (used for I/O and physics).
     ndouble = 9;
     allow_app_update = 1;
     app_update_only = 1; //Skip solid-state growth for now.
     ninteger = 2;
+    nghostint = 2;  // spin, active_flag
+    nghostdbl = 4;  // q0, qx, qy, qz
     sites = unique = NULL;
     unique_dot = NULL;
     neigh_dist = NULL;
@@ -506,12 +512,10 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     }
   }
 
-  //Communicate changes - only KMC-relevant arrays:
-  //  iarray[0..1] = spin, active_flag
-  //  darray[0..3] = q0, qx, qy, qz
+  //Communicate only KMC-relevant ghost arrays (see nghostint/nghostdbl in constructor)
   t_start = MPI_Wtime();
   timer->stamp();
-  comm->all_partial(2, 4);
+  comm->all_partial(nghostint, nghostdbl);
   timer->stamp(TIME_COMM);
   t_end = MPI_Wtime();
   t_comm += (t_end - t_start);

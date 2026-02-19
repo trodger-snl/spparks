@@ -432,6 +432,12 @@ void AppAdditiveExtTempTexture::app_update(double dt)
   bool melting_occurred = false;
 
   //iterate through all the sites for phase transitions (applies to both systems)
+  // Time each phase-transition category around the loop, not per-site
+  double t_melt_start = 0, t_melt_accum = 0;
+  double t_mushy_start = 0, t_mushy_accum = 0;
+  double t_smooth_start = 0, t_smooth_accum = 0;
+  bool in_melting = false, in_mushy = false, in_smoothing = false;
+
   for (int i=0; i<nlocal; i++) {
     // Skip void sites - they never change state
     if (active_flag[i] == 5) continue;
@@ -441,8 +447,7 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     //to avoid repeated initialization
     if( (T[i] >= tl) && active_flag[i] != 2) {
         melting_occurred = true;
-        // Time: Melting operations
-        t_start = MPI_Wtime();
+        if (!in_melting) { t_melt_start = MPI_Wtime(); in_melting = true; }
         active_flag[i] = 2;
         spin[i] = (int) (nspins * ranapp->uniform());
         // Create random orientation as each site
@@ -454,28 +459,38 @@ void AppAdditiveExtTempTexture::app_update(double dt)
         solid_d[i] = 0;
         G[i] = 0;
         V[i] = 0;
-        t_end = MPI_Wtime();
-        t_melting += (t_end - t_start);
     }
     //If we're molten, call the mushy_phase function to figure out any phase change
     else if (active_flag[i] == 2 && T[i] <= tl) {
-        // Time: Mushy phase (includes nucleation + solidification + gradient computation)
-        t_start = MPI_Wtime();
+        // Flush melting timer if switching categories
+        if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
+        if (!in_mushy) { t_mushy_start = MPI_Wtime(); in_mushy = true; }
         mushy_phase(i, ranapp);
-        t_end = MPI_Wtime();
-        t_mushy += (t_end - t_start);
     }
     //Call smoothing
     else if(solid_d[i] < 0 && solid_d[i] > -nrefine -1 && active_flag[i] == 3)    {
-            // Time: Smoothing operations
-            t_start = MPI_Wtime();
+            // Flush prior timers if switching categories
+            if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
+            if (in_mushy) { t_mushy_accum += MPI_Wtime() - t_mushy_start; in_mushy = false; }
+            if (!in_smoothing) { t_smooth_start = MPI_Wtime(); in_smoothing = true; }
             mobility_out[i] = 1;
             smooth_site(i);
             solid_d[i]--;
-            t_end = MPI_Wtime();
-            t_smoothing += (t_end - t_start);
+    }
+    else {
+        // Non-transition site: flush any open timer
+        if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
+        if (in_mushy) { t_mushy_accum += MPI_Wtime() - t_mushy_start; in_mushy = false; }
+        if (in_smoothing) { t_smooth_accum += MPI_Wtime() - t_smooth_start; in_smoothing = false; }
     }
   }
+  // Flush any timer still open after the loop
+  if (in_melting) t_melt_accum += MPI_Wtime() - t_melt_start;
+  if (in_mushy) t_mushy_accum += MPI_Wtime() - t_mushy_start;
+  if (in_smoothing) t_smooth_accum += MPI_Wtime() - t_smooth_start;
+  t_melting += t_melt_accum;
+  t_mushy += t_mushy_accum;
+  t_smoothing += t_smooth_accum;
 
   // Activate powder once when melting first occurs
   // CRITICAL: Use MPI_Allreduce to check if ANY rank has melting, so all ranks call activate_powder_sites()
@@ -496,12 +511,6 @@ void AppAdditiveExtTempTexture::app_update(double dt)
   timer->stamp();
   comm->all();
   timer->stamp(TIME_COMM);
-
-    // Use MPI_Allreduce to check if t_active is 0 on all processors
-    int global_t_active;
-    timer->stamp();
-    MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-    timer->stamp(TIME_COMM);
   t_end = MPI_Wtime();
   t_comm += (t_end - t_start);
 

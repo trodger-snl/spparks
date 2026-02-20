@@ -1114,15 +1114,19 @@ void AppAdditiveExtTempTexture::apply_misorientation(int i, double Tcool, Random
     qy[i] = q_new[2];
     qz[i] = q_new[3];
 
-    // Compute direct quaternion rotation angle (without symmetry considerations)
-    double dot_product = q_site[0]*q_new[0] + q_site[1]*q_new[1] + q_site[2]*q_new[2] + q_site[3]*q_new[3];
-    // Handle both positive and negative dot products (quaternion double cover)
-    dot_product = std::abs(dot_product);
-    // Clamp to avoid numerical issues
-    dot_product = std::min(1.0, dot_product);
-    double direct_angle = 2.0 * acos(dot_product);
-    
-    if(direct_angle >= mis_thresh) {
+    // Compute crystal-symmetry-aware disorientation (consistent with site_energy)
+    double di_rad;
+    if (symmetries.empty()) {
+        // Fallback: direct angle (no symmetry)
+        double dot_product = q_site[0]*q_new[0] + q_site[1]*q_new[1]
+                           + q_site[2]*q_new[2] + q_site[3]*q_new[3];
+        di_rad = 2.0 * acos(std::min(1.0, std::abs(dot_product)));
+    } else {
+        double di_deg = disorientation::compute_disorientation(symmetries, q_site, q_new);
+        di_rad = di_deg * MY_PI / 180.0;
+    }
+
+    if(di_rad >= mis_thresh) {
         spin[i] = (int) (nspins * ranapp->uniform()); //If greater than misorientation threshold, make new grain
     }
 }

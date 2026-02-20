@@ -349,15 +349,28 @@ inline vector<double> rotate_q_towards_u(const vector<double> &q,
   // and the target direction. We'll use the quaternion's principal axis
   // (the vector part when angle is non-zero) and cross it with the target.
   
-  // Extract the axis of rotation from the quaternion
-  // If q = (cos(θ/2), sin(θ/2)*axis), we need to handle the case where sin(θ/2) ≈ 0
-  double qr = q[0];
-  vector<double> qv{q[1], q[2], q[3]};
-  
-  // Get a reference direction from the quaternion
-  // Use the z-axis rotated by the quaternion as the reference
-  vector<double> ref_axis{0.0, 0.0, 1.0};
-  vector<double> current_dir = rotate_vector(q, ref_axis);
+  // Find which <100> axis is closest to the target direction.
+  // For a cubic crystal, [100], [010], [001] are equivalent growth
+  // directions.  We want to rotate the nearest one toward the target,
+  // not the hardcoded [001].
+  vector<double> m = to_rotation_matrix(q);
+  // Columns of m are the lab-frame directions of [100], [010], [001].
+  // m is row-major: column 'col' has components m[col], m[col+3], m[col+6].
+  double best_dot = 0.0;
+  int best_col = 0;
+  for (int col = 0; col < 3; col++) {
+      double dot = m[col] * n[0] + m[col + 3] * n[1] + m[col + 6] * n[2];
+      if (std::fabs(dot) > std::fabs(best_dot)) {
+          best_dot = dot;
+          best_col = col;
+      }
+  }
+  // current_dir = lab-frame direction of the nearest <100>, sign-corrected
+  // so it points toward (not away from) the target.
+  double sign = (best_dot >= 0.0) ? 1.0 : -1.0;
+  vector<double> current_dir{sign * m[best_col],
+                             sign * m[best_col + 3],
+                             sign * m[best_col + 6]};
   
   // Calculate the current misorientation angle
   double dot_product = current_dir[0]*n[0] + current_dir[1]*n[1] + current_dir[2]*n[2];

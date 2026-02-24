@@ -139,11 +139,13 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
 
   int t_active;
 
-  // Number of iarray/darray entries communicated to ghost sites in app_update.
-  // Only the first nghostint integer and nghostdbl double arrays are sent;
+  // Index-based selective ghost communication.
+  // Only the specified iarray/darray indices are communicated to ghost sites;
   // remaining arrays are local-only (used for I/O, physics, not by KMC neighbors).
-  int nghostint;  // iarray[0..nghostint-1]: spin, active_flag
-  int nghostdbl;  // darray[0..nghostdbl-1]: q0, qx, qy, qz
+  int *ghost_iindices;   // iarray indices to ghost-comm
+  int nghost_iarray;     // count
+  int *ghost_dindices;   // darray indices to ghost-comm
+  int nghost_darray;     // count
 
   // Powder activation tracking
   double last_powder_activation_time;  // Track when we last activated powder sites

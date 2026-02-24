@@ -93,14 +93,33 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     // Integer arrays (iarray): 0=spin, 1=active_flag
     // Double arrays (darray):  0=q0, 1=qx, 2=qy, 3=qz,
     //   4=mobility_out, 5=T, 6=solid_d, 7=G, 8=V
-    // Arrays 0..nghostint-1 (int) and 0..nghostdbl-1 (dbl) are communicated
-    // to ghost sites for KMC; the rest are local-only (used for I/O and physics).
+    // Ghost-communicated arrays (see ghost_iindices/ghost_dindices):
+    //   iarray: {0,1} = spin, active_flag
+    //   darray: {0,1,2,3,5} = q0,qx,qy,qz,T (skips 4=mobility_out)
+    // Remaining arrays are local-only (used for I/O and physics).
     ndouble = 9;
     allow_app_update = 1;
     app_update_only = 1; //Skip solid-state growth for now.
     ninteger = 2;
-    nghostint = 2;  // spin, active_flag
-    nghostdbl = 4;  // q0, qx, qy, qz
+
+    // Ghost-communicated arrays (index-based selective comm):
+    //   iarray: {0,1} = spin, active_flag
+    //   darray: {0,1,2,3,5} = q0,qx,qy,qz,T (skips 4=mobility_out)
+    ghost_iindices = NULL;
+    ghost_dindices = NULL;
+
+    nghost_iarray = 2;
+    ghost_iindices = new int[nghost_iarray];
+    ghost_iindices[0] = 0;  // spin
+    ghost_iindices[1] = 1;  // active_flag
+
+    nghost_darray = 5;
+    ghost_dindices = new int[nghost_darray];
+    ghost_dindices[0] = 0;  // q0
+    ghost_dindices[1] = 1;  // qx
+    ghost_dindices[2] = 2;  // qy
+    ghost_dindices[3] = 3;  // qz
+    ghost_dindices[4] = 5;  // T (needed by normal_finder on ghost neighbors)
     sites = unique = NULL;
     unique_dot = NULL;
     neigh_dist = NULL;
@@ -174,6 +193,8 @@ AppAdditiveExtTempTexture::~AppAdditiveExtTempTexture()
   if (nucleation_temps) delete[] nucleation_temps;
   if (nucleation_sizes) delete[] nucleation_sizes;
   if (solid_front_coeffs) delete[] solid_front_coeffs;
+  if (ghost_iindices) delete [] ghost_iindices;
+  if (ghost_dindices) delete [] ghost_dindices;
 }
 
 /* ----------------------------------------------------------------------
@@ -512,10 +533,11 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     }
   }
 
-  //Communicate only KMC-relevant ghost arrays (see nghostint/nghostdbl in constructor)
+  // Communicate only KMC-relevant ghost arrays via index-based selection
   t_start = MPI_Wtime();
   timer->stamp();
-  comm->all_partial(nghostint, nghostdbl);
+  comm->all_selective(ghost_iindices, nghost_iarray,
+                      ghost_dindices, nghost_darray);
   timer->stamp(TIME_COMM);
   t_end = MPI_Wtime();
   t_comm += (t_end - t_start);
@@ -1161,9 +1183,11 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 int i_chosen = neighbor[i][j];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
-                solid_d[i_chosen] = -nrefine -3;
-                G[i_chosen] = G[i];
-                V[i_chosen] = V[i];
+                if (i_chosen < nlocal) {
+                    solid_d[i_chosen] = -nrefine -3;
+                    G[i_chosen] = G[i];
+                    V[i_chosen] = V[i];
+                }
                 nSites--;
                 naccept++;
             }
@@ -1210,9 +1234,11 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 int i_chosen = neighbor[i][nearest_neigh[idx]];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
-                solid_d[i_chosen] = -nrefine -3;
-                G[i_chosen] = G[i];
-                V[i_chosen] = V[i];
+                if (i_chosen < nlocal) {
+                    solid_d[i_chosen] = -nrefine -3;
+                    G[i_chosen] = G[i];
+                    V[i_chosen] = V[i];
+                }
                 nSites--;
                 naccept++;
             }
@@ -1225,11 +1251,13 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
             int idx = shell2_indices[j];
             if(active_flag[neighbor[i][second_nearest[idx]]] == 2) {
                 int i_chosen = neighbor[i][second_nearest[idx]];
-                flip_site(i_chosen, s_in);            
+                flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
-                solid_d[i_chosen] = -nrefine -3;
-                G[i_chosen] = G[i];
-                V[i_chosen] = V[i];
+                if (i_chosen < nlocal) {
+                    solid_d[i_chosen] = -nrefine -3;
+                    G[i_chosen] = G[i];
+                    V[i_chosen] = V[i];
+                }
                 nSites--;
                 naccept++;
             }
@@ -1244,9 +1272,11 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 int i_chosen = neighbor[i][third_nearest[idx]];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
-                solid_d[i_chosen] = -nrefine -3;
-                G[i_chosen] = G[i];
-                V[i_chosen] = V[i];
+                if (i_chosen < nlocal) {
+                    solid_d[i_chosen] = -nrefine -3;
+                    G[i_chosen] = G[i];
+                    V[i_chosen] = V[i];
+                }
                 nSites--;
                 naccept++;
             }
@@ -1277,7 +1307,9 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
     //Otherwise, randomly pick a possilbe neighbor
     int neighran =  round(((nneigh -1) * random->uniform()));
     
-    nucleation_particle_flipper(neighbor[i][possible_neigh[neighran]],nSites, random);
+    int next_site = neighbor[i][possible_neigh[neighran]];
+    if (next_site < nlocal)
+        nucleation_particle_flipper(next_site, nSites, random);
     return;
     
 }
@@ -1699,7 +1731,7 @@ double AppAdditiveExtTempTexture::site_energy_smooth(int i)
   int isite = spin[i];
   int eng = 0;
   for (int j = 0; j < numneigh[i]; j++) {
-    if(active_flag[i] != 3) continue; //Only include solid sites in energy total
+    if(active_flag[neighbor[i][j]] != 3) continue; //Only include solid neighbors in energy total
     if (isite != spin[neighbor[i][j]]) eng++;
   }
   return (double) eng;

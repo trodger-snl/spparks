@@ -144,33 +144,6 @@ void CommLattice::all()
 
 /* ----------------------------------------------------------------------
    acquire ghost values for entire proc sub-domain
-   communicate only the first ni integer and nd double arrays
-   ni must be <= ninteger, nd must be <= ndouble
-   buffers were allocated at init() with full counts, so partial is safe
-------------------------------------------------------------------------- */
-
-void CommLattice::all_partial(int ni, int nd)
-{
-  int save_ninteger = ninteger;
-  int save_ndouble = ndouble;
-  int save_site_only = site_only;
-
-  ninteger = ni;
-  ndouble = nd;
-  site_only = (ni == 1 && nd == 0) ? 1 : 0;
-
-  if (site_only) perform_swap_site(allswap);
-  else if (ndouble == 0) perform_swap_int(allswap);
-  else if (ninteger == 0) perform_swap_double(allswap);
-  else perform_swap_general(allswap);
-
-  ninteger = save_ninteger;
-  ndouble = save_ndouble;
-  site_only = save_site_only;
-}
-
-/* ----------------------------------------------------------------------
-   acquire ghost values for entire proc sub-domain
    communicate only the specific integer and double arrays given by index
    iidx[0..ni-1] are iarray indices, didx[0..nd-1] are darray indices
    allows skipping arrays in the middle (unlike all_partial which requires
@@ -183,6 +156,11 @@ void CommLattice::all_selective(const int *iidx, int ni,
 {
   if (ni + nd == 0) return;
 
+  // Validate array counts against stack buffer limit
+  static const int MAX_SEL = 32;
+  if (ni > MAX_SEL || nd > MAX_SEL)
+    error->all(FLERR,"CommLattice::all_selective: ni or nd exceeds MAX_SEL");
+
   // save originals
   int **save_iarray = iarray;
   double **save_darray = darray;
@@ -191,9 +169,15 @@ void CommLattice::all_selective(const int *iidx, int ni,
   int save_site_only = site_only;
   int *save_site = site;
 
+  // Validate indices are within original array bounds
+  for (int k = 0; k < ni; k++)
+    if (iidx[k] < 0 || iidx[k] >= save_ninteger)
+      error->all(FLERR,"CommLattice::all_selective: iarray index out of range");
+  for (int k = 0; k < nd; k++)
+    if (didx[k] < 0 || didx[k] >= save_ndouble)
+      error->all(FLERR,"CommLattice::all_selective: darray index out of range");
+
   // build temporary reordered pointer arrays on the stack
-  // 32 is generous; no SPPARKS app has more than ~12 arrays per site
-  static const int MAX_SEL = 32;
   int *tmp_iarray[MAX_SEL];
   double *tmp_darray[MAX_SEL];
 

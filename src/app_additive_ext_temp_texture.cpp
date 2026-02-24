@@ -93,10 +93,6 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     // Integer arrays (iarray): 0=spin, 1=active_flag
     // Double arrays (darray):  0=q0, 1=qx, 2=qy, 3=qz,
     //   4=mobility_out, 5=T, 6=solid_d, 7=G, 8=V
-    // Ghost-communicated arrays (see ghost_iindices/ghost_dindices):
-    //   iarray: {0,1} = spin, active_flag
-    //   darray: {0,1,2,3,5} = q0,qx,qy,qz,T (skips 4=mobility_out)
-    // Remaining arrays are local-only (used for I/O and physics).
     ndouble = 9;
     allow_app_update = 1;
     app_update_only = 1; //Skip solid-state growth for now.
@@ -105,21 +101,24 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     // Ghost-communicated arrays (index-based selective comm):
     //   iarray: {0,1} = spin, active_flag
     //   darray: {0,1,2,3,5} = q0,qx,qy,qz,T (skips 4=mobility_out)
+    // Remaining arrays are local-only (used for I/O and physics).
     ghost_iindices = NULL;
     ghost_dindices = NULL;
 
     nghost_iarray = 2;
-    ghost_iindices = new int[nghost_iarray];
-    ghost_iindices[0] = 0;  // spin
-    ghost_iindices[1] = 1;  // active_flag
+    int *gi = new int[nghost_iarray];
+    gi[0] = 0;  // spin
+    gi[1] = 1;  // active_flag
+    ghost_iindices = gi;
 
     nghost_darray = 5;
-    ghost_dindices = new int[nghost_darray];
-    ghost_dindices[0] = 0;  // q0
-    ghost_dindices[1] = 1;  // qx
-    ghost_dindices[2] = 2;  // qy
-    ghost_dindices[3] = 3;  // qz
-    ghost_dindices[4] = 5;  // T (needed by normal_finder on ghost neighbors)
+    int *gd = new int[nghost_darray];
+    gd[0] = 0;  // q0
+    gd[1] = 1;  // qx
+    gd[2] = 2;  // qy
+    gd[3] = 3;  // qz
+    gd[4] = 5;  // T (needed by normal_finder on ghost neighbors)
+    ghost_dindices = gd;
     sites = unique = NULL;
     unique_dot = NULL;
     neigh_dist = NULL;
@@ -1731,7 +1730,8 @@ double AppAdditiveExtTempTexture::site_energy_smooth(int i)
   int isite = spin[i];
   int eng = 0;
   for (int j = 0; j < numneigh[i]; j++) {
-    if(active_flag[neighbor[i][j]] != 3) continue; //Only include solid neighbors in energy total
+    // NB: must check neighbor's active_flag, not center site's (bug fix: was active_flag[i])
+    if(active_flag[neighbor[i][j]] != 3) continue;
     if (isite != spin[neighbor[i][j]]) eng++;
   }
   return (double) eng;

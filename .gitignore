@@ -48,6 +48,7 @@ CMakeCache.txt
 cmake_install.cmake
 CTestTestfile.cmake
 feature_status.cmake
+src/cmake/package_installer.cmake
 
 # OS files
 .DS_Store

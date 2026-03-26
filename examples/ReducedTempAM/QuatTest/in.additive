@@ -38,6 +38,9 @@ diag_style       array d6 sum
 temperature	 0.0
 #############
 
+############# Misorientation target mode: gradient (default) or random
+misorientation_target gradient
+
 
 ############## AM specific parameters, optional inputs, default are for 304L SS
 liquidus                1623 #Liquidus temperature in Kelvin

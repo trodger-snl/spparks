@@ -33,6 +33,11 @@ namespace SPPARKS_NS {
 
 class AppAdditiveExtTempTexture : public AppPottsQuaternion {
  public:
+  enum MisorientationTargetMode {
+    MISORI_TARGET_GRADIENT = 0,
+    MISORI_TARGET_RANDOM = 1
+  };
+
   AppAdditiveExtTempTexture(class SPPARKS *, int, char **);
   virtual ~AppAdditiveExtTempTexture();
   virtual void grow_app();
@@ -105,12 +110,13 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
 	double size_sig;
 	double *solid_front_coeffs;
 	int    solid_front_length;
-	// Texture model parameters
+  // Texture model parameters
 	double c1, c2, c3;
   double max_misorient;
   double t_cool_max;
   double mis_thresh;
   double misorient_alpha;
+  int misorientation_target_mode;
 
  	// Monte Carlo nucleation model parameters
 	int *nucleation_flags;

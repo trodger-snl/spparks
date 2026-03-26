@@ -59,6 +59,14 @@ static double g_t_temp_site_loop = 0.0; // Time in site temperature loop
 static double g_t_cache_build = 0.0;    // One-time cache build time (per layer)
 static bool g_cache_was_built = false;  // Flag to detect cache build in current call
 
+static std::vector<double> sample_random_unit_vector(RandomPark *random)
+{
+  const double z = 2.0 * random->uniform() - 1.0;
+  const double phi = 2.0 * MY_PI * random->uniform();
+  const double radial = sqrt(std::max(0.0, 1.0 - z * z));
+  return std::vector<double>{radial * cos(phi), radial * sin(phi), z};
+}
+
 /* ---------------------------------------------------------------------- */
 
 static char** construct_parent_args(char **arg) {
@@ -151,6 +159,7 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     max_misorient = 0;
     mis_thresh = 10.0 * MY_PI / 180.0; // Default 10 degrees converted to radians
     misorient_alpha = 5.0; // Default exponential steepness parameter
+    misorientation_target_mode = MISORI_TARGET_GRADIENT;
 
     // Void generation defaults
     enable_voids = 0;              // Disabled by default
@@ -278,6 +287,16 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
        error->all(FLERR,"Illegal misorientation_function maximum value: must be greater than 0");
      if (mis_thresh < 0)
        error->all(FLERR,"Illegal misorientation_function threshold value: must be greater than 0");
+  }
+  else if (strcmp(command,"misorientation_target") == 0) {
+     if (narg != 1) error->all(FLERR,"Illegal misorientation_target command");
+     if (strcmp(arg[0],"gradient") == 0) {
+       misorientation_target_mode = MISORI_TARGET_GRADIENT;
+     } else if (strcmp(arg[0],"random") == 0) {
+       misorientation_target_mode = MISORI_TARGET_RANDOM;
+     } else {
+       error->all(FLERR,"Illegal misorientation_target value: use gradient or random");
+     }
   }
   else if (strcmp(command,"fast_forward_search_window") == 0) {
      if (narg != 1) error->all(FLERR,"Illegal fast_forward_search_window command");
@@ -1112,9 +1131,16 @@ void AppAdditiveExtTempTexture::apply_misorientation(int i, double Tcool, Random
     double normalized_temp = Tcool / t_cool_max;
     double mis_angle = max_misorient * (exp(misorient_alpha * normalized_temp) - 1.0) / (exp(misorient_alpha) - 1.0) * MY_PI/180;
 
-    //Calculate the unit-vector surface norm (use voxel counting)
-    vector<double> grad_full = normal_finder(i);  // Returns [norm_x, norm_y, norm_z, magnitude]
-    vector<double> grad_out = {grad_full[0], grad_full[1], grad_full[2]};  // Extract direction only
+    vector<double> target_dir;
+    if (misorientation_target_mode == MISORI_TARGET_GRADIENT) {
+        // Calculate the unit-vector surface norm (use voxel counting)
+        vector<double> grad_full = normal_finder(i);  // Returns [norm_x, norm_y, norm_z, magnitude]
+        target_dir = {grad_full[0], grad_full[1], grad_full[2]};
+    } else if (misorientation_target_mode == MISORI_TARGET_RANDOM) {
+        target_dir = sample_random_unit_vector(ranapp);
+    } else {
+        error->all(FLERR,"Unknown misorientation target mode");
+    }
 
     // Create quaternion vector from site's orientation
     vector<double> q_site = {q0[i], qx[i], qy[i], qz[i]};
@@ -1128,7 +1154,7 @@ void AppAdditiveExtTempTexture::apply_misorientation(int i, double Tcool, Random
         q_site[3] /= q_mag;
     }
 
-    vector<double> q_new = quaternion::rotate_q_towards_u(q_site,grad_out, mis_angle);
+    vector<double> q_new = quaternion::rotate_q_towards_u(q_site,target_dir, mis_angle);
 
     q0[i] = q_new[0];
     qx[i] = q_new[1];
@@ -2246,4 +2272,3 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
 
   timer->stamp(TIME_APP);
 }
-

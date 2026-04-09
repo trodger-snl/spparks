@@ -1,0 +1,90 @@
+# SPPARKS additive_temperature_texture driven by the analytical
+# Moser/Green's-function temperature source: a time-domain integral
+# of an ellipsoidal Gaussian heat source against the unsteady heat
+# kernel, on an insulating half-space (image source factor of 2).
+#
+# This is the same physics as the rosenthal_standard example
+# (in.additive.rosenthal_standard) but expressed as the unsteady
+# integral form of Moser et al. SAND2017 Eq. 4 instead of the
+# steady-state Rosenthal closed-form. In the limit of constant
+# parameters and a long enough emission history the two should
+# agree to within the σ-vs-η reparameterization, modulo finite
+# integration tolerance.
+#
+# Material:    rho ~= 8220 kg/m^3, cp ~= 650 J/(kg K), k = 11.2 W/(m K)
+#              -> alpha = k/(rho*cp) = 2.0959e-6 m^2/s
+# Laser:       Q=285 W (raw), lambda=0.155 (so absorbed = 44.2 W),
+#              v=1.2 m/s
+# Preheat:     T0=573 K, T_m=1573 K
+#
+# Note: the Moser source takes the *raw* laser power Q and absorption
+# efficiency lambda separately, multiplying them internally to get the
+# absorbed power. Compare to the Rosenthal example which folds the
+# image-source factor of 2 into lambda (hence its lambda=0.0775).
+# Here lambda=0.155 because the factor of 2 is now in the integrand
+# prefactor of Eq. 4.
+#
+# Source widths sx, sy, sz are the std-devs of the ellipsoidal
+# Gaussian deposition profile in the moving laser frame. With sx=sy
+# the source is round in plan view; sz controls the depth of energy
+# deposition. Values here are educated guesses for an LPBF spot of
+# ~100 µm characteristic size; calibrate against a high-fidelity
+# reference if you need quantitatively accurate pool dimensions.
+#
+# app_style args: nspins dx[m] dt[s] nrefine
+
+app_style additive_temperature_texture 1000000 20e-6 5e-6 2
+
+shell mkdir -p DumpFiles_moser
+
+seed             56789
+
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 60 0 40 0 20
+
+boundary         n n n
+
+create_box       box
+create_sites     box
+ set             site range 1 1000000
+ set             i2 value 1
+ set             d1 value 0
+ set             d2 value 573
+
+sector           yes
+sweep            random mask no
+
+diag_style       array d6 sum
+
+temperature      0.0
+misorientation_target gradient
+
+liquidus         1573
+solidus          1523
+solid_front_vel  4 -1.0302e-7 1.0533e-4 2.2196e-3 0
+nucleation_density      1e14
+critical_undercooling   5
+undercooling_deviation  3
+mean_nuclei_volume      8.4375e-16
+nuclei_volume_deviation 1.5625e-17
+
+# ----- Moser Green's-function source ---------------------------------
+# args: <Q[W]> <lambda> <k[W/(mK)]> <alpha[m^2/s]> <T0[K]> <cp[J/(kgK)]>
+#       <sx[m]> <sy[m]> <sz[m]>
+setup_temperature_source moser 285.0 0.155 11.2 2.0959e-6 573.0 650.0 50e-6 50e-6 25e-6
+
+# Single linear scan, no repeats, exactly matching the rosenthal_standard
+# example geometry. Coordinates in meters.
+rosenthal_path start 0.1e-3 0.4e-3 0.4e-3 end 1.1e-3 0.4e-3 speed 1.2 repeats 1
+
+shell cd DumpFiles_moser
+
+stats            1e-4
+
+dump             1 text 2e-4 dump.moser.* id i1 i2 d6 x y z
+dump_modify      1 thresh i2 > 1
+
+# Run long enough to cover the full scan plus some cooling.
+run              2e-3
+shell cd ../

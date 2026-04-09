@@ -46,6 +46,7 @@
 #include "potts_quaternion/hcp_symmetries.h"
 #include "potts_quaternion/quaternion.h"
 #include "temperature_source_rosenthal.h"
+#include "temperature_source_moser.h"
 #include "temperature_source_hdf5_unstructured.h"
 
 
@@ -430,9 +431,12 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     RosenthalTemperatureSource* ros_source =
       hdf5_source ? nullptr
                   : dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
+    MoserGreenTemperatureSource* moser_source =
+      (hdf5_source || ros_source) ? nullptr
+                  : dynamic_cast<MoserGreenTemperatureSource*>(temperature_source.get());
     if (hdf5_source) {
       fast_forward_threshold = hdf5_source->get_fast_forward_threshold();
-    } else if (ros_source) {
+    } else if (ros_source || moser_source) {
       fast_forward_threshold = tl;
     }
 
@@ -2244,6 +2248,14 @@ void AppAdditiveExtTempTexture::rosenthal_path_cmd(int narg, char **arg)
   // already a Rosenthal source.
   if (auto* ros = dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get())) {
     ros->set_r_min(0.5 * dx);
+  }
+
+  // If the active source is Moser-Green, hand the path geometry over so
+  // it can build its own GREENAM LaserScan/ScanIntegration. The Moser
+  // source is path-aware and consumes simulation time + world-space
+  // coordinates directly; it does not use scan_layer.
+  if (auto* moser = dynamic_cast<MoserGreenTemperatureSource*>(temperature_source.get())) {
+    moser->build_scan(time, x0, y0, x1, y1, z0, v, repeats);
   }
 
   if (domain->me == 0) {

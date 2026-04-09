@@ -12,6 +12,7 @@ function(configure_conditional_sources)
                 app_additive_ext_temp_texture.cpp
                 temperature_source.cpp
                 temperature_source_rosenthal.cpp
+                temperature_source_moser.cpp
                 temperature_source_hdf5_unstructured.cpp
                 temperature_source_hdf5_csr.cpp
             )
@@ -22,6 +23,7 @@ function(configure_conditional_sources)
                 app_additive_ext_temp_texture.cpp
                 temperature_source.cpp
                 temperature_source_rosenthal.cpp
+                temperature_source_moser.cpp
             )
             message(STATUS "Added HDF5 temperature source files (serial mode - no parallel I/O)")
         endif()

@@ -13,6 +13,7 @@
 
 #include "temperature_source.h"
 #include "temperature_source_rosenthal.h"
+#include "temperature_source_moser.h"
 #include "temperature_source_hdf5_unstructured.h"
 #include "temperature_source_hdf5_csr.h"
 #include "domain.h"
@@ -76,6 +77,8 @@ std::unique_ptr<TemperatureSource> SPPARKS_NS::create_temperature_source(
 {
   if (type == "rosenthal") {
     return std::make_unique<RosenthalTemperatureSource>(spk);
+  } else if (type == "moser") {
+    return std::make_unique<MoserGreenTemperatureSource>(spk);
   } else if (type == "hdf5_unstructured") {
     return std::make_unique<HDF5UnstructuredTemperatureSource>(spk);
   } else if (type == "hdf5_csr") {

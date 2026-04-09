@@ -893,129 +893,23 @@ double AppAdditiveExtTempTexture::site_energy(int i) {
 }
 
 /* ----------------------------------------------------------------------
-   rKMC method
-   perform a site event with no null bin rejection
-   flip to random neighbor spin without null bin
-   technically this is an incorrect rejection-KMC algorithm
-   I think we can eventually get rid of mobilityout
+   site_event_rejection is intentionally not used by this app.
+
+   AppAdditiveExtTempTexture overrides app_update() (see line ~400) to drive
+   site evolution directly via mushy_phase()/site_event_solidification() and
+   smooth_site(); the framework's rejection-KMC sweep loop in
+   AppLattice::iterate_rejection is bypassed entirely. This override exists
+   only to satisfy the pure virtual declared in AppLattice. If something
+   ever calls it, that indicates the standard sweep path has been wired up
+   on this app by mistake -- bail out loudly rather than silently running
+   stale logic.
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
+void AppAdditiveExtTempTexture::site_event_rejection(int /*i*/, RandomPark * /*random*/)
 {
-  timer->stamp();
-
-  // Skip void sites - they never participate in Monte Carlo events
-  if (active_flag[i] == 5) {
-    timer->stamp(TIME_SOLVE);
-    return;
-  }
-
-  int oldstate = spin[i];
-  SiteState s_old(spin[i], {q0[i], qx[i], qy[i], qz[i]});
-  double einitial = site_energy(i);
-  double efinal = 0;
-  double Mobloc = 0;
-  double dotValue = 0;
-
-    //Assign the local mobility
-    Mobloc = mobility_out[i];
-    
-    int j,m,value;
-    int nevent = 0;
-    
-    if((Mobloc < 0.0) || (Mobloc > 1.0001)) {
-        mobility_out[i] = 0;
-        return;
-    }
-    
-    if(solid_d[i] < 0 && solid_d[i] > -nrefine -1) {
-        //Go through neighbor list and add them to possible switches
-        for (int j = 0; j < numneigh[i]; j++) {
-            // Exclude void neighbors
-            if(active_flag[neighbor[i][j]] == 5) continue;
-            if(active_flag[neighbor[i][j]] == 3 || active_flag[neighbor[i][j]] == 1) {
-                // Calculate temperature gradient/grain misorientation and store in array
-                // Use cumulative probability for random sampling
-                //Exclude gas or molten sites from the Potts neighbor tally
-                double melt_misori_val = melt_misorientation(neighbor[i][j],c1,c2,c3);
-                dotValue += melt_misori_val;
-                unique_dot[nevent] = dotValue;
-                value = spin[neighbor[i][j]];
-                unique[nevent] = value;
-                unique_neigh[nevent] = neighbor[i][j];
-                nevent++;										
-            }
-        }
-        //If no neighbor is eligible, return before changing anything. Will try next sweep.
-        if (nevent == 0) return;
-        // Use nevent-1 to account for extra event at end
-        double dran = (unique_dot[nevent - 1]*random->uniform());
-        //if (iran >= nevent) iran = nevent-1;
-        //Go through possible events and pick one
-        for( int j = 0; j < nevent -1; j++) {
-            if(dran <= unique_dot[j]) {
-              int neighran = unique_neigh[j];
-              SiteState s_new(unique[j], {q0[neighran], qx[neighran], qy[neighran], qz[neighran]});
-              flip_site(i, s_new);
-              efinal = site_energy(i);
-            }
-        }
-    }
-
-  else {
-      for (j = 0; j < numneigh[i]; j++) {
-        value = spin[neighbor[i][j]];
-        //Exclude gas, powder or molten sites from the Potts neighbor tally
-        if (value == spin[i] || value == nspins || active_flag[neighbor[i][j]] != 3) continue;
-        for (m = 0; m < nevent; m++) 
-          if (value == unique[m]) break;
-        if (m < nevent) continue;
-        unique[nevent] = value;
-        unique_neigh[nevent] = neighbor[i][j];
-        nevent += 1;
-      }
-
-      if (nevent == 0) return;
-      int iran = (int) (nevent*random->uniform());
-      if (iran >= nevent) iran = nevent-1;
-      int neighran = unique_neigh[iran]; // Get neighbor index
-      SiteState s_new(unique[iran], {q0[neighran], qx[neighran], qy[neighran], qz[neighran]});
-      flip_site(i, s_new);
-      efinal = site_energy(i);
-  }
-  // accept or reject via Boltzmann criterion
-
-  if (efinal <= einitial) {
-     if (random->uniform() > Mobloc){
-       flip_site(i, s_old);
-     }
-  }
-  else if (temperature == 0.0) {
-    flip_site(i, s_old);
-
-  } 
-  else if (random->uniform() > Mobloc * exp((einitial-efinal)*t_inverse)) {
-    flip_site(i, s_old);
-
-  }
-
-
-
-  if (spin[i] != oldstate) {
-    naccept++;
-  }
-
-  // set mask if site could not have changed
-  // if site changed, unset mask of sites with affected propensity
-  // OK to change mask of ghost sites since never used
-  if (Lmask) {
-    if (einitial < 0.5*numneigh[i]) mask[i] = 1;
-    if (spin[i] != oldstate)
-      for (int j = 0; j < numneigh[i]; j++)
-	      mask[neighbor[i][j]] = 0;
-  }
-
-  timer->stamp(TIME_SOLVE);
+  error->one(FLERR,
+    "AppAdditiveExtTempTexture::site_event_rejection should never be "
+    "called; this app drives site evolution from app_update()");
 }
 
 /* ----------------------------------------------------------------------
@@ -1127,11 +1021,12 @@ void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, R
     //If no neighbor is eligible, return before changing anything. Will try next sweep.
     if (nevent == 0) return;
     
-    // Use nevent-1 to account for extra event at end
+    // unique_dot[nevent - 1] is the total cumulative mobility (last entry).
     double dran = (unique_dot[nevent - 1]*random->uniform());
-    //if (iran >= nevent) iran = nevent-1;
-    //Go through possible events and pick one
-    for( int j = 0; j < nevent - 1; j++) {
+    // Roulette-wheel selection: find the first j with dran <= unique_dot[j].
+    // Loop must run through j = nevent - 1 so the last neighbor is reachable;
+    // the early return after flip_site keeps the body single-shot.
+    for( int j = 0; j < nevent; j++) {
         if(dran <= unique_dot[j]) {
             int neighran = unique_neigh[j];
             SiteState s1(unique[j],{q0[neighran],qx[neighran],qy[neighran],qz[neighran]});

@@ -1,0 +1,14 @@
+# Pure white-noise jitter for stress testing the fluctuation pipeline.
+# No correlation length: every sample is independent.
+length_m: 0.005
+dx_m: 5.0e-6
+seed: 24680
+correlation: 0.0
+
+dW:
+  type: white
+  sigma: 0.02
+
+dD:
+  type: white
+  sigma: 0.02

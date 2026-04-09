@@ -1,0 +1,17 @@
+# Lorentzian (correlated-noise) ΔW/W, ΔD/D with ~5% RMS width fluctuations
+# and 200 µm correlation length, in line with the order of magnitude reported
+# by Subraveti et al. 2025 for stationary LPBF scan-track imagery.
+length_m: 0.005       # 5 mm of scan track
+dx_m: 5.0e-6          # 5 µm sample spacing
+seed: 12345
+correlation: 0.7      # Pearson rho between dW and dD
+
+dW:
+  type: lorentzian
+  sigma: 0.05
+  tau_m: 200.0e-6
+
+dD:
+  type: lorentzian
+  sigma: 0.08
+  tau_m: 200.0e-6

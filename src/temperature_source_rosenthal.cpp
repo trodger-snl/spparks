@@ -16,8 +16,11 @@
 #include "domain.h"
 #include "math_const.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -34,7 +37,12 @@ RosenthalTemperatureSource::RosenthalTemperatureSource(SPPARKS *spk)
     k_cond(0.0), alpha(0.0), T0_default(300.0),
     eta_y(1.0), eta_z(1.0),
     d_keyhole(0.0), n_quad(8),
-    r_min(0.0)
+    r_min(0.0),
+    fluct_periodic(true),
+    fluct_total_length(0.0),
+    fluct_warned_clamp(false),
+    fluct_warned_linearization(false),
+    eta_y_eff(1.0), eta_z_eff(1.0)
 {
   ambient_temperature = T0_default;
 }
@@ -119,6 +127,10 @@ void RosenthalTemperatureSource::setup_temperature_source(const std::vector<std:
   }
 
   ambient_temperature = T0_default;
+  // Initialize per-step eta cache to nominal values; set_arc_length()
+  // overwrites these when fluctuations are loaded.
+  eta_y_eff = eta_y;
+  eta_z_eff = eta_z;
   validate_after_setup();
   source_initialized = true;
 
@@ -206,8 +218,10 @@ double RosenthalTemperatureSource::rosenthal_pointwise(double xi, double y_rel, 
   }
 
   case RosenthalMode::ANISOTROPIC: {
-    const double yy = eta_y * y_rel;
-    const double zz = eta_z * z_rel;
+    // Use the cached effective etas (set per-step by set_arc_length when
+    // fluctuations are loaded; equal to the nominal etas otherwise).
+    const double yy = eta_y_eff * y_rel;
+    const double zz = eta_z_eff * z_rel;
     const double R_eta = std::sqrt(xi*xi + yy*yy + zz*zz);
     return T0 + 2.0 * rosenthal_kernel(lambda * Q, v, xi, R_eta);
   }
@@ -381,7 +395,115 @@ void RosenthalTemperatureSource::print_source_info() const
               << "  d_keyhole  = " << d_keyhole << " m\n"
               << "  n_quad     = " << n_quad    << "\n";
   }
+  if (!fluct_s.empty()) {
+    std::cout << "  fluctuations: " << fluct_s.size() << " samples, "
+              << "s in [" << fluct_s.front() << ", " << fluct_s.back() << "] m, "
+              << (fluct_periodic ? "periodic" : "continuous") << "\n";
+  }
   std::cout.flush();
+}
+
+/* ----------------------------------------------------------------------
+   Stochastic ΔW/W, ΔD/D modulation of eta_y, eta_z (anisotropic mode).
+------------------------------------------------------------------------- */
+
+void RosenthalTemperatureSource::load_fluctuations(const std::vector<double> &s,
+                                                   const std::vector<double> &dW_over_W,
+                                                   const std::vector<double> &dD_over_D,
+                                                   bool periodic)
+{
+  if (s.empty() || s.size() != dW_over_W.size() || s.size() != dD_over_D.size()) {
+    error->all(FLERR,"rosenthal_fluctuations: arrays must be non-empty and equal length");
+  }
+  for (size_t i = 1; i < s.size(); ++i) {
+    if (s[i] <= s[i-1])
+      error->all(FLERR,"rosenthal_fluctuations: s column must be strictly increasing");
+  }
+  for (size_t i = 0; i < s.size(); ++i) {
+    if (std::fabs(dW_over_W[i]) >= 1.0 || std::fabs(dD_over_D[i]) >= 1.0)
+      error->all(FLERR,"rosenthal_fluctuations: |dW/W| and |dD/D| must be < 1");
+  }
+  fluct_s        = s;
+  fluct_dW       = dW_over_W;
+  fluct_dD       = dD_over_D;
+  fluct_periodic = periodic;
+  fluct_total_length = fluct_s.back() - fluct_s.front();
+  fluct_warned_clamp = false;
+  fluct_warned_linearization = false;
+  // Reset cache to nominal until set_arc_length is called.
+  eta_y_eff = eta_y;
+  eta_z_eff = eta_z;
+}
+
+void RosenthalTemperatureSource::set_arc_length(double s)
+{
+  if (fluct_s.empty()) return;
+
+  double s_lookup = s;
+  if (fluct_periodic) {
+    if (fluct_total_length > 0.0) {
+      s_lookup = fluct_s.front()
+               + std::fmod(s - fluct_s.front(), fluct_total_length);
+      if (s_lookup < fluct_s.front()) s_lookup += fluct_total_length;
+    } else {
+      s_lookup = fluct_s.front();
+    }
+  } else {
+    if (s_lookup > fluct_s.back()) {
+      if (!fluct_warned_clamp && domain->me == 0) {
+        std::cout << "WARNING: rosenthal_fluctuations continuous track exhausted "
+                  << "(s=" << s << " > " << fluct_s.back()
+                  << "); clamping to last value." << std::endl;
+        fluct_warned_clamp = true;
+      }
+      s_lookup = fluct_s.back();
+    }
+    if (s_lookup < fluct_s.front()) s_lookup = fluct_s.front();
+  }
+
+  // Linear interp via lower_bound on fluct_s.
+  auto it = std::lower_bound(fluct_s.begin(), fluct_s.end(), s_lookup);
+  std::ptrdiff_t idx = it - fluct_s.begin();
+  if (idx <= 0) idx = 1;
+  if (static_cast<size_t>(idx) >= fluct_s.size()) idx = fluct_s.size() - 1;
+  const size_t i = static_cast<size_t>(idx);
+  const double s0 = fluct_s[i-1];
+  const double s1 = fluct_s[i];
+  const double t  = (s1 > s0) ? (s_lookup - s0) / (s1 - s0) : 0.0;
+  const double dW = (1.0 - t) * fluct_dW[i-1] + t * fluct_dW[i];
+  const double dD = (1.0 - t) * fluct_dD[i-1] + t * fluct_dD[i];
+
+  if (!fluct_warned_linearization &&
+      (std::fabs(dW) > 0.5 || std::fabs(dD) > 0.5) && domain->me == 0) {
+    std::cout << "WARNING: rosenthal_fluctuations |dW/W| or |dD/D| > 0.5; "
+              << "first-order linearization eta_eff = eta*(1 - dW/W) is no longer "
+              << "accurate." << std::endl;
+    fluct_warned_linearization = true;
+  }
+
+  eta_y_eff = eta_y * (1.0 - dW);
+  eta_z_eff = eta_z * (1.0 - dD);
+  // Defensive clamp: keep effective etas strictly positive.
+  if (eta_y_eff < 1.0e-3) eta_y_eff = 1.0e-3;
+  if (eta_z_eff < 1.0e-3) eta_z_eff = 1.0e-3;
+}
+
+void RosenthalTemperatureSource::promote_to_anisotropic()
+{
+  if (mode == RosenthalMode::ANISOTROPIC) return;
+  if (mode == RosenthalMode::KEYHOLE) {
+    error->all(FLERR,"rosenthal_fluctuations: not supported with keyhole mode");
+  }
+  // STANDARD -> ANISOTROPIC with unit etas (kernel result is identical).
+  mode = RosenthalMode::ANISOTROPIC;
+  eta_y = 1.0;
+  eta_z = 1.0;
+  eta_y_eff = 1.0;
+  eta_z_eff = 1.0;
+  if (domain->me == 0) {
+    std::cout << "rosenthal_fluctuations: auto-promoted STANDARD source to "
+              << "ANISOTROPIC (eta_y=eta_z=1)" << std::endl;
+  }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -390,5 +512,11 @@ void RosenthalTemperatureSource::cleanup()
 {
   quad_nodes.clear();
   quad_weights.clear();
+  fluct_s.clear();
+  fluct_dW.clear();
+  fluct_dD.clear();
+  fluct_total_length = 0.0;
+  fluct_warned_clamp = false;
+  fluct_warned_linearization = false;
   source_initialized = false;
 }

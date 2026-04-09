@@ -111,6 +111,26 @@ class RosenthalTemperatureSource : public TemperatureSource {
 
   RosenthalMode get_mode() const { return mode; }
 
+  // ----- Stochastic per-step modulation of eta_y, eta_z (anisotropic) -----
+  // Sequences are user-supplied (file or test fixture) and indexed by the
+  // laser's cumulative arc length s in meters. Linearization:
+  //   eta_y_eff(s) = eta_y * (1 - dW(s)/W)
+  //   eta_z_eff(s) = eta_z * (1 - dD(s)/D)
+  // valid for small fluctuations (|dW|,|dD| << 1).
+  void load_fluctuations(const std::vector<double> &s,
+                         const std::vector<double> &dW_over_W,
+                         const std::vector<double> &dD_over_D,
+                         bool periodic);
+  bool has_fluctuations() const { return !fluct_s.empty(); }
+
+  // Called once per timestep before the per-site loop. Computes
+  // eta_y_eff/eta_z_eff for the current laser arc length and caches them
+  // so rosenthal_pointwise() runs at full speed inside the site loop.
+  void set_arc_length(double s);
+
+  // Auto-promote STANDARD -> ANISOTROPIC (eta_y=eta_z=1).
+  void promote_to_anisotropic();
+
  private:
   RosenthalMode mode;
 
@@ -135,6 +155,18 @@ class RosenthalTemperatureSource : public TemperatureSource {
 
   // Singularity cutoff (meters); 0 means no cutoff (set externally)
   double r_min;
+
+  // Stochastic ΔW/W, ΔD/D vs. arc length (anisotropic mode only)
+  std::vector<double> fluct_s;          // sorted, length N
+  std::vector<double> fluct_dW;         // dW/W at each s
+  std::vector<double> fluct_dD;         // dD/D at each s
+  bool   fluct_periodic;
+  double fluct_total_length;            // = fluct_s.back() - fluct_s.front()
+  bool   fluct_warned_clamp;            // one-time warning flags
+  bool   fluct_warned_linearization;
+  // Per-step cache of effective etas; default to nominal values
+  double eta_y_eff;
+  double eta_z_eff;
 
   // Helpers
   double rosenthal_kernel(double Q_eff, double v, double xi, double R) const;

@@ -1,0 +1,18 @@
+# Stochastic ΔW/W, ΔD/D for in.additive.rosenthal_multiscan with NSCANS=5.
+# Path: 1.5 mm at 1.2 m/s, repeated 5x -> total scanned arc = 7.5 mm.
+# Generate 8 mm to leave headroom; mode continuous in the input script
+# means each repeat consumes a fresh 1.5 mm segment of this track.
+length_m: 0.008
+dx_m: 5.0e-6
+seed: 12345
+correlation: 0.5
+
+dW:
+  type: lorentzian
+  sigma: 0.05
+  tau_m: 200.0e-6
+
+dD:
+  type: lorentzian
+  sigma: 0.06
+  tau_m: 200.0e-6

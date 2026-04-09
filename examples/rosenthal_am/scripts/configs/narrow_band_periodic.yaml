@@ -1,0 +1,18 @@
+# Narrow-band oscillation with a 100 µm spatial period (1e4 1/m), to
+# probe the response of the Rosenthal pool to a single-frequency drive.
+length_m: 0.005
+dx_m: 5.0e-6
+seed: 13579
+correlation: 1.0      # ΔW and ΔD perfectly co-vary
+
+dW:
+  type: narrow_band
+  sigma: 0.04
+  f0: 1.0e4           # 1/m -> 100 µm period
+  df: 1.0e3
+
+dD:
+  type: narrow_band
+  sigma: 0.04
+  f0: 1.0e4
+  df: 1.0e3

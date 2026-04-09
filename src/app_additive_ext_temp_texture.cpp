@@ -183,6 +183,8 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     scan_layer_time = 0.0;
     scan_layer_active = false;
     rosenthal_path_set = false;
+    laser_arc_length = 0.0;
+    fluctuations_loaded = false;
 
     // Temperature optimization flags (all enabled by default)
     opt_use_spatial_grid = true;
@@ -385,6 +387,9 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
   }
   else if (strcmp(command,"rosenthal_path") == 0) {
     rosenthal_path_cmd(narg, arg);
+  }
+  else if (strcmp(command,"rosenthal_fluctuations") == 0) {
+    rosenthal_fluctuations_cmd(narg, arg);
   }
 
   else error->all(FLERR,"Unrecognized command");
@@ -2230,6 +2235,9 @@ void AppAdditiveExtTempTexture::rosenthal_path_cmd(int narg, char **arg)
   scan_layer_time = time;  // anchor the layer pose to the current sim time
   scan_layer_active = true;
   rosenthal_path_set = true;
+  // Reset cumulative arc length so any loaded fluctuation track restarts
+  // from its origin on each new path definition.
+  laser_arc_length = 0.0;
 
   // Size the singularity cutoff to the lattice so the 1/R prefactor at
   // the laser site stays finite. Only meaningful when the source is
@@ -2243,6 +2251,112 @@ void AppAdditiveExtTempTexture::rosenthal_path_cmd(int narg, char **arg)
               << ") -> (" << x1 << "," << y1 << "," << z0 << ")"
               << " speed=" << v << " m/s, repeats=" << repeats << std::endl;
   }
+}
+
+/* ----------------------------------------------------------------------
+   rosenthal_fluctuations command:
+     rosenthal_fluctuations <file> [mode periodic|continuous]
+
+   File is an ASCII three-column table:
+       s[m]   dW_over_W   dD_over_D
+   Comment lines starting with '#' are skipped. The s column must be
+   strictly increasing. Read on rank 0, broadcast to all ranks.
+
+   Modulates eta_y, eta_z of the Rosenthal source per timestep using a
+   first-order linearization of the analytical pool. Forces the source
+   into ANISOTROPIC mode (auto-promotes from STANDARD with eta=1, errors
+   for KEYHOLE).
+------------------------------------------------------------------------- */
+
+void AppAdditiveExtTempTexture::rosenthal_fluctuations_cmd(int narg, char **arg)
+{
+  if (narg < 1)
+    error->all(FLERR,"Illegal rosenthal_fluctuations command: expected <file> [mode periodic|continuous]");
+
+  bool periodic = true;  // default
+  if (narg >= 3) {
+    if (strcmp(arg[1],"mode") != 0)
+      error->all(FLERR,"rosenthal_fluctuations: expected keyword 'mode' as second argument");
+    if (strcmp(arg[2],"periodic") == 0) periodic = true;
+    else if (strcmp(arg[2],"continuous") == 0) periodic = false;
+    else error->all(FLERR,"rosenthal_fluctuations: mode must be 'periodic' or 'continuous'");
+  } else if (narg == 2) {
+    error->all(FLERR,"rosenthal_fluctuations: 'mode' keyword requires a value");
+  }
+
+  // Validate against current temperature source.
+  if (!temperature_source) {
+    error->all(FLERR,"rosenthal_fluctuations: setup_temperature_source rosenthal must be called first");
+  }
+  RosenthalTemperatureSource *ros =
+    dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
+  if (!ros) {
+    error->all(FLERR,"rosenthal_fluctuations: temperature source is not Rosenthal");
+  }
+  if (ros->get_mode() == RosenthalTemperatureSource::RosenthalMode::KEYHOLE) {
+    error->all(FLERR,"rosenthal_fluctuations: not supported with keyhole mode");
+  }
+
+  // Read on rank 0.
+  std::vector<double> s_vec, dW_vec, dD_vec;
+  int n_samples = 0;
+  if (domain->me == 0) {
+    std::ifstream fin(arg[0]);
+    if (!fin) {
+      std::string msg = "rosenthal_fluctuations: could not open file '";
+      msg += arg[0];
+      msg += "'";
+      error->one(FLERR,msg.c_str());
+    }
+    std::string line;
+    int lineno = 0;
+    while (std::getline(fin, line)) {
+      ++lineno;
+      // Strip leading whitespace
+      size_t p = line.find_first_not_of(" \t\r\n");
+      if (p == std::string::npos) continue;
+      if (line[p] == '#') continue;
+      std::istringstream iss(line);
+      double s_val, dW, dD;
+      if (!(iss >> s_val >> dW >> dD)) {
+        std::ostringstream oss;
+        oss << "rosenthal_fluctuations: parse error on line " << lineno
+            << " of " << arg[0];
+        error->one(FLERR,oss.str().c_str());
+      }
+      s_vec.push_back(s_val);
+      dW_vec.push_back(dW);
+      dD_vec.push_back(dD);
+    }
+    n_samples = static_cast<int>(s_vec.size());
+    if (n_samples < 2) {
+      error->one(FLERR,"rosenthal_fluctuations: file must contain at least 2 samples");
+    }
+    std::cout << "rosenthal_fluctuations: loaded " << n_samples
+              << " samples from " << arg[0]
+              << " (mode=" << (periodic ? "periodic" : "continuous") << ")"
+              << std::endl;
+  }
+
+  // Broadcast count, then arrays.
+  MPI_Bcast(&n_samples, 1, MPI_INT, 0, world);
+  if (domain->me != 0) {
+    s_vec.resize(n_samples);
+    dW_vec.resize(n_samples);
+    dD_vec.resize(n_samples);
+  }
+  MPI_Bcast(s_vec.data(),  n_samples, MPI_DOUBLE, 0, world);
+  MPI_Bcast(dW_vec.data(), n_samples, MPI_DOUBLE, 0, world);
+  MPI_Bcast(dD_vec.data(), n_samples, MPI_DOUBLE, 0, world);
+
+  // Promote STANDARD -> ANISOTROPIC if needed (no-op for ANISOTROPIC).
+  if (ros->get_mode() == RosenthalTemperatureSource::RosenthalMode::STANDARD) {
+    ros->promote_to_anisotropic();
+  }
+
+  ros->load_fluctuations(s_vec, dW_vec, dD_vec, periodic);
+  fluctuations_loaded = true;
+  laser_arc_length = 0.0;
 }
 
 /* ----------------------------------------------------------------------
@@ -2425,15 +2539,41 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
       double advance = simulation_time - scan_layer_time;
       // tolerance: ignore tiny negative drift from FP arithmetic
       const double step = (dt > 0.0) ? dt : 1.0e-6;
+      // Accumulate cumulative arc length across the chunked move() calls.
+      // RASTER::Layer::get_distance_traveled() resets to 0 on auto-rewind
+      // at the end of each repeat, so we measure deltas around each move()
+      // and fall back to v*dt when a wrap is detected.
+      const double v_path = scan_layer.get_speed();
       while (advance > step) {
+        const double dist_before = scan_layer.get_distance_traveled();
         if (!scan_layer.move(step)) { scan_layer_active = false; break; }
+        const double dist_after = scan_layer.get_distance_traveled();
+        const double delta = (dist_after >= dist_before)
+                               ? (dist_after - dist_before)
+                               : (dist_after + v_path * step);
+        laser_arc_length += delta;
         advance -= step;
       }
       if (scan_layer_active && advance > 0.0) {
-        if (!scan_layer.move(advance)) scan_layer_active = false;
+        const double dist_before = scan_layer.get_distance_traveled();
+        if (!scan_layer.move(advance)) {
+          scan_layer_active = false;
+        } else {
+          const double dist_after = scan_layer.get_distance_traveled();
+          const double delta = (dist_after >= dist_before)
+                                 ? (dist_after - dist_before)
+                                 : (dist_after + v_path * advance);
+          laser_arc_length += delta;
+        }
       }
     }
     scan_layer_time = simulation_time;
+
+    // Per-step ΔW/W, ΔD/D lookup happens once here, before the per-site
+    // loop. No-op if no fluctuation track was loaded.
+    if (fluctuations_loaded) {
+      ros_source->set_arc_length(laser_arc_length);
+    }
 
     const double v_laser = scan_layer.get_speed();
     // Use the source's own preheat/ambient (Rosenthal T0), not the app's

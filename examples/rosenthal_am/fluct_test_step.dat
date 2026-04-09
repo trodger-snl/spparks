@@ -1,0 +1,10 @@
+# Step-function ΔW/W, ΔD/D fixture for rosenthal_fluctuations.
+# Columns: s[m]   dW_over_W   dD_over_D
+#
+# Along a 1-mm scan path: ΔW jumps from 0 to +0.20 at the midpoint
+# (s = 0.5 mm). With dW>0 the source narrows eta_y -> the pool widens
+# transversely. ΔD is held at 0 throughout.
+0.0000e-3   0.00   0.00
+0.4999e-3   0.00   0.00
+0.5000e-3   0.20   0.00
+2.0000e-3   0.20   0.00

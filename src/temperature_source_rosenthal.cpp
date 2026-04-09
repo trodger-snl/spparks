@@ -5,73 +5,38 @@
 
    Copyright (2008) Sandia Corporation.  Under the terms of Contract
    DE-AC04-94AL85000 with Sandia Corporation, the U.S. Government retains
-   certain rights in this software.  This software is distributed under 
+   certain rights in this software.  This software is distributed under
    the GNU General Public License.
 
    See the README file in the top-level SPPARKS directory.
-------------------------------------------------------------------------- */
-
-/* ----------------------------------------------------------------------
-   WARNING: This temperature source is UNTESTED with the current modular
-   temperature source system and is unlikely to work in its current state.
-   
-   Only temperature_source_hdf5_unstructured.cpp has been tested and 
-   validated with the modular system. Use of this temperature source
-   may result in compilation errors or runtime failures.
-   
-   For working temperature sources, use:
-   - hdf5_unstructured (tested and validated)
 ------------------------------------------------------------------------- */
 
 #include "temperature_source_rosenthal.h"
 #include "error.h"
 #include "domain.h"
 #include "math_const.h"
+
 #include <cmath>
-#include <fstream>
-#include <sstream>
 #include <iostream>
-#include <algorithm>
+#include <limits>
+#include <stdexcept>
+#include <string>
 
 using namespace SPPARKS_NS;
 using namespace MathConst;
 
 /* ---------------------------------------------------------------------- */
 
-RosenthalTemperatureSource::RosenthalTemperatureSource(SPPARKS *spk) : TemperatureSource(spk)
+RosenthalTemperatureSource::RosenthalTemperatureSource(SPPARKS *spk)
+  : TemperatureSource(spk),
+    mode(RosenthalMode::STANDARD),
+    Q(0.0), lambda(0.0), lambda_p(0.0), lambda_l(0.0),
+    k_cond(0.0), alpha(0.0), T0_default(300.0),
+    eta_y(1.0), eta_z(1.0),
+    d_keyhole(0.0), n_quad(8),
+    r_min(0.0)
 {
-  // Initialize default values
-  laser_power = 1000.0;          // 1 kW default
-  scan_velocity = 0.01;          // 1 cm/s default
-  thermal_conductivity = 30.0;   // W/m·K (typical for steel)
-  thermal_diffusivity = 5.3e-6;  // m²/s (typical for steel)
-  ambient_temperature = 300.0;   // Room temperature
-  
-  path_type = LINEAR;
-  path_start_time = 0.0;
-  path_end_time = 1.0;
-  
-  // Initialize cache
-  cached_time = -1.0;
-  cached_laser_position = {0.0, 0.0, 0.0};
-  cached_laser_velocity = 0.0;
-  
-  // Initialize path parameters with defaults
-  linear_start = {0.0, 0.0, 0.0};
-  linear_end = {0.01, 0.0, 0.0}; // 1 cm linear path
-  
-  // Raster defaults
-  raster_x_min = 0.0; raster_x_max = 0.01;
-  raster_y_min = 0.0; raster_y_max = 0.01;
-  raster_z_height = 0.0;
-  raster_spacing = 0.001; // 1 mm spacing
-  raster_num_passes = 0;
-  
-  // Spiral defaults
-  spiral_center = {0.0, 0.0, 0.0};
-  spiral_radius_max = 0.005; // 5 mm
-  spiral_pitch = 0.001;      // 1 mm
-  spiral_turns = 5.0;
+  ambient_temperature = T0_default;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -82,446 +47,334 @@ RosenthalTemperatureSource::~RosenthalTemperatureSource()
 }
 
 /* ----------------------------------------------------------------------
-   Setup temperature source from command line arguments
-   Expected format: laser_power scan_velocity thermal_conductivity thermal_diffusivity ambient_temp
+   Setup. Expected forms (SI units throughout):
+
+   standard <Q> <lambda>   <k> <alpha> <T0>
+   aniso    <Q> <lambda>   <k> <alpha> <T0> <eta_y> <eta_z>
+   keyhole  <Q> <lambda_p> <lambda_l> <k> <alpha> <T0> <d> [<n_quad>]
 ------------------------------------------------------------------------- */
 
 void RosenthalTemperatureSource::setup_temperature_source(const std::vector<std::string> &args)
 {
-  if (args.size() < 5) {
-    error->all(FLERR,"Insufficient arguments for Rosenthal temperature source setup");
+  if (args.empty()) {
+    error->all(FLERR,"setup_temperature_source rosenthal: missing mode (standard|aniso|keyhole)");
   }
-  
-  try {
-    laser_power = std::stod(args[0]);
-    scan_velocity = std::stod(args[1]);
-    thermal_conductivity = std::stod(args[2]);
-    thermal_diffusivity = std::stod(args[3]);
-    ambient_temperature = std::stod(args[4]);
-  } catch (const std::exception &e) {
-    error->all(FLERR,"Invalid numeric arguments in Rosenthal temperature source setup");
+
+  const std::string &mode_str = args[0];
+
+  auto parse = [&](size_t i, const char *what) -> double {
+    if (i >= args.size())
+      error->all(FLERR,"setup_temperature_source rosenthal: missing argument");
+    try {
+      return std::stod(args[i]);
+    } catch (const std::exception &) {
+      (void)what;
+      error->all(FLERR,"setup_temperature_source rosenthal: invalid numeric argument");
+      return 0.0;
+    }
+  };
+
+  if (mode_str == "standard") {
+    if (args.size() < 6)
+      error->all(FLERR,"rosenthal standard: expected <Q> <lambda> <k> <alpha> <T0>");
+    mode       = RosenthalMode::STANDARD;
+    Q          = parse(1,"Q");
+    lambda     = parse(2,"lambda");
+    k_cond     = parse(3,"k");
+    alpha      = parse(4,"alpha");
+    T0_default = parse(5,"T0");
   }
-  
-  validate_material_properties();
-  
-  // Generate default linear path if no path has been set up
-  if (scan_path_points.empty()) {
-    generate_linear_path();
+  else if (mode_str == "aniso" || mode_str == "anisotropic") {
+    if (args.size() < 8)
+      error->all(FLERR,"rosenthal aniso: expected <Q> <lambda> <k> <alpha> <T0> <eta_y> <eta_z>");
+    mode       = RosenthalMode::ANISOTROPIC;
+    Q          = parse(1,"Q");
+    lambda     = parse(2,"lambda");
+    k_cond     = parse(3,"k");
+    alpha      = parse(4,"alpha");
+    T0_default = parse(5,"T0");
+    eta_y      = parse(6,"eta_y");
+    eta_z      = parse(7,"eta_z");
   }
-  
-  validate_scan_path();
-  
+  else if (mode_str == "keyhole") {
+    if (args.size() < 8)
+      error->all(FLERR,"rosenthal keyhole: expected <Q> <lambda_p> <lambda_l> <k> <alpha> <T0> <d> [<n_quad>]");
+    mode       = RosenthalMode::KEYHOLE;
+    Q          = parse(1,"Q");
+    lambda_p   = parse(2,"lambda_p");
+    lambda_l   = parse(3,"lambda_l");
+    k_cond     = parse(4,"k");
+    alpha      = parse(5,"alpha");
+    T0_default = parse(6,"T0");
+    d_keyhole  = parse(7,"d");
+    if (args.size() >= 9) {
+      n_quad = static_cast<int>(parse(8,"n_quad"));
+      if (n_quad < 2) n_quad = 2;
+      if (n_quad > 64) n_quad = 64;
+    }
+    build_gauss_legendre_quadrature();
+  }
+  else {
+    error->all(FLERR,"setup_temperature_source rosenthal: unknown mode (use standard|aniso|keyhole)");
+  }
+
+  ambient_temperature = T0_default;
+  validate_after_setup();
   source_initialized = true;
-  
-  if (domain->me == 0) {
-    print_source_info();
-  }
+
+  if (domain->me == 0) print_source_info();
 }
 
 /* ----------------------------------------------------------------------
-   Calculate temperature at given position and time using Rosenthal solution
+   Required base-class entry point. The driving app uses
+   rosenthal_pointwise() directly with pool-local coordinates, but this
+   xyz/time API is honored as a fallback that returns the ambient T
+   (no path means no laser position).
 ------------------------------------------------------------------------- */
 
-double RosenthalTemperatureSource::get_temperature_at_xyz_and_time(double x, double y, double z, double time)
+double RosenthalTemperatureSource::get_temperature_at_xyz_and_time(double /*x*/, double /*y*/,
+                                                                   double /*z*/, double /*time*/)
 {
   check_initialization();
-  
-  // Check if time is within the scan period
-  if (time < path_start_time || time > path_end_time) {
-    return ambient_temperature;
-  }
-  
-  return rosenthal_temperature(x, y, z, time);
+  return ambient_temperature;
+}
+
+/* ---------------------------------------------------------------------- */
+
+void RosenthalTemperatureSource::update_temperatures(double /*dt*/, double /*simulation_time*/)
+{
+  // Analytical solution: nothing to load.
+}
+
+/* ---------------------------------------------------------------------- */
+
+bool RosenthalTemperatureSource::needs_data_refresh(double /*simulation_time*/)
+{
+  return false;
 }
 
 /* ----------------------------------------------------------------------
-   Rosenthal analytical solution for moving point heat source
+   Fast-forward query: the source itself has no path geometry, so it
+   declares "yes I support time queries" but returns +inf here. The
+   driving app intercepts and computes the real next-active time using
+   its scan_layer state.
 ------------------------------------------------------------------------- */
 
-double RosenthalTemperatureSource::rosenthal_temperature(double x, double y, double z, double time)
+double RosenthalTemperatureSource::get_next_time_with_temperature(double /*current_time*/,
+                                                                  double /*threshold_temp*/)
 {
-  // Get current laser position and velocity
-  std::array<double,3> laser_pos = get_laser_position(time);
-  double velocity = get_laser_velocity(time);
-  
-  // Calculate distance from laser position
-  double r = calculate_distance(x, y, z, laser_pos);
-  
-  // Avoid singularity at laser position
-  if (r < 1e-12) {
-    r = 1e-12;
-  }
-  
-  // Calculate relative position in scanning direction
-  // Assume scanning primarily in x-direction for simplicity
-  double dx_rel = x - laser_pos[0];
-  
-  // Rosenthal solution: T = T_amb + (Q/(2πkr)) * exp(-v(x-x_source+r)/(2α))
-  double peclet_term = velocity * (dx_rel + r) / (2.0 * thermal_diffusivity);
-  double temperature_rise = (laser_power / (2.0 * MY_PI * thermal_conductivity * r)) * 
-                           std::exp(-peclet_term);
-  
-  return ambient_temperature + temperature_rise;
+  return std::numeric_limits<double>::max();
 }
 
 /* ----------------------------------------------------------------------
-   Calculate distance between point and laser position
+   Core kernel (Eq. B4 form):
+   T_rise = (Q_eff / (2 pi k R)) * exp(-v (xi + R) / (2 alpha))
 ------------------------------------------------------------------------- */
 
-double RosenthalTemperatureSource::calculate_distance(double x, double y, double z, 
-                                                     const std::array<double,3> &laser_pos)
+double RosenthalTemperatureSource::rosenthal_kernel(double Q_eff, double v,
+                                                    double xi, double R) const
 {
-  double dx = x - laser_pos[0];
-  double dy = y - laser_pos[1]; 
-  double dz = z - laser_pos[2];
-  return std::sqrt(dx*dx + dy*dy + dz*dz);
+  if (R < r_min) R = r_min;
+  if (R <= 0.0)  return 0.0;
+  const double prefactor = Q_eff / (2.0 * MY_PI * k_cond * R);
+  const double exponent  = -v * (xi + R) / (2.0 * alpha);
+  return prefactor * std::exp(exponent);
 }
 
 /* ----------------------------------------------------------------------
-   Get laser position at given time with caching for performance
+   Mode dispatch evaluated in the moving (pool-local) frame.
+   Returns absolute temperature in K.
 ------------------------------------------------------------------------- */
 
-std::array<double,3> RosenthalTemperatureSource::get_laser_position(double time)
+double RosenthalTemperatureSource::rosenthal_pointwise(double xi, double y_rel, double z_rel,
+                                                       double v, double T0) const
 {
-  // Use cache if time hasn't changed
-  if (std::abs(time - cached_time) < 1e-12) {
-    return cached_laser_position;
+  switch (mode) {
+
+  case RosenthalMode::STANDARD: {
+    const double R = std::sqrt(xi*xi + y_rel*y_rel + z_rel*z_rel);
+    return T0 + rosenthal_kernel(lambda * Q, v, xi, R);
   }
-  
-  // Find appropriate path segment
-  int segment = find_path_segment(time);
-  
-  if (segment < 0 || segment >= static_cast<int>(scan_path_points.size()) - 1) {
-    // Outside path range, return start or end position
-    if (time <= path_start_time) {
-      cached_laser_position = {scan_path_points[0][0], scan_path_points[0][1], scan_path_points[0][2]};
-    } else {
-      int last_idx = scan_path_points.size() - 1;
-      cached_laser_position = {scan_path_points[last_idx][0], scan_path_points[last_idx][1], scan_path_points[last_idx][2]};
+
+  case RosenthalMode::ANISOTROPIC: {
+    const double yy = eta_y * y_rel;
+    const double zz = eta_z * z_rel;
+    const double R_eta = std::sqrt(xi*xi + yy*yy + zz*zz);
+    return T0 + rosenthal_kernel(lambda * Q, v, xi, R_eta);
+  }
+
+  case RosenthalMode::KEYHOLE: {
+    // Surface point source
+    const double R = std::sqrt(xi*xi + y_rel*y_rel + z_rel*z_rel);
+    double T_rise = rosenthal_kernel(lambda_p * Q, v, xi, R);
+
+    // Distributed line source: integrate over D in [-d, d]
+    // R'(D) = sqrt(xi^2 + y^2 + (D + z)^2)
+    for (int i = 0; i < n_quad; ++i) {
+      const double D    = quad_nodes[i];
+      const double w    = quad_weights[i];
+      const double zarg = D + z_rel;
+      const double Rp   = std::sqrt(xi*xi + y_rel*y_rel + zarg*zarg);
+      T_rise += w * rosenthal_kernel(lambda_l * Q, v, xi, Rp);
     }
-  } else {
-    // Interpolate position within segment
-    cached_laser_position = interpolate_position(time, segment);
+    return T0 + T_rise;
   }
-  
-  cached_time = time;
-  return cached_laser_position;
+  }
+  return T0;  // unreachable
 }
 
 /* ----------------------------------------------------------------------
-   Get laser velocity at given time
+   Conservative upper bound on Rosenthal temperature at distance >= R.
+   Always >= the true rosenthal_pointwise() value for any site at that
+   distance, so the fast-forward predictor cannot skip a real heating
+   event by relying on this bound.
 ------------------------------------------------------------------------- */
 
-double RosenthalTemperatureSource::get_laser_velocity(double time)
+double RosenthalTemperatureSource::rosenthal_peak_at_distance(double R, double T0) const
 {
-  // Use cache if time hasn't changed
-  if (std::abs(time - cached_time) < 1e-12) {
-    return cached_laser_velocity;
-  }
-  
-  int segment = find_path_segment(time);
-  
-  if (segment < 0 || segment >= static_cast<int>(scan_velocities.size())) {
-    cached_laser_velocity = scan_velocity; // Default velocity
-  } else {
-    cached_laser_velocity = scan_velocities[segment];
-  }
-  
-  return cached_laser_velocity;
-}
+  if (R < r_min) R = r_min;
+  if (R <= 0.0) return T0;
 
-/* ----------------------------------------------------------------------
-   Find path segment index for given time
-------------------------------------------------------------------------- */
+  // ANISOTROPIC: R_eta <= R / min(eta_y, eta_z, 1) for any (xi,y,z)
+  // satisfying xi^2+y^2+z^2 = R^2. Use the smallest effective R.
+  // STANDARD/KEYHOLE: R unchanged.
+  double R_eff = R;
+  if (mode == RosenthalMode::ANISOTROPIC) {
+    double s = 1.0;
+    if (eta_y < s) s = eta_y;
+    if (eta_z < s) s = eta_z;
+    if (s > 0.0) R_eff = R * s;
+    if (R_eff < r_min) R_eff = r_min;
+  }
 
-int RosenthalTemperatureSource::find_path_segment(double time) const
-{
-  for (int i = 0; i < static_cast<int>(scan_path_points.size()) - 1; i++) {
-    if (time >= scan_path_points[i][3] && time <= scan_path_points[i+1][3]) {
-      return i;
+  // Sum the maximum kernel contributions for the active mode. The
+  // exponential factor exp(-v*(xi+R)/(2 alpha)) <= 1 always (it equals
+  // 1 when xi = -R, i.e. straight downstream), so the absolute peak is
+  // Q_eff_total / (2 pi k R_eff).
+  const double inv_prefactor = 1.0 / (2.0 * MY_PI * k_cond * R_eff);
+
+  double T_rise = 0.0;
+  switch (mode) {
+  case RosenthalMode::STANDARD:
+  case RosenthalMode::ANISOTROPIC:
+    T_rise = lambda * Q * inv_prefactor;
+    break;
+  case RosenthalMode::KEYHOLE:
+    // Point source at R_eff (= R since not ANISOTROPIC) plus a coarse
+    // upper bound on the line integral: each quadrature node has the
+    // same prefactor cap, so sum the weights and multiply.
+    {
+      double w_total = 0.0;
+      for (int i = 0; i < n_quad; ++i) w_total += quad_weights[i];
+      T_rise = (lambda_p * Q + lambda_l * Q * w_total) * inv_prefactor;
     }
+    break;
   }
-  return -1; // Time outside path range
+  return T0 + T_rise;
 }
 
 /* ----------------------------------------------------------------------
-   Interpolate position within a path segment
+   Build Gauss-Legendre nodes/weights on [-d, d] for the keyhole line
+   integral. Uses Newton iteration on Legendre polynomials.
 ------------------------------------------------------------------------- */
 
-std::array<double,3> RosenthalTemperatureSource::interpolate_position(double time, int segment) const
+void RosenthalTemperatureSource::build_gauss_legendre_quadrature()
 {
-  if (segment < 0 || segment >= static_cast<int>(scan_path_points.size()) - 1) {
-    error->one(FLERR,"Invalid segment in position interpolation");
-  }
-  
-  double t0 = scan_path_points[segment][3];
-  double t1 = scan_path_points[segment + 1][3];
-  double dt = t1 - t0;
-  
-  if (dt < 1e-12) {
-    // Zero time interval, return start position
-    return {scan_path_points[segment][0], scan_path_points[segment][1], scan_path_points[segment][2]};
-  }
-  
-  double alpha = (time - t0) / dt;
-  alpha = std::max(0.0, std::min(1.0, alpha)); // Clamp to [0,1]
-  
-  std::array<double,3> pos;
-  pos[0] = scan_path_points[segment][0] + alpha * (scan_path_points[segment + 1][0] - scan_path_points[segment][0]);
-  pos[1] = scan_path_points[segment][1] + alpha * (scan_path_points[segment + 1][1] - scan_path_points[segment][1]);
-  pos[2] = scan_path_points[segment][2] + alpha * (scan_path_points[segment + 1][2] - scan_path_points[segment][2]);
-  
-  return pos;
-}
+  quad_nodes.assign(n_quad, 0.0);
+  quad_weights.assign(n_quad, 0.0);
 
-/* ----------------------------------------------------------------------
-   Generate linear scan path between two points
-------------------------------------------------------------------------- */
-
-void RosenthalTemperatureSource::generate_linear_path()
-{
-  scan_path_points.clear();
-  scan_velocities.clear();
-  
-  // Calculate path length and time
-  double dx = linear_end[0] - linear_start[0];
-  double dy = linear_end[1] - linear_start[1];
-  double dz = linear_end[2] - linear_start[2];
-  double path_length = std::sqrt(dx*dx + dy*dy + dz*dz);
-  
-  double travel_time = path_length / scan_velocity;
-  
-  // Add start and end points
-  scan_path_points.push_back({linear_start[0], linear_start[1], linear_start[2], path_start_time});
-  scan_path_points.push_back({linear_end[0], linear_end[1], linear_end[2], path_start_time + travel_time});
-  
-  // Single velocity for entire path
-  scan_velocities.push_back(scan_velocity);
-  
-  path_end_time = path_start_time + travel_time;
-}
-
-/* ----------------------------------------------------------------------
-   Update method - no special updates needed for analytical solution
-------------------------------------------------------------------------- */
-
-void RosenthalTemperatureSource::update_temperatures(double dt, double simulation_time)
-{
-  // Analytical solution doesn't require time stepping updates
-  // This method is available for future extensions
-}
-
-/* ----------------------------------------------------------------------
-   Check if data refresh is needed - always false for analytical solution
-------------------------------------------------------------------------- */
-
-bool RosenthalTemperatureSource::needs_data_refresh(double simulation_time)
-{
-  return false; // Analytical solution doesn't need data refresh
-}
-
-/* ----------------------------------------------------------------------
-   Setup scan path with specified type and parameters
-------------------------------------------------------------------------- */
-
-void RosenthalTemperatureSource::setup_scan_path(ScanPathType type, const std::vector<double> &params)
-{
-  path_type = type;
-  
-  switch (path_type) {
-    case LINEAR:
-      if (params.size() >= 6) {
-        linear_start = {params[0], params[1], params[2]};
-        linear_end = {params[3], params[4], params[5]};
+  // Standard Newton-Raphson on Legendre P_n to find roots in [-1,1]
+  const int n = n_quad;
+  const double tol = 1.0e-14;
+  for (int i = 0; i < (n + 1) / 2; ++i) {
+    // Initial guess (Tricomi/asymptotic)
+    double x = std::cos(MY_PI * (i + 0.75) / (n + 0.5));
+    double dp = 0.0;
+    for (int it = 0; it < 100; ++it) {
+      // Evaluate P_n(x) and P_n'(x) by recurrence
+      double p1 = 1.0, p2 = 0.0;
+      for (int j = 1; j <= n; ++j) {
+        const double p3 = p2;
+        p2 = p1;
+        p1 = ((2.0*j - 1.0) * x * p2 - (j - 1.0) * p3) / j;
       }
-      generate_linear_path();
-      break;
-      
-    case SERPENTINE:
-      if (params.size() >= 6) {
-        raster_x_min = params[0]; raster_x_max = params[1];
-        raster_y_min = params[2]; raster_y_max = params[3];
-        raster_z_height = params[4];
-        raster_spacing = params[5];
-      }
-      generate_serpentine_path();
-      break;
-      
-    case SPIRAL:
-      if (params.size() >= 6) {
-        spiral_center = {params[0], params[1], params[2]};
-        spiral_radius_max = params[3];
-        spiral_pitch = params[4];
-        spiral_turns = params[5];
-      }
-      generate_spiral_path();
-      break;
-      
-    case CUSTOM:
-      // Custom path will be loaded separately
-      break;
-  }
-}
-
-/* ----------------------------------------------------------------------
-   Generate serpentine/raster scan path
-------------------------------------------------------------------------- */
-
-void RosenthalTemperatureSource::generate_serpentine_path()
-{
-  scan_path_points.clear();
-  scan_velocities.clear();
-  
-  double y_range = raster_y_max - raster_y_min;
-  raster_num_passes = static_cast<int>(y_range / raster_spacing) + 1;
-  
-  double current_time = path_start_time;
-  
-  for (int pass = 0; pass < raster_num_passes; pass++) {
-    double y_pos = raster_y_min + pass * raster_spacing;
-    
-    if (pass % 2 == 0) {
-      // Even passes: left to right
-      scan_path_points.push_back({raster_x_min, y_pos, raster_z_height, current_time});
-      double travel_time = (raster_x_max - raster_x_min) / scan_velocity;
-      current_time += travel_time;
-      scan_path_points.push_back({raster_x_max, y_pos, raster_z_height, current_time});
-    } else {
-      // Odd passes: right to left
-      scan_path_points.push_back({raster_x_max, y_pos, raster_z_height, current_time});
-      double travel_time = (raster_x_max - raster_x_min) / scan_velocity;
-      current_time += travel_time;
-      scan_path_points.push_back({raster_x_min, y_pos, raster_z_height, current_time});
+      dp = n * (x * p1 - p2) / (x * x - 1.0);
+      const double dx = p1 / dp;
+      x -= dx;
+      if (std::fabs(dx) < tol) break;
     }
-    
-    scan_velocities.push_back(scan_velocity);
+    // Map from [-1, 1] to [-d, d]
+    quad_nodes[i]         = -d_keyhole * x;
+    quad_nodes[n - 1 - i] =  d_keyhole * x;
+    const double w = 2.0 / ((1.0 - x*x) * dp * dp);
+    // Jacobian for [-1,1] -> [-d,d] is d
+    quad_weights[i]         = d_keyhole * w;
+    quad_weights[n - 1 - i] = d_keyhole * w;
   }
-  
-  path_end_time = current_time;
 }
 
-/* ----------------------------------------------------------------------
-   Generate spiral scan path
-------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------- */
 
-void RosenthalTemperatureSource::generate_spiral_path()
+void RosenthalTemperatureSource::validate_after_setup() const
 {
-  scan_path_points.clear();
-  scan_velocities.clear();
-  
-  int num_points = static_cast<int>(spiral_turns * 50); // 50 points per turn
-  double angular_increment = 2.0 * MY_PI * spiral_turns / num_points;
-  
-  double current_time = path_start_time;
-  
-  for (int i = 0; i <= num_points; i++) {
-    double angle = i * angular_increment;
-    double radius = spiral_radius_max * angle / (2.0 * MY_PI * spiral_turns);
-    
-    double x = spiral_center[0] + radius * std::cos(angle);
-    double y = spiral_center[1] + radius * std::sin(angle);
-    double z = spiral_center[2];
-    
-    scan_path_points.push_back({x, y, z, current_time});
-    
-    if (i > 0) {
-      // Calculate distance from previous point
-      double dx = x - scan_path_points[i-1][0];
-      double dy = y - scan_path_points[i-1][1];
-      double dist = std::sqrt(dx*dx + dy*dy);
-      current_time += dist / scan_velocity;
-      scan_path_points[i][3] = current_time;
-    }
-    
-    if (i < num_points) {
-      scan_velocities.push_back(scan_velocity);
-    }
-  }
-  
-  path_end_time = current_time;
-}
+  if (Q <= 0.0)      error->all(FLERR,"rosenthal: Q (laser power) must be > 0");
+  if (k_cond <= 0.0) error->all(FLERR,"rosenthal: k (thermal conductivity) must be > 0");
+  if (alpha <= 0.0)  error->all(FLERR,"rosenthal: alpha (thermal diffusivity) must be > 0");
 
-/* ----------------------------------------------------------------------
-   Validate material properties
-------------------------------------------------------------------------- */
-
-void RosenthalTemperatureSource::validate_material_properties()
-{
-  if (laser_power <= 0.0) {
-    error->all(FLERR,"Laser power must be positive in Rosenthal temperature source");
-  }
-  if (scan_velocity <= 0.0) {
-    error->all(FLERR,"Scan velocity must be positive in Rosenthal temperature source");
-  }
-  if (thermal_conductivity <= 0.0) {
-    error->all(FLERR,"Thermal conductivity must be positive in Rosenthal temperature source");
-  }
-  if (thermal_diffusivity <= 0.0) {
-    error->all(FLERR,"Thermal diffusivity must be positive in Rosenthal temperature source");
+  switch (mode) {
+  case RosenthalMode::STANDARD:
+    if (lambda <= 0.0) error->all(FLERR,"rosenthal standard: lambda must be > 0");
+    break;
+  case RosenthalMode::ANISOTROPIC:
+    if (lambda <= 0.0) error->all(FLERR,"rosenthal aniso: lambda must be > 0");
+    if (eta_y <= 0.0 || eta_z <= 0.0)
+      error->all(FLERR,"rosenthal aniso: eta_y and eta_z must be > 0");
+    break;
+  case RosenthalMode::KEYHOLE:
+    if (lambda_p <= 0.0 || lambda_l <= 0.0)
+      error->all(FLERR,"rosenthal keyhole: lambda_p and lambda_l must be > 0");
+    if (d_keyhole <= 0.0)
+      error->all(FLERR,"rosenthal keyhole: d (line-source half-depth) must be > 0");
+    if (static_cast<int>(quad_nodes.size()) != n_quad)
+      error->all(FLERR,"rosenthal keyhole: quadrature was not built");
+    break;
   }
 }
 
-/* ----------------------------------------------------------------------
-   Validate scan path
-------------------------------------------------------------------------- */
-
-void RosenthalTemperatureSource::validate_scan_path()
-{
-  if (scan_path_points.empty()) {
-    error->all(FLERR,"No scan path points defined in Rosenthal temperature source");
-  }
-  if (scan_path_points.size() != scan_velocities.size() + 1) {
-    error->all(FLERR,"Inconsistent scan path points and velocities in Rosenthal temperature source");
-  }
-}
-
-/* ----------------------------------------------------------------------
-   Print source information
-------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------- */
 
 void RosenthalTemperatureSource::print_source_info() const
 {
-  std::cout << "Rosenthal Temperature Source Configuration:" << std::endl;
-  std::cout << "  Laser Power: " << laser_power << " W" << std::endl;
-  std::cout << "  Scan Velocity: " << scan_velocity << " m/s" << std::endl;
-  std::cout << "  Thermal Conductivity: " << thermal_conductivity << " W/m·K" << std::endl;
-  std::cout << "  Thermal Diffusivity: " << thermal_diffusivity << " m²/s" << std::endl;
-  std::cout << "  Ambient Temperature: " << ambient_temperature << " K" << std::endl;
-  
-  std::string path_type_str;
-  switch (path_type) {
-    case LINEAR: path_type_str = "Linear"; break;
-    case SERPENTINE: path_type_str = "Serpentine"; break;
-    case SPIRAL: path_type_str = "Spiral"; break;
-    case CUSTOM: path_type_str = "Custom"; break;
+  const char *mname = "STANDARD";
+  if (mode == RosenthalMode::ANISOTROPIC) mname = "ANISOTROPIC";
+  else if (mode == RosenthalMode::KEYHOLE) mname = "KEYHOLE";
+
+  std::cout << "Rosenthal temperature source [" << mname << "]\n"
+            << "  Q          = " << Q          << " W\n"
+            << "  k          = " << k_cond     << " W/(m K)\n"
+            << "  alpha      = " << alpha      << " m^2/s\n"
+            << "  T0         = " << T0_default << " K\n"
+            << "  r_min      = " << r_min      << " m\n";
+  if (mode == RosenthalMode::STANDARD) {
+    std::cout << "  lambda     = " << lambda << "\n";
+  } else if (mode == RosenthalMode::ANISOTROPIC) {
+    std::cout << "  lambda     = " << lambda << "\n"
+              << "  eta_y      = " << eta_y  << "\n"
+              << "  eta_z      = " << eta_z  << "\n";
+  } else {
+    std::cout << "  lambda_p   = " << lambda_p  << "\n"
+              << "  lambda_l   = " << lambda_l  << "\n"
+              << "  d_keyhole  = " << d_keyhole << " m\n"
+              << "  n_quad     = " << n_quad    << "\n";
   }
-  std::cout << "  Scan Path Type: " << path_type_str << std::endl;
-  std::cout << "  Path Duration: " << (path_end_time - path_start_time) << " s" << std::endl;
-  std::cout << "  Number of Path Points: " << scan_path_points.size() << std::endl;
+  std::cout.flush();
 }
 
-/* ----------------------------------------------------------------------
-   Cleanup resources
-------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------- */
 
 void RosenthalTemperatureSource::cleanup()
 {
-  scan_path_points.clear();
-  scan_velocities.clear();
+  quad_nodes.clear();
+  quad_weights.clear();
   source_initialized = false;
-}
-
-/* ----------------------------------------------------------------------
-   Site-based temperature access for lattice applications
-------------------------------------------------------------------------- */
-
-double RosenthalTemperatureSource::get_temperature_at_site(int site_index, double time)
-{
-  check_initialization();
-  
-  // For Rosenthal source, we need access to site coordinates
-  // This will need to be handled by the calling app since we don't have direct access
-  // to the coordinate arrays. For now, return ambient temperature.
-  // This method should be called through get_temperature_at_xyz_and_time instead.
-  return ambient_temperature;
 }

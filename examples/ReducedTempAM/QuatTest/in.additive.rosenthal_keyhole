@@ -1,0 +1,62 @@
+# SPPARKS additive_temperature_texture driven by the analytical
+# Rosenthal solution (keyhole mode, paper Table B1 case 1).
+#
+# Modified Rosenthal Eq. B8: surface point source plus a depth-
+# integrated line source for keyhole penetration.
+#   T = point(lambda_p, R) + integral_{-d}^{d} line(lambda_l, D) dD
+#   R'(D) = sqrt(xi^2 + y^2 + (D + z)^2)
+# Line integral evaluated by Gauss-Legendre quadrature.
+
+app_style additive_temperature_texture 1000000 20e-6 5e-6 2
+
+shell mkdir -p DumpFiles_rosenthal_keyhole
+
+seed             56789
+
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 60 0 40 0 20
+
+boundary         n n n
+
+create_box       box
+create_sites     box
+ set             site range 1 1000000
+ set             i2 value 1
+ set             d1 value 0
+ set             d2 value 573
+
+sector           yes
+sweep            random mask no
+
+diag_style       array d6 sum
+
+temperature      0.0
+misorientation_target gradient
+
+liquidus         1573
+solidus          1523
+solid_front_vel  4 -1.0302e-7 1.0533e-4 2.2196e-3 0
+nucleation_density      1e14
+critical_undercooling   5
+undercooling_deviation  3
+mean_nuclei_volume      8.4375e-16
+nuclei_volume_deviation 1.5625e-17
+
+# ----- Rosenthal source: keyhole (Eq. B8) ---------------------------
+# args: <Q[W]> <lambda_p> <lambda_l> <k[W/(mK)]> <alpha[m^2/s]> <T0[K]> <d[m]> [<n_quad>]
+# Case 1: lambda_p=0.1, lambda_l=0.036, d=300 um, 8 quadrature nodes
+setup_temperature_source rosenthal keyhole 285.0 0.1 0.036 11.2 2.0959e-6 573.0 300e-6 8
+
+# Slow scan: 0.6 m/s -> 1.67 ms scan duration over 1 mm.
+rosenthal_path start 0.1e-3 0.4e-3 0.38e-3 end 1.1e-3 0.4e-3 speed 0.6 repeats 1
+
+shell cd DumpFiles_rosenthal_keyhole
+
+stats            1e-4
+
+dump             1 text 2e-4 dump.keyhole.* id i1 i2 d6 x y z
+dump_modify      1 thresh i2 > 1
+
+run              3e-3
+shell cd ../

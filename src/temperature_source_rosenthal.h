@@ -5,22 +5,10 @@
 
    Copyright (2008) Sandia Corporation.  Under the terms of Contract
    DE-AC04-94AL85000 with Sandia Corporation, the U.S. Government retains
-   certain rights in this software.  This software is distributed under 
+   certain rights in this software.  This software is distributed under
    the GNU General Public License.
 
    See the README file in the top-level SPPARKS directory.
-------------------------------------------------------------------------- */
-
-/* ----------------------------------------------------------------------
-   WARNING: This temperature source is UNTESTED with the current modular
-   temperature source system and is unlikely to work in its current state.
-   
-   Only temperature_source_hdf5_unstructured.cpp has been tested and 
-   validated with the modular system. Use of this temperature source
-   may result in compilation errors or runtime failures.
-   
-   For working temperature sources, use:
-   - hdf5_unstructured (tested and validated)
 ------------------------------------------------------------------------- */
 
 #ifndef SPK_TEMPERATURE_SOURCE_ROSENTHAL_H
@@ -28,43 +16,41 @@
 
 #include "temperature_source.h"
 #include <vector>
-#include <array>
 #include <string>
 
 namespace SPPARKS_NS {
 
 /* ----------------------------------------------------------------------
-   Scan path types for Rosenthal moving heat source
-------------------------------------------------------------------------- */
-enum ScanPathType {
-  LINEAR,      // Single linear pass
-  SERPENTINE,  // Back-and-forth raster pattern
-  SPIRAL,      // Spiral pattern
-  CUSTOM       // User-defined path from file
-};
+   Analytical Rosenthal moving point heat source.
 
-/* ----------------------------------------------------------------------
-   Rosenthal analytical temperature source for moving point heat source
-   
-   Implements the classical Rosenthal solution for a moving point heat source:
-   T(x,y,z,t) = T_ambient + (Q/(2πkr)) * exp(-v(x-x_source(t)+r)/(2α))
-   
-   where:
-   - r = distance from current heat source position
-   - v = scanning velocity
-   - α = thermal diffusivity
-   - Q = laser power
-   - k = thermal conductivity
-   
-   Supports multiple scan path patterns and moving heat source trajectories.
+   Path-agnostic: this class does not own a scan path. The driving app
+   provides pool-local coordinates (xi, y_rel, z_rel) and the current
+   scan velocity each timestep, and queries rosenthal_pointwise().
+
+   Three modes are supported, all referenced to Rolchigo et al.,
+   Mod. Sim. Mater. Sci. Eng. 2021, Appendix B:
+
+   STANDARD    (Eq. B4):  T = T0 + (lambda*Q)/(2*pi*k*R)
+                              * exp(-v*(xi+R)/(2*alpha))
+                          R  = sqrt(xi^2 + y^2 + z^2)
+
+   ANISOTROPIC (Eq. B6):  same kernel with R replaced by
+                          R_eta = sqrt(xi^2 + (eta_y*y)^2 + (eta_z*z)^2)
+
+   KEYHOLE     (Eq. B8):  point + line source combination
+                          T = point(lambda_p) + integral_{-d}^{d} line(lambda_l, D) dD
+                          R' = sqrt(xi^2 + y^2 + (D + z)^2)
+                          Line integral evaluated by Gauss-Legendre quadrature.
 ------------------------------------------------------------------------- */
 
 class RosenthalTemperatureSource : public TemperatureSource {
  public:
+  enum class RosenthalMode { STANDARD, ANISOTROPIC, KEYHOLE };
+
   RosenthalTemperatureSource(class SPPARKS *);
   virtual ~RosenthalTemperatureSource();
 
-  // Required virtual methods from base class
+  // TemperatureSource interface
   virtual void setup_temperature_source(const std::vector<std::string> &args) override;
   virtual double get_temperature_at_xyz_and_time(double x, double y, double z, double time) override;
   virtual void update_temperatures(double dt, double simulation_time) override;
@@ -72,67 +58,64 @@ class RosenthalTemperatureSource : public TemperatureSource {
   virtual void cleanup() override;
   virtual std::string get_source_type() const override { return "rosenthal"; }
   virtual void print_source_info() const override;
-  virtual double get_temperature_at_site(int site_index, double time) override;
 
-  // Rosenthal-specific methods
-  void setup_scan_path(ScanPathType type, const std::vector<double> &params);
-  void load_custom_path(const std::string &filename);
-  std::array<double,3> get_laser_position(double time);
-  double get_laser_velocity(double time);
+  // Fast-forward support: the source declares it; the driving app
+  // implements the actual time prediction using path geometry.
+  virtual bool supports_time_queries() const override { return true; }
+  virtual double get_next_time_with_temperature(double current_time, double threshold_temp) override;
+
+  // Pool-local-frame query used by AppAdditiveExtTempTexture every step.
+  // (xi, y_rel, z_rel) are coordinates of a lattice site relative to the
+  // current laser position, with xi along the scan direction. v is the
+  // current scan speed (m/s). T0 is the preheat/ambient temperature (K).
+  double rosenthal_pointwise(double xi, double y_rel, double z_rel,
+                             double v, double T0) const;
+
+  // Conservative upper bound on the Rosenthal temperature for ANY site
+  // whose distance to the current laser position is >= R. Used by the
+  // driving app's fast-forward predictor to guarantee that real heating
+  // events are never skipped. Bounds details:
+  //   - exponent term -v(xi+R)/(2 alpha) is maximized at zero (xi=-R),
+  //     so the kernel reduces to Q_eff_total / (2 pi k R)
+  //   - ANISOTROPIC: R_eta <= R / min(eta_y, eta_z, 1) shrinks R
+  //   - KEYHOLE: sum point + line integrals' max contributions
+  double rosenthal_peak_at_distance(double R, double T0) const;
+
+  // Cutoff radius for the 1/R singularity at the laser site.
+  // Set by the app from its lattice spacing dx.
+  void set_r_min(double r) { r_min = r; }
+
+  RosenthalMode get_mode() const { return mode; }
 
  private:
-  // Material and laser parameters
-  double laser_power;           // Laser power (W)
-  double scan_velocity;         // Nominal scanning velocity (m/s)
-  double thermal_conductivity;  // Material thermal conductivity (W/m·K)
-  double thermal_diffusivity;   // Material thermal diffusivity (m²/s)
-  
-  // Scan path parameters
-  ScanPathType path_type;
-  std::vector<std::array<double,4>> scan_path_points; // [x, y, z, time]
-  std::vector<double> scan_velocities; // Velocity at each path segment
-  
-  // Path generation parameters
-  double path_start_time;
-  double path_end_time;
-  
-  // Linear path parameters
-  std::array<double,3> linear_start, linear_end;
-  
-  // Serpentine/raster parameters
-  double raster_x_min, raster_x_max;
-  double raster_y_min, raster_y_max;
-  double raster_z_height;
-  double raster_spacing;
-  int raster_num_passes;
-  
-  // Spiral parameters
-  std::array<double,3> spiral_center;
-  double spiral_radius_max;
-  double spiral_pitch;
-  double spiral_turns;
-  
-  // Cache for performance
-  mutable double cached_time;
-  mutable std::array<double,3> cached_laser_position;
-  mutable double cached_laser_velocity;
-  
-  // Private helper methods
-  void parse_setup_arguments(const std::vector<std::string> &args);
-  void generate_linear_path();
-  void generate_serpentine_path();
-  void generate_spiral_path();
-  void generate_custom_path();
-  
-  double calculate_distance(double x, double y, double z, const std::array<double,3> &laser_pos);
-  double rosenthal_temperature(double x, double y, double z, double time);
-  
-  int find_path_segment(double time) const;
-  std::array<double,3> interpolate_position(double time, int segment) const;
-  double interpolate_velocity(double time, int segment) const;
-  
-  void validate_material_properties();
-  void validate_scan_path();
+  RosenthalMode mode;
+
+  // Material / laser parameters (SI units)
+  double Q;            // total laser power [W]
+  double lambda;       // absorption efficiency (STANDARD, ANISOTROPIC)
+  double lambda_p;     // point-source absorption (KEYHOLE)
+  double lambda_l;     // line-source absorption (KEYHOLE)
+  double k_cond;       // thermal conductivity [W/(m K)]
+  double alpha;        // thermal diffusivity [m^2/s]
+  double T0_default;   // preheat / ambient [K]; also stored in base ambient_temperature
+
+  // Anisotropic-mode shape factors
+  double eta_y;
+  double eta_z;
+
+  // Keyhole-mode line source
+  double d_keyhole;    // half-depth of line integral [m]
+  int    n_quad;       // number of Gauss-Legendre nodes
+  std::vector<double> quad_nodes;    // mapped to [-d, d]
+  std::vector<double> quad_weights;  // mapped weights (include Jacobian)
+
+  // Singularity cutoff (meters); 0 means no cutoff (set externally)
+  double r_min;
+
+  // Helpers
+  double rosenthal_kernel(double Q_eff, double v, double xi, double R) const;
+  void   build_gauss_legendre_quadrature();
+  void   validate_after_setup() const;
 };
 
 }

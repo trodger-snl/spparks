@@ -1,0 +1,68 @@
+# SPPARKS additive_temperature_texture driven by the analytical
+# Rosenthal solution (standard mode, paper Table B1 case 3).
+#
+# Material:    rho=8220 kg/m^3, c_p=650 J/(kg K), k=11.2 W/(m K)
+#              -> alpha = k/(rho*c_p) = 2.0959e-6 m^2/s
+# Laser:       Q=285 W, lambda=0.155, v=1.2 m/s
+# Preheat:     T0=573 K, T_m=1573 K
+#
+# app_style args: nspins dx[m] dt[s] nrefine
+
+app_style additive_temperature_texture 1000000 20e-6 5e-6 2
+
+shell mkdir -p DumpFiles_rosenthal_standard
+
+seed             56789
+
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 60 0 40 0 20
+
+boundary         n n n
+
+create_box       box
+create_sites     box
+ set             site range 1 1000000
+ set             i2 value 1
+ set             d1 value 0
+ set             d2 value 573
+
+sector           yes
+sweep            random mask no
+
+diag_style       array d6 sum
+
+temperature      0.0
+misorientation_target gradient
+
+# AM-specific (paper Table B1, IN718-like values)
+liquidus         1573
+solidus          1523
+solid_front_vel  4 -1.0302e-7 1.0533e-4 2.2196e-3 0
+nucleation_density      1e14
+critical_undercooling   5
+undercooling_deviation  3
+mean_nuclei_volume      8.4375e-16
+nuclei_volume_deviation 1.5625e-17
+
+# ----- Rosenthal source: standard (Eq. B4) ---------------------------
+# args: <Q[W]> <lambda> <k[W/(mK)]> <alpha[m^2/s]> <T0[K]>
+setup_temperature_source rosenthal standard 285.0 0.155 11.2 2.0959e-6 573.0
+
+# Single linear scan, no repeats. Coordinates in meters.
+# Box is 60*20e-6=1.2mm wide, 40*20e-6=0.8mm deep, 20*20e-6=0.4mm tall.
+# Scan along centerline at the top surface.
+# Path length 1mm at 1.2 m/s -> ~833 us scan duration.
+rosenthal_path start 0.1e-3 0.4e-3 0.38e-3 end 1.1e-3 0.4e-3 speed 1.2 repeats 1
+
+shell cd DumpFiles_rosenthal_standard
+
+stats            1e-4
+
+# Dump T at every 200 us (covers the active scan window).
+dump             1 text 2e-4 dump.rosenthal.* id i1 i2 d6 x y z
+dump_modify      1 thresh i2 > 1
+
+# Run long enough to cover the full scan plus some cooling.
+run              2e-3
+shell cd ../

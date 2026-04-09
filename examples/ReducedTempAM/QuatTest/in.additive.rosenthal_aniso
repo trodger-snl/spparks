@@ -1,0 +1,60 @@
+# SPPARKS additive_temperature_texture driven by the analytical
+# Rosenthal solution (anisotropic mode, paper Table B1 case 2).
+#
+# Modified Rosenthal Eq. B6 with R replaced by
+#   R_eta = sqrt(xi^2 + (eta_y*y)^2 + (eta_z*z)^2)
+# eta_y < 1 widens the pool transversely; eta_z < 1 deepens it.
+
+app_style additive_temperature_texture 1000000 20e-6 5e-6 2
+
+shell mkdir -p DumpFiles_rosenthal_aniso
+
+seed             56789
+
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 60 0 40 0 20
+
+boundary         n n n
+
+create_box       box
+create_sites     box
+ set             site range 1 1000000
+ set             i2 value 1
+ set             d1 value 0
+ set             d2 value 573
+
+sector           yes
+sweep            random mask no
+
+diag_style       array d6 sum
+
+temperature      0.0
+misorientation_target gradient
+
+liquidus         1573
+solidus          1523
+solid_front_vel  4 -1.0302e-7 1.0533e-4 2.2196e-3 0
+nucleation_density      1e14
+critical_undercooling   5
+undercooling_deviation  3
+mean_nuclei_volume      8.4375e-16
+nuclei_volume_deviation 1.5625e-17
+
+# ----- Rosenthal source: anisotropic (Eq. B6) -----------------------
+# args: <Q[W]> <lambda> <k[W/(mK)]> <alpha[m^2/s]> <T0[K]> <eta_y> <eta_z>
+# Case 2: eta_y=0.89 (slightly wider), eta_z=0.4 (much deeper)
+setup_temperature_source rosenthal aniso 285.0 0.2 11.2 2.0959e-6 573.0 0.89 0.4
+
+# Slower scan: 0.8 m/s -> 1.25 ms scan duration over 1 mm.
+rosenthal_path start 0.1e-3 0.4e-3 0.38e-3 end 1.1e-3 0.4e-3 speed 0.8 repeats 1
+
+shell cd DumpFiles_rosenthal_aniso
+
+stats            1e-4
+
+dump             1 text 2e-4 dump.aniso.* id i1 i2 d6 x y z
+dump_modify      1 thresh i2 > 1
+
+run              2.5e-3
+shell cd ../

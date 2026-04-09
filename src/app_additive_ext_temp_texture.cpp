@@ -177,6 +177,13 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     use_temperature_source = true;  // Always use modular temperature system
     fast_forward_search_window = 0.1;  // Default 100ms search window
 
+    // Rosenthal scan-path state (only used when temperature_source is Rosenthal)
+    scan_layer = RASTER::Layer();
+    scan_layer_z = 0.0;
+    scan_layer_time = 0.0;
+    scan_layer_active = false;
+    rosenthal_path_set = false;
+
     // Temperature optimization flags (all enabled by default)
     opt_use_spatial_grid = true;
     opt_use_element_cache = true;
@@ -376,8 +383,8 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
   else if (strcmp(command,"setup_temperature_source") == 0) {
     setup_temperature_source_cmd(narg, arg);
   }
-  else if (strcmp(command,"scan_path") == 0) {
-    setup_scan_path_cmd(narg, arg);
+  else if (strcmp(command,"rosenthal_path") == 0) {
+    rosenthal_path_cmd(narg, arg);
   }
 
   else error->all(FLERR,"Unrecognized command");
@@ -408,14 +415,20 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     t_end = MPI_Wtime();
     t_temp_update += (t_end - t_start);
 
-    // Check for active sites using temperature source's threshold
+    // Check for active sites using temperature source's threshold.
+    // HDF5 sources expose their own threshold; the Rosenthal source has
+    // no intrinsic notion of "active" so we use the app's liquidus tl.
     double fast_forward_threshold = t_room; // Default to t_room
 
-    // If using HDF5 temperature source, use its threshold
     HDF5UnstructuredTemperatureSource* hdf5_source =
       dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+    RosenthalTemperatureSource* ros_source =
+      hdf5_source ? nullptr
+                  : dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
     if (hdf5_source) {
       fast_forward_threshold = hdf5_source->get_fast_forward_threshold();
+    } else if (ros_source) {
+      fast_forward_threshold = tl;
     }
 
     for (int i = 0; i < nlocal; i++) {
@@ -427,11 +440,27 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
 
 
-    // If no active sites and temperature source supports time queries, fast forward
+    // If no active sites and temperature source supports time queries, fast forward.
+    // For Rosenthal we route through the app's own predictor (which knows
+    // the scan_layer geometry); for HDF5 we use the source's predictor.
     // Time: Fast-forward logic
     t_start = MPI_Wtime();
     if (global_t_active == 0 && time > 1e-6 && temperature_source->supports_time_queries()) {
-      double next_thermal_time = temperature_source->get_next_time_with_temperature(time, fast_forward_threshold);
+      double local_next_time;
+      if (ros_source) {
+        local_next_time = rosenthal_next_active_time(time, fast_forward_threshold);
+      } else {
+        local_next_time = temperature_source->get_next_time_with_temperature(time, fast_forward_threshold);
+      }
+
+      // Each rank predicts based on its own local subdomain, so the
+      // earliest wake-up across the entire MPI communicator is the
+      // single time we may safely advance to. Without this reduction,
+      // ranks would skip to different target_times, desynchronizing
+      // simulation time and risking MPI hangs in subsequent collectives.
+      double next_thermal_time;
+      MPI_Allreduce(&local_next_time, &next_thermal_time, 1, MPI_DOUBLE,
+                    MPI_MIN, world);
 
       if (next_thermal_time > time && next_thermal_time < std::numeric_limits<double>::max()) {
         // Fast-forward to whichever comes first: next thermal activity or run end time
@@ -2146,58 +2175,163 @@ void AppAdditiveExtTempTexture::setup_temperature_source_cmd(int narg, char **ar
 }
 
 /* ----------------------------------------------------------------------
-   Setup scan path command for temperature sources that support it
-   Format: scan_path type [parameters...]
+   rosenthal_path command: define a single linear scan, optionally
+   repeated N times. Coordinates and velocity are SI (meters, m/s).
+
+   Format:
+     rosenthal_path start <X0> <Y0> <Z0> end <X1> <Y1> speed <V> [repeats <N>]
+
+   Builds N copies of one RASTER::Path into scan_layer; scan_layer_z is
+   set to Z0. The Rosenthal source itself is path-agnostic; this layer
+   is consumed by update_temperature_from_source() each step.
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::setup_scan_path_cmd(int narg, char **arg)
+void AppAdditiveExtTempTexture::rosenthal_path_cmd(int narg, char **arg)
 {
-  if (!use_temperature_source || !temperature_source) {
-    error->all(FLERR,"scan_path command requires setup_temperature_source to be called first");
+  // Expected token layout (0-based, command name already stripped):
+  //   start X0 Y0 Z0 end X1 Y1 speed V [repeats N]
+  // Minimum is 9 tokens (no repeats); with repeats it's 11.
+  if (narg < 9)
+    error->all(FLERR,"Illegal rosenthal_path command: expected start X0 Y0 Z0 end X1 Y1 speed V [repeats N]");
+  if (strcmp(arg[0],"start") != 0)
+    error->all(FLERR,"rosenthal_path: expected keyword 'start'");
+  const double x0 = atof(arg[1]);
+  const double y0 = atof(arg[2]);
+  const double z0 = atof(arg[3]);
+  if (strcmp(arg[4],"end") != 0)
+    error->all(FLERR,"rosenthal_path: expected keyword 'end' after start coordinates");
+  const double x1 = atof(arg[5]);
+  const double y1 = atof(arg[6]);
+  if (strcmp(arg[7],"speed") != 0)
+    error->all(FLERR,"rosenthal_path: expected keyword 'speed' after end coordinates");
+  const double v = atof(arg[8]);
+  if (v <= 0.0)
+    error->all(FLERR,"rosenthal_path: speed must be > 0");
+
+  int repeats = 1;
+  if (narg > 9) {
+    if (strcmp(arg[9],"repeats") != 0)
+      error->all(FLERR,"rosenthal_path: expected keyword 'repeats' or end-of-command");
+    if (narg < 11)
+      error->all(FLERR,"rosenthal_path: missing value after 'repeats'");
+    repeats = atoi(arg[10]);
+    if (repeats < 1)
+      error->all(FLERR,"rosenthal_path: repeats must be >= 1");
   }
-  
-  if (narg < 1) {
-    error->all(FLERR,"Illegal scan_path command: must specify type");
+
+  // Build N identical paths in the layer.
+  RASTER::Point a(x0,y0,0.0), b(x1,y1,0.0);
+  std::vector<RASTER::Path> paths;
+  paths.reserve(repeats);
+  for (int i = 0; i < repeats; ++i) paths.emplace_back(a, b, v);
+
+  scan_layer = RASTER::Layer(paths, /*thickness*/0);
+  scan_layer_z = z0;
+  scan_layer_time = time;  // anchor the layer pose to the current sim time
+  scan_layer_active = true;
+  rosenthal_path_set = true;
+
+  // Size the singularity cutoff to the lattice so the 1/R prefactor at
+  // the laser site stays finite. Only meaningful when the source is
+  // already a Rosenthal source.
+  if (auto* ros = dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get())) {
+    ros->set_r_min(0.5 * dx);
   }
-  
-  // Try to cast to RosenthalTemperatureSource (only source that currently supports scan paths)
-  auto rosenthal_source = dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
-  if (!rosenthal_source) {
-    error->all(FLERR,"scan_path command only supported for Rosenthal temperature source");
+
+  if (domain->me == 0) {
+    std::cout << "rosenthal_path: (" << x0 << "," << y0 << "," << z0
+              << ") -> (" << x1 << "," << y1 << "," << z0 << ")"
+              << " speed=" << v << " m/s, repeats=" << repeats << std::endl;
   }
-  
-  std::string path_type_str = arg[0];
-  std::vector<double> path_params;
-  
-  // Convert remaining arguments to double vector
-  for (int i = 1; i < narg; i++) {
-    try {
-      path_params.push_back(std::stod(arg[i]));
-    } catch (const std::exception &e) {
-      error->all(FLERR,"Invalid numeric argument in scan_path command");
+}
+
+/* ----------------------------------------------------------------------
+   Fast-forward predictor for the Rosenthal source.
+
+   Walks a copy of scan_layer forward in time and returns the earliest
+   time at which the conservative upper bound on the Rosenthal
+   temperature on the local domain reaches threshold_temp.
+
+   The upper bound is computed by:
+     1. Finding the closest world-space point on the local bounding box
+        to the current laser position. Distance to this point is the
+        smallest possible R for any site in the local domain.
+     2. Calling RosenthalTemperatureSource::rosenthal_peak_at_distance(R)
+        which returns max(rosenthal_pointwise) over all (xi, y_rel, z_rel)
+        with R fixed (exponent <= 1, line-source weights summed).
+
+   Because this bound is provably >= the true T at any site in the box,
+   crossing it cannot skip a real heating event. The predictor may
+   under-estimate the next active time (i.e. wake up early), which is
+   the safe direction.
+------------------------------------------------------------------------- */
+
+double AppAdditiveExtTempTexture::rosenthal_next_active_time(double current_time, double threshold_temp)
+{
+  if (!rosenthal_path_set || !scan_layer_active)
+    return std::numeric_limits<double>::max();
+
+  auto* ros = dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
+  if (!ros) return std::numeric_limits<double>::max();
+
+  // Local domain bounding box in physical (meters) coordinates.
+  if (nlocal == 0) return std::numeric_limits<double>::max();
+  double xmin = xyz[0][0]*dx, xmax = xmin;
+  double ymin = xyz[0][1]*dx, ymax = ymin;
+  double zmin = xyz[0][2]*dx, zmax = zmin;
+  for (int i = 1; i < nlocal; ++i) {
+    const double sx = xyz[i][0]*dx;
+    const double sy = xyz[i][1]*dx;
+    const double sz = xyz[i][2]*dx;
+    if (sx < xmin) xmin = sx; else if (sx > xmax) xmax = sx;
+    if (sy < ymin) ymin = sy; else if (sy > ymax) ymax = sy;
+    if (sz < zmin) zmin = sz; else if (sz > zmax) zmax = sz;
+  }
+
+  const double T0 = ros->get_ambient_temperature();
+  // Cheap early-out: if even the unmodulated peak at r_min can't reach
+  // the threshold, no laser position ever will. Use r_min as the
+  // tightest possible R_min (set by the app to 0.5*dx).
+  // (rosenthal_peak_at_distance clamps R to r_min internally.)
+  {
+    const double T_max_possible = ros->rosenthal_peak_at_distance(0.0, T0);
+    if (T_max_possible < threshold_temp) {
+      return std::numeric_limits<double>::max();
     }
   }
-  
-  // Map string to enum
-  ScanPathType path_type;
-  if (path_type_str == "linear") {
-    path_type = LINEAR;
-  } else if (path_type_str == "serpentine") {
-    path_type = SERPENTINE;
-  } else if (path_type_str == "spiral") {
-    path_type = SPIRAL;
-  } else if (path_type_str == "custom") {
-    path_type = CUSTOM;
-  } else {
-    error->all(FLERR,"Unknown scan path type in scan_path command");
+
+  // Walk a copy of the layer forward in time using the search window.
+  RASTER::Layer probe = scan_layer;
+  const double ddt = (fast_forward_search_window > 0.0)
+                       ? fast_forward_search_window : 0.01;
+  // Cap the look-ahead so we don't spin forever on a never-active path.
+  const double max_lookahead = 3600.0; // 1 hour of sim time
+  double t = current_time;
+  const double t_stop = current_time + max_lookahead;
+
+  while (t < t_stop) {
+    // Closest point on the local box to the current laser position.
+    // Laser z is the scan plane (scan_layer_z); xy come from the probe.
+    const RASTER::Point laser = probe.get_position();
+    const double lx = laser[0];
+    const double ly = laser[1];
+    const double lz = scan_layer_z;
+    const double cx = (lx < xmin) ? xmin : (lx > xmax ? xmax : lx);
+    const double cy = (ly < ymin) ? ymin : (ly > ymax ? ymax : ly);
+    const double cz = (lz < zmin) ? zmin : (lz > zmax ? zmax : lz);
+    const double dxr = cx - lx;
+    const double dyr = cy - ly;
+    const double dzr = cz - lz;
+    const double R_min_box = std::sqrt(dxr*dxr + dyr*dyr + dzr*dzr);
+
+    const double T_upper = ros->rosenthal_peak_at_distance(R_min_box, T0);
+    if (T_upper >= threshold_temp) return t;
+
+    // Advance the probe by ddt; stop if path is exhausted.
+    if (!probe.move(ddt)) return std::numeric_limits<double>::max();
+    t += ddt;
   }
-  
-  // Setup scan path
-  rosenthal_source->setup_scan_path(path_type, path_params);
-  
-  if (domain->me == 0) {
-    std::cout << "Scan path (" << path_type_str << ") configured" << std::endl;
-  }
+  return std::numeric_limits<double>::max();
 }
 
 /* ----------------------------------------------------------------------
@@ -2216,17 +2350,17 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
   // Update temperature source (may load new data)
   temperature_source->update_temperatures(dt, simulation_time);
 
-  // Cache the dynamic_cast result outside the loop — this cast is expensive
-  // for subclasses (CSR) due to RTTI string comparisons on every call.
+  // Cache the dynamic_cast results outside the loop — these casts are
+  // expensive for subclasses (CSR) due to RTTI string comparisons.
   HDF5UnstructuredTemperatureSource* hdf5_source =
     dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+  RosenthalTemperatureSource* ros_source =
+    hdf5_source ? nullptr
+                : dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
 
-  // Update temperature array for all local sites
-  // Three paths based on optimization flags:
-  // 1. No element_cache: xyz-based lookup (slowest, no caching)
-  // 2. element_cache but no nodal_precompute: lazy per-site lookup
-  // 3. Both enabled: prepare + fast inline lookup (fastest steady-state)
-
+  // -------------------------------------------------------------------
+  // HDF5 path: three optimization tiers, unchanged from prior behavior.
+  // -------------------------------------------------------------------
   if (hdf5_source && opt_use_element_cache && opt_use_nodal_precompute) {
     // Path 3: Fast path with nodal precomputation
     double t0 = MPI_Wtime();
@@ -2238,7 +2372,6 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
     double t2 = MPI_Wtime();
 
     double prepare_time = t1 - t0;
-    // Detect cache build: if prepare takes > 1 second, it's building cache
     if (prepare_time > 1.0) {
       g_t_cache_build += prepare_time;
       g_cache_was_built = true;
@@ -2257,13 +2390,75 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
     double t1 = MPI_Wtime();
     g_t_temp_site_loop += (t1 - t0);
 
-  } else {
+  } else if (hdf5_source) {
     // Path 1: XYZ-based lookup (no element cache)
     double t0 = MPI_Wtime();
+    const double src_dx = hdf5_source->get_dx();
     for (int i = 0; i < nlocal; i++) {
-      double x_physical = xyz[i][0] * hdf5_source->get_dx();
-      double y_physical = xyz[i][1] * hdf5_source->get_dx();
-      double z_physical = xyz[i][2] * hdf5_source->get_dx();
+      double x_physical = xyz[i][0] * src_dx;
+      double y_physical = xyz[i][1] * src_dx;
+      double z_physical = xyz[i][2] * src_dx;
+      T[i] = temperature_source->get_temperature_at_xyz_and_time(x_physical, y_physical, z_physical, simulation_time);
+    }
+    double t1 = MPI_Wtime();
+    g_t_temp_site_loop += (t1 - t0);
+
+  // -------------------------------------------------------------------
+  // Rosenthal path: analytical evaluation in pool-local frame.
+  // The laser position is advanced by scan_layer.move(dt) once per call;
+  // each site is then evaluated against the current pool.
+  // -------------------------------------------------------------------
+  } else if (ros_source) {
+    if (!rosenthal_path_set) {
+      error->all(FLERR,"Rosenthal source selected but no rosenthal_path defined");
+    }
+
+    double t0 = MPI_Wtime();
+
+    // Sync the laser pose to simulation_time. We may be called with a
+    // simulation_time that is well ahead of scan_layer_time -- e.g. just
+    // after a fast-forward jump -- so advance in small dt-sized chunks.
+    // RASTER::Layer::move(dt) does not carry remainder across path
+    // boundaries, so taking many small steps is also the safe way to
+    // step across multiple repeats of a single path.
+    if (scan_layer_active) {
+      double advance = simulation_time - scan_layer_time;
+      // tolerance: ignore tiny negative drift from FP arithmetic
+      const double step = (dt > 0.0) ? dt : 1.0e-6;
+      while (advance > step) {
+        if (!scan_layer.move(step)) { scan_layer_active = false; break; }
+        advance -= step;
+      }
+      if (scan_layer_active && advance > 0.0) {
+        if (!scan_layer.move(advance)) scan_layer_active = false;
+      }
+    }
+    scan_layer_time = simulation_time;
+
+    const double v_laser = scan_layer.get_speed();
+    // Use the source's own preheat/ambient (Rosenthal T0), not the app's
+    // t_room — they may differ (e.g. T0=573 K with t_room=300 K).
+    const double T0 = ros_source->get_ambient_temperature();
+    for (int i = 0; i < nlocal; i++) {
+      double phys[3] = { xyz[i][0]*dx, xyz[i][1]*dx, xyz[i][2]*dx };
+      RASTER::Point loc =
+        scan_layer.compute_position_relative_to_pool(phys, scan_layer_z);
+      T[i] = scan_layer_active
+               ? ros_source->rosenthal_pointwise(loc[0], loc[1], loc[2], v_laser, T0)
+               : T0;
+    }
+    double t1 = MPI_Wtime();
+    g_t_temp_site_loop += (t1 - t0);
+
+  // -------------------------------------------------------------------
+  // Generic xyz fallback for any other future source type.
+  // -------------------------------------------------------------------
+  } else {
+    double t0 = MPI_Wtime();
+    for (int i = 0; i < nlocal; i++) {
+      double x_physical = xyz[i][0] * dx;
+      double y_physical = xyz[i][1] * dx;
+      double z_physical = xyz[i][2] * dx;
       T[i] = temperature_source->get_temperature_at_xyz_and_time(x_physical, y_physical, z_physical, simulation_time);
     }
     double t1 = MPI_Wtime();

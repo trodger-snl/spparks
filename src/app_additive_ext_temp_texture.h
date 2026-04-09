@@ -22,6 +22,7 @@ AppStyle(additive_temperature_texture,AppAdditiveExtTempTexture)
 #include "app_potts_quaternion.h"
 #include "temperatureQueues.h"
 #include "temperature_source.h"
+#include "am_raster.h"
 #include <stdlib.h>
 #include <string>
 #include <map>
@@ -64,8 +65,15 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
 
   // Modular temperature source methods
   void setup_temperature_source_cmd(int narg, char **arg);
-  void setup_scan_path_cmd(int narg, char **arg);
+  void rosenthal_path_cmd(int narg, char **arg);
   void update_temperature_from_source(double simulation_time);
+
+  // Fast-forward predictor for the Rosenthal source. Walks scan_layer
+  // (on a copy) to find the earliest time at which a Rosenthal-driven
+  // temperature on the local domain rises above threshold_temp, given
+  // current sim time. Returns +inf if the laser never reaches threshold
+  // before all repeats are exhausted.
+  double rosenthal_next_active_time(double current_time, double threshold_temp);
 
   // Void generation methods
   void generate_voids(class RandomPark *);
@@ -137,6 +145,14 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   std::unique_ptr<TemperatureSource> temperature_source;
   bool use_temperature_source;  // Flag to enable new modular system
   double fast_forward_search_window;  // Search window for fast-forward (default 0.1s)
+
+  // Laser scan path state for the analytical Rosenthal source.
+  // Coordinates are SI meters; speeds are m/s. Not used by HDF5 sources.
+  RASTER::Layer scan_layer;
+  double scan_layer_z;       // physical Z of the scan plane (meters)
+  double scan_layer_time;    // sim time at which scan_layer's pose is current
+  bool   scan_layer_active;  // true while the path has remaining motion
+  bool   rosenthal_path_set; // true once rosenthal_path has been parsed
 
   // Temperature optimization flags (for performance testing)
   bool opt_use_spatial_grid;    // Use spatial grid for element lookup (default: true)

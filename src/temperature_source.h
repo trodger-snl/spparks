@@ -59,6 +59,12 @@ class TemperatureSource : protected Pointers {
   virtual bool supports_time_queries() const { return false; }
   virtual double get_next_time_with_temperature(double current_time, double threshold_temp) { return current_time; }
 
+  // Accessor for the source's notion of ambient/preheat temperature.
+  // Set by setup_temperature_source() in derived classes (e.g. Rosenthal T0,
+  // HDF5 default_temp). Used by driving apps to seed analytical evaluations
+  // and to know what to set sites to outside the active region.
+  double get_ambient_temperature() const { return ambient_temperature; }
+
  protected:
   // Common data members accessible to derived classes
   double ambient_temperature;

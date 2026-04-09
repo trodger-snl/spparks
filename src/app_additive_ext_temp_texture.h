@@ -66,7 +66,7 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   // Modular temperature source methods
   void setup_temperature_source_cmd(int narg, char **arg);
   void laser_path_cmd(int narg, char **arg);
-  void rosenthal_fluctuations_cmd(int narg, char **arg);
+  void laser_fluctuations_cmd(int narg, char **arg);
   void update_temperature_from_source(double simulation_time);
 
   // Fast-forward predictor for the Rosenthal source. Walks scan_layer
@@ -154,11 +154,6 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   double scan_layer_time;    // sim time at which scan_layer's pose is current
   bool   scan_layer_active;  // true while the path has remaining motion
   bool   laser_path_set;     // true once laser_path has been parsed
-
-  // Cumulative laser arc length (meters), used to index ΔW/W, ΔD/D
-  // sequences when rosenthal_fluctuations is loaded.
-  double laser_arc_length;
-  bool   fluctuations_loaded;
 
   // Temperature optimization flags (for performance testing)
   bool opt_use_spatial_grid;    // Use spatial grid for element lookup (default: true)

@@ -1,13 +1,19 @@
-# Stochastic fluctuation generator
+# Stochastic fluctuation generator (reference / external use)
 
 `generate_fluctuations.py` produces ΔW/W, ΔD/D vs. arc-length tracks
-suitable for the SPPARKS `rosenthal_fluctuations` command. The generator
-emits an ASCII three-column file:
+in an ASCII three-column file:
 
     s[m]   dW_over_W   dD_over_D
 
-with header lines (`#`) capturing the config used to produce it. The
-SPPARKS C++ side parses comments transparently.
+with header lines (`#`) capturing the config used to produce it.
+
+**Note:** SPPARKS no longer has a built-in command that loads these
+files. Stochastic fluctuations are now produced internally by the
+Moser/Green's-function source via the `laser_fluctuations psd ...`
+input command (see `examples/rosenthal_am/in.additive.moser_multiscan_fluct`).
+This Python tool is kept as a reference implementation and for
+external workflows that want to generate stochastic tracks for
+non-SPPARKS consumers (analysis, plotting, comparison studies).
 
 ## Install
 
@@ -65,24 +71,19 @@ Other PSD shapes:
 
 `f0`, `df` are spatial frequencies in 1/m; spatial period = 1/f₀.
 
-## Mapping into SPPARKS
+## In-source equivalent
 
-After generating `lorentzian_5pct.dat`, point an input script at it:
+The same Lorentzian, white, pink and narrow_band shapes are available
+as a built-in command on the Moser source — no Python preprocessing
+or file I/O required:
 
 ```spparks
-setup_temperature_source rosenthal standard 285.0 0.0775 11.2 2.0959e-6 573.0
-laser_path               start 0.1e-3 0.4e-3 0.4e-3 end 1.1e-3 0.4e-3 \
-                         speed 1.2 repeats 1
-rosenthal_fluctuations   lorentzian_5pct.dat mode continuous
+setup_temperature_source moser 285.0 0.155 11.2 2.0959e-6 573.0 650.0 \
+                               50e-6 50e-6 25e-6
+laser_fluctuations psd lorentzian sigma_W 0.05 sigma_D 0.06 tau 200e-6 \
+                                  rho 0.5 seed 12345 dt 5e-6
+laser_path start 0.1e-3 0.4e-3 0.4e-3 end 1.1e-3 0.4e-3 speed 1.2 repeats 1
 ```
 
-`mode periodic` (default) wraps the noise on each repeat — good for
-"what does this exact roughness profile do" comparisons. `mode continuous`
-uses the cumulative laser arc length without modulo and clamps to the
-last sample once exhausted, so generate a track at least as long as
-`speed × total_run_time` for that mode.
-
-If `setup_temperature_source rosenthal standard …` is used, the
-fluctuation command auto-promotes the source to `anisotropic` with
-η_y=η_z=1, so no other input changes are needed. `keyhole` mode is not
-supported.
+The Python tool is only useful if you need a track for an external
+consumer or want to inspect the time series outside SPPARKS.

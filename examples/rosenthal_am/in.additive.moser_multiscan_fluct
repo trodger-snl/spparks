@@ -1,0 +1,131 @@
+# SPPARKS additive_temperature_texture: multi-pass laser scan driven by
+# the Moser/Green's-function source with stochastic ΔW/W, ΔD/D
+# fluctuations applied per emission.
+#
+# This is the natural successor of the old rosenthal_multiscan example:
+# the Moser unsteady integral form correctly applies fluctuations to
+# the laser parameters AT THE TIME OF EMISSION, so a fluctuation that
+# happened 0.5 ms ago contributes to the cooling tail with its original
+# (sx, sy, sz) values, while a fluctuation happening now affects only
+# the active pool. The steady-state Rosenthal kernel cannot do this
+# because it implicitly assumes the laser parameters have always been
+# their current value.
+#
+# ---------------------------------------------------------------------
+# Geometry
+# ---------------------------------------------------------------------
+#
+# 1.5 mm linear path in +x along the centerline of a 2 mm × 0.4 mm ×
+# 0.3 mm box at dx = 5 µm. Substrate (z < 0.20 mm) is single-crystal,
+# powder layer above. NSCANS=5 repeated passes.
+#
+# Per-pass duration = 1.5e-3 m / 1.2 m/s = 1.25 ms.
+# Total scan time   = NSCANS * 1.25 ms = 6.25 ms.
+#
+# ---------------------------------------------------------------------
+# Source widths (calibration knob)
+# ---------------------------------------------------------------------
+#
+# Moser's ellipsoidal Gaussian source has lateral widths sx, sy and
+# depth width sz. Values here are educated guesses for an LPBF spot of
+# ~50 µm characteristic radius. Calibrate against either a high-fidelity
+# FEM melt-pool snapshot or a single-track cross-section to get
+# quantitatively accurate pool dimensions.
+
+variable NSCANS equal 5
+
+# app_style additive_temperature_texture <nspins> <dx[m]> <dt[s]> <nrefine>
+app_style additive_temperature_texture 1000000 5e-6 5e-6 2
+
+shell mkdir -p DumpFiles_moser_multiscan_fluct
+
+seed             56789
+
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 400 0 80 0 60
+
+boundary         n n n
+
+create_box       box
+create_sites     box
+
+# ---------------------------------------------------------------------
+# Initial site state: powder default + single-crystal substrate
+# (z < 40 in lattice units = z < 0.20 mm).
+# ---------------------------------------------------------------------
+
+set site range 1 1000000
+set i2 value 1
+
+set i1 value 42      #if z < 40
+set i2 value 3       #if z < 40
+set d1 value 1.0     #if z < 40
+set d2 value 0.0     #if z < 40
+set d3 value 0.0     #if z < 40
+set d4 value 0.0     #if z < 40
+
+sector           yes
+sweep            random mask no
+
+diag_style       array d6 sum
+
+temperature      0.0
+misorientation_target gradient
+
+# AM-specific (IN718-like)
+liquidus         1573
+solidus          1523
+solid_front_vel  4 -1.0302e-7 1.0533e-4 2.2196e-3 0
+nucleation_density      1e14
+critical_undercooling   5
+undercooling_deviation  3
+mean_nuclei_volume      8.4375e-16
+nuclei_volume_deviation 1.5625e-17
+
+# ---------------------------------------------------------------------
+# Moser/Green's-function source
+# args: <Q[W]> <lambda> <k[W/(mK)]> <alpha[m^2/s]> <T0[K]> <cp[J/(kgK)]>
+#       <sx[m]> <sy[m]> <sz[m]>
+# ---------------------------------------------------------------------
+setup_temperature_source moser 240.0 0.155 11.2 2.0959e-6 573.0 650.0 50e-6 50e-6 25e-6
+
+# ---------------------------------------------------------------------
+# Stochastic ΔW/W, ΔD/D fluctuations on the Moser source.
+#
+# Lorentzian-correlated noise with tau = 200 µs (= ~one pool transit
+# time at 1.2 m/s over 240 µm), 5% RMS in width, 6% RMS in depth,
+# Pearson rho = 0.5. The same seed produces an identical chain on every
+# MPI rank (no MPI_Bcast needed).
+#
+# Because the Moser integrand integrates over the laser emission
+# history with parameters frozen at each emission time, sites in the
+# cooling tail "remember" the σ values from their original emission
+# rather than snapping to the latest values each timestep.
+#
+# IMPORTANT: laser_fluctuations must come BEFORE laser_path so the
+# spec is in place when the fluctuation table is materialized inside
+# build_scan().
+# ---------------------------------------------------------------------
+laser_fluctuations psd lorentzian sigma_W 0.05 sigma_D 0.06 tau 200e-6 rho 0.5 seed 12345 dt 5e-6
+
+# ---------------------------------------------------------------------
+# Multi-scan path. Coordinates in meters; Z is the laser plane.
+# 1.5 mm linear scan at 1.2 m/s, repeated ${NSCANS} times.
+# ---------------------------------------------------------------------
+laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats ${NSCANS}
+
+shell cd DumpFiles_moser_multiscan_fluct
+
+stats            5e-4
+
+# Dump T (d6 = darray[5]), grain id, active_flag, and the full
+# quaternion (d1..d4) every 0.5 ms. NSCANS=5 passes take 6.25 ms;
+# at 0.5 ms cadence we get ~12 in-scan snapshots plus cool-down frames.
+dump             1 text 5e-4 dump.multiscan.* id i1 i2 d1 d2 d3 d4 d6 x y z
+dump_modify      1 thresh i2 > 1
+
+# Run for slightly longer than NSCANS * 1.25 ms = 6.25 ms to capture
+# post-scan cooling and the final solidified microstructure.
+run              15e-3
+shell cd ../

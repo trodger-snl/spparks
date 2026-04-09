@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""Generate stochastic ΔW/W, ΔD/D sequences for SPPARKS rosenthal_fluctuations.
+"""Generate stochastic ΔW/W, ΔD/D sequences as ASCII reference data.
 
 Reads a YAML config that specifies a target spectral shape (white, 1/f^β,
 Lorentzian, narrow-band, multi-peak), target RMS, correlation length, and a
 Pearson correlation between the W and D channels. Emits a 3-column ASCII
-file consumed by the SPPARKS `rosenthal_fluctuations` command:
+file:
 
     s[m]   dW_over_W   dD_over_D
+
+Note: SPPARKS no longer has a built-in command that loads these files.
+Stochastic fluctuations are now produced internally by the Moser source
+via the `laser_fluctuations psd ...` input command. This generator is
+kept as a reference implementation and for external workflows that need
+ΔW/ΔD time series outside SPPARKS (analysis, plotting, comparison
+studies).
 
 Usage:
     python generate_fluctuations.py config.yaml -o fluct.dat

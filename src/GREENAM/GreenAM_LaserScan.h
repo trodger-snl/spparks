@@ -1,6 +1,7 @@
 #ifndef GREENAM_LASER_SCAN_H
 #define GREENAM_LASER_SCAN_H
 
+#include "GreenAM_Fluctuations.h"
 #include "GreenAM_Properties.h"
 
 #ifndef GREENAM_FUNCTION
@@ -19,14 +20,16 @@ namespace greenam {
 template <typename T>
 struct GaussGreenEllips
 {
-  GREENAM_FUNCTION GaussGreenEllips(T xi = 0., T yi = 0., T zi = 0., 
+  GREENAM_FUNCTION GaussGreenEllips(T xi = 0., T yi = 0., T zi = 0.,
     T ti =0., T xl = 0., T yl = 0., T zl = 0.,
-    T p = 0., T sp = 0., T tzero = 0., 
-    T nxi = 1., T nyi = 0., T a = 0., 
-    T ci = 0., EllipsoidProperties<T> ep = EllipsoidProperties<T>()) :
-      x(xi), y(yi), z(zi), t(ti), alpha(a), c(ci), z0(zl),  
-      xl(xl), yl(yl), power(p), speed(sp), t0(tzero), nx(nxi), 
-      ny(nyi), eprop(ep)
+    T p = 0., T sp = 0., T tzero = 0.,
+    T nxi = 1., T nyi = 0., T a = 0.,
+    T ci = 0., EllipsoidProperties<T> ep = EllipsoidProperties<T>(),
+    // SPPARKS extension: optional emission-time fluctuation table.
+    const FluctuationTable<T> * ft = nullptr) :
+      x(xi), y(yi), z(zi), t(ti), alpha(a), c(ci), z0(zl),
+      xl(xl), yl(yl), power(p), speed(sp), t0(tzero), nx(nxi),
+      ny(nyi), eprop(ep), ftable(ft)
   {}
   GREENAM_INLINE_FUNCTION void coord_transform(T s, T & xt, T & yt, T & zt, T & tt) const
   {
@@ -42,27 +45,48 @@ struct GaussGreenEllips
     T st = 4.*alpha*(t-s);
     T xt, yt, zt, tt;
     coord_transform(s, xt, yt, zt, tt);
-    T varx = 1. / (eprop.sx*eprop.sx + st);
-    T vary = 1. / (eprop.sy*eprop.sy + st);
-    T varz = 1. / (eprop.sz*eprop.sz + st);
+    // SPPARKS extension: query the emission-time fluctuation table for
+    // multiplicative corrections to (sx, sy, sz, power) at this s.
+    // The integrand is sampled at many s values within each segment by
+    // adaptive Gauss-Legendre quadrature, so this naturally captures
+    // sub-segment temporal variation.
+    T sx_use = eprop.sx;
+    T sy_use = eprop.sy;
+    T sz_use = eprop.sz;
+    T p_use  = power;
+    if (ftable != nullptr && !ftable->empty()) {
+      T fW, fD, fP;
+      ftable->get_at(s, fW, fD, fP);
+      sx_use *= fW;
+      sy_use *= fW;
+      sz_use *= fD;
+      p_use  *= fP;
+    }
+    T varx = 1. / (sx_use*sx_use + st);
+    T vary = 1. / (sy_use*sy_use + st);
+    T varz = 1. / (sz_use*sz_use + st);
     T xeff = xt-speed*tt;
-    T res = 2. * power / c * invPi3_2 * 
-      std::exp(-xeff * xeff * varx - yt*yt*vary 
+    T res = 2. * p_use / c * invPi3_2 *
+      std::exp(-xeff * xeff * varx - yt*yt*vary
       - zt*zt*varz);
     res *= std::sqrt(varx*vary*varz);
     return res;
   }
-  T x, y, z, t; 
+  T x, y, z, t;
   T alpha, c, z0;
   unsigned my_idx = uint_max;
   T xl;
   T yl;
-  T power; 
-  T speed; 
+  T power;
+  T speed;
   T t0;
   T nx;
   T ny;
   EllipsoidProperties<T> eprop;
+  // SPPARKS extension: borrowed (non-owning) pointer to a fluctuation
+  // table. nullptr means no fluctuations and the integrand uses the
+  // nominal eprop and power.
+  const FluctuationTable<T> * ftable;
 };
 
 //Class to compute the temperature response of a laser scan at a set of provided space-time points
@@ -156,12 +180,18 @@ struct LaserScan {
   //l [in] line number
   //Returns:
   //GaussGreenEllips at specified location and time for integration
-  GREENAM_FUNCTION GaussGreenEllips<RealType> get_gg_ellipse_for_point(const RealType & x, const RealType & y, 
+  GREENAM_FUNCTION GaussGreenEllips<RealType> get_gg_ellipse_for_point(const RealType & x, const RealType & y,
     const RealType & z, const RealType & t, unsigned l) const
   {
-    return GaussGreenEllips<RealType>(x, y, z, t, xl(l), yl(l), zl, powers(l), speeds(l), bounds(l), 
-      normals_x(l), normals_y(l), alpha, c, eprop);
+    return GaussGreenEllips<RealType>(x, y, z, t, xl(l), yl(l), zl, powers(l), speeds(l), bounds(l),
+      normals_x(l), normals_y(l), alpha, c, eprop, ftable);
   }
+
+  // SPPARKS extension: attach an emission-time fluctuation table.
+  // Borrowed pointer; the caller (typically MoserGreenTemperatureSource)
+  // owns the storage and must keep it alive for the lifetime of this
+  // LaserScan. Pass nullptr to disable fluctuations.
+  void set_fluctuation_table(const FluctuationTable<RealType> * t) { ftable = t; }
 
   GREENAM_FUNCTION void get_laser_location_at_time(const RealType & t, RealType & x, RealType & y)
   {
@@ -223,6 +253,8 @@ struct LaserScan {
   RealType zl;
   RealType alpha;
   RealType c;
+  // SPPARKS extension: optional emission-time fluctuation table.
+  const FluctuationTable<RealType> * ftable = nullptr;
 };
 }
 }

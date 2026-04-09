@@ -184,8 +184,6 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     scan_layer_time = 0.0;
     scan_layer_active = false;
     laser_path_set = false;
-    laser_arc_length = 0.0;
-    fluctuations_loaded = false;
 
     // Temperature optimization flags (all enabled by default)
     opt_use_spatial_grid = true;
@@ -389,8 +387,8 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
   else if (strcmp(command,"laser_path") == 0) {
     laser_path_cmd(narg, arg);
   }
-  else if (strcmp(command,"rosenthal_fluctuations") == 0) {
-    rosenthal_fluctuations_cmd(narg, arg);
+  else if (strcmp(command,"laser_fluctuations") == 0) {
+    laser_fluctuations_cmd(narg, arg);
   }
 
   else error->all(FLERR,"Unrecognized command");
@@ -2240,9 +2238,6 @@ void AppAdditiveExtTempTexture::laser_path_cmd(int narg, char **arg)
   scan_layer_time = time;  // anchor the layer pose to the current sim time
   scan_layer_active = true;
   laser_path_set = true;
-  // Reset cumulative arc length so any loaded fluctuation track restarts
-  // from its origin on each new path definition.
-  laser_arc_length = 0.0;
 
   // Size the singularity cutoff to the lattice so the 1/R prefactor at
   // the laser site stays finite. Only meaningful when the source is
@@ -2267,164 +2262,109 @@ void AppAdditiveExtTempTexture::laser_path_cmd(int narg, char **arg)
 }
 
 /* ----------------------------------------------------------------------
-   rosenthal_fluctuations command. Two forms:
+   laser_fluctuations command. Currently supports the in-source PSD
+   form only (file-loaded fluctuations are not yet implemented for the
+   Moser source):
 
-   1. File-loaded ΔW/W, ΔD/D:
-        rosenthal_fluctuations <file> [mode periodic|continuous]
+     laser_fluctuations psd <shape> sigma_W <s> sigma_D <s> \
+                            [sigma_P <s>] [rho <r>] [seed <n>] [dt <s>] \
+                            [shape-specific keys ...]
+   Shapes:
+     white
+     lorentzian   tau <s>
+     pink
+     narrow_band  f0 <Hz>  df <Hz>
 
-   2. In-source PSD streaming generator (no preprocessing):
-        rosenthal_fluctuations psd <shape> sigma_W <s> sigma_D <s> \
-                              [rho <r>] [seed <n>] [dx <m>] \
-                              [shape-specific keys ...]
-      Shapes:
-        white
-        lorentzian   tau <m>
-        pink
-        narrow_band  f0 <1/m>  df <1/m>
+   Stores the spec on the active Moser source. The fluctuation table
+   is materialized inside laser_path_cmd's call to build_scan(),
+   because that's when the scan duration becomes known. Therefore the
+   correct command order is:
 
-   Modulates eta_y, eta_z of the Rosenthal source per timestep using a
-   first-order linearization of the analytical pool. Forces the source
-   into ANISOTROPIC mode (auto-promotes from STANDARD with eta=1, errors
-   for KEYHOLE).
+     setup_temperature_source moser ...
+     laser_fluctuations psd ...
+     laser_path start ... end ... speed ...
+
+   The active source must be the Moser/Green's-function source; the
+   Rosenthal source no longer supports fluctuations (the steady-state
+   kernel "snaps the entire pool" semantics is unphysical, and the
+   Moser unsteady integral is the proper way to apply per-emission
+   parameter variation).
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::rosenthal_fluctuations_cmd(int narg, char **arg)
+void AppAdditiveExtTempTexture::laser_fluctuations_cmd(int narg, char **arg)
 {
   if (narg < 1)
-    error->all(FLERR,"Illegal rosenthal_fluctuations command: expected <file> [mode ...] OR psd <shape> ...");
+    error->all(FLERR,"Illegal laser_fluctuations command: expected psd <shape> ...");
 
-  // Validate against current temperature source.
   if (!temperature_source) {
-    error->all(FLERR,"rosenthal_fluctuations: setup_temperature_source rosenthal must be called first");
+    error->all(FLERR,"laser_fluctuations: setup_temperature_source must be called first");
   }
-  RosenthalTemperatureSource *ros =
-    dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
-  if (!ros) {
-    error->all(FLERR,"rosenthal_fluctuations: temperature source is not Rosenthal");
-  }
-  if (ros->get_mode() == RosenthalTemperatureSource::RosenthalMode::KEYHOLE) {
-    error->all(FLERR,"rosenthal_fluctuations: not supported with keyhole mode");
+  MoserGreenTemperatureSource *moser =
+    dynamic_cast<MoserGreenTemperatureSource*>(temperature_source.get());
+  if (!moser) {
+    error->all(FLERR,"laser_fluctuations: only the Moser/Green's-function source supports fluctuations");
   }
 
-  // -------- PSD form: rosenthal_fluctuations psd <shape> ... --------
-  if (strcmp(arg[0],"psd") == 0) {
-    if (narg < 2)
-      error->all(FLERR,"rosenthal_fluctuations psd: missing <shape>");
-    RosenthalTemperatureSource::PsdSpec spec;
-    spec.sigma_W = 0.0;
-    spec.sigma_D = 0.0;
-    spec.rho     = 0.0;
-    spec.seed    = 12345UL;
-    spec.dx      = 5.0e-6;
-    spec.tau     = 0.0;
-    spec.f0      = 0.0;
-    spec.df      = 0.0;
-    if      (strcmp(arg[1],"white")       == 0) spec.shape = RosenthalTemperatureSource::PsdShape::WHITE;
-    else if (strcmp(arg[1],"lorentzian")  == 0) spec.shape = RosenthalTemperatureSource::PsdShape::LORENTZIAN;
-    else if (strcmp(arg[1],"pink")        == 0) spec.shape = RosenthalTemperatureSource::PsdShape::PINK;
-    else if (strcmp(arg[1],"narrow_band") == 0) spec.shape = RosenthalTemperatureSource::PsdShape::NARROW_BAND;
-    else error->all(FLERR,"rosenthal_fluctuations psd: unknown shape (use white|lorentzian|pink|narrow_band)");
+  if (strcmp(arg[0],"psd") != 0)
+    error->all(FLERR,"laser_fluctuations: expected 'psd' subcommand");
+  if (narg < 2)
+    error->all(FLERR,"laser_fluctuations psd: missing <shape>");
 
-    int i = 2;
-    while (i < narg) {
-      const char *k = arg[i];
-      if (i + 1 >= narg)
-        error->all(FLERR,"rosenthal_fluctuations psd: missing value for keyword");
-      const double val = atof(arg[i+1]);
-      if      (strcmp(k,"sigma_W") == 0) spec.sigma_W = val;
-      else if (strcmp(k,"sigma_D") == 0) spec.sigma_D = val;
-      else if (strcmp(k,"rho")     == 0) spec.rho     = val;
-      else if (strcmp(k,"seed")    == 0) spec.seed    = static_cast<unsigned long>(atol(arg[i+1]));
-      else if (strcmp(k,"dx")      == 0) spec.dx      = val;
-      else if (strcmp(k,"tau")     == 0) spec.tau     = val;
-      else if (strcmp(k,"f0")      == 0) spec.f0      = val;
-      else if (strcmp(k,"df")      == 0) spec.df      = val;
-      else error->all(FLERR,"rosenthal_fluctuations psd: unknown keyword");
-      i += 2;
-    }
+  MoserGreenTemperatureSource::PsdSpec spec;
+  spec.sigma_W = 0.0;
+  spec.sigma_D = 0.0;
+  spec.sigma_P = 0.0;
+  spec.rho     = 0.0;
+  spec.seed    = 12345UL;
+  spec.dt_psd  = 5.0e-6;
+  spec.tau     = 0.0;
+  spec.f0      = 0.0;
+  spec.df      = 0.0;
 
-    // Promote STANDARD -> ANISOTROPIC if needed (no-op for ANISOTROPIC).
-    if (ros->get_mode() == RosenthalTemperatureSource::RosenthalMode::STANDARD) {
-      ros->promote_to_anisotropic();
-    }
-    ros->init_psd_generator(spec);
-    fluctuations_loaded = true;
-    laser_arc_length = 0.0;
-    return;
+  if      (strcmp(arg[1],"white")       == 0) spec.shape = MoserGreenTemperatureSource::PsdShape::WHITE;
+  else if (strcmp(arg[1],"lorentzian")  == 0) spec.shape = MoserGreenTemperatureSource::PsdShape::LORENTZIAN;
+  else if (strcmp(arg[1],"pink")        == 0) spec.shape = MoserGreenTemperatureSource::PsdShape::PINK;
+  else if (strcmp(arg[1],"narrow_band") == 0) spec.shape = MoserGreenTemperatureSource::PsdShape::NARROW_BAND;
+  else error->all(FLERR,"laser_fluctuations psd: unknown shape (use white|lorentzian|pink|narrow_band)");
+
+  int i = 2;
+  while (i < narg) {
+    const char *k = arg[i];
+    if (i + 1 >= narg)
+      error->all(FLERR,"laser_fluctuations psd: missing value for keyword");
+    const double val = atof(arg[i+1]);
+    if      (strcmp(k,"sigma_W") == 0) spec.sigma_W = val;
+    else if (strcmp(k,"sigma_D") == 0) spec.sigma_D = val;
+    else if (strcmp(k,"sigma_P") == 0) spec.sigma_P = val;
+    else if (strcmp(k,"rho")     == 0) spec.rho     = val;
+    else if (strcmp(k,"seed")    == 0) spec.seed    = static_cast<unsigned long>(atol(arg[i+1]));
+    else if (strcmp(k,"dt")      == 0) spec.dt_psd  = val;
+    else if (strcmp(k,"tau")     == 0) spec.tau     = val;
+    else if (strcmp(k,"f0")      == 0) spec.f0      = val;
+    else if (strcmp(k,"df")      == 0) spec.df      = val;
+    else error->all(FLERR,"laser_fluctuations psd: unknown keyword");
+    i += 2;
   }
 
-  // -------- File form: rosenthal_fluctuations <file> [mode ...] --------
-  bool periodic = true;  // default
-  if (narg >= 3) {
-    if (strcmp(arg[1],"mode") != 0)
-      error->all(FLERR,"rosenthal_fluctuations: expected keyword 'mode' as second argument");
-    if (strcmp(arg[2],"periodic") == 0) periodic = true;
-    else if (strcmp(arg[2],"continuous") == 0) periodic = false;
-    else error->all(FLERR,"rosenthal_fluctuations: mode must be 'periodic' or 'continuous'");
-  } else if (narg == 2) {
-    error->all(FLERR,"rosenthal_fluctuations: 'mode' keyword requires a value");
-  }
-
-  // Read on rank 0.
-  std::vector<double> s_vec, dW_vec, dD_vec;
-  int n_samples = 0;
+  moser->set_psd_spec(spec);
   if (domain->me == 0) {
-    std::ifstream fin(arg[0]);
-    if (!fin) {
-      std::string msg = "rosenthal_fluctuations: could not open file '";
-      msg += arg[0];
-      msg += "'";
-      error->one(FLERR,msg.c_str());
-    }
-    std::string line;
-    int lineno = 0;
-    while (std::getline(fin, line)) {
-      ++lineno;
-      // Strip leading whitespace
-      size_t p = line.find_first_not_of(" \t\r\n");
-      if (p == std::string::npos) continue;
-      if (line[p] == '#') continue;
-      std::istringstream iss(line);
-      double s_val, dW, dD;
-      if (!(iss >> s_val >> dW >> dD)) {
-        std::ostringstream oss;
-        oss << "rosenthal_fluctuations: parse error on line " << lineno
-            << " of " << arg[0];
-        error->one(FLERR,oss.str().c_str());
-      }
-      s_vec.push_back(s_val);
-      dW_vec.push_back(dW);
-      dD_vec.push_back(dD);
-    }
-    n_samples = static_cast<int>(s_vec.size());
-    if (n_samples < 2) {
-      error->one(FLERR,"rosenthal_fluctuations: file must contain at least 2 samples");
-    }
-    std::cout << "rosenthal_fluctuations: loaded " << n_samples
-              << " samples from " << arg[0]
-              << " (mode=" << (periodic ? "periodic" : "continuous") << ")"
-              << std::endl;
+    const char *sname = "white";
+    if      (spec.shape == MoserGreenTemperatureSource::PsdShape::LORENTZIAN)  sname = "lorentzian";
+    else if (spec.shape == MoserGreenTemperatureSource::PsdShape::PINK)        sname = "pink";
+    else if (spec.shape == MoserGreenTemperatureSource::PsdShape::NARROW_BAND) sname = "narrow_band";
+    std::cout << "laser_fluctuations psd: shape=" << sname
+              << " sigma_W=" << spec.sigma_W
+              << " sigma_D=" << spec.sigma_D
+              << " sigma_P=" << spec.sigma_P
+              << " rho="     << spec.rho
+              << " seed="    << spec.seed
+              << " dt="      << spec.dt_psd << " s";
+    if (spec.shape == MoserGreenTemperatureSource::PsdShape::LORENTZIAN)
+      std::cout << " tau=" << spec.tau;
+    if (spec.shape == MoserGreenTemperatureSource::PsdShape::NARROW_BAND)
+      std::cout << " f0=" << spec.f0 << " df=" << spec.df;
+    std::cout << std::endl;
   }
-
-  // Broadcast count, then arrays.
-  MPI_Bcast(&n_samples, 1, MPI_INT, 0, world);
-  if (domain->me != 0) {
-    s_vec.resize(n_samples);
-    dW_vec.resize(n_samples);
-    dD_vec.resize(n_samples);
-  }
-  MPI_Bcast(s_vec.data(),  n_samples, MPI_DOUBLE, 0, world);
-  MPI_Bcast(dW_vec.data(), n_samples, MPI_DOUBLE, 0, world);
-  MPI_Bcast(dD_vec.data(), n_samples, MPI_DOUBLE, 0, world);
-
-  // Promote STANDARD -> ANISOTROPIC if needed (no-op for ANISOTROPIC).
-  if (ros->get_mode() == RosenthalTemperatureSource::RosenthalMode::STANDARD) {
-    ros->promote_to_anisotropic();
-  }
-
-  ros->load_fluctuations(s_vec, dW_vec, dD_vec, periodic);
-  fluctuations_loaded = true;
-  laser_arc_length = 0.0;
 }
 
 /* ----------------------------------------------------------------------
@@ -2607,41 +2547,15 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
       double advance = simulation_time - scan_layer_time;
       // tolerance: ignore tiny negative drift from FP arithmetic
       const double step = (dt > 0.0) ? dt : 1.0e-6;
-      // Accumulate cumulative arc length across the chunked move() calls.
-      // RASTER::Layer::get_distance_traveled() resets to 0 on auto-rewind
-      // at the end of each repeat, so we measure deltas around each move()
-      // and fall back to v*dt when a wrap is detected.
-      const double v_path = scan_layer.get_speed();
       while (advance > step) {
-        const double dist_before = scan_layer.get_distance_traveled();
         if (!scan_layer.move(step)) { scan_layer_active = false; break; }
-        const double dist_after = scan_layer.get_distance_traveled();
-        const double delta = (dist_after >= dist_before)
-                               ? (dist_after - dist_before)
-                               : (dist_after + v_path * step);
-        laser_arc_length += delta;
         advance -= step;
       }
       if (scan_layer_active && advance > 0.0) {
-        const double dist_before = scan_layer.get_distance_traveled();
-        if (!scan_layer.move(advance)) {
-          scan_layer_active = false;
-        } else {
-          const double dist_after = scan_layer.get_distance_traveled();
-          const double delta = (dist_after >= dist_before)
-                                 ? (dist_after - dist_before)
-                                 : (dist_after + v_path * advance);
-          laser_arc_length += delta;
-        }
+        if (!scan_layer.move(advance)) scan_layer_active = false;
       }
     }
     scan_layer_time = simulation_time;
-
-    // Per-step ΔW/W, ΔD/D lookup happens once here, before the per-site
-    // loop. No-op if no fluctuation track was loaded.
-    if (fluctuations_loaded) {
-      ros_source->set_arc_length(laser_arc_length);
-    }
 
     const double v_laser = scan_layer.get_speed();
     // Use the source's own preheat/ambient (Rosenthal T0), not the app's

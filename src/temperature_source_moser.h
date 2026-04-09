@@ -15,13 +15,19 @@
 #define SPK_TEMPERATURE_SOURCE_MOSER_H
 
 #include "temperature_source.h"
+#include <array>
+#include <cstdint>
 #include <memory>
+#include <random>
 #include <string>
 #include <vector>
 
-// Forward-declare the GREENAM templates so the cpp file is the only
-// translation unit that has to instantiate them. The instantiation
-// types are defined in the cpp via aliases.
+// FluctuationTable is small and used inline by the wrapper, so we
+// include the header here rather than forward-declaring it. The other
+// GREENAM templates are forward-declared and instantiated only inside
+// the cpp file.
+#include "GREENAM/GreenAM_Fluctuations.h"
+
 namespace sierra { namespace greenam {
   template <typename RealType> struct VectorWrapper;
   template <typename RealType, typename ArrayType> struct LaserScan;
@@ -107,6 +113,45 @@ class MoserGreenTemperatureSource : public TemperatureSource {
   // ~1e-4 fractional integration error per the GREENAM comments.
   void set_char_length(double cl) { char_length = cl; }
 
+  // ----- Stochastic ΔW/W, ΔD/D, ΔP/P fluctuations -----------------------
+  // Time-domain recursive PSD generator. Pre-builds an emission-time-keyed
+  // (factor_W, factor_D, factor_P) table that the GREENAM integrand reads
+  // at every Gauss-Legendre node. Sub-segment fluctuations work naturally
+  // because the integrand is sampled adaptively within each scan segment
+  // by the adaptive quadrature routine.
+  //
+  // Channel layout:
+  //   factor_W = 1 + dW(s)  multiplies BOTH sx AND sy (lateral scaling,
+  //                          preserves any static aspect ratio set at
+  //                          setup_temperature_source moser)
+  //   factor_D = 1 + dD(s)  multiplies sz                (depth scaling)
+  //   factor_P = 1 + dP(s)  multiplies the absorbed power (lambda*Q)
+  //
+  // The W and D channels share a Pearson correlation rho. The P channel
+  // is independent of W and D in v1 (sigma_P=0 by default disables it).
+  enum class PsdShape { WHITE, LORENTZIAN, PINK, NARROW_BAND };
+
+  struct PsdSpec {
+    PsdShape shape;
+    double sigma_W;       // target RMS of dW/W
+    double sigma_D;       // target RMS of dD/D
+    double sigma_P;       // target RMS of dP/P (default 0)
+    double rho;           // Pearson correlation between W and D, in [-1,1]
+    unsigned long seed;
+    double dt_psd;        // sample spacing in emission time [s]
+    // Shape-specific (unused fields ignored)
+    double tau;           // lorentzian: correlation time [s]
+    double f0;            // narrow_band: center temporal freq [Hz]
+    double df;            // narrow_band: bandwidth [Hz]
+  };
+
+  // Stash a PSD spec for use by the next build_scan() call. Must be
+  // called BEFORE laser_path_cmd, since the table is materialized
+  // inside build_scan once the scan duration is known.
+  void set_psd_spec(const PsdSpec &spec);
+
+  bool has_fluctuations() const { return psd_spec_set; }
+
  private:
   // Material / source parameters
   double Q;          // total laser power [W]
@@ -138,6 +183,29 @@ class MoserGreenTemperatureSource : public TemperatureSource {
 
   std::shared_ptr<GREENAM_Scan>  scan_;
   std::shared_ptr<GREENAM_Integ> integrator_;
+
+  // ----- PSD generator state --------------------------------------------
+  bool   psd_spec_set;
+  PsdSpec psd_spec;
+  std::mt19937_64 psd_rng;
+  std::normal_distribution<double> psd_norm;
+  // Filter state (only the fields used by the active shape are read).
+  double ar_state_W, ar_state_D, ar_state_P;             // lorentzian AR(1)
+  static constexpr int VOSS_K = 6;
+  std::array<double, VOSS_K> voss_W, voss_D, voss_P;     // pink Voss-McCartney
+  std::uint64_t voss_step;
+  double osc_x_W, osc_v_W, osc_x_D, osc_v_D, osc_x_P, osc_v_P;  // narrow_band
+
+  // Materialized fluctuation table consumed by the integrand. Owned by
+  // this class; the LaserScan stores a borrowed pointer.
+  sierra::greenam::FluctuationTable<double> fluct_table_;
+
+  // PSD helpers
+  void psd_reset_filter_state();
+  void psd_warmup(int n_steps);
+  void psd_draw_trivariate(double &eps_W, double &eps_D, double &eps_P);
+  void psd_generate_next_sample(double &dW, double &dD, double &dP);
+  void populate_fluctuation_table(double t_start, double t_end);
 };
 
 }

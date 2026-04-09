@@ -15,9 +15,6 @@
 #define SPK_TEMPERATURE_SOURCE_ROSENTHAL_H
 
 #include "temperature_source.h"
-#include <array>
-#include <cstdint>
-#include <random>
 #include <string>
 #include <vector>
 
@@ -114,50 +111,6 @@ class RosenthalTemperatureSource : public TemperatureSource {
 
   RosenthalMode get_mode() const { return mode; }
 
-  // ----- Stochastic per-step modulation of eta_y, eta_z (anisotropic) -----
-  // Sequences are user-supplied (file or test fixture) and indexed by the
-  // laser's cumulative arc length s in meters. Linearization:
-  //   eta_y_eff(s) = eta_y * (1 - dW(s)/W)
-  //   eta_z_eff(s) = eta_z * (1 - dD(s)/D)
-  // valid for small fluctuations (|dW|,|dD| << 1).
-  void load_fluctuations(const std::vector<double> &s,
-                         const std::vector<double> &dW_over_W,
-                         const std::vector<double> &dD_over_D,
-                         bool periodic);
-  bool has_fluctuations() const { return !fluct_s.empty() || psd_active; }
-
-  // Called once per timestep before the per-site loop. Computes
-  // eta_y_eff/eta_z_eff for the current laser arc length and caches them
-  // so rosenthal_pointwise() runs at full speed inside the site loop.
-  void set_arc_length(double s);
-
-  // Auto-promote STANDARD -> ANISOTROPIC (eta_y=eta_z=1).
-  void promote_to_anisotropic();
-
-  // ----- In-source PSD generator (no Python preprocessing) ---------------
-  // Streaming time-domain filter that synthesizes ΔW/W, ΔD/D as the laser
-  // arc length advances, with exact W↔D Pearson correlation rho.
-  enum class PsdShape { WHITE, LORENTZIAN, PINK, NARROW_BAND };
-
-  struct PsdSpec {
-    PsdShape shape;
-    double sigma_W;       // target RMS of dW/W
-    double sigma_D;       // target RMS of dD/D
-    double rho;           // Pearson correlation in [-1, 1]
-    unsigned long seed;
-    double dx;            // sample spacing in arc length [m]
-    // Shape-specific (unused fields ignored)
-    double tau;           // lorentzian: correlation length [m]
-    double f0;            // narrow_band: center spatial freq [1/m]
-    double df;            // narrow_band: bandwidth [1/m]
-  };
-
-  // Initialize the streaming generator. Subsequent set_arc_length() calls
-  // will pull samples from this chain instead of from a loaded file.
-  // Performs a warmup of ~1000 samples so the filter starts in steady
-  // state. Validates the spec and errors on invalid arguments.
-  void init_psd_generator(const PsdSpec &spec);
-
  private:
   RosenthalMode mode;
 
@@ -182,39 +135,6 @@ class RosenthalTemperatureSource : public TemperatureSource {
 
   // Singularity cutoff (meters); 0 means no cutoff (set externally)
   double r_min;
-
-  // Stochastic ΔW/W, ΔD/D vs. arc length (anisotropic mode only)
-  std::vector<double> fluct_s;          // sorted, length N
-  std::vector<double> fluct_dW;         // dW/W at each s
-  std::vector<double> fluct_dD;         // dD/D at each s
-  bool   fluct_periodic;
-  double fluct_total_length;            // = fluct_s.back() - fluct_s.front()
-  bool   fluct_warned_clamp;            // one-time warning flags
-  bool   fluct_warned_linearization;
-  // Per-step cache of effective etas; default to nominal values
-  double eta_y_eff;
-  double eta_z_eff;
-
-  // ----- In-source PSD streaming generator state ------------------------
-  bool   psd_active;
-  PsdSpec psd_spec;
-  std::mt19937_64 psd_rng;
-  std::normal_distribution<double> psd_norm;
-  // Two-sample interpolation window (laser sweeps monotonically forward)
-  double psd_s_prev, psd_dW_prev, psd_dD_prev;
-  double psd_s_next, psd_dW_next, psd_dD_next;
-  // Filter state (only the fields used by the active shape are read)
-  double ar_state_W, ar_state_D;          // lorentzian AR(1)
-  static constexpr int VOSS_K = 6;
-  std::array<double, VOSS_K> voss_W, voss_D;  // pink Voss-McCartney
-  std::uint64_t voss_step;
-  double osc_x_W, osc_v_W, osc_x_D, osc_v_D;  // narrow_band oscillator
-
-  // Helpers
-  void psd_reset_filter_state();
-  void psd_warmup(int n_steps);
-  void psd_draw_bivariate(double &eps_W, double &eps_D);
-  void psd_generate_next_sample(double &dW, double &dD);
 
   // Helpers
   double rosenthal_kernel(double Q_eff, double v, double xi, double R) const;

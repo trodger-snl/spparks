@@ -183,7 +183,7 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     scan_layer_z = 0.0;
     scan_layer_time = 0.0;
     scan_layer_active = false;
-    rosenthal_path_set = false;
+    laser_path_set = false;
     laser_arc_length = 0.0;
     fluctuations_loaded = false;
 
@@ -386,8 +386,8 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
   else if (strcmp(command,"setup_temperature_source") == 0) {
     setup_temperature_source_cmd(narg, arg);
   }
-  else if (strcmp(command,"rosenthal_path") == 0) {
-    rosenthal_path_cmd(narg, arg);
+  else if (strcmp(command,"laser_path") == 0) {
+    laser_path_cmd(narg, arg);
   }
   else if (strcmp(command,"rosenthal_fluctuations") == 0) {
     rosenthal_fluctuations_cmd(narg, arg);
@@ -2184,48 +2184,49 @@ void AppAdditiveExtTempTexture::setup_temperature_source_cmd(int narg, char **ar
 }
 
 /* ----------------------------------------------------------------------
-   rosenthal_path command: define a single linear scan, optionally
+   laser_path command: define a single linear scan, optionally
    repeated N times. Coordinates and velocity are SI (meters, m/s).
 
    Format:
-     rosenthal_path start <X0> <Y0> <Z0> end <X1> <Y1> speed <V> [repeats <N>]
+     laser_path start <X0> <Y0> <Z0> end <X1> <Y1> speed <V> [repeats <N>]
 
    Builds N copies of one RASTER::Path into scan_layer; scan_layer_z is
-   set to Z0. The Rosenthal source itself is path-agnostic; this layer
-   is consumed by update_temperature_from_source() each step.
+   set to Z0. The temperature sources are path-agnostic; this layer is
+   consumed by update_temperature_from_source() each step (Rosenthal),
+   or translated into a GREENAM LaserScan via build_scan() (Moser).
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::rosenthal_path_cmd(int narg, char **arg)
+void AppAdditiveExtTempTexture::laser_path_cmd(int narg, char **arg)
 {
   // Expected token layout (0-based, command name already stripped):
   //   start X0 Y0 Z0 end X1 Y1 speed V [repeats N]
   // Minimum is 9 tokens (no repeats); with repeats it's 11.
   if (narg < 9)
-    error->all(FLERR,"Illegal rosenthal_path command: expected start X0 Y0 Z0 end X1 Y1 speed V [repeats N]");
+    error->all(FLERR,"Illegal laser_path command: expected start X0 Y0 Z0 end X1 Y1 speed V [repeats N]");
   if (strcmp(arg[0],"start") != 0)
-    error->all(FLERR,"rosenthal_path: expected keyword 'start'");
+    error->all(FLERR,"laser_path: expected keyword 'start'");
   const double x0 = atof(arg[1]);
   const double y0 = atof(arg[2]);
   const double z0 = atof(arg[3]);
   if (strcmp(arg[4],"end") != 0)
-    error->all(FLERR,"rosenthal_path: expected keyword 'end' after start coordinates");
+    error->all(FLERR,"laser_path: expected keyword 'end' after start coordinates");
   const double x1 = atof(arg[5]);
   const double y1 = atof(arg[6]);
   if (strcmp(arg[7],"speed") != 0)
-    error->all(FLERR,"rosenthal_path: expected keyword 'speed' after end coordinates");
+    error->all(FLERR,"laser_path: expected keyword 'speed' after end coordinates");
   const double v = atof(arg[8]);
   if (v <= 0.0)
-    error->all(FLERR,"rosenthal_path: speed must be > 0");
+    error->all(FLERR,"laser_path: speed must be > 0");
 
   int repeats = 1;
   if (narg > 9) {
     if (strcmp(arg[9],"repeats") != 0)
-      error->all(FLERR,"rosenthal_path: expected keyword 'repeats' or end-of-command");
+      error->all(FLERR,"laser_path: expected keyword 'repeats' or end-of-command");
     if (narg < 11)
-      error->all(FLERR,"rosenthal_path: missing value after 'repeats'");
+      error->all(FLERR,"laser_path: missing value after 'repeats'");
     repeats = atoi(arg[10]);
     if (repeats < 1)
-      error->all(FLERR,"rosenthal_path: repeats must be >= 1");
+      error->all(FLERR,"laser_path: repeats must be >= 1");
   }
 
   // Build N identical paths in the layer.
@@ -2238,7 +2239,7 @@ void AppAdditiveExtTempTexture::rosenthal_path_cmd(int narg, char **arg)
   scan_layer_z = z0;
   scan_layer_time = time;  // anchor the layer pose to the current sim time
   scan_layer_active = true;
-  rosenthal_path_set = true;
+  laser_path_set = true;
   // Reset cumulative arc length so any loaded fluctuation track restarts
   // from its origin on each new path definition.
   laser_arc_length = 0.0;
@@ -2259,7 +2260,7 @@ void AppAdditiveExtTempTexture::rosenthal_path_cmd(int narg, char **arg)
   }
 
   if (domain->me == 0) {
-    std::cout << "rosenthal_path: (" << x0 << "," << y0 << "," << z0
+    std::cout << "laser_path: (" << x0 << "," << y0 << "," << z0
               << ") -> (" << x1 << "," << y1 << "," << z0 << ")"
               << " speed=" << v << " m/s, repeats=" << repeats << std::endl;
   }
@@ -2449,7 +2450,7 @@ void AppAdditiveExtTempTexture::rosenthal_fluctuations_cmd(int narg, char **arg)
 
 double AppAdditiveExtTempTexture::rosenthal_next_active_time(double current_time, double threshold_temp)
 {
-  if (!rosenthal_path_set || !scan_layer_active)
+  if (!laser_path_set || !scan_layer_active)
     return std::numeric_limits<double>::max();
 
   auto* ros = dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
@@ -2590,8 +2591,8 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
   // each site is then evaluated against the current pool.
   // -------------------------------------------------------------------
   } else if (ros_source) {
-    if (!rosenthal_path_set) {
-      error->all(FLERR,"Rosenthal source selected but no rosenthal_path defined");
+    if (!laser_path_set) {
+      error->all(FLERR,"Rosenthal source selected but no laser_path defined");
     }
 
     double t0 = MPI_Wtime();

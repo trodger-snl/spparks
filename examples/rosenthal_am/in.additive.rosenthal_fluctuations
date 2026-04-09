@@ -52,7 +52,7 @@ nuclei_volume_deviation 1.5625e-17
 setup_temperature_source rosenthal standard 285.0 0.0775 11.2 2.0959e-6 573.0
 
 # Single 1 mm linear scan at 1.2 m/s.
-rosenthal_path start 0.1e-3 0.4e-3 0.4e-3 end 1.1e-3 0.4e-3 speed 1.2 repeats 1
+laser_path start 0.1e-3 0.4e-3 0.4e-3 end 1.1e-3 0.4e-3 speed 1.2 repeats 1
 
 # In-source PSD streaming generator: narrow-band oscillator centered at
 # f0 = 1e4 1/m (100 µm period), bandwidth df = 1e3 1/m (Q ~= 10).

@@ -162,7 +162,7 @@ setup_temperature_source rosenthal standard 240.0 0.0775 11.2 2.0959e-6 573.0
 # Laser plane at z = 0.30 mm = lattice index 60 = top of the powder.
 # Path centered transversely at y = 0.20 mm = lattice index 40.
 # ---------------------------------------------------------------------
-rosenthal_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats ${NSCANS}
+laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats ${NSCANS}
 
 # ---------------------------------------------------------------------
 # Stochastic ΔW/W, ΔD/D modulation of the (anisotropic) Rosenthal pool.
@@ -190,7 +190,7 @@ stats            5e-4
 # Dump T (d6 = darray[5]), grain id, active_flag, and the full
 # quaternion (d1..d4) every 0.5 ms. NSCANS=5 passes take 6.25 ms;
 # at 0.5 ms cadence we get ~12 in-scan snapshots plus cool-down frames.
-dump             1 text 5e-4 dump.multiscan.* id i1 i2 d1 d2 d3 d4 d6 x y z
+dump             1 text 5e-6 dump.multiscan id i1 i2 d1 d2 d3 d4 d6 x y z
 dump_modify      1 thresh i2 > 1
 
 # Run for slightly longer than NSCANS * 1.25 ms = 6.25 ms to capture

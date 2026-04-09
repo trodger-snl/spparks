@@ -61,7 +61,7 @@ setup_temperature_source rosenthal standard 285.0 0.0775 11.2 2.0959e-6 573.0
 # the entire box is below the free surface and the half-space cutoff
 # is invisible.
 # Path length 1mm at 1.2 m/s -> ~833 us scan duration.
-rosenthal_path start 0.1e-3 0.4e-3 0.4e-3 end 1.1e-3 0.4e-3 speed 1.2 repeats 1
+laser_path start 0.1e-3 0.4e-3 0.4e-3 end 1.1e-3 0.4e-3 speed 1.2 repeats 1
 
 shell cd DumpFiles_rosenthal_standard
 

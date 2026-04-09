@@ -76,7 +76,7 @@ setup_temperature_source moser 285.0 0.155 11.2 2.0959e-6 573.0 650.0 50e-6 50e-
 
 # Single linear scan, no repeats, exactly matching the rosenthal_standard
 # example geometry. Coordinates in meters.
-rosenthal_path start 0.1e-3 0.4e-3 0.4e-3 end 1.1e-3 0.4e-3 speed 1.2 repeats 1
+laser_path start 0.1e-3 0.4e-3 0.4e-3 end 1.1e-3 0.4e-3 speed 1.2 repeats 1
 
 shell cd DumpFiles_moser
 

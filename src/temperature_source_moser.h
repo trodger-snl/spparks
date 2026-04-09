@@ -54,7 +54,7 @@ namespace SPPARKS_NS {
 
    This source is path-aware: it owns its own piecewise-linear scan
    path (laser segments with constant power and velocity per segment),
-   built by the driving app from the rosenthal_path command.  Sites are
+   built by the driving app from the laser_path command.  Sites are
    queried in the WORLD frame (meters), and absolute simulation time is
    used as the integration upper limit.
 
@@ -87,7 +87,7 @@ class MoserGreenTemperatureSource : public TemperatureSource {
   virtual void print_source_info() const override;
 
   // Build a scan from a RASTER-style straight-line repeated path. Called
-  // by AppAdditiveExtTempTexture::rosenthal_path_cmd when the active
+  // by AppAdditiveExtTempTexture::laser_path_cmd when the active
   // temperature source is Moser. Coordinates and times are SI units;
   // start_time is the absolute simulation time at which the laser begins
   // its first repeat (typically 0 at run start). All segments share the

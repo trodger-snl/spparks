@@ -50,7 +50,7 @@ setup_temperature_source rosenthal aniso 285.0 0.1 11.2 2.0959e-6 573.0 0.89 0.4
 
 # Slower scan: 0.8 m/s -> 1.25 ms scan duration over 1 mm.
 # Laser plane at the top of the box (z = 0.4 mm).
-rosenthal_path start 0.1e-3 0.4e-3 0.4e-3 end 1.1e-3 0.4e-3 speed 0.8 repeats 1
+laser_path start 0.1e-3 0.4e-3 0.4e-3 end 1.1e-3 0.4e-3 speed 0.8 repeats 1
 
 shell cd DumpFiles_rosenthal_aniso
 

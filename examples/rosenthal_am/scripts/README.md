@@ -71,7 +71,7 @@ After generating `lorentzian_5pct.dat`, point an input script at it:
 
 ```spparks
 setup_temperature_source rosenthal standard 285.0 0.0775 11.2 2.0959e-6 573.0
-rosenthal_path           start 0.1e-3 0.4e-3 0.4e-3 end 1.1e-3 0.4e-3 \
+laser_path               start 0.1e-3 0.4e-3 0.4e-3 end 1.1e-3 0.4e-3 \
                          speed 1.2 repeats 1
 rosenthal_fluctuations   lorentzian_5pct.dat mode continuous
 ```

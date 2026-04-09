@@ -3,8 +3,14 @@
 #
 # Material:    rho=8220 kg/m^3, c_p=650 J/(kg K), k=11.2 W/(m K)
 #              -> alpha = k/(rho*c_p) = 2.0959e-6 m^2/s
-# Laser:       Q=285 W, lambda=0.155, v=1.2 m/s
+# Laser:       Q=285 W, v=1.2 m/s
 # Preheat:     T0=573 K, T_m=1573 K
+#
+# Half-space convention: SPPARKS uses the textbook image-source form
+# (laser plane = free surface; pool exists only for z_rel <= 0). The
+# Pauza paper writes the kernel with prefactor 1/(2*pi) and absorbs
+# the image factor of 2 into lambda, so paper case-3 lambda=0.155
+# becomes lambda=0.0775 in this convention.
 #
 # app_style args: nspins dx[m] dt[s] nrefine
 
@@ -45,15 +51,17 @@ undercooling_deviation  3
 mean_nuclei_volume      8.4375e-16
 nuclei_volume_deviation 1.5625e-17
 
-# ----- Rosenthal source: standard (Eq. B4) ---------------------------
+# ----- Rosenthal source: standard (Eq. B4, half-space) ---------------
 # args: <Q[W]> <lambda> <k[W/(mK)]> <alpha[m^2/s]> <T0[K]>
-setup_temperature_source rosenthal standard 285.0 0.155 11.2 2.0959e-6 573.0
+setup_temperature_source rosenthal standard 285.0 0.0775 11.2 2.0959e-6 573.0
 
 # Single linear scan, no repeats. Coordinates in meters.
 # Box is 60*20e-6=1.2mm wide, 40*20e-6=0.8mm deep, 20*20e-6=0.4mm tall.
-# Scan along centerline at the top surface.
+# Laser plane sits at the top of the box (z = 20*20e-6 = 0.4 mm), so
+# the entire box is below the free surface and the half-space cutoff
+# is invisible.
 # Path length 1mm at 1.2 m/s -> ~833 us scan duration.
-rosenthal_path start 0.1e-3 0.4e-3 0.38e-3 end 1.1e-3 0.4e-3 speed 1.2 repeats 1
+rosenthal_path start 0.1e-3 0.4e-3 0.4e-3 end 1.1e-3 0.4e-3 speed 1.2 repeats 1
 
 shell cd DumpFiles_rosenthal_standard
 

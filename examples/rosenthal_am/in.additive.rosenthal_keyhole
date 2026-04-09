@@ -43,13 +43,17 @@ undercooling_deviation  3
 mean_nuclei_volume      8.4375e-16
 nuclei_volume_deviation 1.5625e-17
 
-# ----- Rosenthal source: keyhole (Eq. B8) ---------------------------
+# ----- Rosenthal source: keyhole (Eq. B8, half-space) ---------------
 # args: <Q[W]> <lambda_p> <lambda_l> <k[W/(mK)]> <alpha[m^2/s]> <T0[K]> <d[m]> [<n_quad>]
-# Case 1: lambda_p=0.1, lambda_l=0.036, d=300 um, 8 quadrature nodes
-setup_temperature_source rosenthal keyhole 285.0 0.1 0.036 11.2 2.0959e-6 573.0 300e-6 8
+# Case 1: lambda_p=0.1, lambda_l=0.036, d=300 um, 8 quadrature nodes.
+# Half-space convention: paper lambdas are halved here (image factor of
+# 2 is now explicit in rosenthal_pointwise) -> lambda_p=0.05,
+# lambda_l=0.018.
+setup_temperature_source rosenthal keyhole 285.0 0.05 0.018 11.2 2.0959e-6 573.0 300e-6 8
 
 # Slow scan: 0.6 m/s -> 1.67 ms scan duration over 1 mm.
-rosenthal_path start 0.1e-3 0.4e-3 0.38e-3 end 1.1e-3 0.4e-3 speed 0.6 repeats 1
+# Laser plane at the top of the box (z = 0.4 mm).
+rosenthal_path start 0.1e-3 0.4e-3 0.4e-3 end 1.1e-3 0.4e-3 speed 0.6 repeats 1
 
 shell cd DumpFiles_rosenthal_keyhole
 

@@ -6,23 +6,56 @@
 # tracks, and grain selection in the consolidating powder layer.
 #
 # ---------------------------------------------------------------------
+# Half-space (free-surface) Rosenthal convention
+# ---------------------------------------------------------------------
+#
+# SPPARKS implements the textbook image-source form: the laser plane
+# (= scan_layer_z) is treated as a thermally insulating free surface.
+# Sites ABOVE the laser plane (z_rel > 0) are vacuum and stay at T0;
+# sites BELOW the laser plane (z_rel <= 0) get the textbook half-space
+# kernel with the explicit image factor of 2:
+#
+#     T = T0 + 2 * lambda*Q / (2*pi*k*R) * exp(-v*(xi+R)/(2*alpha))
+#
+# In this example the laser plane is set at the TOP of the box, so
+# every lattice site is below the free surface and the cutoff is
+# invisible -- the entire box is part of the half-space.
+#
+# Pauza paper note: the paper uses the kernel with prefactor 1/(2*pi)
+# and absorbs the image factor of 2 into lambda. To match the same
+# physical pool size, lambda values used here are HALF the published
+# paper values (e.g. paper case-3 lambda=0.155 -> 0.0775 here).
+#
+# ---------------------------------------------------------------------
 # Characteristic scales and box sizing
 # ---------------------------------------------------------------------
 #
-# Standard Rosenthal melt-pool half-width (centerline, surface) is
+# Effective Rosenthal melt-pool half-width (centerline, top surface):
 #
-#     R_m  =  lambda * Q / (2*pi * k * (T_m - T0))
+#     R_m  =  2 * lambda * Q / (2*pi * k * (T_m - T0))
 #
-# For the parameters used below (Q=60 W, lambda=0.155, k=11.2,
-# T_m-T0 = 1000 K) this gives R_m ~= 0.132 mm.
+# For the parameters used below (Q=240 W, lambda=0.0775, k=11.2,
+# T_m-T0 = 1000 K) this gives R_m ~= 0.53 mm. The factor of 2 in
+# R_m is the image source.
 #
 # Box (in physical units):
-#     x: 2.00 mm  ~ 15 * R_m   (within the 10-50x window)
-#     y: 0.40 mm  ~  3 * R_m   (full transverse pool with margin)
-#     z: 0.30 mm  ~ 2.3 * R_m  (substrate + powder, full pool depth)
+#     x: 2.00 mm  ~ 3.8 * R_m  (path is 1.5 mm = ~2.8 * R_m)
+#     y: 0.40 mm  ~ 0.8 * R_m  (pool clips at the y walls)
+#     z: 0.30 mm  ~ 0.6 * R_m  (pool clips at the z bottom; the box
+#                                 acts as a thin slab, not a far-field
+#                                 half-space)
 #
 # Lattice (sc/26n) at dx = 5 um:  400 x 80 x 60 = 1.92 M sites
-# Pool half-width is resolved at R_m / dx ~= 26 cells.
+# Pool half-width is resolved at R_m / dx ~= 106 cells.
+#
+# Note on box vs pool: the y and z extents are smaller than R_m, so
+# the analytical Rosenthal field extends past the box walls. The
+# 'boundary n n n' setting means those external sites simply don't
+# exist; sites at the walls melt normally. This is the intended
+# regime for the multi-scan study -- a thin slab of powder + substrate
+# rather than a far-field semi-infinite half-space. Reduce Q if you
+# want a fully enclosed pool (Q ~ 45 W gives R_m ~ 0.2 mm, which just
+# fits inside the y half-extent and the substrate depth).
 #
 # Note on rescaling: the Rosenthal solution is geometrically scale-free
 # in the combination R/R_m, so increasing Q by a factor of f and the
@@ -37,15 +70,19 @@
 # Substrate / powder layout (lattice indices; dx = 5 um)
 # ---------------------------------------------------------------------
 #
-#   z in [ 0, 40)  : single-crystal substrate (0.20 mm of bulk)
-#   z in [40, 60]  : powder layer             (0.10 mm of fresh powder)
-#   spot plane     : z = 40 (= 0.20 mm)       at the substrate top
+#   z in [ 0, 40)  : single-crystal substrate  (0.20 mm of bulk)
+#   z in [40, 60]  : powder layer              (0.10 mm of fresh powder)
+#   laser plane    : z = 60 (= 0.30 mm)        at the top of the powder
+#                    (and at the top of the simulation box)
+#
+# This is the textbook LPBF geometry: substrate at the bottom, powder
+# layer on top, laser scanning the top surface of the powder.
 #
 # ---------------------------------------------------------------------
 # Scan path
 # ---------------------------------------------------------------------
 #
-#   1.5 mm linear path in +x at the centerline (y = 40, z = 40),
+#   1.5 mm linear path in +x along the centerline (y = 40, z = 60),
 #   from x = 0.25 mm to x = 1.75 mm, repeated NSCANS times.
 #   Path duration per repeat = 1.5e-3 m / 1.2 m/s = 1.25 ms.
 #   Total scan time = NSCANS * 1.25 ms.
@@ -111,21 +148,21 @@ mean_nuclei_volume      8.4375e-16
 nuclei_volume_deviation 1.5625e-17
 
 # ---------------------------------------------------------------------
-# Rosenthal source: standard mode (Eq. B4)
+# Rosenthal source: standard mode (Eq. B4, half-space)
 # args: <Q[W]> <lambda> <k[W/(mK)]> <alpha[m^2/s]> <T0[K]>
 #
-# Q=60 W chosen so the melt pool is large enough to resolve at dx=5 um
-# while the 15x R_m box stays under ~2 M sites.
+# lambda=0.0775 here = paper case-3 lambda=0.155 / 2 (image factor of
+# 2 is now explicit in rosenthal_pointwise).
 # ---------------------------------------------------------------------
-setup_temperature_source rosenthal standard 60.0 0.155 11.2 2.0959e-6 573.0
+setup_temperature_source rosenthal standard 240.0 0.0775 11.2 2.0959e-6 573.0
 
 # ---------------------------------------------------------------------
-# Multi-scan path. Coordinates in meters; Z is the scan plane.
+# Multi-scan path. Coordinates in meters; Z is the laser plane.
 # 1.5 mm linear scan at 1.2 m/s, repeated ${NSCANS} times.
-# Spot at z = 0.20 mm = lattice index 40, i.e. at the substrate top.
+# Laser plane at z = 0.30 mm = lattice index 60 = top of the powder.
 # Path centered transversely at y = 0.20 mm = lattice index 40.
 # ---------------------------------------------------------------------
-rosenthal_path start 0.25e-3 0.20e-3 0.20e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats ${NSCANS}
+rosenthal_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats ${NSCANS}
 
 shell cd DumpFiles_rosenthal_multiscan
 

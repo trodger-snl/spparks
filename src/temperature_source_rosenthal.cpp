@@ -182,40 +182,51 @@ double RosenthalTemperatureSource::rosenthal_kernel(double Q_eff, double v,
 }
 
 /* ----------------------------------------------------------------------
-   Mode dispatch evaluated in the moving (pool-local) frame.
-   Returns absolute temperature in K.
+   Mode dispatch evaluated in the moving (pool-local) frame on a free
+   surface. Returns absolute temperature in K.
+
+   Half-space convention:
+     - z_rel > 0  (above the laser plane): no material, return T0
+     - z_rel <= 0 (below the laser plane): apply the image-source method,
+       which doubles the unbounded-medium kernel result. The factor of 2
+       in front of every kernel call below is the explicit image source.
 ------------------------------------------------------------------------- */
 
 double RosenthalTemperatureSource::rosenthal_pointwise(double xi, double y_rel, double z_rel,
                                                        double v, double T0) const
 {
+  // Free-surface cutoff: anything above the laser plane is vacuum.
+  if (z_rel > 0.0) return T0;
+
   switch (mode) {
 
   case RosenthalMode::STANDARD: {
     const double R = std::sqrt(xi*xi + y_rel*y_rel + z_rel*z_rel);
-    return T0 + rosenthal_kernel(lambda * Q, v, xi, R);
+    return T0 + 2.0 * rosenthal_kernel(lambda * Q, v, xi, R);
   }
 
   case RosenthalMode::ANISOTROPIC: {
     const double yy = eta_y * y_rel;
     const double zz = eta_z * z_rel;
     const double R_eta = std::sqrt(xi*xi + yy*yy + zz*zz);
-    return T0 + rosenthal_kernel(lambda * Q, v, xi, R_eta);
+    return T0 + 2.0 * rosenthal_kernel(lambda * Q, v, xi, R_eta);
   }
 
   case RosenthalMode::KEYHOLE: {
-    // Surface point source
+    // Surface point source (image-doubled)
     const double R = std::sqrt(xi*xi + y_rel*y_rel + z_rel*z_rel);
-    double T_rise = rosenthal_kernel(lambda_p * Q, v, xi, R);
+    double T_rise = 2.0 * rosenthal_kernel(lambda_p * Q, v, xi, R);
 
-    // Distributed line source: integrate over D in [-d, d]
-    // R'(D) = sqrt(xi^2 + y^2 + (D + z)^2)
+    // Distributed line source (image-doubled at every quadrature node):
+    // R'(D) = sqrt(xi^2 + y^2 + (D + z)^2). Each quadrature node sits
+    // on a buried line element whose image lies above the surface, so
+    // the same factor of 2 applies elementwise.
     for (int i = 0; i < n_quad; ++i) {
       const double D    = quad_nodes[i];
       const double w    = quad_weights[i];
       const double zarg = D + z_rel;
       const double Rp   = std::sqrt(xi*xi + y_rel*y_rel + zarg*zarg);
-      T_rise += w * rosenthal_kernel(lambda_l * Q, v, xi, Rp);
+      T_rise += 2.0 * w * rosenthal_kernel(lambda_l * Q, v, xi, Rp);
     }
     return T0 + T_rise;
   }
@@ -228,6 +239,9 @@ double RosenthalTemperatureSource::rosenthal_pointwise(double xi, double y_rel, 
    Always >= the true rosenthal_pointwise() value for any site at that
    distance, so the fast-forward predictor cannot skip a real heating
    event by relying on this bound.
+
+   Note: includes the half-space image-source factor of 2 to match
+   rosenthal_pointwise().
 ------------------------------------------------------------------------- */
 
 double RosenthalTemperatureSource::rosenthal_peak_at_distance(double R, double T0) const
@@ -250,14 +264,14 @@ double RosenthalTemperatureSource::rosenthal_peak_at_distance(double R, double T
   // Sum the maximum kernel contributions for the active mode. The
   // exponential factor exp(-v*(xi+R)/(2 alpha)) <= 1 always (it equals
   // 1 when xi = -R, i.e. straight downstream), so the absolute peak is
-  // Q_eff_total / (2 pi k R_eff).
-  const double inv_prefactor = 1.0 / (2.0 * MY_PI * k_cond * R_eff);
+  //   2 * Q_eff_total / (2 pi k R_eff)        (factor 2 = image source)
+  const double prefactor = 2.0 / (2.0 * MY_PI * k_cond * R_eff);
 
   double T_rise = 0.0;
   switch (mode) {
   case RosenthalMode::STANDARD:
   case RosenthalMode::ANISOTROPIC:
-    T_rise = lambda * Q * inv_prefactor;
+    T_rise = lambda * Q * prefactor;
     break;
   case RosenthalMode::KEYHOLE:
     // Point source at R_eff (= R since not ANISOTROPIC) plus a coarse
@@ -266,7 +280,7 @@ double RosenthalTemperatureSource::rosenthal_peak_at_distance(double R, double T
     {
       double w_total = 0.0;
       for (int i = 0; i < n_quad; ++i) w_total += quad_weights[i];
-      T_rise = (lambda_p * Q + lambda_l * Q * w_total) * inv_prefactor;
+      T_rise = (lambda_p * Q + lambda_l * Q * w_total) * prefactor;
     }
     break;
   }

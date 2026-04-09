@@ -41,13 +41,16 @@ undercooling_deviation  3
 mean_nuclei_volume      8.4375e-16
 nuclei_volume_deviation 1.5625e-17
 
-# ----- Rosenthal source: anisotropic (Eq. B6) -----------------------
+# ----- Rosenthal source: anisotropic (Eq. B6, half-space) ----------
 # args: <Q[W]> <lambda> <k[W/(mK)]> <alpha[m^2/s]> <T0[K]> <eta_y> <eta_z>
-# Case 2: eta_y=0.89 (slightly wider), eta_z=0.4 (much deeper)
-setup_temperature_source rosenthal aniso 285.0 0.2 11.2 2.0959e-6 573.0 0.89 0.4
+# Case 2: eta_y=0.89 (slightly wider), eta_z=0.4 (much deeper).
+# Half-space convention: paper lambda=0.2 -> 0.1 here (image factor of 2
+# is now explicit in rosenthal_pointwise).
+setup_temperature_source rosenthal aniso 285.0 0.1 11.2 2.0959e-6 573.0 0.89 0.4
 
 # Slower scan: 0.8 m/s -> 1.25 ms scan duration over 1 mm.
-rosenthal_path start 0.1e-3 0.4e-3 0.38e-3 end 1.1e-3 0.4e-3 speed 0.8 repeats 1
+# Laser plane at the top of the box (z = 0.4 mm).
+rosenthal_path start 0.1e-3 0.4e-3 0.4e-3 end 1.1e-3 0.4e-3 speed 0.8 repeats 1
 
 shell cd DumpFiles_rosenthal_aniso
 

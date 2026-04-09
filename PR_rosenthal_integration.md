@@ -2,7 +2,7 @@
 
 ## Summary
 
-This change makes the analytical Rosenthal moving-point heat source a first-class temperature source for `AppAdditiveExtTempTexture`, alongside the existing `HDF5UnstructuredTemperatureSource` / `HDF5CSRTemperatureSource`. Three solution variants from J G Pauza et al 2021 *Modelling Simul. Mater. Sci. Eng.* **29** 055019 (Appendix B) are supported:
+This change makes the analytical Rosenthal moving-point heat source a first-class temperature source for `AppAdditiveExtTempTexture`, alongside the existing `HDF5UnstructuredTemperatureSource` / `HDF5CSRTemperatureSource`. The source implements the textbook **half-space (free-surface) Rosenthal** form via the image-source method: the laser plane (`scan_layer_z`) is treated as a thermally insulating free surface, sites above the plane stay at `T0`, and sites below the plane get the unbounded-medium kernel multiplied by 2 (the explicit image source). Three solution variants from J G Pauza et al 2021 *Modelling Simul. Mater. Sci. Eng.* **29** 055019 (Appendix B) are supported:
 
 1. **Standard Rosenthal** (Eq. B4) — classical moving point source.
 2. **Anisotropic Rosenthal** (Eq. B6/B7) — replaces `R` with `R_η = √(ξ² + (η_y y)² + (η_z z)²)` to elongate, widen, or deepen the melt pool.
@@ -193,6 +193,37 @@ Three bugs were caught in review and fixed before merge:
 3. **`rosenthal_path` parser rejected its own documented minimal form (medium)**. The minimal syntax `start X0 Y0 Z0 end X1 Y1 speed V` is 9 tokens after the command name (indices 0–8), but the initial guard required `narg < 10` and errored out. The optional-`repeats` branch correctly checked `narg > 9`, so adding `repeats N` worked but the bare form was rejected.
 
    **Fix**: relax the guard to `narg < 9`. Verified by parsing a script that omits the `repeats` clause entirely; produces 574 melted sites (matches the explicit `repeats 1` form within RNG noise).
+
+### Half-space (free-surface) Rosenthal
+
+The first cut implemented the **full-space** point-source kernel — the canonical Rosenthal solution for a moving point in an infinite medium. That produces a melt pool that is symmetric in `z` about the laser plane, which is *not* how laser-on-surface heating works: the real laser sits on a free surface and only heats the half-space below it.
+
+Switched the source to the textbook **image-source method** as the only form (no full-space option remains):
+
+- For sites with `z_rel > 0` (above the laser plane), `rosenthal_pointwise()` returns `T0` immediately.
+- For sites with `z_rel ≤ 0`, the kernel result is multiplied by 2. This factor is the contribution of the coincident image source on the free surface, which makes the temperature in the lower half-space exactly twice the unbounded-medium result and enforces zero heat flux through the surface.
+- The factor of 2 applies in **all three modes** (STANDARD, ANISOTROPIC, KEYHOLE). For KEYHOLE the factor multiplies *both* the surface point source and every Gauss–Legendre node of the line integral.
+- `rosenthal_peak_at_distance()` (the fast-forward upper bound) was updated to include the same factor of 2 so it remains a true upper bound on the new pointwise output.
+
+**`λ` convention vs. the Pauza paper.** The paper writes its kernel with prefactor `1/(2π)` and then evaluates it only in the lower half-space — i.e. the paper's formula already absorbs the image factor of 2 into its `λ` values. To reproduce paper Table B1 pool sizes in this implementation, **divide the published `λ` values by 2**:
+
+| Paper case | Paper `λ` | SPPARKS `λ` |
+|---|---|---|
+| Case 3 (standard) | 0.155 | 0.0775 |
+| Case 2 (aniso) | 0.2 | 0.1 |
+| Case 1 (keyhole, point) | 0.1 | 0.05 |
+| Case 1 (keyhole, line) | 0.036 | 0.018 |
+
+All four checked-in example input scripts use the halved values and document the conversion in their headers.
+
+**Multiscan example geometry.** The original `in.additive.rosenthal_multiscan` placed the laser plane in the middle of the box, with substrate below and powder above. Under the symmetric kernel that produced a (visually wrong) hemispherical pool extending up into the powder *and* down into the substrate. The new layout puts the laser plane at the **top of the box**, on top of the powder, with the substrate below — the textbook LPBF geometry. With the laser plane at the box top, every lattice site has `z_rel ≤ 0` and the half-space cutoff is invisible; the cutoff only matters when the user puts the laser plane somewhere inside the lattice (e.g. simulating a buried heat source or running a partial-layer experiment).
+
+**Verification.** Built a focused half-space cutoff test that places the laser plane at `z = 0.20 mm` in a `0.40 mm`-tall box. After the scan, dumped all 48,000 sites and counted:
+
+- 21,600 sites at `z ≥ 11` (above the laser plane): mean `T = 573.00 K`, max rise above ambient = 0.00 K, **zero violations**.
+- 26,400 sites at `z < 11` (at or below the laser plane): mean `T = 589.25 K` (heated by the moving source).
+
+The cutoff is strict (`z_rel > 0` → `T0`), so sites *at* the laser plane (`z_rel = 0`) are part of the heated half-space, matching the textbook image-source convention. All four checked-in examples (standard, aniso, keyhole, multiscan) re-ran cleanly under 4-rank MPI and produced physically sensible pools below the laser plane.
 
 ### Second-pass review issue
 

@@ -21,27 +21,50 @@
 namespace SPPARKS_NS {
 
 /* ----------------------------------------------------------------------
-   Analytical Rosenthal moving point heat source.
+   Analytical Rosenthal moving point heat source on a free surface
+   (half-space, image-source method).
+
+   The laser plane (scan_layer_z in the driving app) is treated as a
+   free surface. For sites ABOVE the laser plane (z_rel > 0) there is
+   no material and rosenthal_pointwise() returns T0. For sites BELOW
+   the laser plane (z_rel <= 0) the textbook image-source method
+   doubles the unbounded-medium kernel:
+
+       T = T0 + 2 * (lambda*Q) / (2*pi*k*R) * exp(-v*(xi+R)/(2*alpha))
+
+   This is the physically correct form for a moving point heat source
+   on the surface of a thermally insulating half-space (no flux through
+   the free surface). It produces a hemispherical pool below the laser
+   plane and zero heat above, regardless of where the laser plane is
+   positioned within the simulation domain.
 
    Path-agnostic: this class does not own a scan path. The driving app
    provides pool-local coordinates (xi, y_rel, z_rel) and the current
    scan velocity each timestep, and queries rosenthal_pointwise().
 
-   Three modes are supported, all referenced to
-   J G Pauza et al 2021 Modelling Simul. Mater. Sci. Eng. 29 055019,
-   Appendix B:
+   Three modes are supported, all derived from the analytical formulas
+   in J G Pauza et al 2021 Modelling Simul. Mater. Sci. Eng. 29 055019,
+   Appendix B (with the explicit factor of 2 from the image source):
 
-   STANDARD    (Eq. B4):  T = T0 + (lambda*Q)/(2*pi*k*R)
-                              * exp(-v*(xi+R)/(2*alpha))
-                          R  = sqrt(xi^2 + y^2 + z^2)
+   STANDARD    (Eq. B4):  R  = sqrt(xi^2 + y^2 + z^2)
 
-   ANISOTROPIC (Eq. B6):  same kernel with R replaced by
+   ANISOTROPIC (Eq. B6):  R replaced by
                           R_eta = sqrt(xi^2 + (eta_y*y)^2 + (eta_z*z)^2)
 
    KEYHOLE     (Eq. B8):  point + line source combination
                           T = point(lambda_p) + integral_{-d}^{d} line(lambda_l, D) dD
                           R' = sqrt(xi^2 + y^2 + (D + z)^2)
-                          Line integral evaluated by Gauss-Legendre quadrature.
+                          Line integral evaluated by Gauss-Legendre quadrature;
+                          the factor of 2 image source applies to BOTH the
+                          surface point source AND every line-source quadrature
+                          node.
+
+   IMPORTANT lambda convention: the Pauza paper writes the kernel with
+   prefactor 1/(2*pi) and then evaluates it in the lower half-space, so
+   their published lambda values implicitly absorb the factor-of-2 image
+   source. To reproduce paper Table B1 pool sizes here, divide the
+   paper's lambda values by 2 (e.g. paper case-3 lambda=0.155 becomes
+   lambda=0.0775 in this implementation).
 ------------------------------------------------------------------------- */
 
 class RosenthalTemperatureSource : public TemperatureSource {

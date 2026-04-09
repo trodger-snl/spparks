@@ -42,9 +42,20 @@ RosenthalTemperatureSource::RosenthalTemperatureSource(SPPARKS *spk)
     fluct_total_length(0.0),
     fluct_warned_clamp(false),
     fluct_warned_linearization(false),
-    eta_y_eff(1.0), eta_z_eff(1.0)
+    eta_y_eff(1.0), eta_z_eff(1.0),
+    psd_active(false),
+    psd_rng(12345),
+    psd_norm(0.0, 1.0),
+    psd_s_prev(0.0), psd_dW_prev(0.0), psd_dD_prev(0.0),
+    psd_s_next(0.0), psd_dW_next(0.0), psd_dD_next(0.0),
+    ar_state_W(0.0), ar_state_D(0.0),
+    voss_step(0),
+    osc_x_W(0.0), osc_v_W(0.0), osc_x_D(0.0), osc_v_D(0.0)
 {
   ambient_temperature = T0_default;
+  voss_W.fill(0.0);
+  voss_D.fill(0.0);
+  psd_spec = PsdSpec{PsdShape::WHITE, 0.0, 0.0, 0.0, 12345, 0.0, 0.0, 0.0, 0.0};
 }
 
 /* ---------------------------------------------------------------------- */
@@ -400,6 +411,17 @@ void RosenthalTemperatureSource::print_source_info() const
               << "s in [" << fluct_s.front() << ", " << fluct_s.back() << "] m, "
               << (fluct_periodic ? "periodic" : "continuous") << "\n";
   }
+  if (psd_active) {
+    const char *sname = "white";
+    if (psd_spec.shape == PsdShape::LORENTZIAN)  sname = "lorentzian";
+    else if (psd_spec.shape == PsdShape::PINK)   sname = "pink";
+    else if (psd_spec.shape == PsdShape::NARROW_BAND) sname = "narrow_band";
+    std::cout << "  fluctuations: psd " << sname
+              << " sigma_W=" << psd_spec.sigma_W
+              << " sigma_D=" << psd_spec.sigma_D
+              << " rho="     << psd_spec.rho
+              << " dx="      << psd_spec.dx << "\n";
+  }
   std::cout.flush();
 }
 
@@ -437,6 +459,40 @@ void RosenthalTemperatureSource::load_fluctuations(const std::vector<double> &s,
 
 void RosenthalTemperatureSource::set_arc_length(double s)
 {
+  // -------- PSD streaming generator path ----------
+  if (psd_active) {
+    // Advance the streaming chain until s lies in [psd_s_prev, psd_s_next].
+    while (s > psd_s_next) {
+      psd_s_prev   = psd_s_next;
+      psd_dW_prev  = psd_dW_next;
+      psd_dD_prev  = psd_dD_next;
+      psd_s_next  += psd_spec.dx;
+      psd_generate_next_sample(psd_dW_next, psd_dD_next);
+    }
+    double t = (psd_s_next > psd_s_prev)
+                 ? (s - psd_s_prev) / (psd_s_next - psd_s_prev)
+                 : 0.0;
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+    double dW = (1.0 - t) * psd_dW_prev + t * psd_dW_next;
+    double dD = (1.0 - t) * psd_dD_prev + t * psd_dD_next;
+
+    if (!fluct_warned_linearization &&
+        (std::fabs(dW) > 0.5 || std::fabs(dD) > 0.5) && domain->me == 0) {
+      std::cout << "WARNING: rosenthal_fluctuations |dW/W| or |dD/D| > 0.5; "
+                << "first-order linearization eta_eff = eta*(1 - dW/W) is no "
+                << "longer accurate." << std::endl;
+      fluct_warned_linearization = true;
+    }
+
+    eta_y_eff = eta_y * (1.0 - dW);
+    eta_z_eff = eta_z * (1.0 - dD);
+    if (eta_y_eff < 1.0e-3) eta_y_eff = 1.0e-3;
+    if (eta_z_eff < 1.0e-3) eta_z_eff = 1.0e-3;
+    return;
+  }
+
+  // -------- File-loaded fluctuation path ----------
   if (fluct_s.empty()) return;
 
   double s_lookup = s;
@@ -506,6 +562,195 @@ void RosenthalTemperatureSource::promote_to_anisotropic()
   }
 }
 
+/* ----------------------------------------------------------------------
+   In-source PSD streaming generator. Time-domain recursive filters with
+   bivariate Gaussian innovations to enforce W↔D Pearson correlation.
+   Identical chain on every MPI rank (same seed) so no MPI_Bcast needed.
+------------------------------------------------------------------------- */
+
+void RosenthalTemperatureSource::init_psd_generator(const PsdSpec &spec)
+{
+  if (spec.sigma_W < 0.0 || spec.sigma_D < 0.0)
+    error->all(FLERR,"rosenthal_fluctuations psd: sigma_W and sigma_D must be >= 0");
+  if (spec.rho < -1.0 || spec.rho > 1.0)
+    error->all(FLERR,"rosenthal_fluctuations psd: rho must be in [-1, 1]");
+  if (spec.dx <= 0.0)
+    error->all(FLERR,"rosenthal_fluctuations psd: dx must be > 0");
+  switch (spec.shape) {
+  case PsdShape::WHITE:
+    break;
+  case PsdShape::LORENTZIAN:
+    if (spec.tau <= 0.0)
+      error->all(FLERR,"rosenthal_fluctuations psd lorentzian: tau must be > 0");
+    break;
+  case PsdShape::PINK:
+    break;
+  case PsdShape::NARROW_BAND:
+    if (spec.f0 <= 0.0)
+      error->all(FLERR,"rosenthal_fluctuations psd narrow_band: f0 must be > 0");
+    if (spec.df <= 0.0)
+      error->all(FLERR,"rosenthal_fluctuations psd narrow_band: df must be > 0");
+    break;
+  }
+
+  psd_spec = spec;
+  psd_active = true;
+  psd_rng.seed(spec.seed);
+  psd_norm = std::normal_distribution<double>(0.0, 1.0);
+  fluct_warned_linearization = false;
+
+  psd_reset_filter_state();
+  // Warm up the filter so it starts in (or near) steady state. Pink needs
+  // ~K * 2^K = 384 samples; lorentzian needs ~5*tau/dx; narrow_band needs
+  // ~1/(2*zeta*omega0)/dx. 1000 covers all of these for typical configs.
+  psd_warmup(1000);
+
+  // Seed the two-sample interpolation window.
+  psd_s_prev  = 0.0;
+  psd_dW_prev = 0.0;
+  psd_dD_prev = 0.0;
+  psd_generate_next_sample(psd_dW_prev, psd_dD_prev);
+  psd_s_next  = spec.dx;
+  psd_generate_next_sample(psd_dW_next, psd_dD_next);
+
+  if (domain->me == 0) {
+    const char *sname = "white";
+    if (spec.shape == PsdShape::LORENTZIAN)  sname = "lorentzian";
+    else if (spec.shape == PsdShape::PINK)    sname = "pink";
+    else if (spec.shape == PsdShape::NARROW_BAND) sname = "narrow_band";
+    std::cout << "rosenthal_fluctuations psd: shape=" << sname
+              << " sigma_W=" << spec.sigma_W
+              << " sigma_D=" << spec.sigma_D
+              << " rho="     << spec.rho
+              << " seed="    << spec.seed
+              << " dx="      << spec.dx;
+    if (spec.shape == PsdShape::LORENTZIAN)  std::cout << " tau=" << spec.tau;
+    if (spec.shape == PsdShape::NARROW_BAND) std::cout << " f0="  << spec.f0
+                                                       << " df="  << spec.df;
+    std::cout << std::endl;
+  }
+}
+
+void RosenthalTemperatureSource::psd_reset_filter_state()
+{
+  ar_state_W = 0.0;
+  ar_state_D = 0.0;
+  voss_W.fill(0.0);
+  voss_D.fill(0.0);
+  voss_step = 0;
+  osc_x_W = 0.0; osc_v_W = 0.0;
+  osc_x_D = 0.0; osc_v_D = 0.0;
+}
+
+void RosenthalTemperatureSource::psd_warmup(int n_steps)
+{
+  double dummy_W = 0.0, dummy_D = 0.0;
+  for (int i = 0; i < n_steps; ++i) {
+    psd_generate_next_sample(dummy_W, dummy_D);
+  }
+}
+
+void RosenthalTemperatureSource::psd_draw_bivariate(double &eps_W, double &eps_D)
+{
+  const double z1 = psd_norm(psd_rng);
+  const double z2 = psd_norm(psd_rng);
+  const double rho = psd_spec.rho;
+  eps_W = z1;
+  eps_D = rho * z1 + std::sqrt(std::max(0.0, 1.0 - rho * rho)) * z2;
+}
+
+void RosenthalTemperatureSource::psd_generate_next_sample(double &dW, double &dD)
+{
+  double eps_W, eps_D;
+  psd_draw_bivariate(eps_W, eps_D);
+
+  switch (psd_spec.shape) {
+
+  case PsdShape::WHITE: {
+    dW = psd_spec.sigma_W * eps_W;
+    dD = psd_spec.sigma_D * eps_D;
+    return;
+  }
+
+  case PsdShape::LORENTZIAN: {
+    // AR(1) with alpha = exp(-dx/tau): produces exact Lorentzian (Ornstein-
+    // Uhlenbeck) autocorrelation in steady state.
+    const double alpha   = std::exp(-psd_spec.dx / psd_spec.tau);
+    const double driveW  = psd_spec.sigma_W * std::sqrt(1.0 - alpha * alpha);
+    const double driveD  = psd_spec.sigma_D * std::sqrt(1.0 - alpha * alpha);
+    ar_state_W = alpha * ar_state_W + driveW * eps_W;
+    ar_state_D = alpha * ar_state_D + driveD * eps_D;
+    dW = ar_state_W;
+    dD = ar_state_D;
+    return;
+  }
+
+  case PsdShape::PINK: {
+    // Voss-McCartney 1/f: at step n, update only the level k =
+    // trailing_zeros(n). Sum of K independent levels approximates a 1/f
+    // spectrum across ~K decades.
+    ++voss_step;
+    int k = 0;
+    std::uint64_t n = voss_step;
+    while ((n & 1ULL) == 0ULL && k < VOSS_K - 1) { n >>= 1; ++k; }
+    const double scale = 1.0 / std::sqrt(static_cast<double>(VOSS_K));
+    voss_W[k] = (psd_spec.sigma_W * scale) * eps_W;
+    voss_D[k] = (psd_spec.sigma_D * scale) * eps_D;
+    double sW = 0.0, sD = 0.0;
+    for (int i = 0; i < VOSS_K; ++i) { sW += voss_W[i]; sD += voss_D[i]; }
+    dW = sW;
+    dD = sD;
+    return;
+  }
+
+  case PsdShape::NARROW_BAND: {
+    // Damped harmonic oscillator driven by white noise:
+    //   x'' + 2ζω₀ x' + ω₀² x = drive · ξ(s)
+    //   ω₀ = 2π f₀, ζ ≈ π df / ω₀
+    // Stationary variance var_x = drive² / (4 ζ ω₀³); pick drive so that
+    // var_x = sigma². Sub-step the integration so that ω₀ * dt_sub << 1.
+    const double omega0 = 2.0 * MY_PI * psd_spec.f0;
+    double zeta = MY_PI * psd_spec.df / omega0;
+    if (zeta <= 0.0)  zeta = 1.0e-6;
+    if (zeta >= 1.0)  zeta = 0.999;  // keep underdamped
+    // sub-step until omega0*dt_sub <= 0.1 (~3% phase error per substep)
+    int n_sub = static_cast<int>(std::ceil(omega0 * psd_spec.dx / 0.1));
+    if (n_sub < 1) n_sub = 1;
+    const double dts = psd_spec.dx / n_sub;
+    // Variance prefactor for this sub-step length:
+    //   drive_var = 4 ζ ω₀³ σ²    (continuous-time intensity)
+    //   per sub-step impulse std = sqrt(drive_var * dts)
+    const double driveW_imp = std::sqrt(4.0 * zeta * omega0 * omega0 * omega0
+                                        * psd_spec.sigma_W * psd_spec.sigma_W
+                                        * dts);
+    const double driveD_imp = std::sqrt(4.0 * zeta * omega0 * omega0 * omega0
+                                        * psd_spec.sigma_D * psd_spec.sigma_D
+                                        * dts);
+    for (int k = 0; k < n_sub; ++k) {
+      // Re-draw innovations for each sub-step. The first sub-step uses the
+      // already-drawn (eps_W, eps_D); subsequent sub-steps draw their own
+      // correlated pair so the rho structure is preserved.
+      double e_W, e_D;
+      if (k == 0) { e_W = eps_W; e_D = eps_D; }
+      else        { psd_draw_bivariate(e_W, e_D); }
+      // Semi-implicit Euler:
+      osc_v_W += dts * (-2.0 * zeta * omega0 * osc_v_W
+                        - omega0 * omega0 * osc_x_W) + driveW_imp * e_W;
+      osc_x_W += dts * osc_v_W;
+      osc_v_D += dts * (-2.0 * zeta * omega0 * osc_v_D
+                        - omega0 * omega0 * osc_x_D) + driveD_imp * e_D;
+      osc_x_D += dts * osc_v_D;
+    }
+    dW = osc_x_W;
+    dD = osc_x_D;
+    return;
+  }
+  }
+  // Unreachable
+  dW = 0.0;
+  dD = 0.0;
+}
+
 /* ---------------------------------------------------------------------- */
 
 void RosenthalTemperatureSource::cleanup()
@@ -518,5 +763,7 @@ void RosenthalTemperatureSource::cleanup()
   fluct_total_length = 0.0;
   fluct_warned_clamp = false;
   fluct_warned_linearization = false;
+  psd_active = false;
+  psd_reset_filter_state();
   source_initialized = false;
 }

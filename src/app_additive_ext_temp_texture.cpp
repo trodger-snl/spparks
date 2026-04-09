@@ -2254,13 +2254,20 @@ void AppAdditiveExtTempTexture::rosenthal_path_cmd(int narg, char **arg)
 }
 
 /* ----------------------------------------------------------------------
-   rosenthal_fluctuations command:
-     rosenthal_fluctuations <file> [mode periodic|continuous]
+   rosenthal_fluctuations command. Two forms:
 
-   File is an ASCII three-column table:
-       s[m]   dW_over_W   dD_over_D
-   Comment lines starting with '#' are skipped. The s column must be
-   strictly increasing. Read on rank 0, broadcast to all ranks.
+   1. File-loaded ΔW/W, ΔD/D:
+        rosenthal_fluctuations <file> [mode periodic|continuous]
+
+   2. In-source PSD streaming generator (no preprocessing):
+        rosenthal_fluctuations psd <shape> sigma_W <s> sigma_D <s> \
+                              [rho <r>] [seed <n>] [dx <m>] \
+                              [shape-specific keys ...]
+      Shapes:
+        white
+        lorentzian   tau <m>
+        pink
+        narrow_band  f0 <1/m>  df <1/m>
 
    Modulates eta_y, eta_z of the Rosenthal source per timestep using a
    first-order linearization of the analytical pool. Forces the source
@@ -2271,18 +2278,7 @@ void AppAdditiveExtTempTexture::rosenthal_path_cmd(int narg, char **arg)
 void AppAdditiveExtTempTexture::rosenthal_fluctuations_cmd(int narg, char **arg)
 {
   if (narg < 1)
-    error->all(FLERR,"Illegal rosenthal_fluctuations command: expected <file> [mode periodic|continuous]");
-
-  bool periodic = true;  // default
-  if (narg >= 3) {
-    if (strcmp(arg[1],"mode") != 0)
-      error->all(FLERR,"rosenthal_fluctuations: expected keyword 'mode' as second argument");
-    if (strcmp(arg[2],"periodic") == 0) periodic = true;
-    else if (strcmp(arg[2],"continuous") == 0) periodic = false;
-    else error->all(FLERR,"rosenthal_fluctuations: mode must be 'periodic' or 'continuous'");
-  } else if (narg == 2) {
-    error->all(FLERR,"rosenthal_fluctuations: 'mode' keyword requires a value");
-  }
+    error->all(FLERR,"Illegal rosenthal_fluctuations command: expected <file> [mode ...] OR psd <shape> ...");
 
   // Validate against current temperature source.
   if (!temperature_source) {
@@ -2295,6 +2291,65 @@ void AppAdditiveExtTempTexture::rosenthal_fluctuations_cmd(int narg, char **arg)
   }
   if (ros->get_mode() == RosenthalTemperatureSource::RosenthalMode::KEYHOLE) {
     error->all(FLERR,"rosenthal_fluctuations: not supported with keyhole mode");
+  }
+
+  // -------- PSD form: rosenthal_fluctuations psd <shape> ... --------
+  if (strcmp(arg[0],"psd") == 0) {
+    if (narg < 2)
+      error->all(FLERR,"rosenthal_fluctuations psd: missing <shape>");
+    RosenthalTemperatureSource::PsdSpec spec;
+    spec.sigma_W = 0.0;
+    spec.sigma_D = 0.0;
+    spec.rho     = 0.0;
+    spec.seed    = 12345UL;
+    spec.dx      = 5.0e-6;
+    spec.tau     = 0.0;
+    spec.f0      = 0.0;
+    spec.df      = 0.0;
+    if      (strcmp(arg[1],"white")       == 0) spec.shape = RosenthalTemperatureSource::PsdShape::WHITE;
+    else if (strcmp(arg[1],"lorentzian")  == 0) spec.shape = RosenthalTemperatureSource::PsdShape::LORENTZIAN;
+    else if (strcmp(arg[1],"pink")        == 0) spec.shape = RosenthalTemperatureSource::PsdShape::PINK;
+    else if (strcmp(arg[1],"narrow_band") == 0) spec.shape = RosenthalTemperatureSource::PsdShape::NARROW_BAND;
+    else error->all(FLERR,"rosenthal_fluctuations psd: unknown shape (use white|lorentzian|pink|narrow_band)");
+
+    int i = 2;
+    while (i < narg) {
+      const char *k = arg[i];
+      if (i + 1 >= narg)
+        error->all(FLERR,"rosenthal_fluctuations psd: missing value for keyword");
+      const double val = atof(arg[i+1]);
+      if      (strcmp(k,"sigma_W") == 0) spec.sigma_W = val;
+      else if (strcmp(k,"sigma_D") == 0) spec.sigma_D = val;
+      else if (strcmp(k,"rho")     == 0) spec.rho     = val;
+      else if (strcmp(k,"seed")    == 0) spec.seed    = static_cast<unsigned long>(atol(arg[i+1]));
+      else if (strcmp(k,"dx")      == 0) spec.dx      = val;
+      else if (strcmp(k,"tau")     == 0) spec.tau     = val;
+      else if (strcmp(k,"f0")      == 0) spec.f0      = val;
+      else if (strcmp(k,"df")      == 0) spec.df      = val;
+      else error->all(FLERR,"rosenthal_fluctuations psd: unknown keyword");
+      i += 2;
+    }
+
+    // Promote STANDARD -> ANISOTROPIC if needed (no-op for ANISOTROPIC).
+    if (ros->get_mode() == RosenthalTemperatureSource::RosenthalMode::STANDARD) {
+      ros->promote_to_anisotropic();
+    }
+    ros->init_psd_generator(spec);
+    fluctuations_loaded = true;
+    laser_arc_length = 0.0;
+    return;
+  }
+
+  // -------- File form: rosenthal_fluctuations <file> [mode ...] --------
+  bool periodic = true;  // default
+  if (narg >= 3) {
+    if (strcmp(arg[1],"mode") != 0)
+      error->all(FLERR,"rosenthal_fluctuations: expected keyword 'mode' as second argument");
+    if (strcmp(arg[2],"periodic") == 0) periodic = true;
+    else if (strcmp(arg[2],"continuous") == 0) periodic = false;
+    else error->all(FLERR,"rosenthal_fluctuations: mode must be 'periodic' or 'continuous'");
+  } else if (narg == 2) {
+    error->all(FLERR,"rosenthal_fluctuations: 'mode' keyword requires a value");
   }
 
   // Read on rank 0.

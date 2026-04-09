@@ -1,0 +1,143 @@
+# SPPARKS additive_temperature_texture: multiple identical Rosenthal
+# scans along the x-direction over a single-crystal substrate.
+#
+# Purpose: study cumulative thermal effects of repeated passes -- heat
+# accumulation in the substrate, melt-pool overlap with re-solidified
+# tracks, and grain selection in the consolidating powder layer.
+#
+# ---------------------------------------------------------------------
+# Characteristic scales and box sizing
+# ---------------------------------------------------------------------
+#
+# Standard Rosenthal melt-pool half-width (centerline, surface) is
+#
+#     R_m  =  lambda * Q / (2*pi * k * (T_m - T0))
+#
+# For the parameters used below (Q=60 W, lambda=0.155, k=11.2,
+# T_m-T0 = 1000 K) this gives R_m ~= 0.132 mm.
+#
+# Box (in physical units):
+#     x: 2.00 mm  ~ 15 * R_m   (within the 10-50x window)
+#     y: 0.40 mm  ~  3 * R_m   (full transverse pool with margin)
+#     z: 0.30 mm  ~ 2.3 * R_m  (substrate + powder, full pool depth)
+#
+# Lattice (sc/26n) at dx = 5 um:  400 x 80 x 60 = 1.92 M sites
+# Pool half-width is resolved at R_m / dx ~= 26 cells.
+#
+# Note on rescaling: the Rosenthal solution is geometrically scale-free
+# in the combination R/R_m, so increasing Q by a factor of f and the
+# box dimensions and dx by the same factor reproduces the identical
+# normalized field. The paper J G Pauza et al 2021 Modelling Simul.
+# Mater. Sci. Eng. 29 055019, Table B1 case 3 uses Q=285 W with
+# dx=1 um; matching that resolution at full Q on this box ratio would
+# be ~13 G sites and is HPC-scale, not example-scale. Bump dx down
+# and Q up together for a higher-resolution study.
+#
+# ---------------------------------------------------------------------
+# Substrate / powder layout (lattice indices; dx = 5 um)
+# ---------------------------------------------------------------------
+#
+#   z in [ 0, 40)  : single-crystal substrate (0.20 mm of bulk)
+#   z in [40, 60]  : powder layer             (0.10 mm of fresh powder)
+#   spot plane     : z = 40 (= 0.20 mm)       at the substrate top
+#
+# ---------------------------------------------------------------------
+# Scan path
+# ---------------------------------------------------------------------
+#
+#   1.5 mm linear path in +x at the centerline (y = 40, z = 40),
+#   from x = 0.25 mm to x = 1.75 mm, repeated NSCANS times.
+#   Path duration per repeat = 1.5e-3 m / 1.2 m/s = 1.25 ms.
+#   Total scan time = NSCANS * 1.25 ms.
+
+variable NSCANS equal 5
+
+# app_style additive_temperature_texture <nspins> <dx[m]> <dt[s]> <nrefine>
+app_style additive_temperature_texture 1000000 5e-6 5e-6 2
+
+shell mkdir -p DumpFiles_rosenthal_multiscan
+
+seed             56789
+
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 400 0 80 0 60
+
+boundary         n n n
+
+create_box       box
+create_sites     box
+
+# ---------------------------------------------------------------------
+# Initial site state
+#
+#   1. Random grain ids (powder default) over the whole box.
+#   2. active_flag (i2) = 1 everywhere (active layer).
+#   3. Substrate region (z < 40 in lattice units, i.e. z < 0.20 mm):
+#      overwrite with a single grain id and identity quaternion, and
+#      set active_flag = 3 (consolidated solid).
+#
+# Multiple 'if' clauses on the same set command are AND'd, but a
+# single 'if z < 40' is sufficient for an axis-aligned slab cut.
+# ---------------------------------------------------------------------
+
+set site range 1 1000000
+set i2 value 1
+
+# Single-crystal substrate. d1..d4 = (q0, qx, qy, qz) = identity.
+set i1 value 42      if z < 40
+set i2 value 3       if z < 40
+set d1 value 1.0     if z < 40
+set d2 value 0.0     if z < 40
+set d3 value 0.0     if z < 40
+set d4 value 0.0     if z < 40
+
+sector           yes
+sweep            random mask no
+
+diag_style       array d6 sum
+
+temperature      0.0
+misorientation_target gradient
+
+# AM-specific (Table B1 IN718-like)
+liquidus         1573
+solidus          1523
+solid_front_vel  4 -1.0302e-7 1.0533e-4 2.2196e-3 0
+nucleation_density      1e14
+critical_undercooling   5
+undercooling_deviation  3
+mean_nuclei_volume      8.4375e-16
+nuclei_volume_deviation 1.5625e-17
+
+# ---------------------------------------------------------------------
+# Rosenthal source: standard mode (Eq. B4)
+# args: <Q[W]> <lambda> <k[W/(mK)]> <alpha[m^2/s]> <T0[K]>
+#
+# Q=60 W chosen so the melt pool is large enough to resolve at dx=5 um
+# while the 15x R_m box stays under ~2 M sites.
+# ---------------------------------------------------------------------
+setup_temperature_source rosenthal standard 60.0 0.155 11.2 2.0959e-6 573.0
+
+# ---------------------------------------------------------------------
+# Multi-scan path. Coordinates in meters; Z is the scan plane.
+# 1.5 mm linear scan at 1.2 m/s, repeated ${NSCANS} times.
+# Spot at z = 0.20 mm = lattice index 40, i.e. at the substrate top.
+# Path centered transversely at y = 0.20 mm = lattice index 40.
+# ---------------------------------------------------------------------
+rosenthal_path start 0.25e-3 0.20e-3 0.20e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats ${NSCANS}
+
+shell cd DumpFiles_rosenthal_multiscan
+
+stats            5e-4
+
+# Dump T (d6 = darray[5]), grain id, active_flag, and the full
+# quaternion (d1..d4) every 0.5 ms. NSCANS=5 passes take 6.25 ms;
+# at 0.5 ms cadence we get ~12 in-scan snapshots plus cool-down frames.
+dump             1 text 5e-4 dump.multiscan.* id i1 i2 d1 d2 d3 d4 d6 x y z
+dump_modify      1 thresh i2 > 1
+
+# Run for slightly longer than NSCANS * 1.25 ms = 6.25 ms to capture
+# post-scan cooling and the final solidified microstructure.
+run              15e-3
+shell cd ../

@@ -27,8 +27,9 @@ namespace SPPARKS_NS {
    provides pool-local coordinates (xi, y_rel, z_rel) and the current
    scan velocity each timestep, and queries rosenthal_pointwise().
 
-   Three modes are supported, all referenced to Rolchigo et al.,
-   Mod. Sim. Mater. Sci. Eng. 2021, Appendix B:
+   Three modes are supported, all referenced to
+   J G Pauza et al 2021 Modelling Simul. Mater. Sci. Eng. 29 055019,
+   Appendix B:
 
    STANDARD    (Eq. B4):  T = T0 + (lambda*Q)/(2*pi*k*R)
                               * exp(-v*(xi+R)/(2*alpha))

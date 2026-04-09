@@ -2,7 +2,7 @@
 
 ## Summary
 
-This change makes the analytical Rosenthal moving-point heat source a first-class temperature source for `AppAdditiveExtTempTexture`, alongside the existing `HDF5UnstructuredTemperatureSource` / `HDF5CSRTemperatureSource`. Three solution variants from Rolchigo et al. (Mod. Sim. Mater. Sci. Eng. 2021, Appendix B) are supported:
+This change makes the analytical Rosenthal moving-point heat source a first-class temperature source for `AppAdditiveExtTempTexture`, alongside the existing `HDF5UnstructuredTemperatureSource` / `HDF5CSRTemperatureSource`. Three solution variants from J G Pauza et al 2021 *Modelling Simul. Mater. Sci. Eng.* **29** 055019 (Appendix B) are supported:
 
 1. **Standard Rosenthal** (Eq. B4) — classical moving point source.
 2. **Anisotropic Rosenthal** (Eq. B6/B7) — replaces `R` with `R_η = √(ξ² + (η_y y)² + (η_z z)²)` to elongate, widen, or deepen the melt pool.

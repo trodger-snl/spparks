@@ -161,6 +161,7 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     mis_thresh = 10.0 * MY_PI / 180.0; // Default 10 degrees converted to radians
     misorient_alpha = 5.0; // Default exponential steepness parameter
     misorientation_target_mode = MISORI_TARGET_GRADIENT;
+    nucleation_mode = NUCLEATION_THRESHOLD;
 
     // Void generation defaults
     enable_voids = 0;              // Disabled by default
@@ -373,6 +374,16 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
      } else {
        error->all(FLERR,"Illegal misorientation_target value: use gradient or random");
      }
+  }
+  else if (strcmp(command,"nucleation_mode") == 0) {
+    if (narg != 1) error->all(FLERR,"Illegal nucleation_mode command");
+    if (strcmp(arg[0],"threshold") == 0) {
+      nucleation_mode = NUCLEATION_THRESHOLD;
+    } else if (strcmp(arg[0],"continuous") == 0) {
+      nucleation_mode = NUCLEATION_CONTINUOUS;
+    } else {
+      error->all(FLERR,"Illegal nucleation_mode value: use threshold or continuous");
+    }
   }
   else if (strcmp(command,"fast_forward_search_window") == 0) {
      if (narg != 1) error->all(FLERR,"Illegal fast_forward_search_window command");
@@ -608,6 +619,9 @@ void AppAdditiveExtTempTexture::app_update(double dt)
         solid_d[i] = 0;
         G[i] = 0;
         V[i] = 0;
+        if (nucleation_mode == NUCLEATION_CONTINUOUS) {
+          T_prev_map[i] = T[i];
+        }
     }
     //If we're molten, call the mushy_phase function to figure out any phase change
     else if (active_flag[i] == 2 && T[i] <= tl) {
@@ -615,6 +629,9 @@ void AppAdditiveExtTempTexture::app_update(double dt)
         if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
         if (!in_mushy) { t_mushy_start = MPI_Wtime(); in_mushy = true; }
         mushy_phase(i, ranapp);
+        if (nucleation_mode == NUCLEATION_CONTINUOUS && active_flag[i] == 2) {
+          T_prev_map[i] = T[i];
+        }
     }
     //Call smoothing
     else if(solid_d[i] < 0 && solid_d[i] > -nrefine -1 && active_flag[i] == 3)    {
@@ -840,7 +857,23 @@ void AppAdditiveExtTempTexture::init_app()
 	MPI_Bcast(nucleation_temps,nspins, MPI_DOUBLE,0,world);
 	MPI_Bcast(nucleation_sizes,nspins, MPI_DOUBLE,0,world);
 	timer->stamp(TIME_COMM);
-	
+
+	// Validate parameters for continuous nucleation mode
+	if (nucleation_mode == NUCLEATION_CONTINUOUS) {
+	  if (tsig <= 0.0)
+	    error->all(FLERR, "undercooling_deviation must be > 0 for continuous nucleation mode");
+	  if (!use_temperature_source)
+	    error->all(FLERR, "continuous nucleation mode requires a temperature source");
+	}
+
+	if (domain->me == 0) {
+	  if (nucleation_mode == NUCLEATION_THRESHOLD) {
+	    fprintf(screen, "Nucleation mode: threshold (tc=%.2f, tsig=%.2f)\n", tc, tsig);
+	  } else {
+	    fprintf(screen, "Nucleation mode: continuous Gaussian (tc=%.2f, tsig=%.2f)\n", tc, tsig);
+	  }
+	}
+
 	//Initialize the neigh_dist array need to fill with good values
 	neigh_dist = new double[26];
 	neigh_dist[0] = sqrt3 * dx;
@@ -981,6 +1014,33 @@ void AppAdditiveExtTempTexture::site_event_rejection(int /*i*/, RandomPark * /*r
 }
 
 /* ----------------------------------------------------------------------
+   Execute a nucleation event at site i with undercooling Tcool.
+   Sets site to solid, computes gradient and solidification rate,
+   and grows the nucleus via nucleation_particle_flipper.
+------------------------------------------------------------------------- */
+void AppAdditiveExtTempTexture::execute_nucleation_event(int i, double Tcool) {
+    active_flag[i] = 3;
+    solid_d[i] = -nrefine - 2;
+
+    std::vector<double> solid_G(4);
+    solid_G = normal_finder(i);
+    G[i] = solid_G[3];
+
+    int power = solid_front_length - 1;
+    for (int k = 0; k < solid_front_length; k++) {
+        V[i] = V[i] + solid_front_coeffs[k] * pow(Tcool, power);
+        power--;
+    }
+
+    naccept++;
+    nucleation_particle_flipper(i, round(nucleation_sizes[spin[i]] / pow(dx, 3)), ranapp);
+
+    if (nucleation_mode == NUCLEATION_CONTINUOUS) {
+      T_prev_map.erase(i);
+    }
+}
+
+/* ----------------------------------------------------------------------
    Perform evolution for sites in the mushy zone. There are several things that need to happen.
    1. Determine if the site is solid or liquid (from active_flag)
    2. Determine if the site should nucleate a new grain (from nucleation_flags)
@@ -1003,31 +1063,34 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
     //Our site should always be molten and below tl
     //Check if it's eligible to nucleate
     if(nucleation_flags[spin[i]]) {
-        //Can and will nucleate
-        if(Tcool >= nucleation_temps[spin[i]]){
-            active_flag[i] = 3;
-            //Don't let nucleated site disappear during smoothing
-            //Neighboring sites will be flipped during the next iterate_rejection call
-            solid_d[i] = -nrefine-2;
-
-            std::vector<double> solid_G(4);  // Now returns [norm_x, norm_y, norm_z, magnitude]
-            solid_G = normal_finder(i); //Update gradient
-            G[i] = solid_G[3];  // Use the actual gradient magnitude directly
-
-            int power = solid_front_length - 1;
-            for(int k = 0; k < solid_front_length; k++) {
-                V[i] = V[i] + solid_front_coeffs[k] * pow(Tcool, power); //Update solidification rate
-                power--;
+        if (nucleation_mode == NUCLEATION_THRESHOLD) {
+            // Threshold mode: nucleate if undercooling exceeds per-spin critical value
+            if(Tcool >= nucleation_temps[spin[i]]){
+                execute_nucleation_event(i, Tcool);
+                return;
             }
-
-            //Call nucleation particle flipper
-            naccept++;
-            nucleation_particle_flipper(i, round(nucleation_sizes[spin[i]]/pow(dx,3)), ranapp);
-            return;
+            else {
+                site_event_solidification(i, Tcool, random);
+            }
         }
-        //Can nucleate, but won't yet. Allow to solidify if the solidification front captures it first.
         else {
-            // fprintf(screen,"Epitaxialy growing instead of nucleating\n");
+            // Continuous Gaussian nucleation mode: probabilistic activation
+            auto it = T_prev_map.find(i);
+            if (it != T_prev_map.end()) {
+                double dT_increment = it->second - T[i];  // positive when cooling
+                if (dT_increment > 0.0 && Tcool > 0.0) {
+                    double exponent = (Tcool - tc) * (Tcool - tc) / (2.0 * tsig * tsig);
+                    double dn_ddT = (1.0 / (sqrt(2.0 * MY_PI) * tsig)) * exp(-exponent);
+                    double P_nucleate = dn_ddT * dT_increment;
+                    if (P_nucleate > 1.0) P_nucleate = 1.0;
+
+                    if (random->uniform() < P_nucleate) {
+                        execute_nucleation_event(i, Tcool);
+                        return;
+                    }
+                }
+            }
+            // Did not nucleate (or no previous temp): allow epitaxial growth
             site_event_solidification(i, Tcool, random);
         }
     }
@@ -1101,7 +1164,10 @@ void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, R
             flip_site(i,s1);
             active_flag[i] = 3;
             solid_d[i] = -1;
-            
+            if (nucleation_mode == NUCLEATION_CONTINUOUS) {
+              T_prev_map.erase(i);
+            }
+
             std::vector<double> solid_G(4);  // Now returns [norm_x, norm_y, norm_z, magnitude]
             solid_G = normal_finder(i); //Update gradient
             G[i] = solid_G[3];  // Use the actual gradient magnitude directly

@@ -26,6 +26,7 @@ AppStyle(additive_temperature_texture,AppAdditiveExtTempTexture)
 #include <stdlib.h>
 #include <string>
 #include <map>
+#include <unordered_map>
 #include <vector>
 #include <cmath>
 #include <memory>
@@ -37,6 +38,11 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   enum MisorientationTargetMode {
     MISORI_TARGET_GRADIENT = 0,
     MISORI_TARGET_RANDOM = 1
+  };
+
+  enum NucleationMode {
+    NUCLEATION_THRESHOLD = 0,   // Existing binary threshold
+    NUCLEATION_CONTINUOUS = 1   // Continuous Gaussian probability
   };
 
   AppAdditiveExtTempTexture(class SPPARKS *, int, char **);
@@ -52,6 +58,7 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   virtual void mushy_phase(int, class RandomPark *);
   virtual double site_energy(int);
   void site_event_solidification(int, double, class RandomPark *);
+  void execute_nucleation_event(int, double);
   std::vector<double> normal_finder(int);
 	double melt_misorientation(int, double, double, double);
   void apply_misorientation(int, double, class RandomPark *);
@@ -131,6 +138,8 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
 	int *nucleation_flags;
 	double *nucleation_temps;
 	double *nucleation_sizes;
+	int nucleation_mode;    // NUCLEATION_THRESHOLD or NUCLEATION_CONTINUOUS
+	std::unordered_map<int, double> T_prev_map;  // Previous temperature for molten sites (continuous nucleation)
 
   // Void generation parameters
   double void_density;           // Voids per cubic meter

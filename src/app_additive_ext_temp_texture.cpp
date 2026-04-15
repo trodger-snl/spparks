@@ -277,10 +277,78 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
     }
   }
   else if (strcmp(command,"texture_parameters") == 0) {
-     if (narg != 3) error->all(FLERR,"Illegal texture_parameters command");
-     c1 = atof(arg[0]);
-     c2 = atof(arg[1]);
-     c3 = atof(arg[2]);
+     if (narg == 3)
+       error->all(FLERR,
+         "texture_parameters now takes 2 arguments (c2 c3), not 3. "
+         "The baseline coefficient c1 has been fixed at 1.0 because "
+         "only mobility ratios affect selection. To migrate an old "
+         "input file: texture_parameters c2/c1 c3 (divide old c2 by "
+         "old c1, drop old c1)");
+     if (narg != 2) error->all(FLERR,"Illegal texture_parameters command");
+
+     // c1 is fixed at 1.0 by normalization convention. The roulette-wheel
+     // selection in site_event_solidification is invariant under uniform
+     // scaling of mobility (only ratios matter), so c1 is mathematically
+     // non-identifiable. Hardcoding it here removes the degenerate
+     // parameter and makes input files unambiguous.
+     c1 = 1.0;
+     c2 = atof(arg[0]);
+     c3 = atof(arg[1]);
+
+     // -------- Validation --------
+     // Mobility model:  mob(theta) = 1 + c2 * cos(c3 * theta)
+     // theta is the misorientation angle between the grain's <100> family
+     // and the local thermal gradient, folded into the cubic fundamental
+     // zone by get_cosine_of_minumum_angle_between_q_and_u.
+     const double theta_max = std::acos(1.0 / std::sqrt(3.0));  // ~0.9553 rad
+
+     // Rule 1: signs.  c2 < 0 reverses the physical meaning (misaligned
+     // grains preferred), which is unphysical for cubic solidification.
+     // c3 < 0 is mathematically redundant since cosine is even.
+     if (c2 < 0.0) {
+       error->all(FLERR,
+         "texture_parameters: c2 must be >= 0 (negative amplitude "
+         "would mean misaligned grains grow faster than aligned ones, "
+         "which is unphysical for cubic solidification)");
+     }
+     if (c3 < 0.0) {
+       error->all(FLERR,
+         "texture_parameters: c3 must be >= 0");
+     }
+
+     // Rule 2: monotonicity of mob(theta) on [0, theta_max].
+     //   d/dtheta mob = -c2 * c3 * sin(c3 * theta) <= 0
+     //   requires c3 * theta_max <= pi (with c2 >= 0 from Rule 1).
+     if (c3 * theta_max > MY_PI + 1.0e-12) {
+       char msg[256];
+       snprintf(msg, sizeof(msg),
+         "texture_parameters: c3 = %g exceeds monotonicity limit "
+         "pi/theta_max ~ %g; mobility would be non-monotonic in "
+         "misorientation angle",
+         c3, MY_PI / theta_max);
+       error->all(FLERR, msg);
+     }
+
+     // Rule 3: positivity of mobility at every angle in [0, theta_max].
+     //   With c2 >= 0 and c3 * theta_max <= pi, the binding angle is
+     //   theta = theta_max where cos is most negative on the interval.
+     double mob_min = 1.0 + c2 * std::cos(c3 * theta_max);
+     if (mob_min < -1.0e-12) {
+       char msg[256];
+       snprintf(msg, sizeof(msg),
+         "texture_parameters: minimum mobility = %g < 0 at theta = "
+         "theta_max (= %g rad); roulette-wheel selection in "
+         "site_event_solidification requires non-negative mobility",
+         mob_min, theta_max);
+       error->all(FLERR, msg);
+     }
+
+     // -------- Soft warning --------
+     if (c2 == 0.0 && screen) {
+       fprintf(screen,
+         "WARNING: texture_parameters c2 = 0; mobility has no "
+         "orientation dependence\n");
+     }
   }
   else if (strcmp(command,"misorientation_function") == 0) {
      if (narg != 2 && narg != 3) error->all(FLERR,"Illegal misorientation_function command");

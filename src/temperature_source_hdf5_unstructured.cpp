@@ -1423,16 +1423,17 @@ HDF5UnstructuredTemperatureSource::merge_overlapping_intervals(const std::vector
 
 bool HDF5UnstructuredTemperatureSource::is_point_in_spparks_domain(double x, double y, double z) const
 {
-  // Use per-rank subdomain bounds (with padding) so each rank only considers
-  // nodes relevant to its partition.  Thermal intervals computed here are
-  // later combined across ranks via MPI_Allreduce(MPI_MIN).
-  double pad = dx * grid_cell_size_multiplier;
-  double x_min = domain->subxlo * dx - pad;
-  double x_max = domain->subxhi * dx + pad;
-  double y_min = domain->subylo * dx - pad;
-  double y_max = domain->subyhi * dx + pad;
-  double z_min = domain->subzlo * dx - pad;
-  double z_max = domain->subzhi * dx + pad;
+  // Use GLOBAL domain bounds — not subdomain — so thermal intervals are not
+  // contaminated by hot nodes outside the SPPARKS simulation box that sit
+  // inside the per-rank chunk-loading padding halo.  Such padding-only nodes
+  // never affect any SPPARKS site but, if included here, would make
+  // fast-forward conservatively refuse to skip quiet periods.
+  double x_min = domain->boxxlo * dx;
+  double x_max = domain->boxxhi * dx;
+  double y_min = domain->boxylo * dx;
+  double y_max = domain->boxyhi * dx;
+  double z_min = domain->boxzlo * dx;
+  double z_max = domain->boxzhi * dx;
   
   return (x >= x_min && x <= x_max &&
           y >= y_min && y <= y_max &&

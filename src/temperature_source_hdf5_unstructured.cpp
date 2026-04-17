@@ -94,7 +94,10 @@ void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vect
     // Create file access property list with MPI-IO
     HighFive::FileAccessProps fapl;
     fapl.add(HighFive::MPIOFileAccess(universe->uworld, MPI_INFO_NULL));
-    fapl.add(HighFive::MPIOCollectiveMetadata(true));
+    // NOTE: Do NOT enable MPIOCollectiveMetadata here.  With per-rank
+    // subdomain chunk filtering, some ranks may load zero chunks and
+    // return early from load_layer(), skipping getDataSet() calls that
+    // other ranks execute.  Collective metadata would deadlock in that case.
     file = std::make_shared<HighFive::File>(filename, HighFive::File::ReadOnly, fapl);
     use_parallel_hdf5 = true;
     if (universe->me == 0) {
@@ -362,10 +365,15 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   std::vector<unsigned> nodePtr;
   grp->getDataSet("nodePtrs").read(nodePtr);
   
-  // Convert SPPARKS domain bounds from lattice units to physical coordinates (meters)
+  // Convert SPPARKS per-rank subdomain bounds to physical coordinates (meters).
+  // Use subdomain (subxlo/hi) instead of global domain (boxxlo/hi) so each rank
+  // only loads temperature chunks overlapping its own partition.
+  // Pad by one spatial grid cell to capture thermal elements straddling the
+  // subdomain boundary (needed for interpolation at boundary sites).
+  double pad = dx * grid_cell_size_multiplier;
   std::vector<double> spparksPhysicalBbox{
-    domain->boxxlo * dx, domain->boxylo * dx, domain->boxzlo * dx,
-    domain->boxxhi * dx, domain->boxyhi * dx, domain->boxzhi * dx
+    domain->subxlo * dx - pad, domain->subylo * dx - pad, domain->subzlo * dx - pad,
+    domain->subxhi * dx + pad, domain->subyhi * dx + pad, domain->subzhi * dx + pad
   };
   
   // Find overlapping chunks - first pass for chunks that directly overlap SPPARKS domain
@@ -427,13 +435,14 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   }
   selected_chunks = overlappingChunks;
   
-  if (universe->me == 0 && overlappingChunks.size() > 0) {
+  if (overlappingChunks.size() > 0) {
     unsigned totalElements = elemPtr.back();
     unsigned loadedElements = elemOffsets.back();
     unsigned totalNodes = nodePtr.back();
     unsigned loadedNodes = nodeOffsets.back();
 
-    fprintf(screen, "  Loaded %zu/%zu chunks (%.1f%%), %u/%u elements (%.1f%%), %u/%u nodes (%.1f%%)\n",
+    fprintf(screen, "  Rank %d: Loaded %zu/%zu chunks (%.1f%%), %u/%u elements (%.1f%%), %u/%u nodes (%.1f%%)\n",
+            universe->me,
             overlappingChunks.size(), bboxes.size(), 100.0 * overlappingChunks.size() / bboxes.size(),
             loadedElements, totalElements, 100.0 * loadedElements / totalElements,
             loadedNodes, totalNodes, 100.0 * loadedNodes / totalNodes);
@@ -1414,13 +1423,16 @@ HDF5UnstructuredTemperatureSource::merge_overlapping_intervals(const std::vector
 
 bool HDF5UnstructuredTemperatureSource::is_point_in_spparks_domain(double x, double y, double z) const
 {
-  // Convert SPPARKS domain bounds from lattice units to physical coordinates (meters)
-  double x_min = domain->boxxlo * dx;
-  double x_max = domain->boxxhi * dx;
-  double y_min = domain->boxylo * dx;
-  double y_max = domain->boxyhi * dx;
-  double z_min = domain->boxzlo * dx;
-  double z_max = domain->boxzhi * dx;
+  // Use per-rank subdomain bounds (with padding) so each rank only considers
+  // nodes relevant to its partition.  Thermal intervals computed here are
+  // later combined across ranks via MPI_Allreduce(MPI_MIN).
+  double pad = dx * grid_cell_size_multiplier;
+  double x_min = domain->subxlo * dx - pad;
+  double x_max = domain->subxhi * dx + pad;
+  double y_min = domain->subylo * dx - pad;
+  double y_max = domain->subyhi * dx + pad;
+  double z_min = domain->subzlo * dx - pad;
+  double z_max = domain->subzhi * dx + pad;
   
   return (x >= x_min && x <= x_max &&
           y >= y_min && y <= y_max &&

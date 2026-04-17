@@ -1546,15 +1546,29 @@ void HDF5UnstructuredTemperatureSource::compute_site_thermal_intervals(double th
   auto t_end = std::chrono::high_resolution_clock::now();
   double elapsed = std::chrono::duration<double>(t_end - t_start).count();
 
+  // Aggregate per-rank counts so the diagnostic reflects the whole
+  // communicator, not just rank 0's subdomain.  Build time is reduced with
+  // MAX so the reported elapsed is the slowest rank (the actual bottleneck).
+  long local_site_count = static_cast<long>(current_layer_site_intervals.size());
+  long local_raw_count  = static_cast<long>(raw.size());
+  long local_node_count = (active_layer < layer_thermal_intervals.size())
+    ? static_cast<long>(layer_thermal_intervals[active_layer].size()) : 0L;
+  long total_site_count = 0, total_raw_count = 0, total_node_count = 0;
+  double max_elapsed = 0.0;
+  MPI_Reduce(&local_site_count, &total_site_count, 1, MPI_LONG, MPI_SUM, 0, world);
+  MPI_Reduce(&local_raw_count,  &total_raw_count,  1, MPI_LONG, MPI_SUM, 0, world);
+  MPI_Reduce(&local_node_count, &total_node_count, 1, MPI_LONG, MPI_SUM, 0, world);
+  MPI_Reduce(&elapsed, &max_elapsed, 1, MPI_DOUBLE, MPI_MAX, 0, world);
+
   if (universe->me == 0) {
-    fprintf(screen, "  Layer %u: Found %zu site-level thermal intervals "
-            "(vs %zu node-level, %zu raw sites) in %.3f s\n",
+    fprintf(screen, "  Layer %u: Found %ld site-level thermal intervals "
+            "(vs %ld node-level, %ld raw sites) across %d ranks in %.3f s\n",
             active_layer,
-            current_layer_site_intervals.size(),
-            active_layer < layer_thermal_intervals.size()
-              ? layer_thermal_intervals[active_layer].size() : 0,
-            raw.size(),
-            elapsed);
+            total_site_count,
+            total_node_count,
+            total_raw_count,
+            universe->nprocs,
+            max_elapsed);
   }
 }
 

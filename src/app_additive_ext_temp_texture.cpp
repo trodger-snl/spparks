@@ -194,6 +194,17 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     // Initialize powder activation tracking
     last_powder_activation_time = -1.0;  // Force activation at init
 
+    // Solidification-band smoothing defaults (off until `temperature_smooth`
+    // is issued in the input script).
+    temperature_smooth_enabled = false;
+    smooth_tmin  = 0.0;
+    smooth_tmax  = 0.0;
+    smooth_guard = 20.0;
+    smooth_sigma = 1.2;
+    smooth_alpha = 0.4;
+    smooth_passes = 1;
+    smooth_diag_interval = 0;
+
     //add the double array
     recreate_arrays();  
 }
@@ -470,6 +481,45 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
     laser_fluctuations_cmd(narg, arg);
   }
 
+  else if (strcmp(command,"temperature_smooth") == 0) {
+    // Usage: temperature_smooth <tmin> <tmax> [sigma] [alpha] [guard] [passes] [diag_interval]
+    //   tmin,tmax:     window inside which smoothing is at full strength (K)
+    //   sigma:         Gaussian width in lattice sites (default 1.2)
+    //   alpha:         blend factor, 0=off, 1=replace (default 0.4)
+    //   guard:         half-width of taper band outside [tmin,tmax] (default 20 K)
+    //   passes:        number of sequential smoothing passes (default 1)
+    //   diag_interval: report isotherm compactness (P/sqrt(A) at T>=liquidus)
+    //                  every N steps; 0 disables (default 0)
+    if (narg < 2 || narg > 7)
+      error->all(FLERR,"Illegal temperature_smooth command");
+    smooth_tmin = atof(arg[0]);
+    smooth_tmax = atof(arg[1]);
+    if (narg >= 3) smooth_sigma  = atof(arg[2]);
+    if (narg >= 4) smooth_alpha  = atof(arg[3]);
+    if (narg >= 5) smooth_guard  = atof(arg[4]);
+    if (narg >= 6) smooth_passes = atoi(arg[5]);
+    if (narg >= 7) smooth_diag_interval = atoi(arg[6]);
+    if (smooth_tmax <= smooth_tmin)
+      error->all(FLERR,"temperature_smooth: tmax must be > tmin");
+    if (smooth_sigma <= 0.0)
+      error->all(FLERR,"temperature_smooth: sigma must be > 0");
+    if (smooth_alpha < 0.0 || smooth_alpha > 1.0)
+      error->all(FLERR,"temperature_smooth: alpha must be in [0,1]");
+    if (smooth_guard < 0.0)
+      error->all(FLERR,"temperature_smooth: guard must be >= 0");
+    if (smooth_passes < 1)
+      error->all(FLERR,"temperature_smooth: passes must be >= 1");
+    if (smooth_diag_interval < 0)
+      error->all(FLERR,"temperature_smooth: diag_interval must be >= 0");
+    temperature_smooth_enabled = true;
+    if (domain->me == 0)
+      fprintf(screen,
+        "Temperature smoothing enabled: window=[%.1f,%.1f] K, "
+        "guard=%.1f K, sigma=%.2f sites, alpha=%.2f, passes=%d, diag_interval=%d\n",
+        smooth_tmin, smooth_tmax, smooth_guard,
+        smooth_sigma, smooth_alpha, smooth_passes, smooth_diag_interval);
+  }
+
   else error->all(FLERR,"Unrecognized command");
 }
 
@@ -680,6 +730,13 @@ void AppAdditiveExtTempTexture::app_update(double dt)
   timer->stamp(TIME_COMM);
   t_end = MPI_Wtime();
   t_comm += (t_end - t_start);
+
+  // Optional isotherm-compactness diagnostic for tuning smoothing.
+  // Ghosts are guaranteed fresh here (just synced above).
+  if (temperature_smooth_enabled && smooth_diag_interval > 0 &&
+      step_count % smooth_diag_interval == 0) {
+    compute_smoothing_diagnostics();
+  }
 
   // Print timing summary every 100 steps (on rank 0 only)
   if (step_count % 100 == 0 && domain->me == 0) {
@@ -2616,5 +2673,163 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
     g_t_temp_site_loop += (t1 - t0);
   }
 
+  // Optional Gaussian smoothing of the solidification band. Runs only when
+  // enabled via `temperature_smooth` in the input script.
+  if (temperature_smooth_enabled) apply_temperature_smoothing();
+
   timer->stamp(TIME_APP);
+}
+
+/* ----------------------------------------------------------------------
+   Gaussian smoothing of T[] inside the user-specified solidification
+   window. Called from update_temperature_from_source() when enabled.
+
+   Algorithm per pass:
+     1. Sync T on ghost sites (T is already in ghost_dindices).
+     2. For each local site whose T falls inside [tmin-guard, tmax+guard]:
+          Tavg = weighted avg of self + lattice neighbors whose T also
+                 lies in [tmin-guard, tmax+guard]. Neighbors outside the
+                 window are skipped so the kernel cannot bleed across
+                 the pool boundary into cold ambient sites.
+                 w_j = exp(-|r_j - r_i|^2 / (2*sigma^2))
+          blend alpha_eff * Tavg + (1-alpha_eff) * T[i], where alpha_eff
+          ramps linearly from 0 at the guard edge to `smooth_alpha` at
+          the window edge. This prevents a discontinuity when a site
+          crosses in/out of the smoothing window across steps.
+     3. Write smoothed values back to T[].
+
+   Pass 2+ re-syncs ghosts so each pass sees the smoothed values from
+   the previous one. Cost per step: one extra all_selective per pass.
+------------------------------------------------------------------------- */
+
+void AppAdditiveExtTempTexture::apply_temperature_smoothing()
+{
+  const double two_sigma2 = 2.0 * smooth_sigma * smooth_sigma;
+  const double lo_outer = smooth_tmin - smooth_guard;
+  const double hi_outer = smooth_tmax + smooth_guard;
+  const double ramp_lo = (smooth_guard > 0.0) ? smooth_guard : 1.0;
+  const double ramp_hi = (smooth_guard > 0.0) ? smooth_guard : 1.0;
+
+  if ((int)smooth_buffer.size() < nlocal) smooth_buffer.resize(nlocal);
+
+  for (int pass = 0; pass < smooth_passes; pass++) {
+    // Ghosts need current T before each pass.
+    comm->all_selective(ghost_iindices, nghost_iarray,
+                        ghost_dindices, nghost_darray);
+
+    for (int i = 0; i < nlocal; i++) {
+      const double Ti = T[i];
+      if (Ti < lo_outer || Ti > hi_outer) {
+        smooth_buffer[i] = Ti;
+        continue;
+      }
+
+      const double xi = xyz[i][0];
+      const double yi = xyz[i][1];
+      const double zi = xyz[i][2];
+
+      double wsum = 1.0;   // self
+      double Tsum = Ti;    // self-contribution
+
+      const int nn = numneigh[i];
+      for (int j = 0; j < nn; j++) {
+        const int nj = neighbor[i][j];
+        if (nj < 0) continue;
+        const double Tj = T[nj];
+        // Skip neighbors whose T is outside the smoothing window; they
+        // are solid/ambient and would drag the in-band site's average
+        // sharply toward cold temperatures.
+        if (Tj < lo_outer || Tj > hi_outer) continue;
+        const double dxn = xyz[nj][0] - xi;
+        const double dyn = xyz[nj][1] - yi;
+        const double dzn = xyz[nj][2] - zi;
+        const double r2 = dxn*dxn + dyn*dyn + dzn*dzn;
+        const double w = exp(-r2 / two_sigma2);
+        wsum += w;
+        Tsum += w * Tj;
+      }
+      const double Tavg = Tsum / wsum;
+
+      // Guard-band taper so the blend factor ramps to zero at the outer edges.
+      double aeff = smooth_alpha;
+      if (Ti < smooth_tmin) {
+        aeff *= (Ti - lo_outer) / ramp_lo;
+      } else if (Ti > smooth_tmax) {
+        aeff *= (hi_outer - Ti) / ramp_hi;
+      }
+      if (aeff < 0.0) aeff = 0.0;
+
+      smooth_buffer[i] = (1.0 - aeff) * Ti + aeff * Tavg;
+    }
+
+    // Commit this pass before the next one.
+    for (int i = 0; i < nlocal; i++) T[i] = smooth_buffer[i];
+  }
+
+  // Leave ghosts consistent with the final committed T. Downstream code
+  // (phase-transition loops, diagnostic) may depend on this.
+  comm->all_selective(ghost_iindices, nghost_iarray,
+                      ghost_dindices, nghost_darray);
+}
+
+/* ----------------------------------------------------------------------
+   In-situ smoothing diagnostic.
+
+   Measures how "clean" the T >= liquidus (tl) isotherm is by counting:
+     V = # local sites with T[i] >= tl                           (pool volume)
+     S = # of those sites with at least one neighbor T[nj] < tl  (pool surface)
+
+   Reports S / V^(2/3) — a 3D isoperimetric ratio, size-independent.
+   Perfect 3D sphere gives (36*pi)^(1/3) ~= 4.836; wiggly/fragmented
+   isotherms push higher. Also reports pool volume, surface, mean and max T.
+
+   Assumes T ghosts are current (caller must ensure this).
+------------------------------------------------------------------------- */
+
+void AppAdditiveExtTempTexture::compute_smoothing_diagnostics()
+{
+  bigint V_local = 0, S_local = 0;
+  double sumT_local = 0.0;
+  double maxT_local = -1.0e30;
+
+  for (int i = 0; i < nlocal; i++) {
+    const double Ti = T[i];
+    if (Ti < tl) continue;
+
+    V_local++;
+    sumT_local += Ti;
+    if (Ti > maxT_local) maxT_local = Ti;
+
+    const int nn = numneigh[i];
+    for (int j = 0; j < nn; j++) {
+      const int nj = neighbor[i][j];
+      if (nj < 0) continue;
+      if (T[nj] < tl) { S_local++; break; }
+    }
+  }
+
+  bigint V_global = 0, S_global = 0;
+  double sumT_global = 0.0, maxT_global = 0.0;
+  MPI_Allreduce(&V_local,    &V_global,    1, MPI_SPK_BIGINT, MPI_SUM, world);
+  MPI_Allreduce(&S_local,    &S_global,    1, MPI_SPK_BIGINT, MPI_SUM, world);
+  MPI_Allreduce(&sumT_local, &sumT_global, 1, MPI_DOUBLE,     MPI_SUM, world);
+  MPI_Allreduce(&maxT_local, &maxT_global, 1, MPI_DOUBLE,     MPI_MAX, world);
+
+  if (domain->me == 0) {
+    const double ideal = cbrt(36.0 * MY_PI);  // ~= 4.8360
+    fprintf(screen, "\n=== Smoothing diagnostic (T >= liquidus=%.1f K) ===\n", tl);
+    if (V_global > 0) {
+      const double V = static_cast<double>(V_global);
+      const double ratio = static_cast<double>(S_global) / cbrt(V * V);  // V^(2/3)
+      const double meanT = sumT_global / V;
+      fprintf(screen,
+        "  Pool volume:       " BIGINT_FORMAT " sites\n"
+        "  Pool surface:      " BIGINT_FORMAT " sites\n"
+        "  S/V^(2/3):         %.3f  (ideal 3D sphere = %.3f)\n"
+        "  Pool mean T:       %.2f K   max T: %.2f K\n",
+        V_global, S_global, ratio, ideal, meanT, maxT_global);
+    } else {
+      fprintf(screen, "  No sites above liquidus this step.\n");
+    }
+  }
 }

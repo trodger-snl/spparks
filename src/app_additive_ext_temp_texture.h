@@ -66,6 +66,19 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   void smooth_site(int site);
   double site_energy_smooth(int site);
 
+  // Gaussian smoothing of T[] inside a user-specified temperature window
+  // (intended for the solidification band). Gated by active_flag so only
+  // molten/solidifying sites participate. Requires ghost-comm of T; a
+  // comm->all_selective is issued per pass.
+  void apply_temperature_smoothing();
+
+  // In-situ diagnostic: isotherm compactness of the T >= liquidus region.
+  // Counts pool area A (sites with T >= tl) and boundary-site count P
+  // (those with any neighbor whose T < tl), then reports P/sqrt(A).
+  // Ideal circular pool ~= 2*sqrt(pi) ~= 3.545; wiggly tails push it higher.
+  // Requires T ghosts to be current before the call.
+  void compute_smoothing_diagnostics();
+
   // Powder phase activation methods
   bool is_powder_eligible_site(int i);
   void activate_powder_sites();
@@ -181,6 +194,21 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
 
   // Powder activation tracking
   double last_powder_activation_time;  // Track when we last activated powder sites
+
+  // Solidification-band temperature smoothing (opt-in via `temperature_smooth`).
+  // Applied once per temperature update, after T[] has been filled from the
+  // modular source. Only sites whose T falls inside the window participate;
+  // a guard band tapers the blend factor to zero at the outer edges so that
+  // sites crossing in/out of the window don't see a discontinuity.
+  bool   temperature_smooth_enabled;
+  double smooth_tmin;        // lower edge of full-strength window (K)
+  double smooth_tmax;        // upper edge of full-strength window (K)
+  double smooth_guard;       // guard-band half-width (K); blend ramps to 0 here
+  double smooth_sigma;       // Gaussian width (lattice sites)
+  double smooth_alpha;       // blend factor (0=off, 1=replace with neighbor avg)
+  int    smooth_passes;      // number of Gaussian passes per step
+  int    smooth_diag_interval;  // report compactness every N steps; 0 disables
+  std::vector<double> smooth_buffer;  // scratch for double-buffered pass
 
 };
 

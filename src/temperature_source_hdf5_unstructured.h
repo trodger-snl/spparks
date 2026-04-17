@@ -324,7 +324,17 @@ private:
   // Thermal interval management for efficient time queries
   std::vector<std::vector<ThermalInterval>> layer_thermal_intervals;
 
+  // Per-site thermal intervals for the currently loaded layer.
+  // Built lazily after the element cache exists (in prepare_for_timestep)
+  // and supersedes the node-based intervals for that layer when non-empty.
+  // Per-site computation evaluates the true barycentric T_site at merged
+  // node sample times, so these intervals are tight rather than the union
+  // bounds produced by the node-level scan.
+  mutable std::vector<ThermalInterval> current_layer_site_intervals;
+  mutable unsigned site_intervals_for_layer;
+
   void compute_thermal_intervals_for_layer(unsigned layerIdx, double threshold_temp);
+  void compute_site_thermal_intervals(double threshold);
   std::vector<ThermalInterval> merge_overlapping_intervals(const std::vector<ThermalInterval>& intervals) const;
   bool is_point_in_spparks_domain(double x, double y, double z) const;
 

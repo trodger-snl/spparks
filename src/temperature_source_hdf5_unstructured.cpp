@@ -55,6 +55,7 @@ HDF5UnstructuredTemperatureSource::HDF5UnstructuredTemperatureSource(SPPARKS *sp
   layer_load_count(0),
   cached_nodal_time(std::numeric_limits<double>::lowest()),
   nodal_cache_valid(false),
+  site_intervals_for_layer(std::numeric_limits<unsigned>::max()),
   grid_cell_size_multiplier(100.0),
   use_spatial_grid(true),
   use_element_cache(true)
@@ -1104,6 +1105,7 @@ void HDF5UnstructuredTemperatureSource::prepare_for_timestep(double time)
       active_layer = currentLayer;
       cache_valid = false;
       nodal_cache_valid = false;
+      site_intervals_for_layer = std::numeric_limits<unsigned>::max();
     }
     current_time = time;
   }
@@ -1111,6 +1113,14 @@ void HDF5UnstructuredTemperatureSource::prepare_for_timestep(double time)
   // Build element cache if needed
   if (!cache_valid) {
     build_site_element_cache();
+  }
+
+  // Once the element cache exists, compute per-site thermal intervals for
+  // the current layer.  These supersede the per-node layer_thermal_intervals
+  // in get_next_time_with_temperature and yield tight, site-accurate skip
+  // windows instead of node-bound unions.
+  if (site_intervals_for_layer != active_layer) {
+    compute_site_thermal_intervals(threshold_temp);
   }
 
   // Precompute nodal temperatures for this timestep
@@ -1303,20 +1313,32 @@ double HDF5UnstructuredTemperatureSource::get_next_time_with_temperature(double 
   // Find current layer
   unsigned current_layer = get_active_layer(current_time);
 
-  // Check if we have thermal intervals computed for this layer
-  if (current_layer >= layer_thermal_intervals.size()) {
-    return current_time;
-  }
-
-  // Check intervals in current layer
-  for (const auto& interval : layer_thermal_intervals[current_layer]) {
-    // If we're currently within this interval, return current_time to signal activity NOW
-    if (current_time >= interval.start_time && current_time <= interval.end_time) {
+  // Prefer per-site intervals for the currently loaded layer when available.
+  // They are tight (computed from the true barycentric T_site) rather than
+  // the looser union bounds produced by the per-node scan.
+  if (site_intervals_for_layer == current_layer
+      && !current_layer_site_intervals.empty()) {
+    for (const auto& interval : current_layer_site_intervals) {
+      if (current_time >= interval.start_time && current_time <= interval.end_time) {
+        return current_time;
+      }
+      if (interval.start_time > current_time) {
+        return interval.start_time;
+      }
+    }
+  } else {
+    // Fall back to the node-level intervals (e.g., before the element
+    // cache has been built for this layer).
+    if (current_layer >= layer_thermal_intervals.size()) {
       return current_time;
     }
-    // If this interval starts after current time, return its start time
-    if (interval.start_time > current_time) {
-      return interval.start_time;
+    for (const auto& interval : layer_thermal_intervals[current_layer]) {
+      if (current_time >= interval.start_time && current_time <= interval.end_time) {
+        return current_time;
+      }
+      if (interval.start_time > current_time) {
+        return interval.start_time;
+      }
     }
   }
 
@@ -1380,16 +1402,165 @@ void HDF5UnstructuredTemperatureSource::compute_thermal_intervals_for_layer(unsi
   
   // Merge overlapping intervals and store
   layer_thermal_intervals[layerIdx] = merge_overlapping_intervals(intervals);
-  
+
   if (universe->me == 0 && !layer_thermal_intervals[layerIdx].empty()) {
-    fprintf(screen, "  Layer %u: Found %zu thermal intervals\n", 
+    fprintf(screen, "  Layer %u: Found %zu thermal intervals\n",
             layerIdx, layer_thermal_intervals[layerIdx].size());
   }
 }
 
 /* ---------------------------------------------------------------------- */
 
-std::vector<HDF5UnstructuredTemperatureSource::ThermalInterval> 
+void HDF5UnstructuredTemperatureSource::compute_site_thermal_intervals(double threshold)
+{
+  current_layer_site_intervals.clear();
+  site_intervals_for_layer = std::numeric_limits<unsigned>::max();
+
+  if (!cache_valid || !app) return;
+
+  auto t_start = std::chrono::high_resolution_clock::now();
+
+  std::vector<ThermalInterval> raw;
+  raw.reserve(256);
+
+  const int nlocal = app->nlocal;
+  for (int i = 0; i < nlocal; i++) {
+    const ElementCache& cache = site_element_cache[i];
+    if (!cache.valid) continue;
+
+    const unsigned n0 = cache.nodeIndices[0];
+    const unsigned n1 = cache.nodeIndices[1];
+    const unsigned n2 = cache.nodeIndices[2];
+    const unsigned n3 = cache.nodeIndices[3];
+    const unsigned c0 = dataCounts[n0];
+    const unsigned c1 = dataCounts[n1];
+    const unsigned c2 = dataCounts[n2];
+    const unsigned c3 = dataCounts[n3];
+    if (c0 == 0 || c1 == 0 || c2 == 0 || c3 == 0) continue;
+
+    const auto t0 = times.row_iterator(n0);
+    const auto t1 = times.row_iterator(n1);
+    const auto t2 = times.row_iterator(n2);
+    const auto t3 = times.row_iterator(n3);
+    const auto T0 = temperatures.row_iterator(n0);
+    const auto T1 = temperatures.row_iterator(n1);
+    const auto T2 = temperatures.row_iterator(n2);
+    const auto T3 = temperatures.row_iterator(n3);
+
+    const double ww1 = cache.weights[0];
+    const double ww2 = cache.weights[1];
+    const double ww3 = cache.weights[2];
+    const double ww0 = 1.0 - ww1 - ww2 - ww3;
+
+    // The cached barycentric formula used by get_temperature_at_site_fast()
+    // is T_site = T0 + w1*(T1-T0) + w2*(T2-T0) + w3*(T3-T0).  Expanded:
+    //   T_site = (1 - w1 - w2 - w3)*T0 + w1*T1 + w2*T2 + w3*T3
+    //          = ww0*T0 + ww1*T1 + ww2*T2 + ww3*T3
+    // so the weights are a partition of unity and T_site is piecewise
+    // linear between the union of the four nodes' sample times.
+
+    // Per-node cursors: cursor points at the NEXT sample whose time is
+    // strictly greater than the current critical time.  Between calls we
+    // maintain T_j(t_crit) via linear interpolation at the last critical
+    // time.
+    unsigned i0 = 1, i1 = 1, i2 = 1, i3 = 1;
+
+    // Start at the max of the four nodes' first sample times so every
+    // node has data at t_crit; stop at the min of the four nodes' last
+    // sample times for the same reason.
+    double t_crit = std::max({t0[0], t1[0], t2[0], t3[0]});
+    const double t_end = std::min({t0[c0 - 1], t1[c1 - 1],
+                                   t2[c2 - 1], t3[c3 - 1]});
+    if (t_end <= t_crit) continue;
+
+    auto advance_cursor = [](unsigned& idx, unsigned count, auto ti, double t) {
+      while (idx < count - 1 && ti[idx] <= t) ++idx;
+    };
+    advance_cursor(i0, c0, t0, t_crit);
+    advance_cursor(i1, c1, t1, t_crit);
+    advance_cursor(i2, c2, t2, t_crit);
+    advance_cursor(i3, c3, t3, t_crit);
+
+    auto interp = [](auto ti, auto Ti, unsigned idx, double t) -> double {
+      // idx is such that ti[idx-1] <= t <= ti[idx]
+      const double t_lo = ti[idx - 1];
+      const double t_hi = ti[idx];
+      const double frac = (t - t_lo) / (t_hi - t_lo);
+      return Ti[idx - 1] + frac * (Ti[idx] - Ti[idx - 1]);
+    };
+
+    double T_prev = ww0 * interp(t0, T0, i0, t_crit)
+                  + ww1 * interp(t1, T1, i1, t_crit)
+                  + ww2 * interp(t2, T2, i2, t_crit)
+                  + ww3 * interp(t3, T3, i3, t_crit);
+    double t_prev = t_crit;
+    bool in_hot = (T_prev > threshold);
+    double hot_start = in_hot ? t_prev : 0.0;
+
+    while (t_crit < t_end) {
+      // Next critical time = smallest of the four nodes' next sample times.
+      double t_next = t_end;
+      if (i0 < c0 && t0[i0] < t_next) t_next = t0[i0];
+      if (i1 < c1 && t1[i1] < t_next) t_next = t1[i1];
+      if (i2 < c2 && t2[i2] < t_next) t_next = t2[i2];
+      if (i3 < c3 && t3[i3] < t_next) t_next = t3[i3];
+
+      const double T_cur = ww0 * interp(t0, T0, i0, t_next)
+                         + ww1 * interp(t1, T1, i1, t_next)
+                         + ww2 * interp(t2, T2, i2, t_next)
+                         + ww3 * interp(t3, T3, i3, t_next);
+
+      const bool cur_hot = (T_cur > threshold);
+      if (!in_hot && cur_hot) {
+        // Threshold crossing in [t_prev, t_next]; solve for exact crossing.
+        const double denom = T_cur - T_prev;
+        const double alpha = (threshold - T_prev) / denom;
+        hot_start = t_prev + alpha * (t_next - t_prev);
+        in_hot = true;
+      } else if (in_hot && !cur_hot) {
+        const double denom = T_cur - T_prev;
+        const double alpha = (threshold - T_prev) / denom;
+        const double hot_end = t_prev + alpha * (t_next - t_prev);
+        raw.emplace_back(hot_start, hot_end);
+        in_hot = false;
+      }
+
+      // Advance cursors whose sample time equals t_next.
+      if (i0 < c0 && t0[i0] == t_next) ++i0;
+      if (i1 < c1 && t1[i1] == t_next) ++i1;
+      if (i2 < c2 && t2[i2] == t_next) ++i2;
+      if (i3 < c3 && t3[i3] == t_next) ++i3;
+      t_prev = t_next;
+      T_prev = T_cur;
+      t_crit = t_next;
+    }
+
+    if (in_hot) {
+      raw.emplace_back(hot_start, t_end);
+    }
+  }
+
+  current_layer_site_intervals = merge_overlapping_intervals(raw);
+  site_intervals_for_layer = active_layer;
+
+  auto t_end = std::chrono::high_resolution_clock::now();
+  double elapsed = std::chrono::duration<double>(t_end - t_start).count();
+
+  if (universe->me == 0) {
+    fprintf(screen, "  Layer %u: Found %zu site-level thermal intervals "
+            "(vs %zu node-level, %zu raw sites) in %.3f s\n",
+            active_layer,
+            current_layer_site_intervals.size(),
+            active_layer < layer_thermal_intervals.size()
+              ? layer_thermal_intervals[active_layer].size() : 0,
+            raw.size(),
+            elapsed);
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+
+std::vector<HDF5UnstructuredTemperatureSource::ThermalInterval>
 HDF5UnstructuredTemperatureSource::merge_overlapping_intervals(const std::vector<ThermalInterval>& intervals) const
 {
   if (intervals.empty()) return {};

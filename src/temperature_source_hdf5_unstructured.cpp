@@ -58,7 +58,13 @@ HDF5UnstructuredTemperatureSource::HDF5UnstructuredTemperatureSource(SPPARKS *sp
   site_intervals_for_layer(std::numeric_limits<unsigned>::max()),
   grid_cell_size_multiplier(100.0),
   use_spatial_grid(true),
-  use_element_cache(true)
+  use_element_cache(true),
+  nodal_smooth_enabled(false),
+  nodal_sigma_xy(4.0),
+  nodal_sigma_z(0.3),
+  nodal_passes(1),
+  nodal_alpha(0.5),
+  nodal_adjacency_valid(false)
 {
   source_initialized = false;
 #ifdef H5_HAVE_PARALLEL
@@ -518,6 +524,16 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
     if (universe->me == 0) {
       fprintf(screen, "  Spatial grid: DISABLED\n");
     }
+  }
+
+  // Build node-graph adjacency for mesh-Laplacian smoothing (optional).
+  // Must run AFTER elemNode + nodeCoords + dataCounts are populated for the
+  // new layer and BEFORE any precompute_nodal_temperatures call uses the
+  // result. Rebuilt on every layer load when enabled.
+  if (nodal_smooth_enabled) {
+    build_nodal_adjacency_weighted();
+  } else {
+    nodal_adjacency_valid = false;
   }
 
   // Compute thermal intervals for efficient time queries
@@ -1190,6 +1206,15 @@ void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
   }
   active_node_indices.assign(unique_nodes.begin(), unique_nodes.end());
 
+  // Build BFS-expanded node sets used to keep the per-step interpolation
+  // and smoothing tight. Requires adjacency; safe to skip otherwise.
+  if (nodal_smooth_enabled && nodal_adjacency_valid) {
+    build_smooth_node_sets();
+  } else {
+    smooth_interp_indices.clear();
+    smooth_update_indices.clear();
+  }
+
   cache_valid = true;
 
   auto end_time = std::chrono::high_resolution_clock::now();
@@ -1240,16 +1265,20 @@ void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double tim
 
   size_t nodes_interpolated = 0;
 
-  // Only process nodes that are actually used by cached sites
-  // This provides major speedup when only a fraction of loaded nodes are needed
-  const std::vector<unsigned>& nodes_to_process =
-      active_node_indices.empty() ? std::vector<unsigned>() : active_node_indices;
-
-  // If no active nodes collected (cache not built), fall back to all nodes
-  const size_t num_to_process = nodes_to_process.empty() ? num_nodes : nodes_to_process.size();
+  // Pick the tightest interpolation set that still satisfies downstream reads:
+  //   • smoothing on + BFS sets built → (K+1)-hop expansion of active set
+  //   • smoothing off                → active set (tet nodes of cached sites)
+  //   • otherwise (cache not yet built) → all loaded nodes
+  const std::vector<unsigned>* subset = nullptr;
+  if (nodal_smooth_enabled && !smooth_interp_indices.empty()) {
+    subset = &smooth_interp_indices;
+  } else if (!nodal_smooth_enabled && !active_node_indices.empty()) {
+    subset = &active_node_indices;
+  }
+  const size_t num_to_process = subset ? subset->size() : num_nodes;
 
   for (size_t i = 0; i < num_to_process; i++) {
-    const size_t nodeIdx = nodes_to_process.empty() ? i : nodes_to_process[i];
+    const size_t nodeIdx = subset ? (*subset)[i] : i;
     const unsigned count = dataCounts[nodeIdx];
     const auto timeIter = times.row_iterator(nodeIdx);
     const auto tempIter = temperatures.row_iterator(nodeIdx);
@@ -1298,8 +1327,308 @@ void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double tim
             100.0*total_nodes_interpolated/total_nodes_processed);
   }
 
+  // Apply mesh-Laplacian smoothing on the FEA node graph before any
+  // barycentric query sees the result. Adjacency was built in load_layer.
+  if (nodal_smooth_enabled) smooth_nodal_temps();
+
   cached_nodal_time = time;
   nodal_cache_valid = true;
+}
+
+/* ----------------------------------------------------------------------
+   Enable anisotropic mesh-Laplacian smoothing. Stores params and clears
+   the adjacency-valid flag so the CSR is rebuilt on the next load_layer.
+   If a layer is already loaded, build the adjacency immediately so the
+   very next precompute_nodal_temperatures call finds it ready.
+------------------------------------------------------------------------- */
+
+void HDF5UnstructuredTemperatureSource::enable_nodal_smoothing(
+    double sigma_xy, double sigma_z, int passes, double alpha)
+{
+  nodal_sigma_xy = sigma_xy;
+  nodal_sigma_z  = sigma_z;
+  nodal_passes   = passes;
+  nodal_alpha    = alpha;
+  nodal_smooth_enabled = true;
+  nodal_adjacency_valid = false;
+  smooth_interp_indices.clear();
+  smooth_update_indices.clear();
+
+  // Nodal smoothing is rank-local and relies on the chunk-load pad for
+  // interior-accurate values near subdomain boundaries. Each pass widens
+  // the effective support by one tet-edge; the pad gives ~one tet hop of
+  // halo, so at passes>=4 boundary nodes near the subdomain seam start
+  // seeing staler values. Warn the user to bump grid_cell_size_multiplier
+  // or implement node-halo exchange in that regime.
+  if (passes >= 4 && universe->me == 0) {
+    fprintf(screen,
+      "WARNING: nodal_smooth passes=%d exceeds the one-hop halo implied by "
+      "the default chunk-load pad; near-subdomain-boundary nodes may see "
+      "stale neighbors. Bump grid_cell_size_multiplier or keep passes <= 3 "
+      "for accurate boundary behavior.\n", passes);
+  }
+
+  // If elemNode / nodeCoords are already populated from a prior load_layer,
+  // build adjacency now so the caller doesn't need to reload the layer.
+  if (!dataCounts.empty()) {
+    build_nodal_adjacency_weighted();
+    // If the site cache is already built, we can also compute the BFS
+    // expansions right away. Otherwise they'll be built lazily in
+    // build_site_element_cache on the next prepare_for_timestep.
+    if (cache_valid) build_smooth_node_sets();
+  }
+}
+
+/* ----------------------------------------------------------------------
+   Build symmetric edge-weighted CSR node adjacency from the loaded tet
+   connectivity (elemNode) and node coordinates. Weight per edge:
+
+     w(i,j) = exp( -( (Δx² + Δy²)/(2 σ_xy²)  +  Δz²/(2 σ_z²) ) )
+
+   where Δ is the edge vector expressed in lattice units (physical / dx).
+   Duplicate edges arising from tets sharing a face have their weights
+   summed, matching build_node_adjacency_aniso in the Python prototype.
+------------------------------------------------------------------------- */
+
+void HDF5UnstructuredTemperatureSource::build_nodal_adjacency_weighted()
+{
+  auto t_start = std::chrono::high_resolution_clock::now();
+
+  const unsigned n_nodes = static_cast<unsigned>(dataCounts.size());
+  const unsigned n_elems = elem_offsets.empty() ? 0u : elem_offsets.back();
+
+  nbr_offsets.assign(n_nodes + 1, 0u);
+  nbr_indices.clear();
+  nbr_weights.clear();
+  nodal_adjacency_valid = false;
+
+  if (n_nodes == 0 || n_elems == 0) {
+    nodal_adjacency_valid = true;
+    return;
+  }
+
+  const double two_sxy2 = 2.0 * nodal_sigma_xy * nodal_sigma_xy;
+  const double two_sz2  = 2.0 * nodal_sigma_z  * nodal_sigma_z;
+  const double inv_dx   = 1.0 / dx;
+
+  // Collect undirected edges (a < b) with weights. Each tet contributes
+  // 6 edges; an interior face-shared edge will appear once per incident
+  // tet and the weights will be summed via sort+merge below.
+  std::vector<std::tuple<unsigned, unsigned, double>> edges;
+  edges.reserve(static_cast<size_t>(n_elems) * 6);
+
+  static constexpr int PAIRS[6][2] = {
+      {0,1},{0,2},{0,3},{1,2},{1,3},{2,3}};
+
+  for (unsigned e = 0; e < n_elems; e++) {
+    unsigned n[4];
+    for (int k = 0; k < 4; k++) n[k] = elemNode(e, k);
+
+    for (int p = 0; p < 6; p++) {
+      unsigned a = n[PAIRS[p][0]];
+      unsigned b = n[PAIRS[p][1]];
+      if (a == b) continue;
+      unsigned i = std::min(a, b);
+      unsigned j = std::max(a, b);
+
+      const double dxe = (nodeCoords(j, 0) - nodeCoords(i, 0)) * inv_dx;
+      const double dye = (nodeCoords(j, 1) - nodeCoords(i, 1)) * inv_dx;
+      const double dze = (nodeCoords(j, 2) - nodeCoords(i, 2)) * inv_dx;
+      const double expo = (dxe*dxe + dye*dye) / two_sxy2 + dze*dze / two_sz2;
+      edges.emplace_back(i, j, std::exp(-expo));
+    }
+  }
+
+  std::sort(edges.begin(), edges.end(),
+    [](const std::tuple<unsigned,unsigned,double>& a,
+       const std::tuple<unsigned,unsigned,double>& b) {
+      if (std::get<0>(a) != std::get<0>(b)) return std::get<0>(a) < std::get<0>(b);
+      return std::get<1>(a) < std::get<1>(b);
+    });
+
+  // Merge duplicate edges by summing weights.
+  size_t merged = 0;
+  for (size_t k = 0; k < edges.size(); ) {
+    size_t kk = k + 1;
+    double wsum = std::get<2>(edges[k]);
+    while (kk < edges.size() &&
+           std::get<0>(edges[kk]) == std::get<0>(edges[k]) &&
+           std::get<1>(edges[kk]) == std::get<1>(edges[k])) {
+      wsum += std::get<2>(edges[kk]);
+      ++kk;
+    }
+    edges[merged] = std::make_tuple(std::get<0>(edges[k]),
+                                    std::get<1>(edges[k]),
+                                    wsum);
+    ++merged;
+    k = kk;
+  }
+  edges.resize(merged);
+
+  // Count degree per node (undirected → add to both endpoints).
+  for (const auto& t : edges) {
+    ++nbr_offsets[std::get<0>(t) + 1];
+    ++nbr_offsets[std::get<1>(t) + 1];
+  }
+  for (unsigned i = 0; i < n_nodes; i++) nbr_offsets[i + 1] += nbr_offsets[i];
+
+  const size_t total_dir = nbr_offsets[n_nodes];
+  nbr_indices.resize(total_dir);
+  nbr_weights.resize(total_dir);
+
+  std::vector<unsigned> cursor(n_nodes, 0u);
+  for (const auto& t : edges) {
+    unsigned i = std::get<0>(t);
+    unsigned j = std::get<1>(t);
+    double   w = std::get<2>(t);
+    size_t pi = nbr_offsets[i] + cursor[i]++;
+    size_t pj = nbr_offsets[j] + cursor[j]++;
+    nbr_indices[pi] = j; nbr_weights[pi] = w;
+    nbr_indices[pj] = i; nbr_weights[pj] = w;
+  }
+
+  nodal_smooth_buffer.assign(n_nodes, 0.0);
+  nodal_adjacency_valid = true;
+
+  auto t_end = std::chrono::high_resolution_clock::now();
+  if (universe->me == 0) {
+    double elapsed = std::chrono::duration<double>(t_end - t_start).count();
+    size_t edge_bytes = nbr_indices.size() * (sizeof(unsigned) + sizeof(double))
+                      + nbr_offsets.size() * sizeof(unsigned);
+    fprintf(screen,
+      "  Nodal adjacency: %u nodes, %zu directed edges, avg deg %.1f "
+      "(%.1f MB, built in %.3f s)\n",
+      n_nodes, total_dir,
+      n_nodes ? static_cast<double>(total_dir) / n_nodes : 0.0,
+      edge_bytes / (1024.0 * 1024.0), elapsed);
+  }
+}
+
+/* ----------------------------------------------------------------------
+   Build (K+1)-hop and K-hop BFS expansions of active_node_indices over
+   the node adjacency. The K+1 set is the read domain during smoothing;
+   the K set is the write domain. Reads at any update node go one hop
+   outside the update set, which always lands inside the interp set so
+   every read is a freshly-interpolated value.
+------------------------------------------------------------------------- */
+
+void HDF5UnstructuredTemperatureSource::build_smooth_node_sets() const
+{
+  smooth_interp_indices.clear();
+  smooth_update_indices.clear();
+
+  if (!nodal_smooth_enabled || !nodal_adjacency_valid) return;
+  if (active_node_indices.empty()) return;
+  if (nodal_passes <= 0) return;
+
+  auto t_start = std::chrono::high_resolution_clock::now();
+
+  const unsigned n_nodes = static_cast<unsigned>(dataCounts.size());
+  constexpr uint8_t UNSEEN = 255;
+  std::vector<uint8_t> depth(n_nodes, UNSEEN);
+
+  std::vector<unsigned> frontier;
+  frontier.reserve(active_node_indices.size());
+  for (unsigned v : active_node_indices) {
+    if (v < n_nodes && depth[v] == UNSEEN) {
+      depth[v] = 0;
+      frontier.push_back(v);
+    }
+  }
+
+  const int max_depth = nodal_passes + 1;   // read ring
+  std::vector<unsigned> next;
+  next.reserve(frontier.size());
+  for (int d = 1; d <= max_depth; d++) {
+    next.clear();
+    const uint8_t dd = static_cast<uint8_t>(d);
+    for (unsigned u : frontier) {
+      const unsigned beg = nbr_offsets[u];
+      const unsigned end = nbr_offsets[u + 1];
+      for (unsigned k = beg; k < end; k++) {
+        const unsigned v = nbr_indices[k];
+        if (depth[v] == UNSEEN) {
+          depth[v] = dd;
+          next.push_back(v);
+        }
+      }
+    }
+    frontier.swap(next);
+    if (frontier.empty()) break;
+  }
+
+  const uint8_t update_max = static_cast<uint8_t>(nodal_passes);
+  for (unsigned i = 0; i < n_nodes; i++) {
+    if (depth[i] == UNSEEN) continue;
+    smooth_interp_indices.push_back(i);
+    if (depth[i] <= update_max) smooth_update_indices.push_back(i);
+  }
+
+  auto t_end = std::chrono::high_resolution_clock::now();
+  if (universe->me == 0) {
+    double elapsed = std::chrono::duration<double>(t_end - t_start).count();
+    fprintf(screen,
+      "  Nodal BFS expansion: active=%zu, update(K=%d)=%zu, "
+      "interp(K+1=%d)=%zu / %u loaded (%.1f%%); built in %.3f s\n",
+      active_node_indices.size(),
+      nodal_passes, smooth_update_indices.size(),
+      max_depth, smooth_interp_indices.size(),
+      n_nodes,
+      n_nodes ? 100.0 * smooth_interp_indices.size() / n_nodes : 0.0,
+      elapsed);
+  }
+}
+
+/* ----------------------------------------------------------------------
+   K-pass anisotropic Laplacian smoothing on cached_nodal_temps.
+
+     T_new[i] = (1 - alpha) T_old[i]
+              + alpha * (T_old[i] + Σ_j w_ij T_old[j]) / (1 + Σ_j w_ij)
+
+   Double-buffered: writes into nodal_smooth_buffer, then swaps. Rank-local;
+   relies on the grid_cell_size_multiplier pad in load_layer for interior-
+   accurate values at subdomain boundaries (adequate for passes <= 3).
+
+   When smooth_update_indices is populated, the pass only writes entries in
+   the K-hop set and starts by copying cached_nodal_temps so that non-updated
+   entries carry forward unchanged across the swap. Reads at update nodes
+   reach the (K+1)-hop interp set, which was interpolated this step.
+------------------------------------------------------------------------- */
+
+void HDF5UnstructuredTemperatureSource::smooth_nodal_temps() const
+{
+  if (!nodal_adjacency_valid) return;
+  if (nodal_passes <= 0) return;
+
+  const size_t n_nodes = cached_nodal_temps.size();
+  if (n_nodes == 0) return;
+  // Nothing to smooth if no node has been claimed as "active" on this rank
+  // (e.g. a rank whose local sites all fell outside the thermal mesh). The
+  // smoothed values would never be read back through the site cache anyway.
+  if (smooth_update_indices.empty()) return;
+  if (nodal_smooth_buffer.size() != n_nodes) nodal_smooth_buffer.assign(n_nodes, 0.0);
+
+  const double alpha  = nodal_alpha;
+  const double one_ma = 1.0 - alpha;
+
+  for (int pass = 0; pass < nodal_passes; pass++) {
+    // Propagate non-updated entries forward unchanged through the swap.
+    nodal_smooth_buffer = cached_nodal_temps;
+    for (unsigned i : smooth_update_indices) {
+      const unsigned beg = nbr_offsets[i];
+      const unsigned end = nbr_offsets[i + 1];
+      double wsum = 1.0;
+      double tsum = cached_nodal_temps[i];
+      for (unsigned k = beg; k < end; k++) {
+        const double w = nbr_weights[k];
+        tsum += w * cached_nodal_temps[nbr_indices[k]];
+        wsum += w;
+      }
+      nodal_smooth_buffer[i] = one_ma * cached_nodal_temps[i]
+                             + alpha  * (tsum / wsum);
+    }
+    cached_nodal_temps.swap(nodal_smooth_buffer);
+  }
 }
 
 /* ---------------------------------------------------------------------- */

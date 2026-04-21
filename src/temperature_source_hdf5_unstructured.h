@@ -162,6 +162,12 @@ public:
   // Site-based temperature access optimized for lattice
   virtual double get_temperature_at_site(int site_index, double time) override;
 
+  // Enable anisotropic mesh-Laplacian smoothing of the per-node temperature
+  // field. Parameters are stored and the edge-weighted node adjacency is
+  // (re)built on the next load_layer call.
+  virtual void enable_nodal_smoothing(double sigma_xy, double sigma_z,
+                                      int passes, double alpha) override;
+
   // High-performance batch temperature access:
   // 1. Call prepare_for_timestep() once at start of timestep
   // 2. Call get_temperature_at_site_fast() for each site (no redundant checks)
@@ -357,6 +363,48 @@ private:
 
   // Precompute interpolated temperatures at all loaded nodes for given time
   void precompute_nodal_temperatures(double time) const;
+
+  // ---- Nodal mesh-Laplacian smoothing (optional) ------------------------
+  // When enabled, an anisotropic-weighted node adjacency (CSR) is built
+  // once per layer load from the tet connectivity. After per-timestep node
+  // interpolation, K passes of alpha-blended weighted averaging are applied
+  // to cached_nodal_temps in place before any barycentric query reads it.
+  bool   nodal_smooth_enabled;
+  double nodal_sigma_xy;   // lattice units
+  double nodal_sigma_z;    // lattice units
+  int    nodal_passes;
+  double nodal_alpha;
+  bool   nodal_adjacency_valid;   // matches the currently loaded layer
+
+  // CSR-style edge-weighted adjacency over loaded nodes.
+  // Each undirected edge is stored once per endpoint (symmetric representation).
+  std::vector<unsigned> nbr_offsets;   // size = n_loaded_nodes + 1
+  std::vector<unsigned> nbr_indices;   // size = total directed edges
+  std::vector<double>   nbr_weights;   // parallel to nbr_indices
+
+  // Scratch buffer for double-buffered smoothing passes.
+  mutable std::vector<double> nodal_smooth_buffer;
+
+  // Node-set expansions used to keep the per-step interpolation tight when
+  // nodal smoothing is enabled. Built in build_site_element_cache after
+  // active_node_indices is known.
+  //   smooth_interp_indices = (K+1)-hop BFS from active → read set
+  //   smooth_update_indices = K-hop BFS from active     → write set
+  // Reads during smoothing go one hop outside the update set; that lands
+  // inside the interp set, so every read is a freshly-interpolated value.
+  mutable std::vector<unsigned> smooth_interp_indices;
+  mutable std::vector<unsigned> smooth_update_indices;
+
+  // Build edge-weighted adjacency CSR from the current elemNode + nodeCoords.
+  // Weights are anisotropic Gaussians in lattice units (divided by dx).
+  void build_nodal_adjacency_weighted();
+
+  // Build the K-hop and (K+1)-hop BFS expansions of active_node_indices.
+  // Requires that active_node_indices and the nodal adjacency are current.
+  void build_smooth_node_sets() const;
+
+  // Apply K passes of alpha-blended weighted averaging to cached_nodal_temps.
+  void smooth_nodal_temps() const;
 };
 
 }

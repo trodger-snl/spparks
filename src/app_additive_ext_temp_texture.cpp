@@ -200,7 +200,8 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     smooth_tmin  = 0.0;
     smooth_tmax  = 0.0;
     smooth_guard = 20.0;
-    smooth_sigma = 1.2;
+    smooth_sigma_xy = 1.2;
+    smooth_sigma_z  = 1.2;
     smooth_alpha = 0.4;
     smooth_passes = 1;
     smooth_diag_interval = 0;
@@ -487,27 +488,32 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
   }
 
   else if (strcmp(command,"temperature_smooth") == 0) {
-    // Usage: temperature_smooth <tmin> <tmax> [sigma] [alpha] [guard] [passes] [diag_interval]
+    // Usage: temperature_smooth <tmin> <tmax> <sigma_xy> <sigma_z>
+    //                           [alpha] [guard] [passes] [diag_interval]
     //   tmin,tmax:     window inside which smoothing is at full strength (K)
-    //   sigma:         Gaussian width in lattice sites (default 1.2)
+    //   sigma_xy:      Gaussian width in x,y (lattice sites)
+    //   sigma_z:       Gaussian width in z   (lattice sites)
     //   alpha:         blend factor, 0=off, 1=replace (default 0.4)
     //   guard:         half-width of taper band outside [tmin,tmax] (default 20 K)
     //   passes:        number of sequential smoothing passes (default 1)
     //   diag_interval: report isotherm compactness (P/sqrt(A) at T>=liquidus)
     //                  every N steps; 0 disables (default 0)
-    if (narg < 2 || narg > 7)
+    if (narg < 4 || narg > 8)
       error->all(FLERR,"Illegal temperature_smooth command");
-    smooth_tmin = atof(arg[0]);
-    smooth_tmax = atof(arg[1]);
-    if (narg >= 3) smooth_sigma  = atof(arg[2]);
-    if (narg >= 4) smooth_alpha  = atof(arg[3]);
-    if (narg >= 5) smooth_guard  = atof(arg[4]);
-    if (narg >= 6) smooth_passes = atoi(arg[5]);
-    if (narg >= 7) smooth_diag_interval = atoi(arg[6]);
+    smooth_tmin     = atof(arg[0]);
+    smooth_tmax     = atof(arg[1]);
+    smooth_sigma_xy = atof(arg[2]);
+    smooth_sigma_z  = atof(arg[3]);
+    if (narg >= 5) smooth_alpha         = atof(arg[4]);
+    if (narg >= 6) smooth_guard         = atof(arg[5]);
+    if (narg >= 7) smooth_passes        = atoi(arg[6]);
+    if (narg >= 8) smooth_diag_interval = atoi(arg[7]);
     if (smooth_tmax <= smooth_tmin)
       error->all(FLERR,"temperature_smooth: tmax must be > tmin");
-    if (smooth_sigma <= 0.0)
-      error->all(FLERR,"temperature_smooth: sigma must be > 0");
+    if (smooth_sigma_xy <= 0.0)
+      error->all(FLERR,"temperature_smooth: sigma_xy must be > 0");
+    if (smooth_sigma_z <= 0.0)
+      error->all(FLERR,"temperature_smooth: sigma_z must be > 0");
     if (smooth_alpha < 0.0 || smooth_alpha > 1.0)
       error->all(FLERR,"temperature_smooth: alpha must be in [0,1]");
     if (smooth_guard < 0.0)
@@ -520,9 +526,39 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
     if (domain->me == 0)
       fprintf(screen,
         "Temperature smoothing enabled: window=[%.1f,%.1f] K, "
-        "guard=%.1f K, sigma=%.2f sites, alpha=%.2f, passes=%d, diag_interval=%d\n",
+        "guard=%.1f K, sigma_xy=%.2f sigma_z=%.2f sites, "
+        "alpha=%.2f, passes=%d, diag_interval=%d\n",
         smooth_tmin, smooth_tmax, smooth_guard,
-        smooth_sigma, smooth_alpha, smooth_passes, smooth_diag_interval);
+        smooth_sigma_xy, smooth_sigma_z,
+        smooth_alpha, smooth_passes, smooth_diag_interval);
+  }
+
+  else if (strcmp(command,"nodal_smooth") == 0) {
+    // Usage: nodal_smooth <sigma_xy> <sigma_z> <passes> <alpha>
+    //   sigma_xy, sigma_z: Gaussian widths in lattice units (> 0)
+    //   passes:            number of mesh-Laplacian passes (>= 1)
+    //   alpha:             pass blend factor in [0,1]
+    // Forwards to the temperature source; sources that don't implement
+    // the hook silently ignore it (default base-class no-op).
+    if (narg != 4)
+      error->all(FLERR,"Illegal nodal_smooth command");
+    if (!temperature_source)
+      error->all(FLERR,"nodal_smooth requires setup_temperature_source first");
+    const double sxy = atof(arg[0]);
+    const double sz  = atof(arg[1]);
+    const int    K   = atoi(arg[2]);
+    const double al  = atof(arg[3]);
+    if (sxy <= 0.0) error->all(FLERR,"nodal_smooth: sigma_xy must be > 0");
+    if (sz  <= 0.0) error->all(FLERR,"nodal_smooth: sigma_z must be > 0");
+    if (K    < 1)   error->all(FLERR,"nodal_smooth: passes must be >= 1");
+    if (al < 0.0 || al > 1.0)
+      error->all(FLERR,"nodal_smooth: alpha must be in [0,1]");
+    temperature_source->enable_nodal_smoothing(sxy, sz, K, al);
+    if (domain->me == 0)
+      fprintf(screen,
+        "Nodal mesh-Laplacian smoothing enabled: "
+        "sigma_xy=%.3f sigma_z=%.3f passes=%d alpha=%.3f\n",
+        sxy, sz, K, al);
   }
 
   else if (strcmp(command,"single_voxel_cleanup") == 0) {
@@ -2817,7 +2853,8 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
 
 void AppAdditiveExtTempTexture::apply_temperature_smoothing()
 {
-  const double two_sigma2 = 2.0 * smooth_sigma * smooth_sigma;
+  const double two_sxy2 = 2.0 * smooth_sigma_xy * smooth_sigma_xy;
+  const double two_sz2  = 2.0 * smooth_sigma_z  * smooth_sigma_z;
   const double lo_outer = smooth_tmin - smooth_guard;
   const double hi_outer = smooth_tmax + smooth_guard;
   const double ramp_lo = (smooth_guard > 0.0) ? smooth_guard : 1.0;
@@ -2826,7 +2863,7 @@ void AppAdditiveExtTempTexture::apply_temperature_smoothing()
   if ((int)smooth_buffer.size() < nlocal) smooth_buffer.resize(nlocal);
 
   // Precompute Gaussian weights per 26-neighbor slot. On a uniform SC_26N
-  // lattice with constant sigma, the weight depends only on the neighbor
+  // lattice with constant sigmas, the weight depends only on the neighbor
   // slot (all interior sites share identical lattice offsets). Use any
   // site with a full 26-neighbor complement as reference; fall back to
   // per-pair exp() if none exists on this rank (pathological small domain).
@@ -2848,8 +2885,8 @@ void AppAdditiveExtTempTexture::apply_temperature_smoothing()
       const double dxn = xyz[nj][0] - xr;
       const double dyn = xyz[nj][1] - yr;
       const double dzn = xyz[nj][2] - zr;
-      const double r2 = dxn*dxn + dyn*dyn + dzn*dzn;
-      w_slot[j] = exp(-r2 / two_sigma2);
+      const double expo = (dxn*dxn + dyn*dyn) / two_sxy2 + dzn*dzn / two_sz2;
+      w_slot[j] = exp(-expo);
     }
     have_weight_lut = true;
   }
@@ -2895,8 +2932,8 @@ void AppAdditiveExtTempTexture::apply_temperature_smoothing()
           const double dxn = xyz[nj][0] - xi;
           const double dyn = xyz[nj][1] - yi;
           const double dzn = xyz[nj][2] - zi;
-          const double r2 = dxn*dxn + dyn*dyn + dzn*dzn;
-          const double w = exp(-r2 / two_sigma2);
+          const double expo = (dxn*dxn + dyn*dyn) / two_sxy2 + dzn*dzn / two_sz2;
+          const double w = exp(-expo);
           wsum += w;
           Tsum += w * Tj;
         }

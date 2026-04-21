@@ -212,7 +212,8 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   double smooth_tmin;        // lower edge of full-strength window (K)
   double smooth_tmax;        // upper edge of full-strength window (K)
   double smooth_guard;       // guard-band half-width (K); blend ramps to 0 here
-  double smooth_sigma;       // Gaussian width (lattice sites)
+  double smooth_sigma_xy;    // Gaussian width in x,y (lattice sites)
+  double smooth_sigma_z;     // Gaussian width in z (lattice sites)
   double smooth_alpha;       // blend factor (0=off, 1=replace with neighbor avg)
   int    smooth_passes;      // number of Gaussian passes per step
   int    smooth_diag_interval;  // report compactness every N steps; 0 disables

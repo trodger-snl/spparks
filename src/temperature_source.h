@@ -59,6 +59,14 @@ class TemperatureSource : protected Pointers {
   virtual bool supports_time_queries() const { return false; }
   virtual double get_next_time_with_temperature(double current_time, double threshold_temp) { return current_time; }
 
+  // Enable anisotropic Gaussian smoothing of nodal temperatures on the FEA
+  // mesh (K passes of edge-weighted Laplacian averaging) before any
+  // barycentric query reads the nodal values. sigma_xy / sigma_z are in
+  // lattice units; alpha is the pass blend factor. Default is a no-op;
+  // derived classes that operate on an explicit node mesh override.
+  virtual void enable_nodal_smoothing(double /*sigma_xy*/, double /*sigma_z*/,
+                                      int /*passes*/, double /*alpha*/) {}
+
   // Accessor for the source's notion of ambient/preheat temperature.
   // Set by setup_temperature_source() in derived classes (e.g. Rosenthal T0,
   // HDF5 default_temp). Used by driving apps to seed analytical evaluations

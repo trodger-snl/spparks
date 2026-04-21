@@ -88,7 +88,7 @@ nuclei_volume_deviation 1.5625e-17
 # args: <Q[W]> <lambda> <k[W/(mK)]> <alpha[m^2/s]> <T0[K]> <cp[J/(kgK)]>
 #       <sx[m]> <sy[m]> <sz[m]>
 # ---------------------------------------------------------------------
-setup_temperature_source moser 240.0 0.155 11.2 2.0959e-6 573.0 650.0 50e-6 50e-6 25e-6
+setup_temperature_source moser 340.0 0.155 11.2 2.0959e-6 573.0 650.0 50e-6 50e-6 75e-6
 
 # ---------------------------------------------------------------------
 # Stochastic ΔW/W, ΔD/D fluctuations on the Moser source.

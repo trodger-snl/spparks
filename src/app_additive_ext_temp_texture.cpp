@@ -205,8 +205,13 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     smooth_passes = 1;
     smooth_diag_interval = 0;
 
+    // Single-voxel grain cleanup is off until `single_voxel_cleanup on`
+    // is issued in the input script.
+    single_voxel_cleanup_enabled = false;
+    n_single_voxel_flips = 0;
+
     //add the double array
-    recreate_arrays();  
+    recreate_arrays();
 }
 
 /* ---------------------------------------------------------------------- */
@@ -520,6 +525,20 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
         smooth_sigma, smooth_alpha, smooth_passes, smooth_diag_interval);
   }
 
+  else if (strcmp(command,"single_voxel_cleanup") == 0) {
+    // Usage: single_voxel_cleanup on|off
+    // Post-smoothing pass that flips 1-voxel grains into the
+    // energy-minimizing neighboring grain. Default off.
+    if (narg != 1)
+      error->all(FLERR,"Illegal single_voxel_cleanup command");
+    if (strcmp(arg[0],"on") == 0) single_voxel_cleanup_enabled = true;
+    else if (strcmp(arg[0],"off") == 0) single_voxel_cleanup_enabled = false;
+    else error->all(FLERR,"single_voxel_cleanup: argument must be on or off");
+    if (domain->me == 0)
+      fprintf(screen,"Single-voxel grain cleanup %s\n",
+              single_voxel_cleanup_enabled ? "enabled" : "disabled");
+  }
+
   else error->all(FLERR,"Unrecognized command");
 }
 
@@ -538,6 +557,9 @@ void AppAdditiveExtTempTexture::app_update(double dt)
 
   //Reset t_active to assume we don't have a melt pool right now
   t_active = 0;
+
+  // Reset per-call single-voxel cleanup counter
+  n_single_voxel_flips = 0;
 
   // Update temperature first to get current temperatures
   if (use_temperature_source) {
@@ -693,6 +715,22 @@ void AppAdditiveExtTempTexture::app_update(double dt)
             smooth_site(i);
             solid_d[i]--;
     }
+    // Single-voxel grain cleanup (opt-in). Triggers exactly once per voxel
+    // after it exits the smoothing window. Covers both the epitaxial-end
+    // state (solid_d == -nrefine-1) and the nucleation-start state
+    // (solid_d == -nrefine-2). A resolved voxel is marked with
+    // solid_d = -nrefine-3 so the branch never re-fires.
+    else if (single_voxel_cleanup_enabled &&
+             active_flag[i] == 3 &&
+             solid_d[i] <= -nrefine - 1 &&
+             solid_d[i] >  -nrefine - 3) {
+            if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
+            if (in_mushy) { t_mushy_accum += MPI_Wtime() - t_mushy_start; in_mushy = false; }
+            if (in_smoothing) { t_smooth_accum += MPI_Wtime() - t_smooth_start; in_smoothing = false; }
+            if (flip_single_voxel_grain(i)) {
+                solid_d[i] = -nrefine - 3;
+            }
+    }
     else {
         // Non-transition site: flush any open timer
         if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
@@ -736,6 +774,18 @@ void AppAdditiveExtTempTexture::app_update(double dt)
   if (temperature_smooth_enabled && smooth_diag_interval > 0 &&
       step_count % smooth_diag_interval == 0) {
     compute_smoothing_diagnostics();
+  }
+
+  // Report single-voxel cleanup activity. Reduced across ranks so the
+  // log line reflects the global domain, not just rank 0.
+  if (single_voxel_cleanup_enabled) {
+    long long local_flips = n_single_voxel_flips;
+    long long global_flips = 0;
+    MPI_Allreduce(&local_flips, &global_flips, 1, MPI_LONG_LONG, MPI_SUM, world);
+    if (global_flips > 0 && domain->me == 0) {
+      fprintf(screen,"single_voxel_cleanup: flipped %lld voxels this step\n",
+              global_flips);
+    }
   }
 
   // Print timing summary every 100 steps (on rank 0 only)
@@ -1886,6 +1936,69 @@ double AppAdditiveExtTempTexture::site_energy_smooth(int i)
 }
 
 /* ----------------------------------------------------------------------
+   Post-smoothing single-voxel grain cleanup. Returns true iff the voxel
+   was resolved (flipped, or confirmed not a 1-voxel grain) this call;
+   returns false to request a deferral when the 26-neighbor first shell
+   is not yet fully solidified.
+
+   A grain in this app is 26-connected through the Potts energy
+   neighborhood, so a site with no same-spin 26-neighbor is by
+   definition a 1-voxel grain. If such a voxel is found, it is flipped
+   to the candidate spin that minimizes site_energy_smooth(i) (tie-break
+   by first-encountered neighbor order → deterministic under MPI). The
+   quaternion is updated via get_average_neighbor_quaternion() to adopt
+   the chosen grain's local orientation. The caller is responsible for
+   marking solid_d to suppress re-firing.
+------------------------------------------------------------------------- */
+bool AppAdditiveExtTempTexture::flip_single_voxel_grain(int i)
+{
+  int oldstate = spin[i];
+  int nunique = 0;
+  bool has_same_spin_neighbor = false;
+
+  for (int j = 0; j < numneigh[i]; j++) {
+    int nj = neighbor[i][j];
+    if (active_flag[nj] != 3) return false;  // defer: neighborhood immature
+    int s = spin[nj];
+    if (s == oldstate) {
+      has_same_spin_neighbor = true;
+      continue;
+    }
+    int m;
+    for (m = 0; m < nunique; m++) if (s == unique[m]) break;
+    if (m == nunique) unique[nunique++] = s;
+  }
+
+  // Fully mature neighborhood: decide.
+  if (has_same_spin_neighbor) return true;   // not a 1-voxel grain
+  if (nunique == 0)           return true;   // no solidified neighbors at all
+
+  // Energy-minimizing pick.
+  int best_spin = unique[0];
+  spin[i] = unique[0];
+  double best_energy = site_energy_smooth(i);
+  for (int k = 1; k < nunique; k++) {
+    spin[i] = unique[k];
+    double e = site_energy_smooth(i);
+    if (e < best_energy) {
+      best_energy = e;
+      best_spin = unique[k];
+    }
+  }
+  spin[i] = best_spin;
+
+  vector<double> q_new = get_average_neighbor_quaternion(i, best_spin);
+  q0[i] = q_new[0];
+  qx[i] = q_new[1];
+  qy[i] = q_new[2];
+  qz[i] = q_new[3];
+
+  n_single_voxel_flips++;
+  naccept++;
+  return true;
+}
+
+/* ----------------------------------------------------------------------
     The first version of this just initialized critical nucleation temperatures.
     This version will also initialize nucleii size (starting with a normal dist)
 ------------------------------------------------------------------------- */
@@ -2712,6 +2825,35 @@ void AppAdditiveExtTempTexture::apply_temperature_smoothing()
 
   if ((int)smooth_buffer.size() < nlocal) smooth_buffer.resize(nlocal);
 
+  // Precompute Gaussian weights per 26-neighbor slot. On a uniform SC_26N
+  // lattice with constant sigma, the weight depends only on the neighbor
+  // slot (all interior sites share identical lattice offsets). Use any
+  // site with a full 26-neighbor complement as reference; fall back to
+  // per-pair exp() if none exists on this rank (pathological small domain).
+  constexpr int MAX_NBR = 26;
+  double w_slot[MAX_NBR];
+  bool have_weight_lut = false;
+  for (int ref = 0; ref < nlocal && !have_weight_lut; ref++) {
+    if (numneigh[ref] < MAX_NBR) continue;
+    bool all_valid = true;
+    for (int j = 0; j < MAX_NBR; j++) {
+      if (neighbor[ref][j] < 0) { all_valid = false; break; }
+    }
+    if (!all_valid) continue;
+    const double xr = xyz[ref][0];
+    const double yr = xyz[ref][1];
+    const double zr = xyz[ref][2];
+    for (int j = 0; j < MAX_NBR; j++) {
+      const int nj = neighbor[ref][j];
+      const double dxn = xyz[nj][0] - xr;
+      const double dyn = xyz[nj][1] - yr;
+      const double dzn = xyz[nj][2] - zr;
+      const double r2 = dxn*dxn + dyn*dyn + dzn*dzn;
+      w_slot[j] = exp(-r2 / two_sigma2);
+    }
+    have_weight_lut = true;
+  }
+
   for (int pass = 0; pass < smooth_passes; pass++) {
     // Ghosts need current T before each pass.
     comm->all_selective(ghost_iindices, nghost_iarray,
@@ -2724,29 +2866,40 @@ void AppAdditiveExtTempTexture::apply_temperature_smoothing()
         continue;
       }
 
-      const double xi = xyz[i][0];
-      const double yi = xyz[i][1];
-      const double zi = xyz[i][2];
-
       double wsum = 1.0;   // self
       double Tsum = Ti;    // self-contribution
 
       const int nn = numneigh[i];
-      for (int j = 0; j < nn; j++) {
-        const int nj = neighbor[i][j];
-        if (nj < 0) continue;
-        const double Tj = T[nj];
-        // Skip neighbors whose T is outside the smoothing window; they
-        // are solid/ambient and would drag the in-band site's average
-        // sharply toward cold temperatures.
-        if (Tj < lo_outer || Tj > hi_outer) continue;
-        const double dxn = xyz[nj][0] - xi;
-        const double dyn = xyz[nj][1] - yi;
-        const double dzn = xyz[nj][2] - zi;
-        const double r2 = dxn*dxn + dyn*dyn + dzn*dzn;
-        const double w = exp(-r2 / two_sigma2);
-        wsum += w;
-        Tsum += w * Tj;
+      if (have_weight_lut) {
+        for (int j = 0; j < nn; j++) {
+          const int nj = neighbor[i][j];
+          if (nj < 0) continue;
+          const double Tj = T[nj];
+          // Skip neighbors whose T is outside the smoothing window; they
+          // are solid/ambient and would drag the in-band site's average
+          // sharply toward cold temperatures.
+          if (Tj < lo_outer || Tj > hi_outer) continue;
+          const double w = w_slot[j];
+          wsum += w;
+          Tsum += w * Tj;
+        }
+      } else {
+        const double xi = xyz[i][0];
+        const double yi = xyz[i][1];
+        const double zi = xyz[i][2];
+        for (int j = 0; j < nn; j++) {
+          const int nj = neighbor[i][j];
+          if (nj < 0) continue;
+          const double Tj = T[nj];
+          if (Tj < lo_outer || Tj > hi_outer) continue;
+          const double dxn = xyz[nj][0] - xi;
+          const double dyn = xyz[nj][1] - yi;
+          const double dzn = xyz[nj][2] - zi;
+          const double r2 = dxn*dxn + dyn*dyn + dzn*dzn;
+          const double w = exp(-r2 / two_sigma2);
+          wsum += w;
+          Tsum += w * Tj;
+        }
       }
       const double Tavg = Tsum / wsum;
 

@@ -66,6 +66,14 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   void smooth_site(int site);
   double site_energy_smooth(int site);
 
+  // Post-smoothing single-voxel grain cleanup. Fires at most once per
+  // voxel, when it exits the nrefine smoothing window and its full
+  // 26-neighbor first shell is solidified. Returns true if the voxel
+  // was resolved (either flipped or confirmed not a 1-voxel grain) and
+  // false if the check was deferred because the neighborhood was still
+  // maturing.
+  bool flip_single_voxel_grain(int site);
+
   // Gaussian smoothing of T[] inside a user-specified temperature window
   // (intended for the solidification band). Gated by active_flag so only
   // molten/solidifying sites participate. Requires ghost-comm of T; a
@@ -209,6 +217,14 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   int    smooth_passes;      // number of Gaussian passes per step
   int    smooth_diag_interval;  // report compactness every N steps; 0 disables
   std::vector<double> smooth_buffer;  // scratch for double-buffered pass
+
+  // Post-solidification single-voxel grain cleanup (opt-in via
+  // `single_voxel_cleanup`). When a voxel finishes the nrefine smoothing
+  // window and has no same-spin 26-connected neighbor, flip it to the
+  // energy-minimizing neighbor grain. solid_d == -nrefine-3 marks the
+  // cleanup as already resolved for a voxel so it is not reconsidered.
+  bool      single_voxel_cleanup_enabled;
+  long long n_single_voxel_flips;  // counter reset each app_update() call
 
 };
 

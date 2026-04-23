@@ -33,6 +33,10 @@ dump.*
 src/Makefile.package
 src/Makefile.package.settings
 
+# STITCH package installed copies (source lives in src/STITCH/)
+src/dump_stitch.cpp
+src/dump_stitch.h
+
 # Package file backups (created by Install.sh)
 *.backup
 *.backup2

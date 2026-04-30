@@ -39,27 +39,19 @@ MoserGreenTemperatureSource::MoserGreenTemperatureSource(SPPARKS *spk)
   : TemperatureSource(spk),
     Q(0.0), lambda(0.0), k_th(0.0), alpha(0.0), T0_default(300.0),
     cp(0.0), rho(0.0),
-    sx(0.0), sy(0.0), sz(0.0),
+    mode(Mode::STANDARD),
     char_length(0.5),
     scan_t_origin(0.0),
-    scan_x0(0.0), scan_y0(0.0), scan_x1(0.0), scan_y1(0.0), scan_zl(0.0),
+    scan_x0(0.0), scan_y0(0.0), scan_x1(0.0), scan_y1(0.0),
+    scan_laser_plane_z(0.0),
     scan_speed(0.0), scan_repeats(0),
     scan_built(false),
-    psd_spec_set(false),
-    psd_rng(12345),
-    psd_norm(0.0, 1.0),
-    ar_state_W(0.0), ar_state_D(0.0), ar_state_P(0.0),
-    voss_step(0),
-    osc_x_W(0.0), osc_v_W(0.0),
-    osc_x_D(0.0), osc_v_D(0.0),
-    osc_x_P(0.0), osc_v_P(0.0)
+    n_lobes_(1)
 {
+  // Lobe members are default-initialized via the Lobe struct's in-class
+  // member-initializers (sx=sy=sz=0, power_fraction=1, rng seeded,
+  // filter state zeroed, fluct_table empty).
   ambient_temperature = T0_default;
-  voss_W.fill(0.0);
-  voss_D.fill(0.0);
-  voss_P.fill(0.0);
-  psd_spec = PsdSpec{PsdShape::WHITE, 0.0, 0.0, 0.0, 0.0,
-                     12345UL, 5.0e-6, 0.0, 0.0, 0.0};
 }
 
 /* ---------------------------------------------------------------------- */
@@ -70,29 +62,45 @@ MoserGreenTemperatureSource::~MoserGreenTemperatureSource()
 }
 
 /* ----------------------------------------------------------------------
-   Setup. Expected form (SI units throughout):
+   Setup. Two forms are supported (SI units throughout):
 
-     setup_temperature_source moser <Q> <lambda> <k> <alpha> <T0> <cp>
-                                    <sx> <sy> <sz>
+     (1) STANDARD (single ellipsoid; legacy form, no mode token):
 
-   Q [W]            : total laser power
-   lambda [-]       : absorption efficiency (absorbed power = lambda * Q)
-   k [W/(m K)]      : thermal conductivity
-   alpha [m^2/s]    : thermal diffusivity = k/(rho cp)
-   T0 [K]           : ambient / preheat temperature
-   cp [J/(kg K)]    : specific heat capacity (used to recover rho)
-   sx [m]           : ellipsoid Gaussian width along scan direction
-   sy [m]           : ellipsoid Gaussian width perpendicular to scan
-   sz [m]           : ellipsoid Gaussian width in depth direction
+           setup_temperature_source moser <Q> <lambda> <k> <alpha> <T0>
+                                          <cp> <sx> <sy> <sz>
+
+         Equivalently, the explicit form:
+
+           setup_temperature_source moser standard <Q> <lambda> <k>
+                                          <alpha> <T0> <cp> <sx> <sy> <sz>
+
+     (2) KEYHOLE (overlapping double-ellipsoid, Goldak-style):
+
+           setup_temperature_source moser keyhole <Q> <lambda> <k>
+                                          <alpha> <T0> <cp>
+                                          <f_top> <sx_top> <sy_top>
+                                                  <sz_top> <z_top>
+                                          <f_bot> <sx_bot> <sy_bot>
+                                                  <sz_bot> <z_bot>
+
+         f_top and f_bot must sum to 1 (within 1e-6); each is the
+         fraction of the absorbed power lambda*Q assigned to that lobe.
+         z_top and z_bot are POSITIVE depths below the laser plane in
+         meters (matches the rosenthal-keyhole `d` convention). Typical
+         values: z_top = 0 (cap sits at the laser plane), z_bot ~
+         0.5–1.5 * sz_bot.
+
+   Common parameters (both forms):
+     Q [W]            : total laser power
+     lambda [-]       : absorption efficiency (absorbed power = lambda * Q)
+     k [W/(m K)]      : thermal conductivity
+     alpha [m^2/s]    : thermal diffusivity = k/(rho cp)
+     T0 [K]           : ambient / preheat temperature
+     cp [J/(kg K)]    : specific heat capacity (used to recover rho)
 ------------------------------------------------------------------------- */
 
 void MoserGreenTemperatureSource::setup_temperature_source(const std::vector<std::string> &args)
 {
-  if (args.size() < 9) {
-    error->all(FLERR,
-      "setup_temperature_source moser: expected <Q> <lambda> <k> <alpha> <T0> <cp> <sx> <sy> <sz>");
-  }
-
   auto parse = [&](size_t i) -> double {
     try { return std::stod(args[i]); }
     catch (const std::exception &) {
@@ -101,24 +109,93 @@ void MoserGreenTemperatureSource::setup_temperature_source(const std::vector<std
     }
   };
 
-  Q          = parse(0);
-  lambda     = parse(1);
-  k_th       = parse(2);
-  alpha      = parse(3);
-  T0_default = parse(4);
-  cp         = parse(5);
-  sx         = parse(6);
-  sy         = parse(7);
-  sz         = parse(8);
+  // Decide mode by looking at the first token.
+  size_t first_numeric = 0;
+  if (!args.empty() && args[0] == "standard") {
+    mode = Mode::STANDARD;
+    first_numeric = 1;
+  }
+  else if (!args.empty() && args[0] == "keyhole") {
+    mode = Mode::KEYHOLE;
+    first_numeric = 1;
+  }
+  else {
+    mode = Mode::STANDARD;
+    first_numeric = 0;
+  }
 
+  if (mode == Mode::STANDARD) {
+    if (args.size() - first_numeric < 9) {
+      error->all(FLERR,
+        "setup_temperature_source moser [standard]: expected <Q> <lambda> <k> <alpha> <T0> <cp> <sx> <sy> <sz>");
+    }
+    n_lobes_ = 1;
+
+    Q          = parse(first_numeric + 0);
+    lambda     = parse(first_numeric + 1);
+    k_th       = parse(first_numeric + 2);
+    alpha      = parse(first_numeric + 3);
+    T0_default = parse(first_numeric + 4);
+    cp         = parse(first_numeric + 5);
+    lobes_[0].sx = parse(first_numeric + 6);
+    lobes_[0].sy = parse(first_numeric + 7);
+    lobes_[0].sz = parse(first_numeric + 8);
+    lobes_[0].z_offset = 0.0;
+    lobes_[0].power_fraction = 1.0;
+  }
+  else {
+    // KEYHOLE: 6 common floats + 5 per lobe * 2 lobes = 16 floats
+    if (args.size() - first_numeric < 16) {
+      error->all(FLERR,
+        "setup_temperature_source moser keyhole: expected <Q> <lambda> <k> <alpha> <T0> <cp> "
+        "<f_top> <sx_top> <sy_top> <sz_top> <z_top> "
+        "<f_bot> <sx_bot> <sy_bot> <sz_bot> <z_bot>");
+    }
+    n_lobes_ = 2;
+
+    Q          = parse(first_numeric + 0);
+    lambda     = parse(first_numeric + 1);
+    k_th       = parse(first_numeric + 2);
+    alpha      = parse(first_numeric + 3);
+    T0_default = parse(first_numeric + 4);
+    cp         = parse(first_numeric + 5);
+
+    lobes_[0].power_fraction = parse(first_numeric + 6);
+    lobes_[0].sx             = parse(first_numeric + 7);
+    lobes_[0].sy             = parse(first_numeric + 8);
+    lobes_[0].sz             = parse(first_numeric + 9);
+    lobes_[0].z_offset       = parse(first_numeric + 10);
+
+    lobes_[1].power_fraction = parse(first_numeric + 11);
+    lobes_[1].sx             = parse(first_numeric + 12);
+    lobes_[1].sy             = parse(first_numeric + 13);
+    lobes_[1].sz             = parse(first_numeric + 14);
+    lobes_[1].z_offset       = parse(first_numeric + 15);
+  }
+
+  // Common-parameter validation
   if (Q     <= 0.0) error->all(FLERR,"moser: Q must be > 0");
   if (lambda <= 0.0) error->all(FLERR,"moser: lambda must be > 0");
   if (k_th  <= 0.0) error->all(FLERR,"moser: k must be > 0");
   if (alpha <= 0.0) error->all(FLERR,"moser: alpha must be > 0");
   if (cp    <= 0.0) error->all(FLERR,"moser: cp must be > 0");
-  if (sx    <= 0.0) error->all(FLERR,"moser: sx must be > 0");
-  if (sy    <= 0.0) error->all(FLERR,"moser: sy must be > 0");
-  if (sz    <= 0.0) error->all(FLERR,"moser: sz must be > 0");
+
+  // Per-lobe validation
+  for (int i = 0; i < n_lobes_; ++i) {
+    if (lobes_[i].sx <= 0.0) error->all(FLERR,"moser: sx must be > 0");
+    if (lobes_[i].sy <= 0.0) error->all(FLERR,"moser: sy must be > 0");
+    if (lobes_[i].sz <= 0.0) error->all(FLERR,"moser: sz must be > 0");
+    if (lobes_[i].z_offset < 0.0)
+      error->all(FLERR,"moser keyhole: z_top and z_bot must be >= 0 (positive depths below laser plane)");
+    if (lobes_[i].power_fraction < 0.0)
+      error->all(FLERR,"moser keyhole: f_top and f_bot must be >= 0");
+  }
+
+  if (mode == Mode::KEYHOLE) {
+    const double fsum = lobes_[0].power_fraction + lobes_[1].power_fraction;
+    if (std::fabs(fsum - 1.0) > 1.0e-6)
+      error->all(FLERR,"moser keyhole: f_top + f_bot must equal 1 (within 1e-6)");
+  }
 
   // rho derived from alpha = k/(rho cp); used only for diagnostics and
   // to populate the GREENAM ThermalProperties struct.
@@ -146,6 +223,11 @@ void MoserGreenTemperatureSource::setup_temperature_source(const std::vector<std
    sentinel is needed because GREENAM derives each segment's velocity
    from waypoint differences, so the array must contain nlines+1
    waypoints even though only nlines segments are stored.
+
+   In KEYHOLE mode the waypoint geometry is identical for both lobes;
+   only the per-lobe absorbed power (lambda*Q*f_lobe) and the LaserScan
+   zl (= laser_plane_z - z_offset) differ. Each lobe gets its own
+   GREENAM_Scan + GREENAM_Integ + (optional) FluctuationTable.
 ------------------------------------------------------------------------- */
 
 void MoserGreenTemperatureSource::build_scan(double start_time,
@@ -164,7 +246,7 @@ void MoserGreenTemperatureSource::build_scan(double start_time,
   scan_t_origin = start_time;
   scan_x0 = x0;  scan_y0 = y0;
   scan_x1 = x1;  scan_y1 = y1;
-  scan_zl = laser_plane_z;
+  scan_laser_plane_z = laser_plane_z;
   scan_speed = speed;
   scan_repeats = repeats;
 
@@ -182,38 +264,28 @@ void MoserGreenTemperatureSource::build_scan(double start_time,
   const int nlines    = n_active + n_transit;
   const int nwp       = nlines + 1;
 
+  // Build the path waypoints once; only the per-lobe `ps` array varies.
   sierra::greenam::VectorWrapper<double> ts("Time",  nwp);
   sierra::greenam::VectorWrapper<double> xs("XLaser", nwp);
   sierra::greenam::VectorWrapper<double> ys("YLaser", nwp);
-  sierra::greenam::VectorWrapper<double> ps("Power",  nwp);
 
   const double abs_power = lambda * Q;
   double t = start_time;
   int wp = 0;
 
   for (int r = 0; r < repeats; ++r) {
-    // active scan segment
     ts(wp) = t;
     xs(wp) = x0;
     ys(wp) = y0;
-    ps(wp) = abs_power;
     ++wp;
 
     t += dt_scan;
-    // transit segment (power 0). For the last repeat this is the
-    // "stop" sentinel that pegs the laser at (x1, y1) for the
-    // remainder of the simulation; the next waypoint extends it to a
-    // distant future time so the velocity calc stays finite.
     ts(wp) = t;
     xs(wp) = x1;
     ys(wp) = y1;
-    ps(wp) = 0.0;
     ++wp;
 
     if (r < repeats - 1) {
-      // Bring the laser back to (x0, y0) for the next repeat. The
-      // tiny eps_t keeps the velocity finite for the wraparound
-      // segment we just appended.
       t += eps_t;
     }
   }
@@ -223,12 +295,10 @@ void MoserGreenTemperatureSource::build_scan(double start_time,
   // this is in the 0-power "stop" segment that the integrator culls.
   const double t_end_active = t;
 
-  // Final velocity-calc sentinel waypoint, far in the future. Power
-  // unused (only the first nlines power values are stored).
+  // Final velocity-calc sentinel waypoint, far in the future.
   ts(wp) = t + 1.0e6;
   xs(wp) = x1;
   ys(wp) = y1;
-  ps(wp) = 0.0;
   ++wp;
 
   if (wp != nwp) {
@@ -238,40 +308,69 @@ void MoserGreenTemperatureSource::build_scan(double start_time,
   ts.commit();
   xs.commit();
   ys.commit();
-  ps.commit();
 
   sierra::greenam::ThermalProperties<double> th{k_th, rho, cp};
-  sierra::greenam::EllipsoidProperties<double> ep{sx, sy, sz};
 
-  try {
-    scan_ = std::make_shared<GREENAM_Scan>(th, ep, ts, xs, ys, ps, laser_plane_z);
-  } catch (const std::runtime_error &e) {
-    std::string msg = "moser build_scan: GREENAM LaserScan construction failed: ";
-    msg += e.what();
-    error->all(FLERR, msg.c_str());
+  // Build a per-lobe scan + integrator + (optional) fluctuation table.
+  for (int li = 0; li < n_lobes_; ++li) {
+    Lobe &L_ref = lobes_[li];
+
+    // Per-lobe waypoint power array (path geometry is shared, but power
+    // is scaled by f_lobe so each LaserScan is self-describing for
+    // total-absorbed-power audits).
+    sierra::greenam::VectorWrapper<double> ps("Power", nwp);
+    int wp2 = 0;
+    for (int r = 0; r < repeats; ++r) {
+      ps(wp2++) = abs_power * L_ref.power_fraction;   // active scan
+      ps(wp2++) = 0.0;                                 // transit/stop
+    }
+    ps(wp2++) = 0.0;                                   // sentinel
+    ps.commit();
+
+    sierra::greenam::EllipsoidProperties<double> ep{L_ref.sx, L_ref.sy, L_ref.sz};
+    const double zl_eff = laser_plane_z - L_ref.z_offset;
+
+    try {
+      L_ref.scan = std::make_shared<GREENAM_Scan>(th, ep, ts, xs, ys, ps, zl_eff);
+    } catch (const std::runtime_error &e) {
+      std::string msg = "moser build_scan: GREENAM LaserScan construction failed: ";
+      msg += e.what();
+      error->all(FLERR, msg.c_str());
+    }
+    L_ref.integrator = std::make_shared<GREENAM_Integ>(*L_ref.scan);
+
+    if (L_ref.psd_spec_set) {
+      populate_fluctuation_table(L_ref, start_time, t_end_active);
+      L_ref.scan->set_fluctuation_table(&L_ref.fluct_table);
+    }
   }
-  integrator_ = std::make_shared<GREENAM_Integ>(*scan_);
+
   scan_built = true;
 
   if (domain->me == 0) {
-    std::cout << "moser: built scan with " << repeats << " repeats, "
-              << "L=" << L*1e3 << " mm, dt_scan=" << dt_scan*1e3 << " ms, "
-              << "absorbed P=" << abs_power << " W" << std::endl;
-  }
-
-  // If a PSD spec was registered before laser_path, materialize the
-  // fluctuation table now and attach it to the scan. The table covers
-  // the active emission window [start_time, t_end_active]; the 0-power
-  // stop segments past t_end_active are culled by the integrator and
-  // never see the table.
-  if (psd_spec_set) {
-    populate_fluctuation_table(start_time, t_end_active);
-    scan_->set_fluctuation_table(&fluct_table_);
-    if (domain->me == 0) {
-      std::cout << "moser: attached fluctuation table with "
-                << fluct_table_.size() << " samples, "
-                << "t in [" << start_time << ", " << t_end_active
-                << "] s" << std::endl;
+    if (mode == Mode::KEYHOLE) {
+      std::cout << "moser keyhole: built " << n_lobes_ << " lobes, "
+                << repeats << " repeats, "
+                << "L=" << L*1e3 << " mm, dt_scan=" << dt_scan*1e3 << " ms, "
+                << "absorbed P_total=" << abs_power << " W ("
+                << "P_top=" << abs_power * lobes_[0].power_fraction
+                << ", P_bot=" << abs_power * lobes_[1].power_fraction
+                << ")" << std::endl;
+    } else {
+      std::cout << "moser: built scan with " << repeats << " repeats, "
+                << "L=" << L*1e3 << " mm, dt_scan=" << dt_scan*1e3 << " ms, "
+                << "absorbed P=" << abs_power << " W" << std::endl;
+    }
+    for (int li = 0; li < n_lobes_; ++li) {
+      if (lobes_[li].psd_spec_set) {
+        const char *tag = (mode == Mode::KEYHOLE)
+                          ? (li == LOBE_TOP ? "top" : "bot")
+                          : "";
+        std::cout << "moser: attached fluctuation table for lobe " << tag
+                  << " with " << lobes_[li].fluct_table.size() << " samples, "
+                  << "t in [" << start_time << ", " << t_end_active
+                  << "] s" << std::endl;
+      }
     }
   }
 }
@@ -279,22 +378,28 @@ void MoserGreenTemperatureSource::build_scan(double start_time,
 /* ----------------------------------------------------------------------
    Per-site temperature evaluation. Returns absolute temperature [K] at
    the world-space site location and absolute simulation time. Sites
-   above the laser plane (z > zl) are vacuum and stay at T0.
+   above the laser plane (z > scan_laser_plane_z) are vacuum and stay
+   at T0. The cutoff is the actual free surface, NOT any individual
+   lobe's effective zl: the bottom keyhole lobe is below the surface but
+   the surface itself is unchanged.
 ------------------------------------------------------------------------- */
 
 double MoserGreenTemperatureSource::get_temperature_at_xyz_and_time(double x, double y,
                                                                     double z, double time)
 {
   check_initialization();
-  if (!scan_built || !integrator_) return T0_default;
+  if (!scan_built) return T0_default;
 
-  // Half-space cutoff (matches the existing Rosenthal source).
-  if (z > scan_zl) return T0_default;
+  if (z > scan_laser_plane_z) return T0_default;
 
   const double t_local = time - scan_t_origin;
   if (t_local <= 0.0) return T0_default;
 
-  const double rise = integrator_->integrate_point_adaptive(x, y, z, t_local, char_length);
+  double rise = 0.0;
+  for (int li = 0; li < n_lobes_; ++li) {
+    if (!lobes_[li].integrator) continue;
+    rise += lobes_[li].integrator->integrate_point_adaptive(x, y, z, t_local, char_length);
+  }
   return T0_default + rise;
 }
 
@@ -316,12 +421,24 @@ bool MoserGreenTemperatureSource::needs_data_refresh(double /*simulation_time*/)
 
 void MoserGreenTemperatureSource::cleanup()
 {
-  integrator_.reset();
-  scan_.reset();
+  for (int li = 0; li < 2; ++li) {
+    lobes_[li].integrator.reset();
+    lobes_[li].scan.reset();
+    lobes_[li].fluct_table.clear();
+    psd_reset_filter_state(lobes_[li]);
+  }
   scan_built = false;
-  fluct_table_.clear();
-  psd_reset_filter_state();
   source_initialized = false;
+}
+
+/* ---------------------------------------------------------------------- */
+
+bool MoserGreenTemperatureSource::has_fluctuations() const
+{
+  for (int li = 0; li < n_lobes_; ++li) {
+    if (lobes_[li].psd_spec_set) return true;
+  }
+  return false;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -329,41 +446,57 @@ void MoserGreenTemperatureSource::cleanup()
 void MoserGreenTemperatureSource::print_source_info() const
 {
   std::cout << "Moser/Green temperature source (unsteady ellipsoid integral)\n"
+            << "  mode       = " << (mode == Mode::KEYHOLE ? "keyhole (double-ellipsoid)" : "standard")
+            << "\n"
             << "  Q          = " << Q          << " W\n"
             << "  lambda     = " << lambda     << "\n"
-            << "  P_absorbed = " << lambda * Q << " W\n"
+            << "  P_absorbed = " << lambda * Q << " W (total)\n"
             << "  k          = " << k_th       << " W/(m K)\n"
             << "  alpha      = " << alpha      << " m^2/s\n"
             << "  cp         = " << cp         << " J/(kg K)\n"
             << "  rho        = " << rho        << " kg/m^3 (derived)\n"
             << "  T0         = " << T0_default << " K\n"
-            << "  sx, sy, sz = " << sx << ", " << sy << ", " << sz << " m\n"
             << "  char_len   = " << char_length << "\n";
+  for (int li = 0; li < n_lobes_; ++li) {
+    print_lobe_info(li);
+  }
   if (scan_built) {
     std::cout << "  scan: (" << scan_x0 << "," << scan_y0 << ") -> ("
-              << scan_x1 << "," << scan_y1 << ") at z=" << scan_zl
+              << scan_x1 << "," << scan_y1 << ") at z=" << scan_laser_plane_z
               << ", v=" << scan_speed << " m/s, repeats=" << scan_repeats
               << ", t_origin=" << scan_t_origin << " s\n";
   }
-  if (psd_spec_set) {
+  std::cout.flush();
+}
+
+void MoserGreenTemperatureSource::print_lobe_info(int li) const
+{
+  const Lobe &L_ref = lobes_[li];
+  const char *tag;
+  if (mode == Mode::KEYHOLE) tag = (li == LOBE_TOP) ? "top" : "bot";
+  else                       tag = "single";
+  std::cout << "  lobe[" << tag << "]: f=" << L_ref.power_fraction
+            << " sx,sy,sz=" << L_ref.sx << "," << L_ref.sy << "," << L_ref.sz << " m"
+            << " z_offset=" << L_ref.z_offset << " m"
+            << " (P_abs=" << lambda * Q * L_ref.power_fraction << " W)\n";
+  if (L_ref.psd_spec_set) {
     const char *sname = "white";
-    if (psd_spec.shape == PsdShape::LORENTZIAN)       sname = "lorentzian";
-    else if (psd_spec.shape == PsdShape::PINK)        sname = "pink";
-    else if (psd_spec.shape == PsdShape::NARROW_BAND) sname = "narrow_band";
-    std::cout << "  fluctuations: psd " << sname
-              << " sigma_W=" << psd_spec.sigma_W
-              << " sigma_D=" << psd_spec.sigma_D
-              << " sigma_P=" << psd_spec.sigma_P
-              << " rho="     << psd_spec.rho
-              << " seed="    << psd_spec.seed
-              << " dt_psd="  << psd_spec.dt_psd << " s";
-    if (psd_spec.shape == PsdShape::LORENTZIAN)
-      std::cout << " tau=" << psd_spec.tau;
-    if (psd_spec.shape == PsdShape::NARROW_BAND)
-      std::cout << " f0=" << psd_spec.f0 << " df=" << psd_spec.df;
+    if (L_ref.psd_spec.shape == PsdShape::LORENTZIAN)       sname = "lorentzian";
+    else if (L_ref.psd_spec.shape == PsdShape::PINK)        sname = "pink";
+    else if (L_ref.psd_spec.shape == PsdShape::NARROW_BAND) sname = "narrow_band";
+    std::cout << "    fluctuations: psd " << sname
+              << " sigma_W=" << L_ref.psd_spec.sigma_W
+              << " sigma_D=" << L_ref.psd_spec.sigma_D
+              << " sigma_P=" << L_ref.psd_spec.sigma_P
+              << " rho="     << L_ref.psd_spec.rho
+              << " seed="    << L_ref.psd_spec.seed
+              << " dt_psd="  << L_ref.psd_spec.dt_psd << " s";
+    if (L_ref.psd_spec.shape == PsdShape::LORENTZIAN)
+      std::cout << " tau=" << L_ref.psd_spec.tau;
+    if (L_ref.psd_spec.shape == PsdShape::NARROW_BAND)
+      std::cout << " f0=" << L_ref.psd_spec.f0 << " df=" << L_ref.psd_spec.df;
     std::cout << "\n";
   }
-  std::cout.flush();
 }
 
 /* ----------------------------------------------------------------------
@@ -372,11 +505,16 @@ void MoserGreenTemperatureSource::print_source_info() const
    Time-domain recursive filters with trivariate Gaussian innovations.
    Identical chain on every MPI rank for the same seed (no MPI_Bcast
    needed). The W↔D channels share a Pearson correlation rho; the P
-   channel is independent.
+   channel is independent. In KEYHOLE mode each lobe carries its own
+   independent stream so cap and depth lobes can pulse out of phase.
 ------------------------------------------------------------------------- */
 
-void MoserGreenTemperatureSource::set_psd_spec(const PsdSpec &spec)
+void MoserGreenTemperatureSource::set_psd_spec(int idx, const PsdSpec &spec)
 {
+  if (idx < 0 || idx >= n_lobes_)
+    error->all(FLERR,
+      "laser_fluctuations psd: lobe index out of range "
+      "(STANDARD mode supports only top; KEYHOLE supports top and bot)");
   if (spec.sigma_W < 0.0 || spec.sigma_D < 0.0 || spec.sigma_P < 0.0)
     error->all(FLERR,"laser_fluctuations psd: sigma_W, sigma_D, sigma_P must be >= 0");
   if (spec.rho < -1.0 || spec.rho > 1.0)
@@ -398,58 +536,62 @@ void MoserGreenTemperatureSource::set_psd_spec(const PsdSpec &spec)
     break;
   }
 
-  psd_spec = spec;
-  psd_spec_set = true;
+  lobes_[idx].psd_spec = spec;
+  lobes_[idx].psd_spec_set = true;
 }
 
-void MoserGreenTemperatureSource::psd_reset_filter_state()
+void MoserGreenTemperatureSource::psd_reset_filter_state(Lobe &L)
 {
-  ar_state_W = 0.0;
-  ar_state_D = 0.0;
-  ar_state_P = 0.0;
-  voss_W.fill(0.0);
-  voss_D.fill(0.0);
-  voss_P.fill(0.0);
-  voss_step = 0;
-  osc_x_W = 0.0; osc_v_W = 0.0;
-  osc_x_D = 0.0; osc_v_D = 0.0;
-  osc_x_P = 0.0; osc_v_P = 0.0;
+  L.ar_state_W = 0.0;
+  L.ar_state_D = 0.0;
+  L.ar_state_P = 0.0;
+  L.voss_W.fill(0.0);
+  L.voss_D.fill(0.0);
+  L.voss_P.fill(0.0);
+  L.voss_step = 0;
+  L.osc_x_W = 0.0; L.osc_v_W = 0.0;
+  L.osc_x_D = 0.0; L.osc_v_D = 0.0;
+  L.osc_x_P = 0.0; L.osc_v_P = 0.0;
 }
 
-void MoserGreenTemperatureSource::psd_warmup(int n_steps)
+void MoserGreenTemperatureSource::psd_warmup(Lobe &L, int n_steps)
 {
   double dummy_W = 0.0, dummy_D = 0.0, dummy_P = 0.0;
   for (int i = 0; i < n_steps; ++i) {
-    psd_generate_next_sample(dummy_W, dummy_D, dummy_P);
+    psd_generate_next_sample(L, dummy_W, dummy_D, dummy_P);
   }
 }
 
-void MoserGreenTemperatureSource::psd_draw_trivariate(double &eps_W,
+void MoserGreenTemperatureSource::psd_draw_trivariate(Lobe &L,
+                                                      double &eps_W,
                                                       double &eps_D,
                                                       double &eps_P)
 {
   // Three independent unit normals.
-  const double z1 = psd_norm(psd_rng);
-  const double z2 = psd_norm(psd_rng);
-  const double z3 = psd_norm(psd_rng);
-  const double rho = psd_spec.rho;
+  const double z1 = L.norm(L.rng);
+  const double z2 = L.norm(L.rng);
+  const double z3 = L.norm(L.rng);
+  const double rho = L.psd_spec.rho;
   // W and D share Pearson correlation rho; P is independent.
   eps_W = z1;
   eps_D = rho * z1 + std::sqrt(std::max(0.0, 1.0 - rho * rho)) * z2;
   eps_P = z3;
 }
 
-void MoserGreenTemperatureSource::psd_generate_next_sample(double &dW, double &dD, double &dP)
+void MoserGreenTemperatureSource::psd_generate_next_sample(Lobe &L,
+                                                           double &dW,
+                                                           double &dD,
+                                                           double &dP)
 {
   double eps_W, eps_D, eps_P;
-  psd_draw_trivariate(eps_W, eps_D, eps_P);
+  psd_draw_trivariate(L, eps_W, eps_D, eps_P);
 
-  switch (psd_spec.shape) {
+  switch (L.psd_spec.shape) {
 
   case PsdShape::WHITE: {
-    dW = psd_spec.sigma_W * eps_W;
-    dD = psd_spec.sigma_D * eps_D;
-    dP = psd_spec.sigma_P * eps_P;
+    dW = L.psd_spec.sigma_W * eps_W;
+    dD = L.psd_spec.sigma_D * eps_D;
+    dP = L.psd_spec.sigma_P * eps_P;
     return;
   }
 
@@ -457,17 +599,17 @@ void MoserGreenTemperatureSource::psd_generate_next_sample(double &dW, double &d
     // AR(1) with alpha = exp(-dt/tau): produces exact Lorentzian
     // (Ornstein-Uhlenbeck) autocorrelation in steady state. dt is the
     // emission-time sample spacing (seconds), tau the correlation time.
-    const double alpha_ar = std::exp(-psd_spec.dt_psd / psd_spec.tau);
+    const double alpha_ar = std::exp(-L.psd_spec.dt_psd / L.psd_spec.tau);
     const double drive_scale = std::sqrt(1.0 - alpha_ar * alpha_ar);
-    const double driveW = psd_spec.sigma_W * drive_scale;
-    const double driveD = psd_spec.sigma_D * drive_scale;
-    const double driveP = psd_spec.sigma_P * drive_scale;
-    ar_state_W = alpha_ar * ar_state_W + driveW * eps_W;
-    ar_state_D = alpha_ar * ar_state_D + driveD * eps_D;
-    ar_state_P = alpha_ar * ar_state_P + driveP * eps_P;
-    dW = ar_state_W;
-    dD = ar_state_D;
-    dP = ar_state_P;
+    const double driveW = L.psd_spec.sigma_W * drive_scale;
+    const double driveD = L.psd_spec.sigma_D * drive_scale;
+    const double driveP = L.psd_spec.sigma_P * drive_scale;
+    L.ar_state_W = alpha_ar * L.ar_state_W + driveW * eps_W;
+    L.ar_state_D = alpha_ar * L.ar_state_D + driveD * eps_D;
+    L.ar_state_P = alpha_ar * L.ar_state_P + driveP * eps_P;
+    dW = L.ar_state_W;
+    dD = L.ar_state_D;
+    dP = L.ar_state_P;
     return;
   }
 
@@ -475,16 +617,16 @@ void MoserGreenTemperatureSource::psd_generate_next_sample(double &dW, double &d
     // Voss-McCartney 1/f: at step n, update only the level k =
     // trailing_zeros(n). Sum of K independent levels approximates a
     // 1/f spectrum across ~K decades.
-    ++voss_step;
+    ++L.voss_step;
     int k = 0;
-    std::uint64_t n = voss_step;
+    std::uint64_t n = L.voss_step;
     while ((n & 1ULL) == 0ULL && k < VOSS_K - 1) { n >>= 1; ++k; }
     const double scale = 1.0 / std::sqrt(static_cast<double>(VOSS_K));
-    voss_W[k] = (psd_spec.sigma_W * scale) * eps_W;
-    voss_D[k] = (psd_spec.sigma_D * scale) * eps_D;
-    voss_P[k] = (psd_spec.sigma_P * scale) * eps_P;
+    L.voss_W[k] = (L.psd_spec.sigma_W * scale) * eps_W;
+    L.voss_D[k] = (L.psd_spec.sigma_D * scale) * eps_D;
+    L.voss_P[k] = (L.psd_spec.sigma_P * scale) * eps_P;
     double sW = 0.0, sD = 0.0, sP = 0.0;
-    for (int i = 0; i < VOSS_K; ++i) { sW += voss_W[i]; sD += voss_D[i]; sP += voss_P[i]; }
+    for (int i = 0; i < VOSS_K; ++i) { sW += L.voss_W[i]; sD += L.voss_D[i]; sP += L.voss_P[i]; }
     dW = sW;
     dD = sD;
     dP = sP;
@@ -498,35 +640,35 @@ void MoserGreenTemperatureSource::psd_generate_next_sample(double &dW, double &d
     // Stationary variance var_x = drive^2 / (4 zeta omega0^3); pick
     // drive so that var_x = sigma^2. Sub-step the integration so
     // omega0 * dt_sub stays small.
-    const double omega0 = 2.0 * MY_PI * psd_spec.f0;
-    double zeta = MY_PI * psd_spec.df / omega0;
+    const double omega0 = 2.0 * MY_PI * L.psd_spec.f0;
+    double zeta = MY_PI * L.psd_spec.df / omega0;
     if (zeta <= 0.0)  zeta = 1.0e-6;
     if (zeta >= 1.0)  zeta = 0.999;
-    int n_sub = static_cast<int>(std::ceil(omega0 * psd_spec.dt_psd / 0.1));
+    int n_sub = static_cast<int>(std::ceil(omega0 * L.psd_spec.dt_psd / 0.1));
     if (n_sub < 1) n_sub = 1;
-    const double dts = psd_spec.dt_psd / n_sub;
+    const double dts = L.psd_spec.dt_psd / n_sub;
     const double var_pref = 4.0 * zeta * omega0 * omega0 * omega0 * dts;
-    const double driveW_imp = std::sqrt(var_pref * psd_spec.sigma_W * psd_spec.sigma_W);
-    const double driveD_imp = std::sqrt(var_pref * psd_spec.sigma_D * psd_spec.sigma_D);
-    const double driveP_imp = std::sqrt(var_pref * psd_spec.sigma_P * psd_spec.sigma_P);
+    const double driveW_imp = std::sqrt(var_pref * L.psd_spec.sigma_W * L.psd_spec.sigma_W);
+    const double driveD_imp = std::sqrt(var_pref * L.psd_spec.sigma_D * L.psd_spec.sigma_D);
+    const double driveP_imp = std::sqrt(var_pref * L.psd_spec.sigma_P * L.psd_spec.sigma_P);
     for (int kstep = 0; kstep < n_sub; ++kstep) {
       double e_W, e_D, e_P;
       if (kstep == 0) { e_W = eps_W; e_D = eps_D; e_P = eps_P; }
-      else            { psd_draw_trivariate(e_W, e_D, e_P); }
+      else            { psd_draw_trivariate(L, e_W, e_D, e_P); }
       // Semi-implicit Euler:
-      osc_v_W += dts * (-2.0 * zeta * omega0 * osc_v_W
-                        - omega0 * omega0 * osc_x_W) + driveW_imp * e_W;
-      osc_x_W += dts * osc_v_W;
-      osc_v_D += dts * (-2.0 * zeta * omega0 * osc_v_D
-                        - omega0 * omega0 * osc_x_D) + driveD_imp * e_D;
-      osc_x_D += dts * osc_v_D;
-      osc_v_P += dts * (-2.0 * zeta * omega0 * osc_v_P
-                        - omega0 * omega0 * osc_x_P) + driveP_imp * e_P;
-      osc_x_P += dts * osc_v_P;
+      L.osc_v_W += dts * (-2.0 * zeta * omega0 * L.osc_v_W
+                          - omega0 * omega0 * L.osc_x_W) + driveW_imp * e_W;
+      L.osc_x_W += dts * L.osc_v_W;
+      L.osc_v_D += dts * (-2.0 * zeta * omega0 * L.osc_v_D
+                          - omega0 * omega0 * L.osc_x_D) + driveD_imp * e_D;
+      L.osc_x_D += dts * L.osc_v_D;
+      L.osc_v_P += dts * (-2.0 * zeta * omega0 * L.osc_v_P
+                          - omega0 * omega0 * L.osc_x_P) + driveP_imp * e_P;
+      L.osc_x_P += dts * L.osc_v_P;
     }
-    dW = osc_x_W;
-    dD = osc_x_D;
-    dP = osc_x_P;
+    dW = L.osc_x_W;
+    dD = L.osc_x_D;
+    dP = L.osc_x_P;
     return;
   }
   }
@@ -534,42 +676,43 @@ void MoserGreenTemperatureSource::psd_generate_next_sample(double &dW, double &d
   dW = 0.0; dD = 0.0; dP = 0.0;
 }
 
-void MoserGreenTemperatureSource::populate_fluctuation_table(double t_start,
+void MoserGreenTemperatureSource::populate_fluctuation_table(Lobe &L,
+                                                              double t_start,
                                                               double t_end)
 {
-  if (!psd_spec_set)
+  if (!L.psd_spec_set)
     error->all(FLERR,"moser populate_fluctuation_table: psd_spec not set");
   if (t_end <= t_start)
     error->all(FLERR,"moser populate_fluctuation_table: empty time interval");
 
   // Reset the chain for reproducibility (multiple build_scan() calls
   // with the same seed produce the same table).
-  psd_rng.seed(psd_spec.seed);
-  psd_norm = std::normal_distribution<double>(0.0, 1.0);
-  psd_reset_filter_state();
+  L.rng.seed(L.psd_spec.seed);
+  L.norm = std::normal_distribution<double>(0.0, 1.0);
+  psd_reset_filter_state(L);
   // Warmup so the filter starts in steady state. Pink needs ~K * 2^K =
   // 384 samples; lorentzian needs ~5*tau/dt; narrow_band needs
   // ~1/(2 zeta omega0)/dt. 1000 covers all of these for typical configs.
-  psd_warmup(1000);
+  psd_warmup(L, 1000);
 
-  const double dt = psd_spec.dt_psd;
+  const double dt = L.psd_spec.dt_psd;
   const std::size_t n_samples =
     static_cast<std::size_t>(std::ceil((t_end - t_start) / dt)) + 1;
 
-  fluct_table_.t_grid.clear();
-  fluct_table_.factor_W.clear();
-  fluct_table_.factor_D.clear();
-  fluct_table_.factor_P.clear();
-  fluct_table_.t_grid.reserve(n_samples);
-  fluct_table_.factor_W.reserve(n_samples);
-  fluct_table_.factor_D.reserve(n_samples);
-  fluct_table_.factor_P.reserve(n_samples);
+  L.fluct_table.t_grid.clear();
+  L.fluct_table.factor_W.clear();
+  L.fluct_table.factor_D.clear();
+  L.fluct_table.factor_P.clear();
+  L.fluct_table.t_grid.reserve(n_samples);
+  L.fluct_table.factor_W.reserve(n_samples);
+  L.fluct_table.factor_D.reserve(n_samples);
+  L.fluct_table.factor_P.reserve(n_samples);
 
   bool warned_linearization = false;
   for (std::size_t i = 0; i < n_samples; ++i) {
     const double t_i = t_start + i * dt;
     double dW = 0.0, dD = 0.0, dP = 0.0;
-    psd_generate_next_sample(dW, dD, dP);
+    psd_generate_next_sample(L, dW, dD, dP);
 
     if (!warned_linearization &&
         (std::fabs(dW) > 0.5 || std::fabs(dD) > 0.5 || std::fabs(dP) > 0.5) &&
@@ -589,9 +732,9 @@ void MoserGreenTemperatureSource::populate_fluctuation_table(double t_start,
     if (fD < 1.0e-3) fD = 1.0e-3;
     if (fP < 0.0)    fP = 0.0;
 
-    fluct_table_.t_grid.push_back(t_i);
-    fluct_table_.factor_W.push_back(fW);
-    fluct_table_.factor_D.push_back(fD);
-    fluct_table_.factor_P.push_back(fP);
+    L.fluct_table.t_grid.push_back(t_i);
+    L.fluct_table.factor_W.push_back(fW);
+    L.fluct_table.factor_D.push_back(fD);
+    L.fluct_table.factor_P.push_back(fP);
   }
 }

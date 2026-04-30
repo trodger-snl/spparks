@@ -2539,7 +2539,7 @@ void AppAdditiveExtTempTexture::laser_path_cmd(int narg, char **arg)
    form only (file-loaded fluctuations are not yet implemented for the
    Moser source):
 
-     laser_fluctuations psd <shape> sigma_W <s> sigma_D <s> \
+     laser_fluctuations psd [top|bot|both] <shape> sigma_W <s> sigma_D <s> \
                             [sigma_P <s>] [rho <r>] [seed <n>] [dt <s>] \
                             [shape-specific keys ...]
    Shapes:
@@ -2548,13 +2548,28 @@ void AppAdditiveExtTempTexture::laser_path_cmd(int narg, char **arg)
      pink
      narrow_band  f0 <Hz>  df <Hz>
 
-   Stores the spec on the active Moser source. The fluctuation table
-   is materialized inside laser_path_cmd's call to build_scan(),
-   because that's when the scan duration becomes known. Therefore the
-   correct command order is:
+   The optional top|bot|both selector controls which Moser keyhole lobe
+   the spec applies to:
+
+     omitted    valid only in STANDARD mode (single ellipsoid)
+     top        configure the top (cap) lobe; KEYHOLE only
+     bot        configure the bottom (depth) lobe; KEYHOLE only
+     both       sugar: same shape and sigmas applied to both lobes;
+                bot's seed is derived as top_seed XOR 0x9E3779B97F4A7C15
+                (SplitMix64 golden constant) so the streams are
+                independent yet MPI-deterministic. KEYHOLE only.
+
+   In KEYHOLE mode, the selector is REQUIRED. In STANDARD mode, it must
+   be OMITTED. To configure top and bot with different parameters, issue
+   two laser_fluctuations commands (one with `top`, one with `bot`).
+
+   Stores the spec on the active Moser source. The fluctuation table is
+   materialized inside laser_path_cmd's call to build_scan(), because
+   that's when the scan duration becomes known. Therefore the correct
+   command order is:
 
      setup_temperature_source moser ...
-     laser_fluctuations psd ...
+     laser_fluctuations psd [selector] ...
      laser_path start ... end ... speed ...
 
    The active source must be the Moser/Green's-function source; the
@@ -2583,6 +2598,25 @@ void AppAdditiveExtTempTexture::laser_fluctuations_cmd(int narg, char **arg)
   if (narg < 2)
     error->all(FLERR,"laser_fluctuations psd: missing <shape>");
 
+  // Optional top|bot|both selector between `psd` and the shape token.
+  enum class Selector { NONE, TOP, BOT, BOTH };
+  Selector which = Selector::NONE;
+  int shape_idx = 1;
+  if      (strcmp(arg[1],"top")  == 0) { which = Selector::TOP;  shape_idx = 2; }
+  else if (strcmp(arg[1],"bot")  == 0) { which = Selector::BOT;  shape_idx = 2; }
+  else if (strcmp(arg[1],"both") == 0) { which = Selector::BOTH; shape_idx = 2; }
+
+  const bool is_keyhole = (moser->get_mode() == MoserGreenTemperatureSource::Mode::KEYHOLE);
+  if (is_keyhole && which == Selector::NONE)
+    error->all(FLERR,
+      "laser_fluctuations psd: keyhole mode requires top|bot|both selector");
+  if (!is_keyhole && which != Selector::NONE)
+    error->all(FLERR,
+      "laser_fluctuations psd: top|bot|both selector is only valid in keyhole mode");
+
+  if (shape_idx >= narg)
+    error->all(FLERR,"laser_fluctuations psd: missing <shape>");
+
   MoserGreenTemperatureSource::PsdSpec spec;
   spec.sigma_W = 0.0;
   spec.sigma_D = 0.0;
@@ -2594,13 +2628,13 @@ void AppAdditiveExtTempTexture::laser_fluctuations_cmd(int narg, char **arg)
   spec.f0      = 0.0;
   spec.df      = 0.0;
 
-  if      (strcmp(arg[1],"white")       == 0) spec.shape = MoserGreenTemperatureSource::PsdShape::WHITE;
-  else if (strcmp(arg[1],"lorentzian")  == 0) spec.shape = MoserGreenTemperatureSource::PsdShape::LORENTZIAN;
-  else if (strcmp(arg[1],"pink")        == 0) spec.shape = MoserGreenTemperatureSource::PsdShape::PINK;
-  else if (strcmp(arg[1],"narrow_band") == 0) spec.shape = MoserGreenTemperatureSource::PsdShape::NARROW_BAND;
+  if      (strcmp(arg[shape_idx],"white")       == 0) spec.shape = MoserGreenTemperatureSource::PsdShape::WHITE;
+  else if (strcmp(arg[shape_idx],"lorentzian")  == 0) spec.shape = MoserGreenTemperatureSource::PsdShape::LORENTZIAN;
+  else if (strcmp(arg[shape_idx],"pink")        == 0) spec.shape = MoserGreenTemperatureSource::PsdShape::PINK;
+  else if (strcmp(arg[shape_idx],"narrow_band") == 0) spec.shape = MoserGreenTemperatureSource::PsdShape::NARROW_BAND;
   else error->all(FLERR,"laser_fluctuations psd: unknown shape (use white|lorentzian|pink|narrow_band)");
 
-  int i = 2;
+  int i = shape_idx + 1;
   while (i < narg) {
     const char *k = arg[i];
     if (i + 1 >= narg)
@@ -2619,13 +2653,34 @@ void AppAdditiveExtTempTexture::laser_fluctuations_cmd(int narg, char **arg)
     i += 2;
   }
 
-  moser->set_psd_spec(spec);
+  // Dispatch to the appropriate lobe(s).
+  if (which == Selector::NONE || which == Selector::TOP) {
+    moser->set_psd_spec(MoserGreenTemperatureSource::LOBE_TOP, spec);
+  }
+  if (which == Selector::BOT) {
+    moser->set_psd_spec(MoserGreenTemperatureSource::LOBE_BOT, spec);
+  }
+  if (which == Selector::BOTH) {
+    moser->set_psd_spec(MoserGreenTemperatureSource::LOBE_TOP, spec);
+    // Derive bot's seed from top's so the two streams are independent
+    // yet identically reproducible across MPI ranks. SplitMix64 golden
+    // constant is a well-mixed XOR partner.
+    MoserGreenTemperatureSource::PsdSpec bot_spec = spec;
+    bot_spec.seed = spec.seed ^ 0x9E3779B97F4A7C15ULL;
+    moser->set_psd_spec(MoserGreenTemperatureSource::LOBE_BOT, bot_spec);
+  }
+
   if (domain->me == 0) {
     const char *sname = "white";
     if      (spec.shape == MoserGreenTemperatureSource::PsdShape::LORENTZIAN)  sname = "lorentzian";
     else if (spec.shape == MoserGreenTemperatureSource::PsdShape::PINK)        sname = "pink";
     else if (spec.shape == MoserGreenTemperatureSource::PsdShape::NARROW_BAND) sname = "narrow_band";
-    std::cout << "laser_fluctuations psd: shape=" << sname
+    const char *wname = "single";
+    if      (which == Selector::TOP)  wname = "top";
+    else if (which == Selector::BOT)  wname = "bot";
+    else if (which == Selector::BOTH) wname = "both";
+    std::cout << "laser_fluctuations psd: lobe=" << wname
+              << " shape=" << sname
               << " sigma_W=" << spec.sigma_W
               << " sigma_D=" << spec.sigma_D
               << " sigma_P=" << spec.sigma_P

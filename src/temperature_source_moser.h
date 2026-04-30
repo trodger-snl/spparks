@@ -64,6 +64,23 @@ namespace SPPARKS_NS {
    queried in the WORLD frame (meters), and absolute simulation time is
    used as the integration upper limit.
 
+   Two modes are supported:
+
+     STANDARD - a single ellipsoidal Gaussian source moving along the
+                scan path. This is the original Moser model.
+
+     KEYHOLE  - an overlapping double-ellipsoid (Goldak-style) keyhole
+                meltpool. Two ellipsoids are superimposed: a wider/
+                shallower TOP lobe centered at the laser plane, plus a
+                narrower/deeper BOTTOM lobe offset down into the
+                workpiece. Each lobe gets a fraction f_top / f_bot of
+                the absorbed power lambda*Q (f_top + f_bot = 1).
+
+   Each lobe carries its own GREENAM LaserScan + integrator, and (when
+   fluctuations are configured) its own emission-time PSD stream and
+   FluctuationTable. This lets the cap and depth lobes pulse
+   independently, which mirrors observed keyhole oscillation behavior.
+
    Implementation notes:
      * The actual integrator lives in the vendored GREENAM/ headers
        (sierra::greenam::ScanIntegration).  This class is a thin
@@ -76,12 +93,17 @@ namespace SPPARKS_NS {
        The volumetric heat capacity rho*cp = k/alpha is computed
        internally; cp is only needed to recover rho for the
        diagnostic print.
+     * Per-lobe fluctuation tables are stored by value inside Lobe,
+       which is held in a fixed-size std::array so the &fluct_table
+       pointer borrowed by LaserScan is never invalidated.
 ------------------------------------------------------------------------- */
 
 class MoserGreenTemperatureSource : public TemperatureSource {
  public:
   MoserGreenTemperatureSource(class SPPARKS *);
   virtual ~MoserGreenTemperatureSource();
+
+  enum class Mode { STANDARD, KEYHOLE };
 
   // TemperatureSource interface
   virtual void setup_temperature_source(const std::vector<std::string> &args) override;
@@ -92,14 +114,11 @@ class MoserGreenTemperatureSource : public TemperatureSource {
   virtual std::string get_source_type() const override { return "moser"; }
   virtual void print_source_info() const override;
 
-  // Build a scan from a RASTER-style straight-line repeated path. Called
+  // Build scans from a RASTER-style straight-line repeated path. Called
   // by AppAdditiveExtTempTexture::laser_path_cmd when the active
-  // temperature source is Moser. Coordinates and times are SI units;
-  // start_time is the absolute simulation time at which the laser begins
-  // its first repeat (typically 0 at run start). All segments share the
-  // single (Q*lambda) absorbed power configured at setup time; transits
-  // between repeats are 0-power placeholder segments that the integrator
-  // skips.
+  // temperature source is Moser. In KEYHOLE mode, both lobes are built
+  // in a single call (path geometry is shared; only ellipsoid widths,
+  // zl, and per-lobe waypoint power differ). All units SI.
   void build_scan(double start_time,
                   double x0, double y0,
                   double x1, double y1,
@@ -107,28 +126,35 @@ class MoserGreenTemperatureSource : public TemperatureSource {
                   double speed,
                   int repeats);
 
-  bool has_scan() const { return scan_ != nullptr; }
+  bool has_scan() const { return scan_built; }
 
   // Quadrature character length (Moser's `char_length`); 0.5 gives
   // ~1e-4 fractional integration error per the GREENAM comments.
   void set_char_length(double cl) { char_length = cl; }
 
+  Mode get_mode() const { return mode; }
+  int  num_lobes() const { return n_lobes_; }
+
   // ----- Stochastic ΔW/W, ΔD/D, ΔP/P fluctuations -----------------------
   // Time-domain recursive PSD generator. Pre-builds an emission-time-keyed
-  // (factor_W, factor_D, factor_P) table that the GREENAM integrand reads
-  // at every Gauss-Legendre node. Sub-segment fluctuations work naturally
-  // because the integrand is sampled adaptively within each scan segment
-  // by the adaptive quadrature routine.
+  // (factor_W, factor_D, factor_P) table per lobe; the GREENAM integrand
+  // reads the table for whichever lobe it belongs to at every Gauss-
+  // Legendre node. Sub-segment fluctuations work naturally because the
+  // integrand is sampled adaptively within each scan segment.
   //
-  // Channel layout:
+  // Channel layout (per lobe):
   //   factor_W = 1 + dW(s)  multiplies BOTH sx AND sy (lateral scaling,
   //                          preserves any static aspect ratio set at
   //                          setup_temperature_source moser)
   //   factor_D = 1 + dD(s)  multiplies sz                (depth scaling)
-  //   factor_P = 1 + dP(s)  multiplies the absorbed power (lambda*Q)
+  //   factor_P = 1 + dP(s)  multiplies the absorbed power (lambda*Q*f_lobe)
   //
-  // The W and D channels share a Pearson correlation rho. The P channel
-  // is independent of W and D in v1 (sigma_P=0 by default disables it).
+  // The W and D channels share a Pearson correlation rho per lobe. The
+  // P channel is independent of W and D in v1 (sigma_P=0 by default
+  // disables it). In KEYHOLE mode the two lobes are independent
+  // streams (different seeds); in the 'both' sugar form, the bot seed
+  // is derived deterministically from top via XOR with the SplitMix64
+  // golden constant.
   enum class PsdShape { WHITE, LORENTZIAN, PINK, NARROW_BAND };
 
   struct PsdSpec {
@@ -148,9 +174,16 @@ class MoserGreenTemperatureSource : public TemperatureSource {
   // Stash a PSD spec for use by the next build_scan() call. Must be
   // called BEFORE laser_path_cmd, since the table is materialized
   // inside build_scan once the scan duration is known.
-  void set_psd_spec(const PsdSpec &spec);
+  //
+  //   idx = 0  -> top lobe (or sole lobe in STANDARD mode)
+  //   idx = 1  -> bottom lobe (KEYHOLE only)
+  void set_psd_spec(int idx, const PsdSpec &spec);
 
-  bool has_fluctuations() const { return psd_spec_set; }
+  bool has_fluctuations() const;
+
+  // Lobe indices (also available to the parser).
+  static constexpr int LOBE_TOP = 0;
+  static constexpr int LOBE_BOT = 1;
 
  private:
   // Material / source parameters
@@ -161,15 +194,17 @@ class MoserGreenTemperatureSource : public TemperatureSource {
   double T0_default; // ambient/preheat temperature [K]
   double cp;         // specific heat [J/(kg K)]
   double rho;        // density derived from k/(alpha*cp) [kg/m^3]
-  double sx, sy, sz; // ellipsoid Gaussian widths [m]
+
+  // Mode (STANDARD or KEYHOLE)
+  Mode mode;
 
   // Quadrature tuning
   double char_length;
 
-  // Stored scan geometry (for diagnostic print only; the authoritative
-  // copy lives inside scan_)
+  // Stored scan geometry (for diagnostic print and free-surface cutoff)
   double scan_t_origin;
-  double scan_x0, scan_y0, scan_x1, scan_y1, scan_zl;
+  double scan_x0, scan_y0, scan_x1, scan_y1;
+  double scan_laser_plane_z;   // actual free surface; lobe zl_eff differ in KEYHOLE
   double scan_speed;
   int    scan_repeats;
   bool   scan_built;
@@ -181,31 +216,66 @@ class MoserGreenTemperatureSource : public TemperatureSource {
   using GREENAM_Scan   = sierra::greenam::LaserScan<double, GREENAM_Array>;
   using GREENAM_Integ  = sierra::greenam::ScanIntegration<double, GREENAM_Array, 30>;
 
-  std::shared_ptr<GREENAM_Scan>  scan_;
-  std::shared_ptr<GREENAM_Integ> integrator_;
-
-  // ----- PSD generator state --------------------------------------------
-  bool   psd_spec_set;
-  PsdSpec psd_spec;
-  std::mt19937_64 psd_rng;
-  std::normal_distribution<double> psd_norm;
-  // Filter state (only the fields used by the active shape are read).
-  double ar_state_W, ar_state_D, ar_state_P;             // lorentzian AR(1)
   static constexpr int VOSS_K = 6;
-  std::array<double, VOSS_K> voss_W, voss_D, voss_P;     // pink Voss-McCartney
-  std::uint64_t voss_step;
-  double osc_x_W, osc_v_W, osc_x_D, osc_v_D, osc_x_P, osc_v_P;  // narrow_band
 
-  // Materialized fluctuation table consumed by the integrand. Owned by
-  // this class; the LaserScan stores a borrowed pointer.
-  sierra::greenam::FluctuationTable<double> fluct_table_;
+  // Per-ellipsoid (lobe) state. Held in a fixed-size std::array so the
+  // &fluct_table pointer borrowed by LaserScan stays valid for the
+  // lifetime of this object. lobes_[0] is the only lobe in STANDARD
+  // mode; lobes_[0]/[1] are TOP/BOT in KEYHOLE mode.
+  struct Lobe {
+    // Geometry
+    double sx = 0.0;
+    double sy = 0.0;
+    double sz = 0.0;
+    double z_offset = 0.0;       // positive depth below laser plane [m]; 0 for STANDARD/top
+    double power_fraction = 1.0; // f baked into per-lobe waypoint power; 1.0 for STANDARD
 
-  // PSD helpers
-  void psd_reset_filter_state();
-  void psd_warmup(int n_steps);
-  void psd_draw_trivariate(double &eps_W, double &eps_D, double &eps_P);
-  void psd_generate_next_sample(double &dW, double &dD, double &dP);
-  void populate_fluctuation_table(double t_start, double t_end);
+    // GREENAM artifacts (built lazily in build_scan)
+    std::shared_ptr<GREENAM_Scan>  scan;
+    std::shared_ptr<GREENAM_Integ> integrator;
+
+    // PSD state
+    bool    psd_spec_set = false;
+    PsdSpec psd_spec = {PsdShape::WHITE, 0.0, 0.0, 0.0, 0.0,
+                        12345UL, 5.0e-6, 0.0, 0.0, 0.0};
+    std::mt19937_64 rng{12345UL};
+    std::normal_distribution<double> norm{0.0, 1.0};
+
+    // Filter state (only the fields used by the active shape are read)
+    double ar_state_W = 0.0, ar_state_D = 0.0, ar_state_P = 0.0;   // lorentzian AR(1)
+    std::array<double, VOSS_K> voss_W{};                            // pink Voss-McCartney
+    std::array<double, VOSS_K> voss_D{};
+    std::array<double, VOSS_K> voss_P{};
+    std::uint64_t voss_step = 0;
+    double osc_x_W = 0.0, osc_v_W = 0.0;                            // narrow_band oscillator
+    double osc_x_D = 0.0, osc_v_D = 0.0;
+    double osc_x_P = 0.0, osc_v_P = 0.0;
+
+    // Materialized fluctuation table consumed by the integrand. Owned
+    // by this lobe; the LaserScan stores a borrowed pointer.
+    sierra::greenam::FluctuationTable<double> fluct_table;
+
+    // Non-movable / non-copyable so the borrowed pointer to
+    // &fluct_table inside LaserScan is never invalidated.
+    Lobe() = default;
+    Lobe(const Lobe&) = delete;
+    Lobe& operator=(const Lobe&) = delete;
+    Lobe(Lobe&&) = delete;
+    Lobe& operator=(Lobe&&) = delete;
+  };
+
+  std::array<Lobe, 2> lobes_;
+  int n_lobes_;        // 1 for STANDARD, 2 for KEYHOLE
+
+  // PSD helpers (operate on a Lobe by reference)
+  void psd_reset_filter_state(Lobe &lobe);
+  void psd_warmup(Lobe &lobe, int n_steps);
+  void psd_draw_trivariate(Lobe &lobe, double &eps_W, double &eps_D, double &eps_P);
+  void psd_generate_next_sample(Lobe &lobe, double &dW, double &dD, double &dP);
+  void populate_fluctuation_table(Lobe &lobe, double t_start, double t_end);
+
+  // Diagnostic print helper for a single lobe.
+  void print_lobe_info(int idx) const;
 };
 
 }

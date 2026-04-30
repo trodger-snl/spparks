@@ -1,0 +1,141 @@
+# SPPARKS additive_temperature_texture: keyhole meltpool driven by the
+# Moser/Green's-function source in its overlapping double-ellipsoid
+# (Goldak-style) keyhole mode.
+#
+# The keyhole pool is built from TWO ellipsoidal Gaussian sources that
+# share the laser path:
+#
+#   TOP (cap)    : wide and shallow, centered at the laser plane.
+#                  Carries f_top of the absorbed power lambda*Q.
+#                  Models the broad surface conduction lobe.
+#
+#   BOT (depth)  : narrow and deep, offset z_bot beneath the laser
+#                  plane. Carries f_bot = 1 - f_top of the absorbed
+#                  power. Models the keyhole drilling channel.
+#
+# The two lobes have INDEPENDENT ΔW/ΔD/ΔP fluctuation streams, so the
+# cap and depth can pulse out of phase — mirroring observed keyhole
+# oscillation behavior (e.g. Sun et al., shorter cap-lobe correlation
+# time vs. longer depth-lobe correlation time).
+#
+# ---------------------------------------------------------------------
+# Geometry
+# ---------------------------------------------------------------------
+#
+# 1.5 mm linear path in +x along the centerline of a 2 mm × 0.4 mm ×
+# 0.3 mm box at dx = 5 µm. Substrate (z < 0.20 mm) is single-crystal,
+# powder layer above. NSCANS=5 repeated passes.
+#
+# Per-pass duration = 1.5e-3 m / 1.2 m/s = 1.25 ms.
+# Total scan time   = NSCANS * 1.25 ms = 6.25 ms.
+
+variable NSCANS equal 5
+
+# app_style additive_temperature_texture <nspins> <dx[m]> <dt[s]> <nrefine>
+app_style additive_temperature_texture 1000000 5e-6 5e-6 2
+
+shell mkdir -p DumpFiles_moser_keyhole
+
+seed             56789
+
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 400 0 80 0 60
+
+boundary         n n n
+
+create_box       box
+create_sites     box
+
+# ---------------------------------------------------------------------
+# Initial site state: powder default + single-crystal substrate
+# (z < 40 in lattice units = z < 0.20 mm).
+# ---------------------------------------------------------------------
+
+set site range 1 1000000
+set i2 value 1
+
+set i1 value 42      #if z < 40
+set i2 value 3       #if z < 40
+set d1 value 1.0     #if z < 40
+set d2 value 0.0     #if z < 40
+set d3 value 0.0     #if z < 40
+set d4 value 0.0     #if z < 40
+
+sector           yes
+sweep            random mask no
+
+diag_style       array d6 sum
+
+temperature      0.0
+misorientation_target gradient
+
+# AM-specific (IN718-like)
+liquidus         1573
+solidus          1523
+solid_front_vel  4 -1.0302e-7 1.0533e-4 2.2196e-3 0
+nucleation_density      1e14
+critical_undercooling   5
+undercooling_deviation  3
+mean_nuclei_volume      8.4375e-16
+nuclei_volume_deviation 1.5625e-17
+
+# ---------------------------------------------------------------------
+# Moser/Green's-function source — KEYHOLE mode.
+#
+# args: <Q[W]> <lambda> <k[W/(mK)]> <alpha[m^2/s]> <T0[K]> <cp[J/(kgK)]>
+#       <f_top> <sx_top[m]> <sy_top[m]> <sz_top[m]> <z_top[m]>
+#       <f_bot> <sx_bot[m]> <sy_bot[m]> <sz_bot[m]> <z_bot[m]>
+#
+# Power split: 55% to the surface cap, 45% drilling the keyhole.
+# Top:  60 µm × 60 µm × 40 µm cap, centered at the laser plane (z_top=0)
+# Bot:  35 µm × 35 µm × 100 µm channel, centered 120 µm below the
+#       laser plane (z_bot = 1.2 * sz_bot).
+#
+# z_top / z_bot are POSITIVE depths below the laser plane (matches the
+# rosenthal-keyhole `d` convention).
+# ---------------------------------------------------------------------
+setup_temperature_source moser keyhole 340.0 0.155 11.2 2.0959e-6 573.0 650.0 &
+    0.55  60e-6 60e-6  40e-6  0.0 &
+    0.45  35e-6 35e-6 100e-6  120e-6
+
+# ---------------------------------------------------------------------
+# Independent stochastic ΔW/W, ΔD/D fluctuations on each lobe.
+#
+# Cap lobe: lorentzian with tau = 200 µs (~one pool transit time across
+# the cap width at 1.2 m/s), 5% RMS in lateral width, 6% RMS in depth.
+#
+# Depth lobe: lorentzian with longer tau = 500 µs (keyhole oscillations
+# are slower than cap surface dynamics), 8% RMS in width, 10% RMS in
+# depth (the keyhole channel breathes more than the cap).
+#
+# Different seeds keep the two streams uncorrelated.
+#
+# IMPORTANT: laser_fluctuations must come BEFORE laser_path so the
+# specs are in place when each lobe's fluctuation table is materialized
+# inside build_scan(). In keyhole mode, the top|bot|both selector is
+# REQUIRED.
+# ---------------------------------------------------------------------
+laser_fluctuations psd top lorentzian sigma_W 0.05 sigma_D 0.06 tau 200e-6 rho 0.5 seed 12345 dt 5e-6
+laser_fluctuations psd bot lorentzian sigma_W 0.08 sigma_D 0.10 tau 500e-6 rho 0.3 seed 67890 dt 5e-6
+
+# ---------------------------------------------------------------------
+# Multi-scan path. Coordinates in meters; Z is the laser plane.
+# 1.5 mm linear scan at 1.2 m/s, repeated ${NSCANS} times.
+# ---------------------------------------------------------------------
+laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats ${NSCANS}
+
+shell cd DumpFiles_moser_keyhole
+
+stats            5e-4
+
+# Dump T (d6 = darray[5]), grain id, active_flag, and the full
+# quaternion (d1..d4) every 0.5 ms. NSCANS=5 passes take 6.25 ms;
+# at 0.5 ms cadence we get ~12 in-scan snapshots plus cool-down frames.
+dump             1 text 5e-4 dump.keyhole.* id i1 i2 d1 d2 d3 d4 d6 x y z
+dump_modify      1 thresh i2 > 1
+
+# Run for slightly longer than NSCANS * 1.25 ms = 6.25 ms to capture
+# post-scan cooling and the final solidified microstructure.
+run              15e-3
+shell cd ../

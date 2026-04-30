@@ -210,7 +210,6 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     // is issued in the input script.
     single_voxel_cleanup_enabled = false;
     n_single_voxel_flips = 0;
-    single_voxel_aggressive_interval = 0;
     smooth_greedy_multiproposal_enabled = false;
 
     //add the double array
@@ -577,22 +576,6 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
               single_voxel_cleanup_enabled ? "enabled" : "disabled");
   }
 
-  else if (strcmp(command,"single_voxel_aggressive_interval") == 0) {
-    // Usage: single_voxel_aggressive_interval N
-    // After the main phase-transition loop and post-loop ghost sync,
-    // sweep every active_flag == 3 site and call flip_single_voxel_grain
-    // every N app_update() calls. 0 disables. Requires
-    // `single_voxel_cleanup on` to take effect.
-    if (narg != 1)
-      error->all(FLERR,"Illegal single_voxel_aggressive_interval command");
-    single_voxel_aggressive_interval = atoi(arg[0]);
-    if (single_voxel_aggressive_interval < 0)
-      error->all(FLERR,"single_voxel_aggressive_interval must be >= 0");
-    if (domain->me == 0)
-      fprintf(screen,"single_voxel_aggressive_interval = %d\n",
-              single_voxel_aggressive_interval);
-  }
-
   else if (strcmp(command,"smooth_greedy_multiproposal") == 0) {
     // Usage: smooth_greedy_multiproposal on|off
     // When on, smooth_site() picks the energy-minimizing distinct
@@ -786,23 +769,19 @@ void AppAdditiveExtTempTexture::app_update(double dt)
             solid_d[i]--;
     }
     // Single-voxel grain cleanup (opt-in). Triggers exactly once per voxel
-    // after it exits the smoothing window. Covers the epitaxial-end state
-    // (solid_d == -nrefine-1), the nucleation-start state
-    // (solid_d == -nrefine-2), and failed-nucleus flipped neighbors
-    // (solid_d == -nrefine-3) that never got consumed into a larger
-    // grain. A resolved voxel is marked with solid_d = -nrefine-4 so
-    // the branch never re-fires. The flipped-neighbor sentinel at
-    // -nrefine-3 must remain distinct from the resolved sentinel so a
-    // failed nucleus cluster can still be cleaned up.
+    // after it exits the smoothing window. Covers both the epitaxial-end
+    // state (solid_d == -nrefine-1) and the nucleation-start state
+    // (solid_d == -nrefine-2). A resolved voxel is marked with
+    // solid_d = -nrefine-3 so the branch never re-fires.
     else if (single_voxel_cleanup_enabled &&
              active_flag[i] == 3 &&
              solid_d[i] <= -nrefine - 1 &&
-             solid_d[i] >  -nrefine - 4) {
+             solid_d[i] >  -nrefine - 3) {
             if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
             if (in_mushy) { t_mushy_accum += MPI_Wtime() - t_mushy_start; in_mushy = false; }
             if (in_smoothing) { t_smooth_accum += MPI_Wtime() - t_smooth_start; in_smoothing = false; }
             if (flip_single_voxel_grain(i)) {
-                solid_d[i] = -nrefine - 4;
+                solid_d[i] = -nrefine - 3;
             }
     }
     else {
@@ -842,29 +821,6 @@ void AppAdditiveExtTempTexture::app_update(double dt)
   timer->stamp(TIME_COMM);
   t_end = MPI_Wtime();
   t_comm += (t_end - t_start);
-
-  // Aggressive full-domain single-voxel grain sweep. Runs post-ghost-sync
-  // so spin/active_flag ghosts are fresh. flip_single_voxel_grain(i)
-  // no-ops on voxels with a same-spin 26-neighbor or an immature
-  // neighborhood, so it is safe to call on every solidified site. The
-  // narrow solid_d-gated cleanup in the main phase-transition loop above
-  // is retained and independent; both contribute to n_single_voxel_flips.
-  if (single_voxel_cleanup_enabled &&
-      single_voxel_aggressive_interval > 0 &&
-      step_count % single_voxel_aggressive_interval == 0) {
-    for (int i = 0; i < nlocal; i++) {
-      if (active_flag[i] != 3) continue;
-      if (flip_single_voxel_grain(i)) {
-        // Mark resolved so the narrow main-loop branch won't re-fire,
-        // but only on the sentinel range it would otherwise catch.
-        // Immature-neighborhood sites return false and are retried
-        // on the next sweep.
-        if (solid_d[i] <= -nrefine - 1 && solid_d[i] > -nrefine - 4) {
-          solid_d[i] = -nrefine - 4;
-        }
-      }
-    }
-  }
 
   // Optional isotherm-compactness diagnostic for tuning smoothing.
   // Ghosts are guaranteed fresh here (just synced above).

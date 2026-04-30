@@ -222,17 +222,10 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   // Post-solidification single-voxel grain cleanup (opt-in via
   // `single_voxel_cleanup`). When a voxel finishes the nrefine smoothing
   // window and has no same-spin 26-connected neighbor, flip it to the
-  // energy-minimizing neighbor grain. Covers epitaxial-end voxels
-  // (solid_d == -nrefine-1), nucleation centers (solid_d == -nrefine-2),
-  // and failed-nucleus flipped neighbors (solid_d == -nrefine-3).
-  // solid_d == -nrefine-4 marks a voxel whose cleanup has already been
-  // resolved so the branch is not reconsidered.
+  // energy-minimizing neighbor grain. solid_d == -nrefine-3 marks the
+  // cleanup as already resolved for a voxel so it is not reconsidered.
   bool      single_voxel_cleanup_enabled;
   long long n_single_voxel_flips;  // counter reset each app_update() call
-  // 0 = off; else run full-domain flip_single_voxel_grain sweep every N
-  // app_update() calls after the post-phase-loop ghost sync. Requires
-  // single_voxel_cleanup_enabled to have any effect.
-  int       single_voxel_aggressive_interval;
 
   // When true, smooth_site() evaluates every distinct neighbor spin per
   // pass and adopts the energy-minimizing one (steepest descent), rather

@@ -1,0 +1,164 @@
+"SPPARKS Website"_sws - "SPPARKS Documentation"_sd - "SPPARKS Commands"_sc :c
+
+:link(sws,https://spparks.github.io)
+:link(sd,Manual.html)
+:link(sc,Section_commands.html#comm)
+
+:line
+
+laser_fluctuations command :h3
+
+[Syntax:]
+
+laser_fluctuations psd [top|bot|both] shape keyword value ... :pre
+
+selector = optional {top}, {bot}, or {both} for the
+"moser keyhole"_temperature_source_moser.html mode (required in
+keyhole mode, rejected in standard mode) :ulb,l
+shape = one of {white}, {lorentzian}, {pink}, {narrow_band} :l
+keyword/value pairs in any order : :l
+sigma_W : RMS fractional fluctuation in lateral widths (sx, sy);
+          default 0.0 :l
+sigma_D : RMS fractional fluctuation in depth width (sz); default 0.0 :l
+sigma_P : RMS fractional fluctuation in absorbed power (lambda*Q on
+          this lobe); default 0.0 :l
+rho : Pearson correlation between (sigma_W, sigma_D) draws,
+      in [-1, 1]; default 0.0 :l
+seed : RNG seed; default 12345.  Identical seeds reproduce identical
+       streams across MPI ranks (no MPI_Bcast). :l
+dt : PSD update interval in seconds; default 5e-6.  Should match or
+     subdivide the simulation timestep. :l
+tau : Lorentzian correlation time in seconds (lorentzian only) :l
+f0 : narrow-band center frequency in Hz (narrow_band only) :l
+df : narrow-band bandwidth in Hz (narrow_band only) :l,ule
+
+[Examples:]
+
+# Standard (single ellipsoid) Moser source:
+laser_fluctuations psd lorentzian sigma_W 0.05 sigma_D 0.06 tau 200e-6 &
+                  rho 0.5 seed 12345 dt 5e-6 :pre
+
+# Moser keyhole, independent streams on cap and depth:
+laser_fluctuations psd top lorentzian sigma_W 0.05 sigma_D 0.06 &
+                  tau 200e-6 rho 0.5 seed 12345 dt 5e-6
+laser_fluctuations psd bot lorentzian sigma_W 0.08 sigma_D 0.10 &
+                  sigma_P 0.20 tau 500e-6 rho 0.3 seed 67890 dt 5e-6 :pre
+
+# Moser keyhole, "both" sugar (same shape and sigmas; bot's seed is
+# derived from top's via SplitMix64 XOR for independent streams):
+laser_fluctuations psd both lorentzian sigma_W 0.05 sigma_D 0.06 &
+                  tau 200e-6 rho 0.5 seed 12345 dt 5e-6 :pre
+
+[Description:]
+
+Attaches a Power Spectral Density (PSD) noise stream to one or both
+lobes of the "moser"_temperature_source_moser.html source so that the
+ellipsoid widths and absorbed power fluctuate around their nominal
+values.  Because the Moser unsteady integral evaluates the source at
+each emission time with the parameters in effect at that emission, the
+stream is recorded into a {FluctuationTable} that is consumed in
+order: cooling-tail sites correctly retain the {sigma_W, sigma_D,
+sigma_P} that produced them, rather than snapping to the latest values
+each timestep.
+
+This is the Moser-source feature that distinguishes it from the
+Rosenthal source for fluctuation studies; the Rosenthal kernel is
+steady-state and cannot represent per-emission parameter histories.
+
+The four available PSD shapes are:
+
+{white} : uncorrelated Gaussian draws each {dt}.  Flat spectrum. :ulb,l
+{lorentzian} : exponentially-correlated Gaussian process via a
+discrete first-order AR(1) filter with correlation time {tau}.
+Spectrum 1 / (1 + (omega tau)^2). :l
+{pink} : 1/f noise via the Voss-McCartney algorithm (sum of K
+exponentially-spaced AR(1) filters). :l
+{narrow_band} : damped harmonic oscillator driven by white noise,
+parameterized by center frequency {f0} and bandwidth {df}.  Spectrum
+peaks at {f0}. :l,ule
+
+The {sigma_W} draw is applied to both lateral widths (sx and sy)
+identically; {sigma_D} is applied to the depth width sz; {sigma_P} is
+applied to the lobe's power fraction.  The {(sigma_W, sigma_D)} pair
+can be correlated via {rho}; {sigma_P} is independent of the geometric
+draws.
+
+:line
+
+[top|bot|both selector (Moser keyhole mode):]
+
+In "moser keyhole"_temperature_source_moser.html mode the source has
+two lobes (TOP cap and BOT depth) and the selector is required:
+
+{top} : configure the top (cap) lobe only :ulb,l
+{bot} : configure the bottom (depth) lobe only :l
+{both} : sugar - apply the same shape and sigmas to both lobes.  The
+bottom-lobe seed is derived as
+{top_seed XOR 0x9E3779B97F4A7C15ULL} (the SplitMix64 golden constant)
+so the streams are statistically independent yet
+MPI-deterministic. :l,ule
+
+To configure the two lobes with {different} shapes or sigmas (the
+typical canonical case for vapor-driven keyhole instabilities), issue
+two {laser_fluctuations} commands - one with {top}, one with {bot}.
+
+In Moser standard mode the selector must be omitted; supplying it
+raises an error.
+
+:line
+
+[Required ordering:]
+
+setup_temperature_source moser ...
+laser_fluctuations psd [selector] shape ...
+laser_path start ... end ... speed ... :pre
+
+The fluctuation table is materialized inside the
+"laser_path"_laser_path.html call to {build_scan} once the scan
+duration is known, so {laser_fluctuations} must be issued after
+{setup_temperature_source} but before {laser_path}.
+
+:line
+
+[Power conservation note:]
+
+Total absorbed power is {not} conserved through fluctuations.  In
+keyhole mode,
+
+P_total(t) = lambda Q [1 + f_top dP_top(t) + f_bot dP_bot(t)] :pre
+
+so {var(P_total) / (lambda Q)^2 = f_top^2 sigma_P_top^2 +
+f_bot^2 sigma_P_bot^2} for uncorrelated streams.  This is by design:
+the keyhole vapor cavity is a much stronger laser absorber than the
+solid/liquid metal, and the resulting intermittent absorption is one
+of the experimentally-observed drivers of unsteady keyhole behavior.
+A typical canonical setup is {sigma_P_bot ~ 0.20} with
+{sigma_P_top ~ 0.01}.
+
+:line
+
+[Restrictions:]
+
+Only the "moser"_temperature_source_moser.html source supports
+{laser_fluctuations}.  Issuing the command against a Rosenthal or
+HDF5 source raises an error.
+
+The {seed} XOR-derivation in the {both} sugar guarantees independent
+streams across MPI ranks for any input seed.  When in doubt, prefer
+two explicit {top} / {bot} commands with different seeds.
+
+[Related commands:]
+
+"setup_temperature_source"_setup_temperature_source.html,
+"laser_path"_laser_path.html,
+"temperature_source_moser"_temperature_source_moser.html,
+"app_style additive_temperature_texture"_app_additive_temperature_texture.html
+
+[Default:]
+
+sigma_W = 0.0
+sigma_D = 0.0
+sigma_P = 0.0
+rho = 0.0
+seed = 12345
+dt = 5e-6 s

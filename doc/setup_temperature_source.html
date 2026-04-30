@@ -1,0 +1,115 @@
+<HTML>
+<CENTER><A HREF = "https://spparks.github.io">SPPARKS Website</A> - <A HREF = "Manual.html">SPPARKS Documentation</A> - <A HREF = "Section_commands.html#comm">SPPARKS Commands</A> 
+</CENTER>
+
+
+
+
+
+
+<HR>
+
+<H3>setup_temperature_source command 
+</H3>
+<P><B>Syntax:</B>
+</P>
+<PRE>setup_temperature_source type args ... 
+</PRE>
+<UL><LI>type = one of <I>rosenthal</I>, <I>moser</I>, <I>hdf5_unstructured</I>, <I>hdf5_csr</I> 
+
+<LI>args = source-specific arguments (see source doc page) 
+
+
+</UL>
+<P><B>Examples:</B>
+</P>
+<PRE>setup_temperature_source rosenthal standard 340.0 0.155 11.2 2.0959e-6 573.0
+setup_temperature_source rosenthal keyhole 340.0 0.155 0.155 11.2 2.0959e-6 573.0 100e-6 8
+setup_temperature_source moser 340.0 0.155 11.2 2.0959e-6 573.0 650.0 50e-6 50e-6 75e-6
+setup_temperature_source moser keyhole 340.0 0.155 11.2 2.0959e-6 573.0 650.0 &
+    0.55  60e-6 60e-6  40e-6  0.0 &
+    0.45  35e-6 35e-6 100e-6  120e-6
+setup_temperature_source hdf5_unstructured thermal.h5 5e-6 1500.0 300.0 
+</PRE>
+<P><B>Description:</B>
+</P>
+<P>Selects and configures the modular temperature source plugin used by
+<A HREF = "app_additive_temperature_texture.html">app_style additive_temperature_texture</A>
+to drive temperature-dependent melting, mushy-band evolution, and
+solidification.  The first argument selects the source family; the
+remaining arguments are forwarded verbatim to that source's
+<I>setup_temperature_source</I> hook and are documented on the per-source
+pages below.
+</P>
+<P>The four currently registered sources are:
+</P>
+<LI><A HREF = "temperature_source_rosenthal.html">rosenthal</A> : steady-state moving-frame
+analytical solution.  Modes: <I>standard</I> (point source), <I>aniso</I>
+(anisotropic point source with eta_y, eta_z stretching), <I>keyhole</I>
+(surface point + Gauss-Legendre-quadratured line source over <B>-d, d</B>).
+Path-aware via <A HREF = "laser_path.html">laser_path</A>. 
+
+<LI><A HREF = "temperature_source_moser.html">moser</A> : unsteady time-domain Green's
+function convolution of a moving ellipsoidal Gaussian source.  Modes:
+<I>standard</I> (single ellipsoid) and <I>keyhole</I> (overlapping
+double-ellipsoid Goldak-style cap + depth lobes).  Path-aware via
+<A HREF = "laser_path.html">laser_path</A>, and supports per-emission stochastic
+ΔW/ΔD/ΔP fluctuations via
+<A HREF = "laser_fluctuations.html">laser_fluctuations</A>. 
+
+<LI><A HREF = "temperature_source_hdf5.html">hdf5_unstructured / hdf5_csr</A> : reads
+time-resolved unstructured FE temperature data from HDF5 files written
+by external thermal solvers (e.g. Sierra Aria) and interpolates to
+SPPARKS lattice sites.  <I>hdf5_csr</I> is a compressed-storage variant of
+<I>hdf5_unstructured</I> that avoids rectangular-array padding for ragged
+per-node time series. 
+</UL>
+<P>The temperature source plugin is queried each timestep to populate the
+per-site temperature array T (darray[5]).  The application's mushy
+band, nucleation, and grain-growth physics consume T directly; the
+source object owns the geometry, integration scheme, file I/O, and
+fast-forward predictors specific to its solution method.
+</P>
+<HR>
+
+<P><B>Required ordering:</B>
+</P>
+<P>For path-aware sources (<I>rosenthal</I> and <I>moser</I>), commands must be
+issued in this order so that the path geometry is available when each
+source builds its scan state:
+</P>
+<PRE>setup_temperature_source ...
+laser_fluctuations ...   # (Moser only, optional)
+laser_path ... 
+</PRE>
+<P>The Moser source materializes its fluctuation tables inside
+<I>laser_path</I>'s <I>build_scan</I> call; therefore <I>laser_fluctuations</I> must
+precede <I>laser_path</I>.
+</P>
+<HR>
+
+<P><B>Restrictions:</B>
+</P>
+<P>The <I>moser</I> source requires the <I>GREENAM</I> headers (vendored under
+<I>src/GREENAM</I>); these are header-only templates and are present in
+every standard build.
+</P>
+<P>The <I>hdf5_unstructured</I> and <I>hdf5_csr</I> sources require SPPARKS to be
+built with HDF5 and HighFive support; see
+<A HREF = "Section_start.html">Section_start</A> for build options.
+</P>
+<P>The <I>finitediff</I> source name is reserved but not yet implemented and
+will raise an error.
+</P>
+<P><B>Related commands:</B>
+</P>
+<P><A HREF = "app_additive_temperature_texture.html">app_style additive_temperature_texture</A>,
+<A HREF = "laser_path.html">laser_path</A>,
+<A HREF = "laser_fluctuations.html">laser_fluctuations</A>,
+<A HREF = "temperature_source_rosenthal.html">temperature_source_rosenthal</A>,
+<A HREF = "temperature_source_moser.html">temperature_source_moser</A>,
+<A HREF = "temperature_source_hdf5.html">temperature_source_hdf5</A>
+</P>
+<P><B>Default:</B> none
+</P>
+</HTML>

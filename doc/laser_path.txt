@@ -1,0 +1,91 @@
+"SPPARKS Website"_sws - "SPPARKS Documentation"_sd - "SPPARKS Commands"_sc :c
+
+:link(sws,https://spparks.github.io)
+:link(sd,Manual.html)
+:link(sc,Section_commands.html#comm)
+
+:line
+
+laser_path command :h3
+
+[Syntax:]
+
+laser_path start X0 Y0 Z0 end X1 Y1 speed V [repeats N] :pre
+
+X0, Y0, Z0 = path start coordinates in meters (Z0 is the laser plane) :ulb,l
+X1, Y1 = path end coordinates in meters (the path is at constant Z = Z0) :l
+V = laser speed in meters per second (must be > 0) :l
+N = number of times to replay the same linear segment back-to-back
+    (default 1; must be >= 1) :l,ule
+
+[Examples:]
+
+laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2
+laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats 5 :pre
+
+[Description:]
+
+Defines the laser trajectory consumed by the path-aware temperature
+sources used with
+"app_style additive_temperature_texture"_app_additive_temperature_texture.html.
+Coordinates and velocity are SI (meters and m/s).  The path is a single
+linear segment in the (X, Y) plane at constant {Z = Z0} (the laser
+plane); setting {repeats > 1} replays the same start->end segment N
+times back-to-back.  Each pass duration is
+
+dt_pass = sqrt((X1 - X0)^2 + (Y1 - Y0)^2) / V :pre
+
+so the total scan time is {N * dt_pass}.  Subsequent commands
+(typically the "run"_run.html command) advance simulation time across
+the full scan and any post-scan cooling.
+
+The active temperature source is updated as follows:
+
+For the "rosenthal"_temperature_source_rosenthal.html source, the path
+is stored in {scan_layer} for use by the per-step Rosenthal evaluation
+and the fast-forward predictor.  The 1/R singularity guard {r_min} is
+sized to {0.5 * dx}. :ulb,l
+
+For the "moser"_temperature_source_moser.html source, the path is
+handed over to the source's {build_scan} method, which constructs the
+GREENAM {LaserScan} / {ScanIntegration} state for the active lobe(s)
+and materializes any pending PSD fluctuation tables. :l
+
+For the "hdf5_unstructured / hdf5_csr"_temperature_source_hdf5.html
+sources, this command is accepted but has no effect (the laser
+trajectory is implicit in the FE temperature trace). :l,ule
+
+:line
+
+[Required ordering:]
+
+For the Moser source with fluctuations, the correct command order is
+
+setup_temperature_source moser ...
+laser_fluctuations psd ...
+laser_path start ... end ... speed ... :pre
+
+so that the fluctuation specs are in place when {build_scan} populates
+each lobe's PSD table.  See
+"laser_fluctuations"_laser_fluctuations.html for details.
+
+:line
+
+[Restrictions:]
+
+Currently only a single linear scan segment is supported per
+{laser_path} command (with optional N-fold replay).  Multi-segment
+arbitrary-shape paths are not yet supported by the path-aware
+temperature sources; for arbitrary scan strategies use the
+"hdf5_unstructured / hdf5_csr"_temperature_source_hdf5.html sources
+with an externally-prepared FE thermal trace.
+
+[Related commands:]
+
+"setup_temperature_source"_setup_temperature_source.html,
+"laser_fluctuations"_laser_fluctuations.html,
+"app_style additive_temperature_texture"_app_additive_temperature_texture.html
+
+[Default:]
+
+repeats = 1

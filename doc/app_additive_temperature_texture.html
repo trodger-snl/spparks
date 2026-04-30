@@ -1,0 +1,258 @@
+<HTML>
+<CENTER><A HREF = "https://spparks.github.io">SPPARKS Website</A> - <A HREF = "Manual.html">SPPARKS Documentation</A> - <A HREF = "Section_commands.html#comm">SPPARKS Commands</A> 
+</CENTER>
+
+
+
+
+
+
+<HR>
+
+<H3>app_style additive_temperature_texture command 
+</H3>
+<P><B>Syntax:</B>
+</P>
+<PRE>app_style additive_temperature_texture nspins dx dt nrefine 
+</PRE>
+<UL><LI>style = additive_temperature_texture 
+
+<LI>nspins = number of possible Potts model spins 
+
+<LI>dx = lattice spacing in meters (SI) 
+
+<LI>dt = simulation timestep in seconds (SI) 
+
+<LI>nrefine = number of post-solidification rejection-MC refinement passes per voxel 
+</UL>
+<P><B>Examples:</B>
+</P>
+<PRE>app_style additive_temperature_texture 1000000 5e-6 5e-6 2 
+</PRE>
+<P><B>Description:</B>
+</P>
+<P>This is an on-lattice additive manufacturing (AM) application derived
+from <A HREF = "app_potts_quaternion.html">app_style potts/quaternion</A>.  It
+simulates melting, solidification, and texture evolution driven by an
+externally-supplied temperature field.  Crystallographic orientations
+are tracked on each site as unit quaternions, and grain mobility is
+biased by the local thermal gradient direction so that columnar /
+textured solidification and competitive grain growth emerge naturally.
+</P>
+<P>The temperature field is provided by a modular <I>temperature source</I>
+plugin selected at runtime via the
+<A HREF = "setup_temperature_source.html">setup_temperature_source</A> command.
+Three source families are currently available:
+</P>
+<UL><LI><A HREF = "temperature_source_rosenthal.html">rosenthal</A> : steady-state
+moving-frame analytical solution (point source, anisotropic point
+source, or surface point + line-source keyhole). 
+
+<LI><A HREF = "temperature_source_moser.html">moser</A> : unsteady time-domain Green's
+function convolution of an ellipsoidal Gaussian source moving along a
+path; supports a Goldak-style overlapping double-ellipsoid keyhole
+mode and per-emission stochastic source-width and power
+fluctuations. 
+
+<LI><A HREF = "temperature_source_hdf5.html">hdf5_unstructured / hdf5_csr</A> : reads
+time-resolved unstructured FE thermal data (e.g. Sierra / Diablo /
+Albany) from HDF5 files and interpolates to lattice sites. 
+</UL>
+<P>The <I>rosenthal</I> and <I>moser</I> sources additionally consume a
+<A HREF = "laser_path.html">laser_path</A> command (linear scan, optionally
+repeated) that defines the laser trajectory in world coordinates, and
+the <I>moser</I> source optionally consumes
+<A HREF = "laser_fluctuations.html">laser_fluctuations</A> commands that attach
+Power Spectral Density (PSD) noise streams to the source widths and
+power.
+</P>
+<P>For each lattice site, every timestep the application: (1) queries
+the active temperature source for T(x,y,z,t); (2) tags the site as
+molten when T >= liquidus, mushy when solidus <= T < liquidus, and
+solid otherwise; (3) randomizes the spin and quaternion at sites
+entering the molten state; (4) evolves quaternions through the mushy
+band using a Monte Carlo nucleation model (threshold or continuous,
+see <I>nucleation_mode</I>) and the analytical solidification-front
+velocity polynomial <I>solid_front_vel</I>; (5) applies <I>nrefine</I>
+rejection-MC smoothing passes per voxel after solidification,
+optionally followed by single-voxel-grain cleanup.
+</P>
+<HR>
+
+<P><B>Application-specific commands:</B>
+</P>
+<P>The following commands are parsed by this application's <I>input_app</I>
+hook in addition to all general SPPARKS commands.
+</P>
+<P>Thermal and material properties:
+</P>
+<UL><LI><I>liquidus</I> <I>Tl</I> : liquidus temperature in K. 
+
+<LI><I>solidus</I> <I>Ts</I> : solidus temperature in K. 
+
+<LI><I>solid_front_vel</I> <I>N c0 c1 ... cN-1</I> : coefficients of the polynomial
+v(dT) used as the analytical solidification-front velocity in the
+mushy band. 
+</UL>
+<P>Nucleation:
+</P>
+<UL><LI><I>nucleation_density</I> <I>n0</I> : volumetric nucleation site density in
+sites per m^3. 
+
+<LI><I>critical_undercooling</I> <I>dTc</I> : mean critical undercooling for
+heterogeneous nucleation in K. 
+
+<LI><I>undercooling_deviation</I> <I>sigma_T</I> : standard deviation of the
+critical undercooling distribution in K. 
+
+<LI><I>mean_nuclei_volume</I> <I>Vn</I> : mean grain-volume cap for newly nucleated
+grains in m^3. 
+
+<LI><I>nuclei_volume_deviation</I> <I>sigma_V</I> : standard deviation of nucleated
+grain volume in m^3. 
+
+<LI><I>nucleation_mode</I> <I>threshold|continuous</I> : threshold uses a hard
+dT-crossing trigger; continuous uses a temperature-rate-weighted
+Gaussian probability per timestep. Default = threshold. 
+</UL>
+<P>Texture and misorientation:
+</P>
+<UL><LI><I>texture_parameters</I> <I>c2 c3</I> : mobility model
+<I>mob(theta) = 1 + c2 * cos(c3 * theta)</I> where theta is the
+misorientation between the grain's 100 family and the local thermal
+gradient.  <I>c2 >= 0</I> and <I>c3 * acos(1/sqrt(3)) <= pi</I> are enforced
+for monotonicity. 
+
+<LI><I>misorientation_function</I> <I>max_misorient mis_thresh</I> optionally
+followed by <I>alpha</I> : parameters of the per-event misorientation
+envelope; <I>mis_thresh</I> is supplied in degrees and converted to
+radians. 
+
+<LI><I>misorientation_target</I> <I>gradient|random</I> : selects whether
+misorientation is computed against the local thermal gradient
+(default) or a fixed random target axis. 
+</UL>
+<P>Temperature source plumbing:
+</P>
+<UL><LI><A HREF = "setup_temperature_source.html">setup_temperature_source</A>
+<I>type</I> followed by source-specific args : choose and configure the
+temperature source plugin.  Required. 
+
+<LI><A HREF = "laser_path.html">laser_path</A>
+<I>start X0 Y0 Z0 end X1 Y1 speed V</I> optionally followed by
+<I>repeats N</I> : defines the laser trajectory (Rosenthal / Moser sources
+only). 
+
+<LI><A HREF = "laser_fluctuations.html">laser_fluctuations</A>
+<I>psd</I> optionally followed by <I>top|bot|both</I> <I>shape ...</I> : attach PSD
+noise streams to the Moser source widths and power. 
+</UL>
+<P>Temperature post-processing:
+</P>
+<UL><LI><I>temperature_smooth</I> <I>tmin tmax sigma_xy sigma_z</I> optionally followed
+by <I>alpha guard passes diag_interval</I> : opt-in Gaussian smoothing of
+the temperature array inside an in-window band, intended for the
+solidification region.  <I>alpha</I> is the blend factor; <I>guard</I> is a
+soft taper outside the window so sites moving in or out of the band
+do not see a discontinuity. 
+
+<LI><I>nodal_smooth</I> <I>sigma_xy sigma_z passes alpha</I> : nodal mesh-Laplacian
+smoothing of the temperature field at the source level (forwarded to
+sources that implement it; no-op otherwise). 
+</UL>
+<P>Microstructure post-processing:
+</P>
+<UL><LI><I>single_voxel_cleanup</I> <I>on|off</I> : after a voxel exits the <I>nrefine</I>
+window, if its full 26-neighbor first shell is solidified and
+contains no same-spin neighbor, flip it to the energy-minimizing
+neighbor grain.  Default off. 
+
+<LI><I>smooth_greedy_multiproposal</I> <I>on|off</I> : during <I>nrefine</I> smoothing
+passes, evaluate every distinct neighbor spin and adopt the
+energy-minimizing one (steepest descent) instead of testing one
+random proposal per pass.  Default off. 
+</UL>
+<P>Voids (porosity):
+</P>
+<UL><LI><I>void_density</I> <I>n</I> : volumetric pore density in voids per m^3.
+Mutually exclusive with <I>void_pore_fraction</I>. 
+
+<LI><I>void_pore_fraction</I> <I>f</I> : target volumetric pore fraction in
+[0, 1).  Mutually exclusive with <I>void_density</I>. 
+
+<LI><I>void_size_distribution</I> <I>mean std min max</I> : truncated normal
+distribution of pore radii in micrometers. 
+</UL>
+<P>HDF5 source optimization:
+</P>
+<UL><LI><I>temperature_optimization</I> <I>spatial_grid|element_cache|nodal_precompute</I>
+<I>on|off</I> : toggle per-feature performance optimizations on the HDF5
+source. 
+
+<LI><I>fast_forward_search_window</I> <I>seconds</I> : look-ahead window used by
+the Rosenthal fast-forward predictor when scanning forward in time
+for the next melt event.  Default 0.1 s. 
+</UL>
+<HR>
+
+<P><B>Site state:</B>
+</P>
+<P>After construction this app exposes the following per-site arrays:
+</P>
+<PRE>iarray<B>0</B>    = spin (grain ID)
+iarray<B>1</B>    = active_flag (0=inactive, 1=active layer, 2=molten,
+                            3=solidified, 5=void)
+darray<B>0..3</B> = (q0, qx, qy, qz) unit quaternion
+darray<B>4</B>    = mobility_out (computed each step)
+darray<B>5</B>    = T (temperature, K)
+darray<B>6</B>    = solid_d (refinement-pass countdown)
+darray<B>7</B>    = G (thermal gradient magnitude at solidification)
+darray<B>8</B>    = V (solidification rate at solidification) 
+</PRE>
+<P>Substrate vs. powder layers and the per-site initial state are set
+with the standard <A HREF = "set.html">set</A> command before the run.
+</P>
+<HR>
+
+<P><B>Example inputs:</B>
+</P>
+<P>The <I>examples/rosenthal_am</I> directory contains representative input
+scripts:
+</P>
+<PRE>in.additive.rosenthal_keyhole    : Rosenthal keyhole mode
+in.additive.moser_multiscan_fluct: Moser standard-mode multi-pass
+                                   with PSD fluctuations
+in.additive.moser_keyhole        : Moser double-ellipsoid keyhole
+                                   with independent top/bot streams 
+</PRE>
+<HR>
+
+<P><B>Restrictions:</B>
+</P>
+<P>This application requires
+<A HREF = "app_potts_quaternion.html">app_style potts/quaternion</A> behavior and
+is restricted to square cubic lattices.  It can only be evolved by a
+rejection KMC (rKMC) algorithm; see the <A HREF = "sweep.html">sweep</A> command
+for more details.  The <A HREF = "create_sites.html">create_sites</A> command must
+be called before the first temperature query.
+</P>
+<P><B>Related commands:</B>
+</P>
+<P><A HREF = "app_potts_quaternion.html">app_style potts/quaternion</A>,
+<A HREF = "app_am_ellipsoid.html">app_style am/ellipsoid</A>,
+<A HREF = "app_potts_am_path_gen.html">app_style potts/am/path/gen</A>,
+<A HREF = "setup_temperature_source.html">setup_temperature_source</A>,
+<A HREF = "laser_path.html">laser_path</A>,
+<A HREF = "laser_fluctuations.html">laser_fluctuations</A>
+</P>
+<P><B>Default:</B>
+</P>
+<P>nucleation_mode = threshold
+misorientation_target = gradient
+single_voxel_cleanup = off
+smooth_greedy_multiproposal = off
+fast_forward_search_window = 0.1 s
+temperature smoothing = off (until temperature_smooth is issued)
+void generation = off (until void_density or void_pore_fraction is issued)
+</P>
+</HTML>

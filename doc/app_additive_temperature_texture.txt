@@ -1,0 +1,231 @@
+"SPPARKS Website"_sws - "SPPARKS Documentation"_sd - "SPPARKS Commands"_sc :c
+
+:link(sws,https://spparks.github.io)
+:link(sd,Manual.html)
+:link(sc,Section_commands.html#comm)
+
+:line
+
+app_style additive_temperature_texture command :h3
+
+[Syntax:]
+
+app_style additive_temperature_texture nspins dx dt nrefine :pre
+
+style = additive_temperature_texture :ulb,l
+nspins = number of possible Potts model spins :l
+dx = lattice spacing in meters (SI) :l
+dt = simulation timestep in seconds (SI) :l
+nrefine = number of post-solidification rejection-MC refinement passes per voxel :l,ule
+
+[Examples:]
+
+app_style additive_temperature_texture 1000000 5e-6 5e-6 2 :pre
+
+[Description:]
+
+This is an on-lattice additive manufacturing (AM) application derived
+from "app_style potts/quaternion"_app_potts_quaternion.html.  It
+simulates melting, solidification, and texture evolution driven by an
+externally-supplied temperature field.  Crystallographic orientations
+are tracked on each site as unit quaternions, and grain mobility is
+biased by the local thermal gradient direction so that columnar /
+textured solidification and competitive grain growth emerge naturally.
+
+The temperature field is provided by a modular {temperature source}
+plugin selected at runtime via the
+"setup_temperature_source"_setup_temperature_source.html command.
+Three source families are currently available:
+
+"rosenthal"_temperature_source_rosenthal.html : steady-state
+moving-frame analytical solution (point source, anisotropic point
+source, or surface point + line-source keyhole). :ulb,l
+"moser"_temperature_source_moser.html : unsteady time-domain Green's
+function convolution of an ellipsoidal Gaussian source moving along a
+path; supports a Goldak-style overlapping double-ellipsoid keyhole
+mode and per-emission stochastic source-width and power
+fluctuations. :l
+"hdf5_unstructured / hdf5_csr"_temperature_source_hdf5.html : reads
+time-resolved unstructured FE thermal data (e.g. Sierra / Diablo /
+Albany) from HDF5 files and interpolates to lattice sites. :l,ule
+
+The {rosenthal} and {moser} sources additionally consume a
+"laser_path"_laser_path.html command (linear scan, optionally
+repeated) that defines the laser trajectory in world coordinates, and
+the {moser} source optionally consumes
+"laser_fluctuations"_laser_fluctuations.html commands that attach
+Power Spectral Density (PSD) noise streams to the source widths and
+power.
+
+For each lattice site, every timestep the application: (1) queries
+the active temperature source for T(x,y,z,t); (2) tags the site as
+molten when T >= liquidus, mushy when solidus <= T < liquidus, and
+solid otherwise; (3) randomizes the spin and quaternion at sites
+entering the molten state; (4) evolves quaternions through the mushy
+band using a Monte Carlo nucleation model (threshold or continuous,
+see {nucleation_mode}) and the analytical solidification-front
+velocity polynomial {solid_front_vel}; (5) applies {nrefine}
+rejection-MC smoothing passes per voxel after solidification,
+optionally followed by single-voxel-grain cleanup.
+
+:line
+
+[Application-specific commands:]
+
+The following commands are parsed by this application's {input_app}
+hook in addition to all general SPPARKS commands.
+
+Thermal and material properties:
+
+{liquidus} {Tl} : liquidus temperature in K. :ulb,l
+{solidus} {Ts} : solidus temperature in K. :l
+{solid_front_vel} {N c0 c1 ... cN-1} : coefficients of the polynomial
+v(dT) used as the analytical solidification-front velocity in the
+mushy band. :l,ule
+
+Nucleation:
+
+{nucleation_density} {n0} : volumetric nucleation site density in
+sites per m^3. :ulb,l
+{critical_undercooling} {dTc} : mean critical undercooling for
+heterogeneous nucleation in K. :l
+{undercooling_deviation} {sigma_T} : standard deviation of the
+critical undercooling distribution in K. :l
+{mean_nuclei_volume} {Vn} : mean grain-volume cap for newly nucleated
+grains in m^3. :l
+{nuclei_volume_deviation} {sigma_V} : standard deviation of nucleated
+grain volume in m^3. :l
+{nucleation_mode} {threshold|continuous} : threshold uses a hard
+dT-crossing trigger; continuous uses a temperature-rate-weighted
+Gaussian probability per timestep. Default = threshold. :l,ule
+
+Texture and misorientation:
+
+{texture_parameters} {c2 c3} : mobility model
+{mob(theta) = 1 + c2 * cos(c3 * theta)} where theta is the
+misorientation between the grain's 100 family and the local thermal
+gradient.  {c2 >= 0} and {c3 * acos(1/sqrt(3)) <= pi} are enforced
+for monotonicity. :ulb,l
+{misorientation_function} {max_misorient mis_thresh} optionally
+followed by {alpha} : parameters of the per-event misorientation
+envelope; {mis_thresh} is supplied in degrees and converted to
+radians. :l
+{misorientation_target} {gradient|random} : selects whether
+misorientation is computed against the local thermal gradient
+(default) or a fixed random target axis. :l,ule
+
+Temperature source plumbing:
+
+"setup_temperature_source"_setup_temperature_source.html
+{type} followed by source-specific args : choose and configure the
+temperature source plugin.  Required. :ulb,l
+"laser_path"_laser_path.html
+{start X0 Y0 Z0 end X1 Y1 speed V} optionally followed by
+{repeats N} : defines the laser trajectory (Rosenthal / Moser sources
+only). :l
+"laser_fluctuations"_laser_fluctuations.html
+{psd} optionally followed by {top|bot|both} {shape ...} : attach PSD
+noise streams to the Moser source widths and power. :l,ule
+
+Temperature post-processing:
+
+{temperature_smooth} {tmin tmax sigma_xy sigma_z} optionally followed
+by {alpha guard passes diag_interval} : opt-in Gaussian smoothing of
+the temperature array inside an in-window band, intended for the
+solidification region.  {alpha} is the blend factor; {guard} is a
+soft taper outside the window so sites moving in or out of the band
+do not see a discontinuity. :ulb,l
+{nodal_smooth} {sigma_xy sigma_z passes alpha} : nodal mesh-Laplacian
+smoothing of the temperature field at the source level (forwarded to
+sources that implement it; no-op otherwise). :l,ule
+
+Microstructure post-processing:
+
+{single_voxel_cleanup} {on|off} : after a voxel exits the {nrefine}
+window, if its full 26-neighbor first shell is solidified and
+contains no same-spin neighbor, flip it to the energy-minimizing
+neighbor grain.  Default off. :ulb,l
+{smooth_greedy_multiproposal} {on|off} : during {nrefine} smoothing
+passes, evaluate every distinct neighbor spin and adopt the
+energy-minimizing one (steepest descent) instead of testing one
+random proposal per pass.  Default off. :l,ule
+
+Voids (porosity):
+
+{void_density} {n} : volumetric pore density in voids per m^3.
+Mutually exclusive with {void_pore_fraction}. :ulb,l
+{void_pore_fraction} {f} : target volumetric pore fraction in
+\[0, 1).  Mutually exclusive with {void_density}. :l
+{void_size_distribution} {mean std min max} : truncated normal
+distribution of pore radii in micrometers. :l,ule
+
+HDF5 source optimization:
+
+{temperature_optimization} {spatial_grid|element_cache|nodal_precompute}
+{on|off} : toggle per-feature performance optimizations on the HDF5
+source. :ulb,l
+{fast_forward_search_window} {seconds} : look-ahead window used by
+the Rosenthal fast-forward predictor when scanning forward in time
+for the next melt event.  Default 0.1 s. :l,ule
+
+:line
+
+[Site state:]
+
+After construction this app exposes the following per-site arrays:
+
+iarray[0]    = spin (grain ID)
+iarray[1]    = active_flag (0=inactive, 1=active layer, 2=molten,
+                            3=solidified, 5=void)
+darray[0..3] = (q0, qx, qy, qz) unit quaternion
+darray[4]    = mobility_out (computed each step)
+darray[5]    = T (temperature, K)
+darray[6]    = solid_d (refinement-pass countdown)
+darray[7]    = G (thermal gradient magnitude at solidification)
+darray[8]    = V (solidification rate at solidification) :pre
+
+Substrate vs. powder layers and the per-site initial state are set
+with the standard "set"_set.html command before the run.
+
+:line
+
+[Example inputs:]
+
+The {examples/rosenthal_am} directory contains representative input
+scripts:
+
+in.additive.rosenthal_keyhole    : Rosenthal keyhole mode
+in.additive.moser_multiscan_fluct: Moser standard-mode multi-pass
+                                   with PSD fluctuations
+in.additive.moser_keyhole        : Moser double-ellipsoid keyhole
+                                   with independent top/bot streams :pre
+
+:line
+
+[Restrictions:]
+
+This application requires
+"app_style potts/quaternion"_app_potts_quaternion.html behavior and
+is restricted to square cubic lattices.  It can only be evolved by a
+rejection KMC (rKMC) algorithm; see the "sweep"_sweep.html command
+for more details.  The "create_sites"_create_sites.html command must
+be called before the first temperature query.
+
+[Related commands:]
+
+"app_style potts/quaternion"_app_potts_quaternion.html,
+"app_style am/ellipsoid"_app_am_ellipsoid.html,
+"app_style potts/am/path/gen"_app_potts_am_path_gen.html,
+"setup_temperature_source"_setup_temperature_source.html,
+"laser_path"_laser_path.html,
+"laser_fluctuations"_laser_fluctuations.html
+
+[Default:]
+
+nucleation_mode = threshold
+misorientation_target = gradient
+single_voxel_cleanup = off
+smooth_greedy_multiproposal = off
+fast_forward_search_window = 0.1 s
+temperature smoothing = off (until temperature_smooth is issued)
+void generation = off (until void_density or void_pore_fraction is issued)

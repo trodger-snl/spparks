@@ -1,0 +1,108 @@
+"SPPARKS Website"_sws - "SPPARKS Documentation"_sd - "SPPARKS Commands"_sc :c
+
+:link(sws,https://spparks.github.io)
+:link(sd,Manual.html)
+:link(sc,Section_commands.html#comm)
+
+:line
+
+setup_temperature_source command :h3
+
+[Syntax:]
+
+setup_temperature_source type args ... :pre
+
+type = one of {rosenthal}, {moser}, {hdf5_unstructured}, {hdf5_csr} :ulb,l
+args = source-specific arguments (see source doc page) :l
+:ule
+
+[Examples:]
+
+setup_temperature_source rosenthal standard 340.0 0.155 11.2 2.0959e-6 573.0
+setup_temperature_source rosenthal keyhole 340.0 0.155 0.155 11.2 2.0959e-6 573.0 100e-6 8
+setup_temperature_source moser 340.0 0.155 11.2 2.0959e-6 573.0 650.0 50e-6 50e-6 75e-6
+setup_temperature_source moser keyhole 340.0 0.155 11.2 2.0959e-6 573.0 650.0 &
+    0.55  60e-6 60e-6  40e-6  0.0 &
+    0.45  35e-6 35e-6 100e-6  120e-6
+setup_temperature_source hdf5_unstructured thermal.h5 5e-6 1500.0 300.0 :pre
+
+[Description:]
+
+Selects and configures the modular temperature source plugin used by
+"app_style additive_temperature_texture"_app_additive_temperature_texture.html
+to drive temperature-dependent melting, mushy-band evolution, and
+solidification.  The first argument selects the source family; the
+remaining arguments are forwarded verbatim to that source's
+{setup_temperature_source} hook and are documented on the per-source
+pages below.
+
+The four currently registered sources are:
+
+"rosenthal"_temperature_source_rosenthal.html : steady-state moving-frame
+analytical solution.  Modes: {standard} (point source), {aniso}
+(anisotropic point source with eta_y, eta_z stretching), {keyhole}
+(surface point + Gauss-Legendre-quadratured line source over [-d, d]).
+Path-aware via "laser_path"_laser_path.html. :l
+
+"moser"_temperature_source_moser.html : unsteady time-domain Green's
+function convolution of a moving ellipsoidal Gaussian source.  Modes:
+{standard} (single ellipsoid) and {keyhole} (overlapping
+double-ellipsoid Goldak-style cap + depth lobes).  Path-aware via
+"laser_path"_laser_path.html, and supports per-emission stochastic
+ΔW/ΔD/ΔP fluctuations via
+"laser_fluctuations"_laser_fluctuations.html. :l
+
+"hdf5_unstructured / hdf5_csr"_temperature_source_hdf5.html : reads
+time-resolved unstructured FE temperature data from HDF5 files written
+by external thermal solvers (e.g. Sierra Aria) and interpolates to
+SPPARKS lattice sites.  {hdf5_csr} is a compressed-storage variant of
+{hdf5_unstructured} that avoids rectangular-array padding for ragged
+per-node time series. :l,ule
+
+The temperature source plugin is queried each timestep to populate the
+per-site temperature array T (darray\[5\]).  The application's mushy
+band, nucleation, and grain-growth physics consume T directly; the
+source object owns the geometry, integration scheme, file I/O, and
+fast-forward predictors specific to its solution method.
+
+:line
+
+[Required ordering:]
+
+For path-aware sources ({rosenthal} and {moser}), commands must be
+issued in this order so that the path geometry is available when each
+source builds its scan state:
+
+setup_temperature_source ...
+laser_fluctuations ...   # (Moser only, optional)
+laser_path ... :pre
+
+The Moser source materializes its fluctuation tables inside
+{laser_path}'s {build_scan} call; therefore {laser_fluctuations} must
+precede {laser_path}.
+
+:line
+
+[Restrictions:]
+
+The {moser} source requires the {GREENAM} headers (vendored under
+{src/GREENAM}); these are header-only templates and are present in
+every standard build.
+
+The {hdf5_unstructured} and {hdf5_csr} sources require SPPARKS to be
+built with HDF5 and HighFive support; see
+"Section_start"_Section_start.html for build options.
+
+The {finitediff} source name is reserved but not yet implemented and
+will raise an error.
+
+[Related commands:]
+
+"app_style additive_temperature_texture"_app_additive_temperature_texture.html,
+"laser_path"_laser_path.html,
+"laser_fluctuations"_laser_fluctuations.html,
+"temperature_source_rosenthal"_temperature_source_rosenthal.html,
+"temperature_source_moser"_temperature_source_moser.html,
+"temperature_source_hdf5"_temperature_source_hdf5.html
+
+[Default:] none

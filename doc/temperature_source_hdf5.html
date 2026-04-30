@@ -1,0 +1,140 @@
+<HTML>
+<CENTER><A HREF = "https://spparks.github.io">SPPARKS Website</A> - <A HREF = "Manual.html">SPPARKS Documentation</A> - <A HREF = "Section_commands.html#comm">SPPARKS Commands</A> 
+</CENTER>
+
+
+
+
+
+
+<HR>
+
+<H3>temperature_source hdf5_unstructured / hdf5_csr 
+</H3>
+<P><B>Syntax:</B>
+</P>
+<PRE>setup_temperature_source hdf5_unstructured filename dx threshold_temp default_temp <B>bounds_check_mode</B> <B>grid_cell_mult</B>
+setup_temperature_source hdf5_csr          filename dx threshold_temp default_temp <B>bounds_check_mode</B> <B>grid_cell_mult</B> 
+</PRE>
+<UL><LI>filename = path to an HDF5 file containing the unstructured FE thermal trace 
+
+<LI>dx = SPPARKS lattice spacing in meters (must match <I>app_style</I> dx) 
+
+<LI>threshold_temp = temperature (K) above which a site is considered "active";
+                 used by the fast-forward predictor to skip cool periods 
+
+<LI>default_temp = ambient / fall-back temperature (K) returned outside the FE
+               mesh and before the first layer becomes active 
+
+<LI>bounds_check_mode = optional integer; 0 = silent, 1 = warn on out-of-mesh
+                    sites, 2 = error.  Default 0. 
+
+<LI>grid_cell_mult = optional positive double controlling the spatial-grid bin
+                 size used for fast point-in-element lookup, in units of dx.
+                 Default 100.0 (i.e. one bin per 100 lattice cells). 
+</UL>
+<P><B>Examples:</B>
+</P>
+<PRE>setup_temperature_source hdf5_unstructured thermal_trace.h5 5e-6 1500.0 300.0
+setup_temperature_source hdf5_csr           thermal_trace_csr.h5 5e-6 1500.0 300.0 1 50.0 
+</PRE>
+<P><B>Description:</B>
+</P>
+<P>Loads a time-resolved unstructured finite-element temperature trace
+from an HDF5 file written by an external thermal solver (e.g. Sierra
+Aria, Diablo, Albany), and interpolates it onto SPPARKS lattice sites
+each timestep.  Selected via
+<A HREF = "setup_temperature_source.html">setup_temperature_source</A> with type
+<I>hdf5_unstructured</I> or <I>hdf5_csr</I>.
+</P>
+<P>The HDF5 file is organized as a sequence of <I>layers</I> (one HDF5 group
+per pass / scan-line / pause) containing:
+</P>
+<UL><LI><I>layerTimes</I> : monotonically-increasing array of layer activation
+times (seconds). 
+
+<LI>per-layer datasets: nodal coordinates, element connectivity, and the
+nodal time-temperature traces for the nodes touched in that layer. 
+</UL>
+<P>For each lattice site the source caches the FE element it falls inside
+(or "outside mesh" if it falls outside any element in the active
+layers) and interpolates the node temperatures by trilinear / tet shape
+functions at the requested simulation time.  A fast-forward predictor
+<I>get_next_time_with_temperature(current_time, threshold)</I> walks the
+layer table forward to find the earliest time at which any node's
+temperature exceeds <I>threshold_temp</I>, so the simulation can skip
+periods when the laser is off the local subdomain.
+</P>
+<P>The two variants share identical setup, lookup, and interpolation
+logic, and differ only in HDF5 storage format:
+</P>
+<LI><UL><I>hdf5_unstructured</I> : node temperatures are stored as a rectangular
+<I>(layers, nodes, time)</I> array.  Simpler format; pads to the longest
+per-node trace and reads with one hyperslab per layer. 
+
+<LI><I>hdf5_csr</I> : node temperatures are stored in compressed sparse-row
+form (<I>nodeOffsets</I> + flat <I>times</I> + flat <I>temperatures</I>) so that
+ragged per-node traces incur no padding.  Reads merged hyperslabs to
+amortize HDF5 metadata cost.  Recommended for sparse / highly-ragged
+thermal traces. 
+</UL>
+<P>When SPPARKS is built against parallel HDF5 (<I>HighFive</I> +
+<I>H5_HAVE_PARALLEL</I>), the source uses MPI-IO so each rank reads only
+the slabs of nodes that intersect its local subdomain.  Per-rank chunk
+filtering is the dominant I/O optimization for large simulations;
+collective metadata is intentionally disabled because some ranks may
+load zero chunks for a given layer and would deadlock under collective
+metadata access.
+</P>
+<HR>
+
+<P><B>Optimizations:</B>
+</P>
+<P>The HDF5 sources expose three independent performance toggles via the
+<A HREF = "app_additive_temperature_texture.html">app_style additive_temperature_texture</A>
+<I>temperature_optimization</I> command:
+</P>
+<UL><LI><I>spatial_grid</I> : bin elements into a uniform grid for O(1) point-in-element
+queries instead of brute-force O(N_elem). Default on. 
+
+<LI><I>element_cache</I> : cache the containing element ID per site between
+timesteps.  Most sites stay in the same element across consecutive
+queries.  Default on. 
+
+<LI><I>nodal_precompute</I> : precompute the per-node temperature at the
+current simulation time once per step, then interpolate sites against
+those precomputed values.  Requires <I>element_cache</I>.  Default on. 
+</UL>
+<P>The <I>grid_cell_mult</I> setup-time argument tunes the spatial-grid bin
+size; smaller values create more, smaller bins and trade memory for
+faster lookup.
+</P>
+<HR>
+
+<P><B>Restrictions:</B>
+</P>
+<P>The HDF5 sources require SPPARKS to be built with HDF5 and HighFive
+support; see <A HREF = "Section_start.html">Section_start</A> for build options.
+Without HighFive, only the <I>hdf5_csr</I> variant's compressed reader is
+unavailable; without HDF5 entirely, neither variant is usable.
+</P>
+<P>The HDF5 sources are not path-aware in the SPPARKS sense
+(<I>laser_path</I> and <I>laser_fluctuations</I> have no effect): the laser
+trajectory is implicitly encoded in the FE temperature trace.
+</P>
+<P><B>Related commands:</B>
+</P>
+<P><A HREF = "setup_temperature_source.html">setup_temperature_source</A>,
+<A HREF = "temperature_source_rosenthal.html">temperature_source_rosenthal</A>,
+<A HREF = "temperature_source_moser.html">temperature_source_moser</A>,
+<A HREF = "app_additive_temperature_texture.html">app_style additive_temperature_texture</A>
+</P>
+<P><B>Default:</B>
+</P>
+<P>bounds_check_mode = 0
+grid_cell_mult = 100.0
+spatial_grid = on
+element_cache = on
+nodal_precompute = on
+</P>
+</HTML>

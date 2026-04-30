@@ -1,0 +1,177 @@
+"SPPARKS Website"_sws - "SPPARKS Documentation"_sd - "SPPARKS Commands"_sc :c
+
+:link(sws,https://spparks.github.io)
+:link(sd,Manual.html)
+:link(sc,Section_commands.html#comm)
+
+:line
+
+temperature_source moser :h3
+
+[Syntax:]
+
+setup_temperature_source moser           Q lambda k alpha T0 cp sx sy sz
+setup_temperature_source moser standard  Q lambda k alpha T0 cp sx sy sz
+setup_temperature_source moser keyhole   Q lambda k alpha T0 cp &
+    f_top sx_top sy_top sz_top z_top &
+    f_bot sx_bot sy_bot sz_bot z_bot :pre
+
+mode = omitted (legacy single-ellipsoid), {standard} (single ellipsoid),
+       or {keyhole} (overlapping double-ellipsoid Goldak-style) :ulb,l
+Q = total laser power (W) :l
+lambda = absorption efficiency (-); absorbed power = lambda * Q :l
+k = thermal conductivity (W/(m K)) :l
+alpha = thermal diffusivity (m^2/s); used with cp to recover density rho = k/(alpha cp) :l
+T0 = ambient / preheat temperature (K) :l
+cp = specific heat capacity (J/(kg K)) :l
+sx, sy, sz = ellipsoid Gaussian widths (m), single-ellipsoid form :l
+f_top, f_bot = power-fraction split of the absorbed power lambda*Q;
+               must sum to 1 within 1e-6 (keyhole only) :l
+sx_top, sy_top, sz_top = top-lobe ellipsoid widths (m) (keyhole only) :l
+z_top = positive depth of the top lobe below the laser plane (m) (keyhole only) :l
+sx_bot, sy_bot, sz_bot = bottom-lobe ellipsoid widths (m) (keyhole only) :l
+z_bot = positive depth of the bottom lobe below the laser plane (m) (keyhole only) :l,ule
+
+[Examples:]
+
+setup_temperature_source moser 340.0 0.155 11.2 2.0959e-6 573.0 650.0 50e-6 50e-6 75e-6 :pre
+
+setup_temperature_source moser keyhole 340.0 0.155 11.2 2.0959e-6 573.0 650.0 &
+    0.55  60e-6 60e-6  40e-6  0.0 &
+    0.45  35e-6 35e-6 100e-6  120e-6 :pre
+
+[Description:]
+
+Implements an unsteady time-domain Green's-function solution for the
+temperature rise around an ellipsoidal Gaussian heat source moving
+along a path through a half-space.  Selected via
+"setup_temperature_source"_setup_temperature_source.html with type
+{moser}.  Two modes are available.
+
+{standard} (single ellipsoid).  The temperature at world-space site
+(x,y,z) and time t is the convolution
+
+T(x,y,z,t) - T0 = (1 / (rho cp)) * integral_0^t G(x - xs(t'),
+                  y - ys(t'), z - zL, t - t') q(t') dt' :pre
+
+where {(xs,ys,zL)} is the laser path, q(t') is the volumetric source
+strength, and G is the half-space Gaussian-source Green's function
+implemented in the {GREENAM} headers.  The integral is evaluated by
+adaptive Gauss-Legendre quadrature for each (x,y,z,t) query.  Because
+the integrand carries the laser parameters {at the time of emission}
+along with the path geometry, sites in the cooling tail correctly
+"remember" the source widths and power that produced them.
+
+{keyhole} (overlapping double-ellipsoid).  Two ellipsoidal Gaussian
+sources share the laser path:
+
+  TOP cap   : wide and shallow, centered at the laser plane.  Carries
+              {f_top * lambda Q} and models the broad surface
+              conduction lobe.
+
+  BOT depth : narrow and deep, centered {z_bot} below the laser plane.
+              Carries {f_bot * lambda Q} and models the keyhole
+              drilling channel.
+
+The free-surface cutoff is the actual laser plane (z = zL); the bottom
+lobe sits below the surface but the surface itself is unchanged.  The
+two lobes integrate independently (each with its own
+{ScanIntegration}) and the result is summed; per-query cost is
+therefore ~2x the standard mode.
+
+Both modes produce identical results to a fluctuation-free unsteady
+Goldak source, and the {standard} path collapses to the legacy
+single-ellipsoid form bit-for-bit when called with the same inputs and
+seed.
+
+:line
+
+[Stochastic source fluctuations:]
+
+The Moser source supports per-emission ΔW/ΔD/ΔP fluctuations attached
+via "laser_fluctuations"_laser_fluctuations.html.  Each lobe carries
+an independent PSD stream:
+
+In {standard} mode, omit the {top|bot|both} selector. :ulb,l
+In {keyhole} mode the selector is required: {top}, {bot}, or {both}.
+The {both} sugar applies the same shape and sigmas to both lobes and
+derives the bottom-lobe seed as
+{top_seed XOR 0x9E3779B97F4A7C15ULL} (SplitMix64 golden constant) so
+the two streams are independent yet MPI-deterministic. :l,ule
+
+Because the integrand carries each emission's own parameters,
+fluctuations applied to a past emission contribute to the cooling tail
+with their original ΔW/ΔD/ΔP values rather than snapping to the latest
+values each step.  This is the unsteady-integral feature that
+distinguishes the Moser source from the Rosenthal source for
+fluctuation-driven studies.
+
+For the canonical vapor-absorption keyhole instability, attach a small
+{sigma_P} to the {bot} lobe (the cap is largely surface-conduction and
+fluctuates less in absorbed power); typical values are
+{sigma_P_bot ~ 0.20} and {sigma_P_top ~ 0.01}.  Total absorbed power is
+{not} conserved through fluctuations:
+
+P_total(t) = lambda Q [1 + f_top dP_top(t) + f_bot dP_bot(t)] :pre
+
+so the variance of the total is {f_top^2 sigma_P_top^2 +
+f_bot^2 sigma_P_bot^2} for uncorrelated streams.
+
+:line
+
+[Required ordering:]
+
+setup_temperature_source moser ...
+laser_fluctuations psd [top|bot|both] ...   # optional
+laser_path start ... end ... speed ... :pre
+
+The fluctuation table is materialized inside the
+"laser_path"_laser_path.html call to {build_scan} once the scan
+duration is known, so {laser_fluctuations} must precede {laser_path}.
+
+:line
+
+[Path-awareness:]
+
+The Moser source is path-aware.  When
+"laser_path"_laser_path.html is called, the source builds one
+{LaserScan} per active lobe with its own {EllipsoidProperties} and an
+effective laser-plane z {zl_eff = laser_plane_z - z_offset}.  Each
+{LaserScan} owns its own waypoint power array {ps_lobe(k) = ps(k) *
+power_fraction}, so per-lobe power fluctuations apply correctly and
+total-absorbed-power audits are self-consistent.
+
+:line
+
+[Restrictions:]
+
+In {keyhole} mode, {z_top} and {z_bot} must be >= 0 (positive depths
+below the laser plane), and {f_top + f_bot} must equal 1 within 1e-6.
+{sx, sy, sz} must all be > 0 on every active lobe.
+
+The Moser source consumes ~2x CPU per query in {keyhole} mode because
+the two lobes refine independently.
+
+[Related commands:]
+
+"setup_temperature_source"_setup_temperature_source.html,
+"laser_path"_laser_path.html,
+"laser_fluctuations"_laser_fluctuations.html,
+"temperature_source_rosenthal"_temperature_source_rosenthal.html,
+"app_style additive_temperature_texture"_app_additive_temperature_texture.html
+
+[Default:]
+
+mode = standard (when the {standard|keyhole} token is omitted)
+n_quad = adaptive (chosen internally per query)
+
+:line
+
+\[1\] Moser, D., et al. "An evaluation of the integral form of the
+heat equation as a closed-form analytical solution to additive
+manufacturing thermal predictions." SAND2017 (Sandia National
+Laboratories).
+
+\[2\] Goldak, J., A. Chakravarti, and M. Bibby. "A new finite element
+model for welding heat sources." Metallurgical Transactions B 15
+(1984): 299–305.

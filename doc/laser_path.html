@@ -1,0 +1,99 @@
+<HTML>
+<CENTER><A HREF = "https://spparks.github.io">SPPARKS Website</A> - <A HREF = "Manual.html">SPPARKS Documentation</A> - <A HREF = "Section_commands.html#comm">SPPARKS Commands</A> 
+</CENTER>
+
+
+
+
+
+
+<HR>
+
+<H3>laser_path command 
+</H3>
+<P><B>Syntax:</B>
+</P>
+<PRE>laser_path start X0 Y0 Z0 end X1 Y1 speed V <B>repeats N</B> 
+</PRE>
+<UL><LI>X0, Y0, Z0 = path start coordinates in meters (Z0 is the laser plane) 
+
+<LI>X1, Y1 = path end coordinates in meters (the path is at constant Z = Z0) 
+
+<LI>V = laser speed in meters per second (must be > 0) 
+
+<LI>N = number of times to replay the same linear segment back-to-back
+    (default 1; must be >= 1) 
+</UL>
+<P><B>Examples:</B>
+</P>
+<PRE>laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2
+laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats 5 
+</PRE>
+<P><B>Description:</B>
+</P>
+<P>Defines the laser trajectory consumed by the path-aware temperature
+sources used with
+<A HREF = "app_additive_temperature_texture.html">app_style additive_temperature_texture</A>.
+Coordinates and velocity are SI (meters and m/s).  The path is a single
+linear segment in the (X, Y) plane at constant <I>Z = Z0</I> (the laser
+plane); setting <I>repeats > 1</I> replays the same start->end segment N
+times back-to-back.  Each pass duration is
+</P>
+<PRE>dt_pass = sqrt((X1 - X0)^2 + (Y1 - Y0)^2) / V 
+</PRE>
+<P>so the total scan time is <I>N * dt_pass</I>.  Subsequent commands
+(typically the <A HREF = "run.html">run</A> command) advance simulation time across
+the full scan and any post-scan cooling.
+</P>
+<P>The active temperature source is updated as follows:
+</P>
+<UL><LI>For the <A HREF = "temperature_source_rosenthal.html">rosenthal</A> source, the path
+is stored in <I>scan_layer</I> for use by the per-step Rosenthal evaluation
+and the fast-forward predictor.  The 1/R singularity guard <I>r_min</I> is
+sized to <I>0.5 * dx</I>. 
+
+<LI>For the <A HREF = "temperature_source_moser.html">moser</A> source, the path is
+handed over to the source's <I>build_scan</I> method, which constructs the
+GREENAM <I>LaserScan</I> / <I>ScanIntegration</I> state for the active lobe(s)
+and materializes any pending PSD fluctuation tables. 
+
+<LI>For the <A HREF = "temperature_source_hdf5.html">hdf5_unstructured / hdf5_csr</A>
+sources, this command is accepted but has no effect (the laser
+trajectory is implicit in the FE temperature trace). 
+</UL>
+<HR>
+
+<P><B>Required ordering:</B>
+</P>
+<P>For the Moser source with fluctuations, the correct command order is
+</P>
+<PRE>setup_temperature_source moser ...
+laser_fluctuations psd ...
+laser_path start ... end ... speed ... 
+</PRE>
+<P>so that the fluctuation specs are in place when <I>build_scan</I> populates
+each lobe's PSD table.  See
+<A HREF = "laser_fluctuations.html">laser_fluctuations</A> for details.
+</P>
+<HR>
+
+<P><B>Restrictions:</B>
+</P>
+<P>Currently only a single linear scan segment is supported per
+<I>laser_path</I> command (with optional N-fold replay).  Multi-segment
+arbitrary-shape paths are not yet supported by the path-aware
+temperature sources; for arbitrary scan strategies use the
+<A HREF = "temperature_source_hdf5.html">hdf5_unstructured / hdf5_csr</A> sources
+with an externally-prepared FE thermal trace.
+</P>
+<P><B>Related commands:</B>
+</P>
+<P><A HREF = "setup_temperature_source.html">setup_temperature_source</A>,
+<A HREF = "laser_fluctuations.html">laser_fluctuations</A>,
+<A HREF = "app_additive_temperature_texture.html">app_style additive_temperature_texture</A>
+</P>
+<P><B>Default:</B>
+</P>
+<P>repeats = 1
+</P>
+</HTML>

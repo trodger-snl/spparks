@@ -1,0 +1,118 @@
+"SPPARKS Website"_sws - "SPPARKS Documentation"_sd - "SPPARKS Commands"_sc :c
+
+:link(sws,https://spparks.github.io)
+:link(sd,Manual.html)
+:link(sc,Section_commands.html#comm)
+
+:line
+
+temperature_source rosenthal :h3
+
+[Syntax:]
+
+setup_temperature_source rosenthal standard Q lambda k alpha T0
+setup_temperature_source rosenthal aniso    Q lambda k alpha T0 eta_y eta_z
+setup_temperature_source rosenthal keyhole  Q lambda_p lambda_l k alpha T0 d [n_quad] :pre
+
+mode = {standard}, {aniso}, or {keyhole} :ulb,l
+Q = total laser power (W) :l
+lambda = absorption efficiency (-); absorbed power = lambda * Q :l
+lambda_p = absorption efficiency for the surface point source (keyhole only) :l
+lambda_l = absorption efficiency for the depth line source (keyhole only) :l
+k = thermal conductivity (W/(m K)) :l
+alpha = thermal diffusivity (m^2/s) :l
+T0 = ambient / preheat temperature (K) :l
+eta_y, eta_z = anisotropic stretching factors in y and z (aniso only); both > 0 :l
+d = half-depth of the line source over [-d, d] (m), keyhole only :l
+n_quad = optional Gauss-Legendre order in [2,64] for the line-source quadrature (default 8) :l,ule
+
+[Examples:]
+
+setup_temperature_source rosenthal standard 340.0 0.155 11.2 2.0959e-6 573.0
+setup_temperature_source rosenthal aniso    340.0 0.155 11.2 2.0959e-6 573.0 1.5 0.7
+setup_temperature_source rosenthal keyhole  340.0 0.155 0.155 11.2 2.0959e-6 573.0 100e-6 8 :pre
+
+[Description:]
+
+Implements the steady-state moving-frame Rosenthal solution for the
+temperature rise around a point or line heat source moving uniformly
+through an infinite half-space.  Selected via
+"setup_temperature_source"_setup_temperature_source.html with type
+{rosenthal}.  Three modes are available.
+
+{standard} : classical Rosenthal point source on the half-space free
+surface. The pool-local temperature is
+
+T(R,xi) = T0 + (lambda Q) / (2 pi k R) * exp(-V (xi + R) / (2 alpha)) :pre
+
+where R is distance to the moving point source, xi is the lab-frame
+distance behind the source along the scan direction, and V is the
+laser speed (set by "laser_path"_laser_path.html).  The free-surface
+factor of 2 is absorbed into the prefactor so that lambda*Q is the
+total absorbed power coupled into the half-space.
+
+{aniso} : anisotropic point source.  Identical to {standard} except the
+in-plane and depth coordinates are pre-scaled by {eta_y} and {eta_z},
+which empirically fits non-spherical pool shapes (transverse-elongated
+melt pools or bowl-shaped penetration profiles) without leaving the
+analytical Rosenthal framework. {eta_y} = {eta_z} = 1 reproduces
+{standard}.
+
+{keyhole} : overlay of two analytical sources sharing the laser path.
+A surface point source with absorption {lambda_p} models the broad
+conduction lobe at the workpiece surface; a depth-distributed line
+source with absorption {lambda_l} models the keyhole drilling channel.
+The line source is integrated along z over the symmetric interval
+[-d, d] using {n_quad}-point Gauss-Legendre quadrature with weights
+and nodes built once at setup time.  Increasing {n_quad} sharpens
+near-field resolution at modest cost.
+
+The total temperature is the linear superposition of the two
+contributions; both share the same {k}, {alpha}, and {V}.  This is the
+analytical-source counterpart of the
+"moser keyhole"_temperature_source_moser.html double-ellipsoid model.
+
+:line
+
+[Path-awareness:]
+
+The Rosenthal source is path-aware.  The driving app translates each
+linear-scan segment defined by "laser_path"_laser_path.html into the
+moving-frame coordinates the kernel expects, and uses the source's
+fast-forward helper {rosenthal_peak_at_distance(R)} to skip ahead
+when no site within the local subdomain can reach the liquidus.
+
+A near-singularity guard {r_min = 0.5 * dx} is set automatically by
+"laser_path"_laser_path.html so the 1/R prefactor remains finite at
+the source itself.
+
+:line
+
+[Restrictions:]
+
+The Rosenthal source is steady-state in the moving frame: it implicitly
+assumes the laser parameters have always been their current value.  In
+particular, if you want the temperature field to "remember" past
+parameter values for cooling-tail sites, use the
+"moser"_temperature_source_moser.html source instead.  Power, width,
+and absorption fluctuations are therefore not supported on the
+Rosenthal source.
+
+The {keyhole} mode requires {d > 0} and 2 <= {n_quad} <= 64.  Values
+outside this range are clamped silently.
+
+[Related commands:]
+
+"setup_temperature_source"_setup_temperature_source.html,
+"laser_path"_laser_path.html,
+"temperature_source_moser"_temperature_source_moser.html,
+"app_style additive_temperature_texture"_app_additive_temperature_texture.html
+
+[Default:]
+
+n_quad = 8
+
+:line
+
+\[1\] Rosenthal, D. "The theory of moving sources of heat and its
+application to metal treatments." Trans. ASME 68 (1946): 849–866.

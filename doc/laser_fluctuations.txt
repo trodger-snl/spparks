@@ -116,7 +116,13 @@ laser_path start ... end ... speed ... :pre
 The fluctuation table is materialized inside the
 "laser_path"_laser_path.html call to {build_scan} once the scan
 duration is known, so {laser_fluctuations} must be issued after
-{setup_temperature_source} but before {laser_path}.
+{setup_temperature_source} but before {laser_path}.  Violating this
+order produces an explicit error:
+
+laser_fluctuations must be issued BEFORE laser_path ... :pre
+
+rather than a silent no-op (the spec would otherwise be stored on the
+source but never materialized into a fluctuation table).
 
 :line
 

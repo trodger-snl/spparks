@@ -24,6 +24,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -192,9 +193,17 @@ void MoserGreenTemperatureSource::setup_temperature_source(const std::vector<std
   }
 
   if (mode == Mode::KEYHOLE) {
-    const double fsum = lobes_[0].power_fraction + lobes_[1].power_fraction;
-    if (std::fabs(fsum - 1.0) > 1.0e-6)
-      error->all(FLERR,"moser keyhole: f_top + f_bot must equal 1 (within 1e-6)");
+    const double f_top = lobes_[0].power_fraction;
+    const double f_bot = lobes_[1].power_fraction;
+    const double fsum  = f_top + f_bot;
+    if (std::fabs(fsum - 1.0) > 1.0e-6) {
+      char errmsg[256];
+      std::snprintf(errmsg, sizeof(errmsg),
+        "moser keyhole: f_top + f_bot must equal 1.0 (within 1e-6); "
+        "got f_top=%.6g, f_bot=%.6g, sum=%.6g (off by %.3e)",
+        f_top, f_bot, fsum, fsum - 1.0);
+      error->all(FLERR, errmsg);
+    }
   }
 
   // rho derived from alpha = k/(rho cp); used only for diagnostics and

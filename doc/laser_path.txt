@@ -69,6 +69,12 @@ so that the fluctuation specs are in place when {build_scan} populates
 each lobe's PSD table.  See
 "laser_fluctuations"_laser_fluctuations.html for details.
 
+{laser_path} requires that "setup_temperature_source"_setup_temperature_source.html
+has already been called; otherwise the command exits with an error of
+the form
+
+laser_path: setup_temperature_source must be called first ... :pre
+
 :line
 
 [Restrictions:]

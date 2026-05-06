@@ -2506,6 +2506,17 @@ void AppAdditiveExtTempTexture::setup_temperature_source_cmd(int narg, char **ar
 
 void AppAdditiveExtTempTexture::laser_path_cmd(int narg, char **arg)
 {
+  // setup_temperature_source must precede laser_path: the Moser source
+  // consumes the path geometry inside build_scan, and the Rosenthal
+  // source needs r_min sized below. Without an active source, the
+  // dynamic_casts below silently no-op and the simulation later crashes
+  // with no useful pointer into the input script.
+  if (!temperature_source)
+    error->all(FLERR,
+      "laser_path: setup_temperature_source must be called first "
+      "(no active temperature source). Add a 'setup_temperature_source "
+      "<type> ...' line before 'laser_path'.");
+
   // Expected token layout (0-based, command name already stripped):
   //   start X0 Y0 Z0 end X1 Y1 speed V [repeats N]
   // Minimum is 9 tokens (no repeats); with repeats it's 11.
@@ -2628,6 +2639,21 @@ void AppAdditiveExtTempTexture::laser_fluctuations_cmd(int narg, char **arg)
     dynamic_cast<MoserGreenTemperatureSource*>(temperature_source.get());
   if (!moser) {
     error->all(FLERR,"laser_fluctuations: only the Moser/Green's-function source supports fluctuations");
+  }
+
+  // The fluctuation table is materialized inside build_scan (called
+  // from laser_path_cmd). If the scan is already built, set_psd_spec
+  // would silently store the spec but never produce a table — the
+  // intended fluctuations would not appear in the simulation. Catch
+  // the reversed order explicitly.
+  if (moser->has_scan()) {
+    error->all(FLERR,
+      "laser_fluctuations must be issued BEFORE laser_path "
+      "(the fluctuation table is materialized inside laser_path once the "
+      "scan duration is known). Correct sequence: "
+      "setup_temperature_source moser ... ; laser_fluctuations psd ... ; "
+      "laser_path start ... . If you intend to change fluctuations after "
+      "the scan was built, re-issue laser_path so build_scan reruns.");
   }
 
   if (strcmp(arg[0],"psd") != 0)

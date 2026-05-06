@@ -53,6 +53,15 @@ through an infinite half-space.  Selected via
 <A HREF = "setup_temperature_source.html">setup_temperature_source</A> with type
 <I>rosenthal</I>.  Three modes are available.
 </P>
+<P>This is a Green's-function method, mathematically the steady-state
+limit of the unsteady Green's-function source described in
+<A HREF = "temperature_source_moser.html">temperature_source moser</A> : Rosenthal
+applies the same point-source kernel but assumes the moving frame has
+reached steady state, while <I>moser</I> integrates an ellipsoidal Gaussian
+Green's function along the time-history of the laser path.  Choose
+<I>rosenthal</I> when the laser parameters are constant in time; choose
+<I>moser</I> when fluctuations or finite source-volume effects matter.
+</P>
 <P><I>standard</I> : classical Rosenthal point source on the half-space free
 surface. The pool-local temperature is
 </P>

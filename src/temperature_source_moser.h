@@ -98,12 +98,12 @@ namespace SPPARKS_NS {
        pointer borrowed by LaserScan is never invalidated.
 ------------------------------------------------------------------------- */
 
-class MoserGreenTemperatureSource : public TemperatureSource {
+class MoserTemperatureSource : public TemperatureSource {
  public:
-  MoserGreenTemperatureSource(class SPPARKS *);
-  virtual ~MoserGreenTemperatureSource();
+  MoserTemperatureSource(class SPPARKS *);
+  virtual ~MoserTemperatureSource();
 
-  enum class Mode { STANDARD, KEYHOLE };
+  enum class MoserMode { STANDARD, KEYHOLE };
 
   // TemperatureSource interface
   virtual void setup_temperature_source(const std::vector<std::string> &args) override;
@@ -132,7 +132,7 @@ class MoserGreenTemperatureSource : public TemperatureSource {
   // ~1e-4 fractional integration error per the GREENAM comments.
   void set_char_length(double cl) { char_length = cl; }
 
-  Mode get_mode() const { return mode; }
+  MoserMode get_mode() const { return mode; }
   int  num_lobes() const { return n_lobes_; }
 
   // ----- Stochastic ΔW/W, ΔD/D, ΔP/P fluctuations -----------------------
@@ -195,8 +195,8 @@ class MoserGreenTemperatureSource : public TemperatureSource {
   double cp;         // specific heat [J/(kg K)]
   double rho;        // density derived from k/(alpha*cp) [kg/m^3]
 
-  // Mode (STANDARD or KEYHOLE)
-  Mode mode;
+  // MoserMode (STANDARD or KEYHOLE)
+  MoserMode mode;
 
   // Quadrature tuning
   double char_length;

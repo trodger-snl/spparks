@@ -191,14 +191,17 @@ with the standard "set"_set.html command before the run.
 
 [Example inputs:]
 
-The {examples/rosenthal_am} directory contains representative input
-scripts:
+Representative input scripts live in two parallel directories, one
+per analytical source family:
 
-in.additive.rosenthal_keyhole    : Rosenthal keyhole mode
-in.additive.moser_multiscan_fluct: Moser standard-mode multi-pass
-                                   with PSD fluctuations
-in.additive.moser_keyhole        : Moser double-ellipsoid keyhole
-                                   with independent top/bot streams :pre
+examples/rosenthal_am/in.additive.rosenthal_standard : steady-state point source
+examples/rosenthal_am/in.additive.rosenthal_aniso    : anisotropic stretch
+examples/rosenthal_am/in.additive.rosenthal_keyhole  : Rosenthal keyhole mode
+examples/moser_am/in.additive.moser                  : single-pass Moser baseline
+examples/moser_am/in.additive.moser_multiscan_fluct  : Moser standard-mode multi-pass
+                                                       with PSD fluctuations
+examples/moser_am/in.additive.moser_keyhole          : Moser double-ellipsoid keyhole
+                                                       with independent top/bot streams :pre
 
 :line
 

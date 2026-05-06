@@ -10,7 +10,7 @@ with header lines (`#`) capturing the config used to produce it.
 **Note:** SPPARKS no longer has a built-in command that loads these
 files. Stochastic fluctuations are now produced internally by the
 Moser/Green's-function source via the `laser_fluctuations psd ...`
-input command (see `examples/rosenthal_am/in.additive.moser_multiscan_fluct`).
+input command (see `examples/moser_am/in.additive.moser_multiscan_fluct`).
 This Python tool is kept as a reference implementation and for
 external workflows that want to generate stochastic tracks for
 non-SPPARKS consumers (analysis, plotting, comparison studies).
@@ -25,7 +25,7 @@ pip install numpy pyyaml          # matplotlib only needed for --plot
 ## Run
 
 ```bash
-cd examples/rosenthal_am/scripts
+cd examples/moser_am/scripts
 python generate_fluctuations.py configs/lorentzian_5pct.yaml \
     -o ../lorentzian_5pct.dat
 

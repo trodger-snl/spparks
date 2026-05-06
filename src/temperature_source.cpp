@@ -78,7 +78,7 @@ std::unique_ptr<TemperatureSource> SPPARKS_NS::create_temperature_source(
   if (type == "rosenthal") {
     return std::make_unique<RosenthalTemperatureSource>(spk);
   } else if (type == "moser") {
-    return std::make_unique<MoserGreenTemperatureSource>(spk);
+    return std::make_unique<MoserTemperatureSource>(spk);
   } else if (type == "hdf5_unstructured") {
     return std::make_unique<HDF5UnstructuredTemperatureSource>(spk);
   } else if (type == "hdf5_csr") {

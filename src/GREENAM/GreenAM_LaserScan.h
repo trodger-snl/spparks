@@ -188,7 +188,7 @@ struct LaserScan {
   }
 
   // SPPARKS extension: attach an emission-time fluctuation table.
-  // Borrowed pointer; the caller (typically MoserGreenTemperatureSource)
+  // Borrowed pointer; the caller (typically MoserTemperatureSource)
   // owns the storage and must keep it alive for the lifetime of this
   // LaserScan. Pass nullptr to disable fluctuations.
   void set_fluctuation_table(const FluctuationTable<RealType> * t) { ftable = t; }

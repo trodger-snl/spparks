@@ -36,11 +36,11 @@ using namespace SPPARKS_NS;
 
 /* ---------------------------------------------------------------------- */
 
-MoserGreenTemperatureSource::MoserGreenTemperatureSource(SPPARKS *spk)
+MoserTemperatureSource::MoserTemperatureSource(SPPARKS *spk)
   : TemperatureSource(spk),
     Q(0.0), lambda(0.0), k_th(0.0), alpha(0.0), T0_default(300.0),
     cp(0.0), rho(0.0),
-    mode(Mode::STANDARD),
+    mode(MoserMode::STANDARD),
     char_length(0.5),
     scan_t_origin(0.0),
     scan_x0(0.0), scan_y0(0.0), scan_x1(0.0), scan_y1(0.0),
@@ -57,7 +57,7 @@ MoserGreenTemperatureSource::MoserGreenTemperatureSource(SPPARKS *spk)
 
 /* ---------------------------------------------------------------------- */
 
-MoserGreenTemperatureSource::~MoserGreenTemperatureSource()
+MoserTemperatureSource::~MoserTemperatureSource()
 {
   cleanup();
 }
@@ -100,7 +100,7 @@ MoserGreenTemperatureSource::~MoserGreenTemperatureSource()
      cp [J/(kg K)]    : specific heat capacity (used to recover rho)
 ------------------------------------------------------------------------- */
 
-void MoserGreenTemperatureSource::setup_temperature_source(const std::vector<std::string> &args)
+void MoserTemperatureSource::setup_temperature_source(const std::vector<std::string> &args)
 {
   auto parse = [&](size_t i) -> double {
     try { return std::stod(args[i]); }
@@ -113,19 +113,19 @@ void MoserGreenTemperatureSource::setup_temperature_source(const std::vector<std
   // Decide mode by looking at the first token.
   size_t first_numeric = 0;
   if (!args.empty() && args[0] == "standard") {
-    mode = Mode::STANDARD;
+    mode = MoserMode::STANDARD;
     first_numeric = 1;
   }
   else if (!args.empty() && args[0] == "keyhole") {
-    mode = Mode::KEYHOLE;
+    mode = MoserMode::KEYHOLE;
     first_numeric = 1;
   }
   else {
-    mode = Mode::STANDARD;
+    mode = MoserMode::STANDARD;
     first_numeric = 0;
   }
 
-  if (mode == Mode::STANDARD) {
+  if (mode == MoserMode::STANDARD) {
     if (args.size() - first_numeric < 9) {
       error->all(FLERR,
         "setup_temperature_source moser [standard]: expected <Q> <lambda> <k> <alpha> <T0> <cp> <sx> <sy> <sz>");
@@ -192,7 +192,7 @@ void MoserGreenTemperatureSource::setup_temperature_source(const std::vector<std
       error->all(FLERR,"moser keyhole: f_top and f_bot must be >= 0");
   }
 
-  if (mode == Mode::KEYHOLE) {
+  if (mode == MoserMode::KEYHOLE) {
     const double f_top = lobes_[0].power_fraction;
     const double f_bot = lobes_[1].power_fraction;
     const double fsum  = f_top + f_bot;
@@ -239,7 +239,7 @@ void MoserGreenTemperatureSource::setup_temperature_source(const std::vector<std
    GREENAM_Scan + GREENAM_Integ + (optional) FluctuationTable.
 ------------------------------------------------------------------------- */
 
-void MoserGreenTemperatureSource::build_scan(double start_time,
+void MoserTemperatureSource::build_scan(double start_time,
                                              double x0, double y0,
                                              double x1, double y1,
                                              double laser_plane_z,
@@ -357,7 +357,7 @@ void MoserGreenTemperatureSource::build_scan(double start_time,
   scan_built = true;
 
   if (domain->me == 0) {
-    if (mode == Mode::KEYHOLE) {
+    if (mode == MoserMode::KEYHOLE) {
       std::cout << "moser keyhole: built " << n_lobes_ << " lobes, "
                 << repeats << " repeats, "
                 << "L=" << L*1e3 << " mm, dt_scan=" << dt_scan*1e3 << " ms, "
@@ -372,7 +372,7 @@ void MoserGreenTemperatureSource::build_scan(double start_time,
     }
     for (int li = 0; li < n_lobes_; ++li) {
       if (lobes_[li].psd_spec_set) {
-        const char *tag = (mode == Mode::KEYHOLE)
+        const char *tag = (mode == MoserMode::KEYHOLE)
                           ? (li == LOBE_TOP ? "top" : "bot")
                           : "";
         std::cout << "moser: attached fluctuation table for lobe " << tag
@@ -393,7 +393,7 @@ void MoserGreenTemperatureSource::build_scan(double start_time,
    the surface itself is unchanged.
 ------------------------------------------------------------------------- */
 
-double MoserGreenTemperatureSource::get_temperature_at_xyz_and_time(double x, double y,
+double MoserTemperatureSource::get_temperature_at_xyz_and_time(double x, double y,
                                                                     double z, double time)
 {
   check_initialization();
@@ -414,21 +414,21 @@ double MoserGreenTemperatureSource::get_temperature_at_xyz_and_time(double x, do
 
 /* ---------------------------------------------------------------------- */
 
-void MoserGreenTemperatureSource::update_temperatures(double /*dt*/, double /*simulation_time*/)
+void MoserTemperatureSource::update_temperatures(double /*dt*/, double /*simulation_time*/)
 {
   // Analytic Green's function: nothing to refresh per timestep.
 }
 
 /* ---------------------------------------------------------------------- */
 
-bool MoserGreenTemperatureSource::needs_data_refresh(double /*simulation_time*/)
+bool MoserTemperatureSource::needs_data_refresh(double /*simulation_time*/)
 {
   return false;
 }
 
 /* ---------------------------------------------------------------------- */
 
-void MoserGreenTemperatureSource::cleanup()
+void MoserTemperatureSource::cleanup()
 {
   for (int li = 0; li < 2; ++li) {
     lobes_[li].integrator.reset();
@@ -442,7 +442,7 @@ void MoserGreenTemperatureSource::cleanup()
 
 /* ---------------------------------------------------------------------- */
 
-bool MoserGreenTemperatureSource::has_fluctuations() const
+bool MoserTemperatureSource::has_fluctuations() const
 {
   for (int li = 0; li < n_lobes_; ++li) {
     if (lobes_[li].psd_spec_set) return true;
@@ -452,10 +452,10 @@ bool MoserGreenTemperatureSource::has_fluctuations() const
 
 /* ---------------------------------------------------------------------- */
 
-void MoserGreenTemperatureSource::print_source_info() const
+void MoserTemperatureSource::print_source_info() const
 {
-  std::cout << "Moser/Green temperature source (unsteady ellipsoid integral)\n"
-            << "  mode       = " << (mode == Mode::KEYHOLE ? "keyhole (double-ellipsoid)" : "standard")
+  std::cout << "Moser temperature source (unsteady-Green's-function ellipsoid integral)\n"
+            << "  mode       = " << (mode == MoserMode::KEYHOLE ? "keyhole (double-ellipsoid)" : "standard")
             << "\n"
             << "  Q          = " << Q          << " W\n"
             << "  lambda     = " << lambda     << "\n"
@@ -478,11 +478,11 @@ void MoserGreenTemperatureSource::print_source_info() const
   std::cout.flush();
 }
 
-void MoserGreenTemperatureSource::print_lobe_info(int li) const
+void MoserTemperatureSource::print_lobe_info(int li) const
 {
   const Lobe &L_ref = lobes_[li];
   const char *tag;
-  if (mode == Mode::KEYHOLE) tag = (li == LOBE_TOP) ? "top" : "bot";
+  if (mode == MoserMode::KEYHOLE) tag = (li == LOBE_TOP) ? "top" : "bot";
   else                       tag = "single";
   std::cout << "  lobe[" << tag << "]: f=" << L_ref.power_fraction
             << " sx,sy,sz=" << L_ref.sx << "," << L_ref.sy << "," << L_ref.sz << " m"
@@ -518,7 +518,7 @@ void MoserGreenTemperatureSource::print_lobe_info(int li) const
    independent stream so cap and depth lobes can pulse out of phase.
 ------------------------------------------------------------------------- */
 
-void MoserGreenTemperatureSource::set_psd_spec(int idx, const PsdSpec &spec)
+void MoserTemperatureSource::set_psd_spec(int idx, const PsdSpec &spec)
 {
   if (idx < 0 || idx >= n_lobes_)
     error->all(FLERR,
@@ -549,7 +549,7 @@ void MoserGreenTemperatureSource::set_psd_spec(int idx, const PsdSpec &spec)
   lobes_[idx].psd_spec_set = true;
 }
 
-void MoserGreenTemperatureSource::psd_reset_filter_state(Lobe &L)
+void MoserTemperatureSource::psd_reset_filter_state(Lobe &L)
 {
   L.ar_state_W = 0.0;
   L.ar_state_D = 0.0;
@@ -563,7 +563,7 @@ void MoserGreenTemperatureSource::psd_reset_filter_state(Lobe &L)
   L.osc_x_P = 0.0; L.osc_v_P = 0.0;
 }
 
-void MoserGreenTemperatureSource::psd_warmup(Lobe &L, int n_steps)
+void MoserTemperatureSource::psd_warmup(Lobe &L, int n_steps)
 {
   double dummy_W = 0.0, dummy_D = 0.0, dummy_P = 0.0;
   for (int i = 0; i < n_steps; ++i) {
@@ -571,7 +571,7 @@ void MoserGreenTemperatureSource::psd_warmup(Lobe &L, int n_steps)
   }
 }
 
-void MoserGreenTemperatureSource::psd_draw_trivariate(Lobe &L,
+void MoserTemperatureSource::psd_draw_trivariate(Lobe &L,
                                                       double &eps_W,
                                                       double &eps_D,
                                                       double &eps_P)
@@ -587,7 +587,7 @@ void MoserGreenTemperatureSource::psd_draw_trivariate(Lobe &L,
   eps_P = z3;
 }
 
-void MoserGreenTemperatureSource::psd_generate_next_sample(Lobe &L,
+void MoserTemperatureSource::psd_generate_next_sample(Lobe &L,
                                                            double &dW,
                                                            double &dD,
                                                            double &dP)
@@ -685,7 +685,7 @@ void MoserGreenTemperatureSource::psd_generate_next_sample(Lobe &L,
   dW = 0.0; dD = 0.0; dP = 0.0;
 }
 
-void MoserGreenTemperatureSource::populate_fluctuation_table(Lobe &L,
+void MoserTemperatureSource::populate_fluctuation_table(Lobe &L,
                                                               double t_start,
                                                               double t_end)
 {

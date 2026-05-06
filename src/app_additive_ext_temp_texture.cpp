@@ -654,9 +654,9 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     RosenthalTemperatureSource* ros_source =
       hdf5_source ? nullptr
                   : dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
-    MoserGreenTemperatureSource* moser_source =
+    MoserTemperatureSource* moser_source =
       (hdf5_source || ros_source) ? nullptr
-                  : dynamic_cast<MoserGreenTemperatureSource*>(temperature_source.get());
+                  : dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
     if (hdf5_source) {
       fast_forward_threshold = hdf5_source->get_fast_forward_threshold();
     } else if (ros_source || moser_source) {
@@ -2567,11 +2567,12 @@ void AppAdditiveExtTempTexture::laser_path_cmd(int narg, char **arg)
     ros->set_r_min(0.5 * dx);
   }
 
-  // If the active source is Moser-Green, hand the path geometry over so
+  // If the active source is the Moser unsteady Green's-function source,
+  // hand the path geometry over so
   // it can build its own GREENAM LaserScan/ScanIntegration. The Moser
   // source is path-aware and consumes simulation time + world-space
   // coordinates directly; it does not use scan_layer.
-  if (auto* moser = dynamic_cast<MoserGreenTemperatureSource*>(temperature_source.get())) {
+  if (auto* moser = dynamic_cast<MoserTemperatureSource*>(temperature_source.get())) {
     moser->build_scan(time, x0, y0, x1, y1, z0, v, repeats);
   }
 
@@ -2620,7 +2621,7 @@ void AppAdditiveExtTempTexture::laser_path_cmd(int narg, char **arg)
      laser_fluctuations psd [selector] ...
      laser_path start ... end ... speed ...
 
-   The active source must be the Moser/Green's-function source; the
+   The active source must be the Moser unsteady Green's-function source; the
    Rosenthal source no longer supports fluctuations (the steady-state
    kernel "snaps the entire pool" semantics is unphysical, and the
    Moser unsteady integral is the proper way to apply per-emission
@@ -2635,10 +2636,10 @@ void AppAdditiveExtTempTexture::laser_fluctuations_cmd(int narg, char **arg)
   if (!temperature_source) {
     error->all(FLERR,"laser_fluctuations: setup_temperature_source must be called first");
   }
-  MoserGreenTemperatureSource *moser =
-    dynamic_cast<MoserGreenTemperatureSource*>(temperature_source.get());
+  MoserTemperatureSource *moser =
+    dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
   if (!moser) {
-    error->all(FLERR,"laser_fluctuations: only the Moser/Green's-function source supports fluctuations");
+    error->all(FLERR,"laser_fluctuations: only the Moser unsteady Green's-function source supports fluctuations");
   }
 
   // The fluctuation table is materialized inside build_scan (called
@@ -2669,7 +2670,7 @@ void AppAdditiveExtTempTexture::laser_fluctuations_cmd(int narg, char **arg)
   else if (strcmp(arg[1],"bot")  == 0) { which = Selector::BOT;  shape_idx = 2; }
   else if (strcmp(arg[1],"both") == 0) { which = Selector::BOTH; shape_idx = 2; }
 
-  const bool is_keyhole = (moser->get_mode() == MoserGreenTemperatureSource::Mode::KEYHOLE);
+  const bool is_keyhole = (moser->get_mode() == MoserTemperatureSource::MoserMode::KEYHOLE);
   if (is_keyhole && which == Selector::NONE)
     error->all(FLERR,
       "laser_fluctuations psd: keyhole mode requires top|bot|both selector");
@@ -2680,7 +2681,7 @@ void AppAdditiveExtTempTexture::laser_fluctuations_cmd(int narg, char **arg)
   if (shape_idx >= narg)
     error->all(FLERR,"laser_fluctuations psd: missing <shape>");
 
-  MoserGreenTemperatureSource::PsdSpec spec;
+  MoserTemperatureSource::PsdSpec spec;
   spec.sigma_W = 0.0;
   spec.sigma_D = 0.0;
   spec.sigma_P = 0.0;
@@ -2691,10 +2692,10 @@ void AppAdditiveExtTempTexture::laser_fluctuations_cmd(int narg, char **arg)
   spec.f0      = 0.0;
   spec.df      = 0.0;
 
-  if      (strcmp(arg[shape_idx],"white")       == 0) spec.shape = MoserGreenTemperatureSource::PsdShape::WHITE;
-  else if (strcmp(arg[shape_idx],"lorentzian")  == 0) spec.shape = MoserGreenTemperatureSource::PsdShape::LORENTZIAN;
-  else if (strcmp(arg[shape_idx],"pink")        == 0) spec.shape = MoserGreenTemperatureSource::PsdShape::PINK;
-  else if (strcmp(arg[shape_idx],"narrow_band") == 0) spec.shape = MoserGreenTemperatureSource::PsdShape::NARROW_BAND;
+  if      (strcmp(arg[shape_idx],"white")       == 0) spec.shape = MoserTemperatureSource::PsdShape::WHITE;
+  else if (strcmp(arg[shape_idx],"lorentzian")  == 0) spec.shape = MoserTemperatureSource::PsdShape::LORENTZIAN;
+  else if (strcmp(arg[shape_idx],"pink")        == 0) spec.shape = MoserTemperatureSource::PsdShape::PINK;
+  else if (strcmp(arg[shape_idx],"narrow_band") == 0) spec.shape = MoserTemperatureSource::PsdShape::NARROW_BAND;
   else error->all(FLERR,"laser_fluctuations psd: unknown shape (use white|lorentzian|pink|narrow_band)");
 
   int i = shape_idx + 1;
@@ -2718,26 +2719,26 @@ void AppAdditiveExtTempTexture::laser_fluctuations_cmd(int narg, char **arg)
 
   // Dispatch to the appropriate lobe(s).
   if (which == Selector::NONE || which == Selector::TOP) {
-    moser->set_psd_spec(MoserGreenTemperatureSource::LOBE_TOP, spec);
+    moser->set_psd_spec(MoserTemperatureSource::LOBE_TOP, spec);
   }
   if (which == Selector::BOT) {
-    moser->set_psd_spec(MoserGreenTemperatureSource::LOBE_BOT, spec);
+    moser->set_psd_spec(MoserTemperatureSource::LOBE_BOT, spec);
   }
   if (which == Selector::BOTH) {
-    moser->set_psd_spec(MoserGreenTemperatureSource::LOBE_TOP, spec);
+    moser->set_psd_spec(MoserTemperatureSource::LOBE_TOP, spec);
     // Derive bot's seed from top's so the two streams are independent
     // yet identically reproducible across MPI ranks. SplitMix64 golden
     // constant is a well-mixed XOR partner.
-    MoserGreenTemperatureSource::PsdSpec bot_spec = spec;
+    MoserTemperatureSource::PsdSpec bot_spec = spec;
     bot_spec.seed = spec.seed ^ 0x9E3779B97F4A7C15ULL;
-    moser->set_psd_spec(MoserGreenTemperatureSource::LOBE_BOT, bot_spec);
+    moser->set_psd_spec(MoserTemperatureSource::LOBE_BOT, bot_spec);
   }
 
   if (domain->me == 0) {
     const char *sname = "white";
-    if      (spec.shape == MoserGreenTemperatureSource::PsdShape::LORENTZIAN)  sname = "lorentzian";
-    else if (spec.shape == MoserGreenTemperatureSource::PsdShape::PINK)        sname = "pink";
-    else if (spec.shape == MoserGreenTemperatureSource::PsdShape::NARROW_BAND) sname = "narrow_band";
+    if      (spec.shape == MoserTemperatureSource::PsdShape::LORENTZIAN)  sname = "lorentzian";
+    else if (spec.shape == MoserTemperatureSource::PsdShape::PINK)        sname = "pink";
+    else if (spec.shape == MoserTemperatureSource::PsdShape::NARROW_BAND) sname = "narrow_band";
     const char *wname = "single";
     if      (which == Selector::TOP)  wname = "top";
     else if (which == Selector::BOT)  wname = "bot";
@@ -2750,9 +2751,9 @@ void AppAdditiveExtTempTexture::laser_fluctuations_cmd(int narg, char **arg)
               << " rho="     << spec.rho
               << " seed="    << spec.seed
               << " dt="      << spec.dt_psd << " s";
-    if (spec.shape == MoserGreenTemperatureSource::PsdShape::LORENTZIAN)
+    if (spec.shape == MoserTemperatureSource::PsdShape::LORENTZIAN)
       std::cout << " tau=" << spec.tau;
-    if (spec.shape == MoserGreenTemperatureSource::PsdShape::NARROW_BAND)
+    if (spec.shape == MoserTemperatureSource::PsdShape::NARROW_BAND)
       std::cout << " f0=" << spec.f0 << " df=" << spec.df;
     std::cout << std::endl;
   }

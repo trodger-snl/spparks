@@ -37,7 +37,8 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
  public:
   enum MisorientationTargetMode {
     MISORI_TARGET_GRADIENT = 0,
-    MISORI_TARGET_RANDOM = 1
+    MISORI_TARGET_RANDOM = 1,
+    MISORI_TARGET_RANDOM_ROTATION = 2
   };
 
   enum NucleationMode {
@@ -234,6 +235,15 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   // effect on the Boltzmann acceptance gate, so a non-zero `temperature`
   // setting is still respected for the uphill branch.
   bool      smooth_greedy_multiproposal_enabled;
+
+  // When true, nucleation events initialize solid_d[i] = -1 for both the
+  // seed site (execute_nucleation_event) and the captured shell sites
+  // (nucleation_particle_flipper) so they enter the same smoothing window
+  // as epitaxially solidified sites. When false (default) the historical
+  // sentinel values (-nrefine-2 for the seed, -nrefine-3 for the shell)
+  // are used, which excludes nuclei from smooth_site() and the greedy
+  // variant. Tied to the input command `nuclei_smooth on|off`.
+  bool      nuclei_smooth_enabled;
 
 };
 

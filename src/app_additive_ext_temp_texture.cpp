@@ -211,6 +211,7 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     single_voxel_cleanup_enabled = false;
     n_single_voxel_flips = 0;
     smooth_greedy_multiproposal_enabled = false;
+    nuclei_smooth_enabled = false;
 
     //add the double array
     recreate_arrays();
@@ -389,8 +390,10 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
        misorientation_target_mode = MISORI_TARGET_GRADIENT;
      } else if (strcmp(arg[0],"random") == 0) {
        misorientation_target_mode = MISORI_TARGET_RANDOM;
+     } else if (strcmp(arg[0],"random_rotation") == 0) {
+       misorientation_target_mode = MISORI_TARGET_RANDOM_ROTATION;
      } else {
-       error->all(FLERR,"Illegal misorientation_target value: use gradient or random");
+       error->all(FLERR,"Illegal misorientation_target value: use gradient, random, or random_rotation");
      }
   }
   else if (strcmp(command,"nucleation_mode") == 0) {
@@ -590,6 +593,24 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
     if (domain->me == 0)
       fprintf(screen,"smooth_greedy_multiproposal %s\n",
               smooth_greedy_multiproposal_enabled ? "enabled" : "disabled");
+  }
+
+  else if (strcmp(command,"nuclei_smooth") == 0) {
+    // Usage: nuclei_smooth on|off
+    // When on, nucleation events (both the seed and the captured shell)
+    // initialize solid_d to -1 instead of the lock-out sentinels
+    // (-nrefine-2 / -nrefine-3), making nucleated sites eligible for
+    // smooth_site() and the greedy multiproposal variant just like
+    // epitaxially solidified sites. Default off preserves the historical
+    // behavior where nuclei skip smoothing entirely.
+    if (narg != 1)
+      error->all(FLERR,"Illegal nuclei_smooth command");
+    if (strcmp(arg[0],"on") == 0) nuclei_smooth_enabled = true;
+    else if (strcmp(arg[0],"off") == 0) nuclei_smooth_enabled = false;
+    else error->all(FLERR,"nuclei_smooth: argument must be on or off");
+    if (domain->me == 0)
+      fprintf(screen,"nuclei_smooth %s\n",
+              nuclei_smooth_enabled ? "enabled" : "disabled");
   }
 
   else error->all(FLERR,"Unrecognized command");
@@ -1180,7 +1201,7 @@ void AppAdditiveExtTempTexture::site_event_rejection(int /*i*/, RandomPark * /*r
 ------------------------------------------------------------------------- */
 void AppAdditiveExtTempTexture::execute_nucleation_event(int i, double Tcool) {
     active_flag[i] = 3;
-    solid_d[i] = -nrefine - 2;
+    solid_d[i] = nuclei_smooth_enabled ? -1 : -nrefine - 2;
 
     std::vector<double> solid_G(4);
     solid_G = normal_finder(i);
@@ -1356,20 +1377,9 @@ void AppAdditiveExtTempTexture::apply_misorientation(int i, double Tcool, Random
     double normalized_temp = Tcool / t_cool_max;
     double mis_angle = max_misorient * (exp(misorient_alpha * normalized_temp) - 1.0) / (exp(misorient_alpha) - 1.0) * MY_PI/180;
 
-    vector<double> target_dir;
-    if (misorientation_target_mode == MISORI_TARGET_GRADIENT) {
-        // Calculate the unit-vector surface norm (use voxel counting)
-        vector<double> grad_full = normal_finder(i);  // Returns [norm_x, norm_y, norm_z, magnitude]
-        target_dir = {grad_full[0], grad_full[1], grad_full[2]};
-    } else if (misorientation_target_mode == MISORI_TARGET_RANDOM) {
-        target_dir = sample_random_unit_vector(ranapp);
-    } else {
-        error->all(FLERR,"Unknown misorientation target mode");
-    }
-
     // Create quaternion vector from site's orientation
     vector<double> q_site = {q0[i], qx[i], qy[i], qz[i]};
-    
+
     // Normalize quaternion to ensure it's a unit quaternion
     double q_mag = sqrt(q_site[0]*q_site[0] + q_site[1]*q_site[1] + q_site[2]*q_site[2] + q_site[3]*q_site[3]);
     if (q_mag > 1e-15) {
@@ -1379,7 +1389,34 @@ void AppAdditiveExtTempTexture::apply_misorientation(int i, double Tcool, Random
         q_site[3] /= q_mag;
     }
 
-    vector<double> q_new = quaternion::rotate_q_towards_u(q_site,target_dir, mis_angle);
+    vector<double> q_new;
+    if (misorientation_target_mode == MISORI_TARGET_RANDOM_ROTATION) {
+        // Apply a rotation by mis_angle about a uniformly-random axis,
+        // composed with the existing site quaternion. No <100>-toward-target
+        // alignment step.
+        vector<double> axis = sample_random_unit_vector(ranapp);
+        double half = 0.5 * mis_angle;
+        double s = sin(half);
+        vector<double> dq = {cos(half), s*axis[0], s*axis[1], s*axis[2]};
+        q_new = quaternion::composition(dq, q_site, /*unit=*/false);
+        double m = sqrt(q_new[0]*q_new[0] + q_new[1]*q_new[1]
+                      + q_new[2]*q_new[2] + q_new[3]*q_new[3]);
+        if (m > 1e-15) {
+            q_new[0] /= m; q_new[1] /= m; q_new[2] /= m; q_new[3] /= m;
+        }
+    } else {
+        vector<double> target_dir;
+        if (misorientation_target_mode == MISORI_TARGET_GRADIENT) {
+            // Calculate the unit-vector surface norm (use voxel counting)
+            vector<double> grad_full = normal_finder(i);  // Returns [norm_x, norm_y, norm_z, magnitude]
+            target_dir = {grad_full[0], grad_full[1], grad_full[2]};
+        } else if (misorientation_target_mode == MISORI_TARGET_RANDOM) {
+            target_dir = sample_random_unit_vector(ranapp);
+        } else {
+            error->all(FLERR,"Unknown misorientation target mode");
+        }
+        q_new = quaternion::rotate_q_towards_u(q_site, target_dir, mis_angle);
+    }
 
     q0[i] = q_new[0];
     qx[i] = q_new[1];
@@ -1434,7 +1471,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
                 if (i_chosen < nlocal) {
-                    solid_d[i_chosen] = -nrefine -3;
+                    solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
                     G[i_chosen] = G[i];
                     V[i_chosen] = V[i];
                 }
@@ -1485,7 +1522,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
                 if (i_chosen < nlocal) {
-                    solid_d[i_chosen] = -nrefine -3;
+                    solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
                     G[i_chosen] = G[i];
                     V[i_chosen] = V[i];
                 }
@@ -1504,7 +1541,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
                 if (i_chosen < nlocal) {
-                    solid_d[i_chosen] = -nrefine -3;
+                    solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
                     G[i_chosen] = G[i];
                     V[i_chosen] = V[i];
                 }
@@ -1523,7 +1560,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
                 if (i_chosen < nlocal) {
-                    solid_d[i_chosen] = -nrefine -3;
+                    solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
                     G[i_chosen] = G[i];
                     V[i_chosen] = V[i];
                 }

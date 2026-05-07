@@ -92,7 +92,7 @@ function(generate_single_style_header CLASS_PATTERN FILE_PREFIX STYLE_NAME DEPEN
     if(STYLE_NAME STREQUAL "app")
         # Check for HDF5-dependent apps
         if(SPPARKS_HAS_HDF5 AND SPPARKS_HAS_HDF5_FOUND)
-            set(HDF5_APPS "app_additive_ext_temp_texture.h")
+            set(HDF5_APPS "app_additive_texture.h")
             foreach(HDF5_APP ${HDF5_APPS})
                 set(FOUND_HDF5_APP FALSE)
                 foreach(HEADER ${VALID_HEADERS})
@@ -413,9 +413,9 @@ function(validate_style_headers)
         set(STYLE_APP_FILE "${CMAKE_CURRENT_SOURCE_DIR}/style_app.h")
         if(EXISTS "${STYLE_APP_FILE}")
             file(READ "${STYLE_APP_FILE}" STYLE_APP_CONTENT)
-            if(NOT STYLE_APP_CONTENT MATCHES "app_additive_ext_temp_texture.h")
+            if(NOT STYLE_APP_CONTENT MATCHES "app_additive_texture.h")
                 message(FATAL_ERROR 
-                    "CMake Error: HDF5 is enabled but app_additive_ext_temp_texture.h is not included in style_app.h\n"
+                    "CMake Error: HDF5 is enabled but app_additive_texture.h is not included in style_app.h\n"
                     "This will cause 'App_style specific command before app_style set' errors.\n"
                     "To fix this issue:\n"
                     "  1. Clean build: rm -rf build && ./build_cmake.sh -m mac_arm --hdf5\n"

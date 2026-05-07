@@ -29,7 +29,7 @@ setup_temperature_source hdf5_unstructured thermal.h5 5e-6 1500.0 300.0 :pre
 [Description:]
 
 Selects and configures the modular temperature source plugin used by
-"app_style additive_temperature_texture"_app_additive_temperature_texture.html
+"app_style additive/texture"_app_additive_texture.html
 to drive temperature-dependent melting, mushy-band evolution, and
 solidification.  The first argument selects the source family; the
 remaining arguments are forwarded verbatim to that source's
@@ -98,7 +98,7 @@ will raise an error.
 
 [Related commands:]
 
-"app_style additive_temperature_texture"_app_additive_temperature_texture.html,
+"app_style additive/texture"_app_additive_texture.html,
 "laser_path"_laser_path.html,
 "laser_fluctuations"_laser_fluctuations.html,
 "temperature_source_rosenthal"_temperature_source_rosenthal.html,

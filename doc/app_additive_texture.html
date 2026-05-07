@@ -9,25 +9,30 @@
 
 <HR>
 
-<H3>app_style additive_temperature_texture command 
+<H3>app_style additive/texture command
 </H3>
 <P><B>Syntax:</B>
 </P>
-<PRE>app_style additive_temperature_texture nspins dx dt nrefine 
+<PRE>app_style additive/texture nspins dx dt nrefine
 </PRE>
-<UL><LI>style = additive_temperature_texture 
+<UL><LI>style = additive/texture
 
-<LI>nspins = number of possible Potts model spins 
+<LI>nspins = number of possible Potts model spins
 
-<LI>dx = lattice spacing in meters (SI) 
+<LI>dx = lattice spacing in meters (SI)
 
-<LI>dt = simulation timestep in seconds (SI) 
+<LI>dt = simulation timestep in seconds (SI)
 
-<LI>nrefine = number of post-solidification rejection-MC refinement passes per voxel 
+<LI>nrefine = number of post-solidification rejection-MC refinement passes per voxel
 </UL>
+<P>The legacy style name <I>additive_temperature_texture</I> is accepted as a
+deprecated alias for backward compatibility with existing input
+scripts; using it prints a warning at parse time. Switch to
+<I>additive/texture</I> when convenient.
+</P>
 <P><B>Examples:</B>
 </P>
-<PRE>app_style additive_temperature_texture 1000000 5e-6 5e-6 2 
+<PRE>app_style additive/texture 1000000 5e-6 5e-6 2
 </PRE>
 <P><B>Description:</B>
 </P>

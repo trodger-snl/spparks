@@ -88,7 +88,7 @@ class RosenthalTemperatureSource : public TemperatureSource {
   virtual bool supports_time_queries() const override { return true; }
   virtual double get_next_time_with_temperature(double current_time, double threshold_temp) override;
 
-  // Pool-local-frame query used by AppAdditiveExtTempTexture every step.
+  // Pool-local-frame query used by AppAdditiveTexture every step.
   // (xi, y_rel, z_rel) are coordinates of a lattice site relative to the
   // current laser position, with xi along the scan direction. v is the
   // current scan speed (m/s). T0 is the preheat/ambient temperature (K).

@@ -1,4 +1,4 @@
-# SPPARKS additive_temperature_texture: multi-pass laser scan driven by
+# SPPARKS additive/texture: multi-pass laser scan driven by
 # the Moser/Green's-function source with stochastic ΔW/W, ΔD/D
 # fluctuations applied per emission.
 #
@@ -34,8 +34,8 @@
 
 variable NSCANS equal 5
 
-# app_style additive_temperature_texture <nspins> <dx[m]> <dt[s]> <nrefine>
-app_style additive_temperature_texture 1000000 5e-6 5e-6 2
+# app_style additive/texture <nspins> <dx[m]> <dt[s]> <nrefine>
+app_style additive/texture 1000000 5e-6 5e-6 2
 
 shell mkdir -p DumpFiles_moser_multiscan_fluct
 

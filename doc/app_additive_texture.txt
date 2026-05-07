@@ -6,21 +6,26 @@
 
 :line
 
-app_style additive_temperature_texture command :h3
+app_style additive/texture command :h3
 
 [Syntax:]
 
-app_style additive_temperature_texture nspins dx dt nrefine :pre
+app_style additive/texture nspins dx dt nrefine :pre
 
-style = additive_temperature_texture :ulb,l
+style = additive/texture :ulb,l
 nspins = number of possible Potts model spins :l
 dx = lattice spacing in meters (SI) :l
 dt = simulation timestep in seconds (SI) :l
 nrefine = number of post-solidification rejection-MC refinement passes per voxel :l,ule
 
+The legacy style name {additive_temperature_texture} is accepted as a
+deprecated alias for backward compatibility with existing input
+scripts; using it prints a warning at parse time. Switch to
+{additive/texture} when convenient.
+
 [Examples:]
 
-app_style additive_temperature_texture 1000000 5e-6 5e-6 2 :pre
+app_style additive/texture 1000000 5e-6 5e-6 2 :pre
 
 [Description:]
 

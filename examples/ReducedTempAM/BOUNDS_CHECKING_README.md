@@ -1,6 +1,6 @@
 # HDF5 Bounds Checking Feature
 
-This document describes the new bounds checking feature added to the `app_additive_ext_temp_texture` application.
+This document describes the new bounds checking feature added to the `app_additive_texture` application (formerly `app_additive_ext_temp_texture`).
 
 ## Overview
 

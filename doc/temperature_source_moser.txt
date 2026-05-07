@@ -158,7 +158,7 @@ the two lobes refine independently.
 "laser_path"_laser_path.html,
 "laser_fluctuations"_laser_fluctuations.html,
 "temperature_source_rosenthal"_temperature_source_rosenthal.html,
-"app_style additive_temperature_texture"_app_additive_temperature_texture.html
+"app_style additive/texture"_app_additive_texture.html
 
 [Default:]
 

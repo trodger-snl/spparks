@@ -12,12 +12,16 @@
 ------------------------------------------------------------------------- */
 
 #ifdef APP_CLASS
-AppStyle(additive_temperature_texture,AppAdditiveExtTempTexture)
+AppStyle(additive/texture,AppAdditiveTexture)
+// Deprecated alias kept for backward compatibility with existing input
+// scripts. Resolves to a thin subclass that emits a one-shot warning at
+// parse time, then forwards to AppAdditiveTexture verbatim.
+AppStyle(additive_temperature_texture,AppAdditiveTextureDeprecated)
 
 #else
 
-#ifndef SPK_APP_ADDITIVE_EXT_TEMP_TEXTURE_H
-#define SPK_APP_ADDITIVE_EXT_TEMP_TEXTURE_H
+#ifndef SPK_APP_ADDITIVE_TEXTURE_H
+#define SPK_APP_ADDITIVE_TEXTURE_H
 
 #include "app_potts_quaternion.h"
 #include "temperatureQueues.h"
@@ -33,7 +37,7 @@ AppStyle(additive_temperature_texture,AppAdditiveExtTempTexture)
 
 namespace SPPARKS_NS {
 
-class AppAdditiveExtTempTexture : public AppPottsQuaternion {
+class AppAdditiveTexture : public AppPottsQuaternion {
  public:
   enum MisorientationTargetMode {
     MISORI_TARGET_GRADIENT = 0,
@@ -46,8 +50,8 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
     NUCLEATION_CONTINUOUS = 1   // Continuous Gaussian probability
   };
 
-  AppAdditiveExtTempTexture(class SPPARKS *, int, char **);
-  virtual ~AppAdditiveExtTempTexture();
+  AppAdditiveTexture(class SPPARKS *, int, char **);
+  virtual ~AppAdditiveTexture();
   virtual void grow_app();
   virtual void init_app();
   virtual void site_event_rejection(int, class RandomPark *);
@@ -245,6 +249,15 @@ class AppAdditiveExtTempTexture : public AppPottsQuaternion {
   // variant. Tied to the input command `nuclei_smooth on|off`.
   bool      nuclei_smooth_enabled;
 
+};
+
+// Deprecated alias for app_style 'additive_temperature_texture'.
+// Forwards construction to AppAdditiveTexture and emits a one-shot
+// deprecation warning so existing input scripts keep working while
+// users migrate to the canonical 'additive/texture' style.
+class AppAdditiveTextureDeprecated : public AppAdditiveTexture {
+ public:
+  AppAdditiveTextureDeprecated(class SPPARKS *, int, char **);
 };
 
 }

@@ -115,7 +115,7 @@ class MoserTemperatureSource : public TemperatureSource {
   virtual void print_source_info() const override;
 
   // Build scans from a RASTER-style straight-line repeated path. Called
-  // by AppAdditiveExtTempTexture::laser_path_cmd when the active
+  // by AppAdditiveTexture::laser_path_cmd when the active
   // temperature source is Moser. In KEYHOLE mode, both lobes are built
   // in a single call (path geometry is shared; only ellipsoid widths,
   // zl, and per-lobe waypoint power differ). All units SI.

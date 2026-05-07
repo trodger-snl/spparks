@@ -1,4 +1,4 @@
-# SPPARKS additive_temperature_texture driven by the analytical
+# SPPARKS additive/texture driven by the analytical
 # Rosenthal solution (keyhole mode, paper Table B1 case 1).
 #
 # Modified Rosenthal Eq. B8: surface point source plus a depth-
@@ -7,7 +7,7 @@
 #   R'(D) = sqrt(xi^2 + y^2 + (D + z)^2)
 # Line integral evaluated by Gauss-Legendre quadrature.
 
-app_style additive_temperature_texture 1000000 20e-6 5e-6 2
+app_style additive/texture 1000000 20e-6 5e-6 2
 
 shell mkdir -p DumpFiles_rosenthal_keyhole
 

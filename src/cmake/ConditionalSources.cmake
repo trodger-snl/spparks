@@ -9,7 +9,7 @@ function(configure_conditional_sources)
         # Base HDF5 temperature sources (require MPI because they use H5Pset_dxpl_mpio)
         if(SPPARKS_ENABLE_MPI)
             list(APPEND SPPARKS_SOURCES
-                app_additive_ext_temp_texture.cpp
+                app_additive_texture.cpp
                 temperature_source.cpp
                 temperature_source_rosenthal.cpp
                 temperature_source_moser.cpp
@@ -20,7 +20,7 @@ function(configure_conditional_sources)
         else()
             # For serial HDF5, only add non-MPI temperature sources
             list(APPEND SPPARKS_SOURCES
-                app_additive_ext_temp_texture.cpp
+                app_additive_texture.cpp
                 temperature_source.cpp
                 temperature_source_rosenthal.cpp
                 temperature_source_moser.cpp
@@ -77,7 +77,7 @@ function(should_include_header HEADER_NAME RESULT_VAR)
     endif()
     
     # Check HDF5-related headers
-    if(HEADER_NAME MATCHES "app_additive_ext_temp_texture\\.h")
+    if(HEADER_NAME MATCHES "app_additive_texture\\.h")
         if(NOT (SPPARKS_HAS_HDF5 AND SPPARKS_HAS_HDF5_FOUND))
             set(INCLUDE_IT FALSE)
         endif()

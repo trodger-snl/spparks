@@ -1,4 +1,4 @@
-# SPPARKS additive_temperature_texture driven by the analytical
+# SPPARKS additive/texture driven by the analytical
 # Moser/Green's-function temperature source: a time-domain integral
 # of an ellipsoidal Gaussian heat source against the unsteady heat
 # kernel, on an insulating half-space (image source factor of 2).
@@ -33,7 +33,7 @@
 #
 # app_style args: nspins dx[m] dt[s] nrefine
 
-app_style additive_temperature_texture 1000000 20e-6 5e-6 2
+app_style additive/texture 1000000 20e-6 5e-6 2
 
 shell mkdir -p DumpFiles_moser
 

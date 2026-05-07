@@ -27,7 +27,7 @@ laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats 5
 
 Defines the laser trajectory consumed by the path-aware temperature
 sources used with
-"app_style additive_temperature_texture"_app_additive_temperature_texture.html.
+"app_style additive/texture"_app_additive_texture.html.
 Coordinates and velocity are SI (meters and m/s).  The path is a single
 linear segment in the (X, Y) plane at constant {Z = Z0} (the laser
 plane); setting {repeats > 1} replays the same start->end segment N
@@ -90,7 +90,7 @@ with an externally-prepared FE thermal trace.
 
 "setup_temperature_source"_setup_temperature_source.html,
 "laser_fluctuations"_laser_fluctuations.html,
-"app_style additive_temperature_texture"_app_additive_temperature_texture.html
+"app_style additive/texture"_app_additive_texture.html
 
 [Default:]
 

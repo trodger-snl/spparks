@@ -34,7 +34,7 @@
 #include <limits>
 #include "math.h"
 #include "math_const.h"
-#include "app_additive_ext_temp_texture.h"
+#include "app_additive_texture.h"
 #include "comm_lattice.h"
 #include "lattice.h"
 #include "timer.h"
@@ -72,7 +72,7 @@ static std::vector<double> sample_random_unit_vector(RandomPark *random)
 
 static char** construct_parent_args(char **arg) {
   static char* parent_args[3];
-  static char app_name[] = "additive_temperature_texture";
+  static char app_name[] = "additive/texture";
   static char crystal_type[] = "cubic";
   
   parent_args[0] = app_name;
@@ -84,7 +84,7 @@ static char** construct_parent_args(char **arg) {
 
 /* ---------------------------------------------------------------------- */
 
-AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, char **arg) :
+AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
   AppPottsQuaternion(spk,3,construct_parent_args(arg))
 {
 
@@ -219,7 +219,7 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
 
 /* ---------------------------------------------------------------------- */
 
-AppAdditiveExtTempTexture::~AppAdditiveExtTempTexture()
+AppAdditiveTexture::~AppAdditiveTexture()
 {
   // Only delete arrays that are specific to this class
   // Parent class destructors will handle sites, unique, unique_neigh
@@ -237,7 +237,7 @@ AppAdditiveExtTempTexture::~AppAdditiveExtTempTexture()
    input script commands unique to this app
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
+void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
 {
   if (strcmp(command,"liquidus") == 0) {
     if (narg != 1) error->all(FLERR,"Illegal liquidus command");
@@ -619,7 +619,7 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
 /* ----------------------------------------------------------------------
   When app_update is called, read in an input file
  ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::app_update(double dt)
+void AppAdditiveTexture::app_update(double dt)
 {
   // CPU Performance Timing Instrumentation
   static int step_count = 0;
@@ -911,7 +911,7 @@ void AppAdditiveExtTempTexture::app_update(double dt)
    than 1 (which we should avoid), allow all spins to nucleate. If not, call a random number
    between zero and one. If the number is less than the fraction, make true. If not, make false.
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::nucleation_spins(RandomPark *random) {
+void AppAdditiveTexture::nucleation_spins(RandomPark *random) {
     timer->stamp();
     
     nucleation_flags = new int[nspins];
@@ -944,7 +944,7 @@ void AppAdditiveExtTempTexture::nucleation_spins(RandomPark *random) {
    set site value ptrs each time iarray/darray are reallocated
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::grow_app()
+void AppAdditiveTexture::grow_app()
 {
   // Call parent to set up quaternion arrays (q0, qx, qy, qz)
   AppPottsQuaternion::grow_app();
@@ -964,7 +964,7 @@ void AppAdditiveExtTempTexture::grow_app()
    check validity of site values
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::init_app()
+void AppAdditiveTexture::init_app()
 {
   // Duplicate parent's array allocation logic without quaternion randomization
   delete[] sites;
@@ -1128,7 +1128,7 @@ void AppAdditiveExtTempTexture::init_app()
    and exclude non-solidified neighbors from energy calculation
 ------------------------------------------------------------------------- */
 
-double AppAdditiveExtTempTexture::site_energy(int i) {
+double AppAdditiveTexture::site_energy(int i) {
   timer->stamp();
 
   // Voids have no energy
@@ -1177,7 +1177,7 @@ double AppAdditiveExtTempTexture::site_energy(int i) {
 /* ----------------------------------------------------------------------
    site_event_rejection is intentionally not used by this app.
 
-   AppAdditiveExtTempTexture overrides app_update() (see line ~400) to drive
+   AppAdditiveTexture overrides app_update() (see line ~400) to drive
    site evolution directly via mushy_phase()/site_event_solidification() and
    smooth_site(); the framework's rejection-KMC sweep loop in
    AppLattice::iterate_rejection is bypassed entirely. This override exists
@@ -1187,10 +1187,10 @@ double AppAdditiveExtTempTexture::site_energy(int i) {
    stale logic.
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::site_event_rejection(int /*i*/, RandomPark * /*random*/)
+void AppAdditiveTexture::site_event_rejection(int /*i*/, RandomPark * /*random*/)
 {
   error->one(FLERR,
-    "AppAdditiveExtTempTexture::site_event_rejection should never be "
+    "AppAdditiveTexture::site_event_rejection should never be "
     "called; this app drives site evolution from app_update()");
 }
 
@@ -1199,7 +1199,7 @@ void AppAdditiveExtTempTexture::site_event_rejection(int /*i*/, RandomPark * /*r
    Sets site to solid, computes gradient and solidification rate,
    and grows the nucleus via nucleation_particle_flipper.
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::execute_nucleation_event(int i, double Tcool) {
+void AppAdditiveTexture::execute_nucleation_event(int i, double Tcool) {
     active_flag[i] = 3;
     solid_d[i] = nuclei_smooth_enabled ? -1 : -nrefine - 2;
 
@@ -1234,7 +1234,7 @@ void AppAdditiveExtTempTexture::execute_nucleation_event(int i, double Tcool) {
       mobility calculated from undercooling.)
 THIS NEEDS UPDATED TO INCLUDE TEXTURE
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
+void AppAdditiveTexture::mushy_phase(int i, RandomPark *random){
     // Skip void sites - they never change state
     if (active_flag[i] == 5) return;
 
@@ -1285,7 +1285,7 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
    This handles the common logic for both nucleation and non-nucleation paths.
    Updates solid front distance and attempts epitaxial growth from neighboring sites.
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, RandomPark *random) {
+void AppAdditiveTexture::site_event_solidification(int i, double Tcool, RandomPark *random) {
     int nevent = 0;
     int value;
     double dotValue = 0;
@@ -1370,7 +1370,7 @@ void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, R
 /* ----------------------------------------------------------------------
     Apply misorientation based on temperature gradient and cooling rate
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::apply_misorientation(int i, double Tcool, RandomPark *ranapp) {
+void AppAdditiveTexture::apply_misorientation(int i, double Tcool, RandomPark *ranapp) {
     if(max_misorient <= 0) return;
     
     // Exponential function: grows slowly initially, then rapidly in last ~10%
@@ -1444,7 +1444,7 @@ void AppAdditiveExtTempTexture::apply_misorientation(int i, double Tcool, Random
     Only nucleating one site at a time introduce lattice size dependency. Here we will
     use a user-defined nucleation particle size and flip neighboring sites until that size is met
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, RandomPark *random) {
+void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomPark *random) {
     
     //If one site is big enough to satisfy, skip evertyhing
     if(partRad <= 0) return;
@@ -1606,7 +1606,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
 
 // Calculate the local direction of the largest temperature gradient
 // using weighted least squares with multiple neighbors for improved accuracy
-std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
+std::vector<double> AppAdditiveTexture::normal_finder(int site)
 {
 	// Initialize gradient components
 	double grad_x = 0, grad_y = 0, grad_z = 0;
@@ -1823,7 +1823,7 @@ std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
      (function should only be called when such neighbors exist) and will
      terminate the simulation with an error message.
 ------------------------------------------------------------------------- */
-std::vector<double> AppAdditiveExtTempTexture::get_average_neighbor_quaternion(int site, int target_spin)
+std::vector<double> AppAdditiveTexture::get_average_neighbor_quaternion(int site, int target_spin)
 {
     // Initialize storage for first quaternion as reference
     double ref_q0 = 0.0, ref_qx = 0.0, ref_qy = 0.0, ref_qz = 0.0;
@@ -1918,7 +1918,7 @@ std::vector<double> AppAdditiveExtTempTexture::get_average_neighbor_quaternion(i
    Inputs: lattice site :: site
    Outputs: double of max dot product
 ------------------------------------------------------------------------- */
-double AppAdditiveExtTempTexture::melt_misorientation(int site, double c1, double c2, double c3)
+double AppAdditiveTexture::melt_misorientation(int site, double c1, double c2, double c3)
 {
 	double dotMax;
 	double theta;
@@ -1952,7 +1952,7 @@ double AppAdditiveExtTempTexture::melt_misorientation(int site, double c1, doubl
    Inputs: lattice site :: site
    Outputs: None
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::smooth_site(int i) {
+void AppAdditiveTexture::smooth_site(int i) {
 
   //Adapt code from potts_neigh_only site_event_rejection.
   int oldstate = spin[i];
@@ -2034,7 +2034,7 @@ void AppAdditiveExtTempTexture::smooth_site(int i) {
    compute energy of site using only spin values (for boundary smoothing after solidification)
 ------------------------------------------------------------------------- */
 
-double AppAdditiveExtTempTexture::site_energy_smooth(int i)
+double AppAdditiveTexture::site_energy_smooth(int i)
 {
   int isite = spin[i];
   int eng = 0;
@@ -2061,7 +2061,7 @@ double AppAdditiveExtTempTexture::site_energy_smooth(int i)
    the chosen grain's local orientation. The caller is responsible for
    marking solid_d to suppress re-firing.
 ------------------------------------------------------------------------- */
-bool AppAdditiveExtTempTexture::flip_single_voxel_grain(int i)
+bool AppAdditiveTexture::flip_single_voxel_grain(int i)
 {
   int oldstate = spin[i];
   int nunique = 0;
@@ -2113,7 +2113,7 @@ bool AppAdditiveExtTempTexture::flip_single_voxel_grain(int i)
     The first version of this just initialized critical nucleation temperatures.
     This version will also initialize nucleii size (starting with a normal dist)
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::nucleation_init() {
+void AppAdditiveTexture::nucleation_init() {
     std::normal_distribution<> dist_T{tc,tsig};
     std::normal_distribution<> dist_S{size_norm,size_sig};
     std::random_device rd{};
@@ -2138,7 +2138,7 @@ void AppAdditiveExtTempTexture::nucleation_init() {
      3. At bottom boundary (substrate)
      4. Below meltpool surface (has active material above)
 ------------------------------------------------------------------------- */
-bool AppAdditiveExtTempTexture::is_powder_eligible_site(int i) {
+bool AppAdditiveTexture::is_powder_eligible_site(int i) {
   // Skip voids - they never participate
   if (active_flag[i] == 5) return false;
 
@@ -2184,7 +2184,7 @@ bool AppAdditiveExtTempTexture::is_powder_eligible_site(int i) {
    - After fast forwards > 1 second (new layer deposition)
    - During app_update when meltpool is present
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::activate_powder_sites() {
+void AppAdditiveTexture::activate_powder_sites() {
   // Find local maximum z-coordinate of molten sites
   double local_max_molten_z = -1e100;  // Very negative initial value
   bool has_molten_sites = false;
@@ -2236,7 +2236,7 @@ void AppAdditiveExtTempTexture::activate_powder_sites() {
    and size distribution. Voids are represented by activeFlag = 5.
    Generation happens on rank 0, then void list is broadcast to all ranks.
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::generate_voids(RandomPark *random) {
+void AppAdditiveTexture::generate_voids(RandomPark *random) {
     timer->stamp();
 
     if (!enable_voids) {
@@ -2452,7 +2452,7 @@ void AppAdditiveExtTempTexture::generate_voids(RandomPark *random) {
    Format: setup_temperature_source type [arguments...]
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::setup_temperature_source_cmd(int narg, char **arg)
+void AppAdditiveTexture::setup_temperature_source_cmd(int narg, char **arg)
 {
   if (narg < 1) {
     error->all(FLERR,"Illegal setup_temperature_source command: must specify type");
@@ -2504,7 +2504,7 @@ void AppAdditiveExtTempTexture::setup_temperature_source_cmd(int narg, char **ar
    or translated into a GREENAM LaserScan via build_scan() (Moser).
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::laser_path_cmd(int narg, char **arg)
+void AppAdditiveTexture::laser_path_cmd(int narg, char **arg)
 {
   // setup_temperature_source must precede laser_path: the Moser source
   // consumes the path geometry inside build_scan, and the Rosenthal
@@ -2628,7 +2628,7 @@ void AppAdditiveExtTempTexture::laser_path_cmd(int narg, char **arg)
    parameter variation).
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::laser_fluctuations_cmd(int narg, char **arg)
+void AppAdditiveTexture::laser_fluctuations_cmd(int narg, char **arg)
 {
   if (narg < 1)
     error->all(FLERR,"Illegal laser_fluctuations command: expected psd <shape> ...");
@@ -2780,7 +2780,7 @@ void AppAdditiveExtTempTexture::laser_fluctuations_cmd(int narg, char **arg)
    the safe direction.
 ------------------------------------------------------------------------- */
 
-double AppAdditiveExtTempTexture::rosenthal_next_active_time(double current_time, double threshold_temp)
+double AppAdditiveTexture::rosenthal_next_active_time(double current_time, double threshold_temp)
 {
   if (!laser_path_set || !scan_layer_active)
     return std::numeric_limits<double>::max();
@@ -2852,7 +2852,7 @@ double AppAdditiveExtTempTexture::rosenthal_next_active_time(double current_time
    Update temperature from modular source
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation_time)
+void AppAdditiveTexture::update_temperature_from_source(double simulation_time)
 {
   timer->stamp();
 
@@ -3008,7 +3008,7 @@ void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation
    the previous one. Cost per step: one extra all_selective per pass.
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::apply_temperature_smoothing()
+void AppAdditiveTexture::apply_temperature_smoothing()
 {
   const double two_sxy2 = 2.0 * smooth_sigma_xy * smooth_sigma_xy;
   const double two_sz2  = 2.0 * smooth_sigma_z  * smooth_sigma_z;
@@ -3133,7 +3133,7 @@ void AppAdditiveExtTempTexture::apply_temperature_smoothing()
    Assumes T ghosts are current (caller must ensure this).
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::compute_smoothing_diagnostics()
+void AppAdditiveTexture::compute_smoothing_diagnostics()
 {
   bigint V_local = 0, S_local = 0;
   double sumT_local = 0.0;
@@ -3179,4 +3179,23 @@ void AppAdditiveExtTempTexture::compute_smoothing_diagnostics()
       fprintf(screen, "  No sites above liquidus this step.\n");
     }
   }
+}
+
+/* ----------------------------------------------------------------------
+   Deprecated app_style alias 'additive_temperature_texture'.
+   Forwards to AppAdditiveTexture; emits a one-shot warning so existing
+   input scripts keep running while users migrate to the canonical
+   'additive/texture' app_style.
+------------------------------------------------------------------------- */
+
+AppAdditiveTextureDeprecated::AppAdditiveTextureDeprecated(SPPARKS *spk,
+                                                           int narg,
+                                                           char **arg)
+  : AppAdditiveTexture(spk, narg, arg)
+{
+  if (domain->me == 0)
+    error->warning(FLERR,
+      "app_style 'additive_temperature_texture' is deprecated; "
+      "use 'additive/texture' instead. The two are equivalent for now, "
+      "but the deprecated alias will be removed in a future release.");
 }

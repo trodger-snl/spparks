@@ -1,4 +1,4 @@
-# SPPARKS additive_temperature_texture driven by the analytical
+# SPPARKS additive/texture driven by the analytical
 # Rosenthal solution (standard mode, paper Table B1 case 3).
 #
 # Material:    rho=8220 kg/m^3, c_p=650 J/(kg K), k=11.2 W/(m K)
@@ -14,7 +14,7 @@
 #
 # app_style args: nspins dx[m] dt[s] nrefine
 
-app_style additive_temperature_texture 1000000 20e-6 5e-6 2
+app_style additive/texture 1000000 20e-6 5e-6 2
 
 shell mkdir -p DumpFiles_rosenthal_standard
 

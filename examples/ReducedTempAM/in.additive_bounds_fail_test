@@ -1,7 +1,7 @@
 # SPPARKS bounds checking test - FAILURE case
 # This example demonstrates that bounds checking happens BEFORE loading data
 
-app_style additive_temperature_texture 1000000 "/Users/Tron/spparks/examples/ReducedTempAM/ms_output_compressed.hdf5" 1623 1563 5e-6 3e-6 1 
+app_style additive/texture 1000000 "/Users/Tron/spparks/examples/ReducedTempAM/ms_output_compressed.hdf5" 1623 1563 5e-6 3e-6 1 
 
 # Set exact match mode
 bounds_check_mode 0

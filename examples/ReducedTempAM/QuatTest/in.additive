@@ -1,5 +1,5 @@
 # SPPARKS Potts tests on generic lattice		 
-app_style additive_temperature_texture 1000000 "/Users/Tron/spparks/examples/ReducedTempAM/ms_output_compressed.hdf5" 5e-6 3e-6 2
+app_style additive/texture 1000000 "/Users/Tron/spparks/examples/ReducedTempAM/ms_output_compressed.hdf5" 5e-6 3e-6 2
 #  |————————————————————————————————————————
 #     nspins = atoi(arg[1]);
 #     temp_file_template = arg[2]; //The base name of the temperature files (will also have timestep #)

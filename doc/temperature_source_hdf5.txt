@@ -82,7 +82,7 @@ metadata access.
 [Optimizations:]
 
 The HDF5 sources expose three independent performance toggles via the
-"app_style additive_temperature_texture"_app_additive_temperature_texture.html
+"app_style additive/texture"_app_additive_texture.html
 {temperature_optimization} command:
 
 {spatial_grid} : bin elements into a uniform grid for O(1) point-in-element
@@ -116,7 +116,7 @@ trajectory is implicitly encoded in the FE temperature trace.
 "setup_temperature_source"_setup_temperature_source.html,
 "temperature_source_rosenthal"_temperature_source_rosenthal.html,
 "temperature_source_moser"_temperature_source_moser.html,
-"app_style additive_temperature_texture"_app_additive_temperature_texture.html
+"app_style additive/texture"_app_additive_texture.html
 
 [Default:]
 

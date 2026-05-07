@@ -115,7 +115,7 @@ outside this range are clamped silently.
 "setup_temperature_source"_setup_temperature_source.html,
 "laser_path"_laser_path.html,
 "temperature_source_moser"_temperature_source_moser.html,
-"app_style additive_temperature_texture"_app_additive_temperature_texture.html
+"app_style additive/texture"_app_additive_texture.html
 
 [Default:]
 

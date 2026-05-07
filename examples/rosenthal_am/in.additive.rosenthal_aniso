@@ -1,11 +1,11 @@
-# SPPARKS additive_temperature_texture driven by the analytical
+# SPPARKS additive/texture driven by the analytical
 # Rosenthal solution (anisotropic mode, paper Table B1 case 2).
 #
 # Modified Rosenthal Eq. B6 with R replaced by
 #   R_eta = sqrt(xi^2 + (eta_y*y)^2 + (eta_z*z)^2)
 # eta_y < 1 widens the pool transversely; eta_z < 1 deepens it.
 
-app_style additive_temperature_texture 1000000 20e-6 5e-6 2
+app_style additive/texture 1000000 20e-6 5e-6 2
 
 shell mkdir -p DumpFiles_rosenthal_aniso
 

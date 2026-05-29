@@ -1,4 +1,42 @@
-# Stochastic fluctuation generator (reference / external use)
+# Helper scripts
+
+This directory contains two standalone Python helpers used while
+setting up Moser-source simulations.
+
+## `crystal_to_quat.py` — crystal-direction → quaternion
+
+Convert a substrate orientation given in crystallographic notation
+(`[hkl]` for the build-direction normal and `[uvw]` for the in-plane
+scan direction) into the SPPARKS scalar-first quaternion `(q0, qx, qy,
+qz)` that goes into the d1..d4 site fields.
+
+```bash
+# Identity (cube-on-face): [001] || +Z, [100] || +X
+python crystal_to_quat.py --normal 001 --inplane 100
+
+# Goss orientation, emitted as a SPPARKS `set` command for spin 7
+python crystal_to_quat.py --normal 110 --inplane 001 --as-set 7
+
+# Bunge Euler angles (degrees, ZXZ)
+python crystal_to_quat.py --euler-bunge 30 45 0
+
+# Sanity-check an existing quaternion: report which [hkl] it places
+# along the build (+Z) and scan (+X) directions
+python crystal_to_quat.py --check 0.270598 0.653281 0.270598 0.653281
+```
+
+For glued multi-digit indices like `[12 0 5]`, separate components
+with spaces or commas: `--normal "12 0 5"`. Negative indices may be
+written with a leading `-` (e.g. `1-10` is `[1, -1, 0]`).
+
+A `--selftest` flag runs a few sanity round-trips:
+```bash
+python crystal_to_quat.py --selftest
+```
+
+Requires `numpy` and `scipy`.
+
+## `generate_fluctuations.py` — stochastic ΔW/W, ΔD/D tracks (reference)
 
 `generate_fluctuations.py` produces ΔW/W, ΔD/D vs. arc-length tracks
 in an ASCII three-column file:

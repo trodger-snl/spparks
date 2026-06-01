@@ -143,6 +143,43 @@ total-absorbed-power audits are self-consistent.
 
 :line
 
+[Multi-pass inter-pass pause:]
+
+When "laser_path"_laser_path.html sets {repeats > 1}, the Moser source
+supports a configurable cooling interval between consecutive passes,
+selected by one of two keywords on the {laser_path} command:
+
+{pause T}: inserts a fixed gap of {T} seconds between repeats.  The
+gap appears in the GREENAM scan as a zero-power transit segment, so
+the integrand cumulates only the decaying tail of the previous pass
+during the gap.  Replaces the legacy hardcoded 1e-12 s spacing; that
+floor is still applied when {T = 0}. :ulb,l
+
+{pause_below Tk}: dynamic inter-pass gap.  Only the first pass is
+pre-scheduled inside {build_scan}; the remaining {repeats - 1} passes
+sit in a per-app queue.  After the current pass finishes emitting,
+the integrand naturally decays.  As soon as the global peak
+temperature drops below {Tk}, the next queued pass is appended (via
+{append_pass}) starting at the current simulation time, the GREENAM
+LaserScan / ScanIntegration are rebuilt to include the new active
+window, and the fluctuation table is re-materialized to cover it.
+The append is gated on "the current pass has finished emitting" so
+that the laser warm-up window does not drain the queue prematurely. :l,ule
+
+In both cases the laser is fully off during the gap; cumulative
+emission history from earlier passes still contributes to {T[i]}
+through the Green's function, and that contribution decays
+monotonically until the next pass starts.  Under {pause_below}, the
+inter-pass gap is therefore not user-specified — it falls out of the
+physics ({Tk} sets the cooling target).
+
+The PSD fluctuation generator is deterministic in seed + t_start, so
+when {append_pass} rebuilds the table, samples at original
+timestamps are identical to the prior table and new samples extend
+forward to cover the appended pass.
+
+:line
+
 [Restrictions:]
 
 In {keyhole} mode, {z_top} and {z_bot} must be >= 0 (positive depths

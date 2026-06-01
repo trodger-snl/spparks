@@ -22,6 +22,7 @@
 #include "GREENAM/GreenAM_LaserScan.h"
 #include "GREENAM/GreenAM_ScanIntegration.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -47,6 +48,8 @@ MoserTemperatureSource::MoserTemperatureSource(SPPARKS *spk)
     scan_laser_plane_z(0.0),
     scan_speed(0.0), scan_repeats(0),
     scan_built(false),
+    scan_pass_duration(0.0),
+    scan_pause_between_repeats(0.0),
     n_lobes_(1)
 {
   // Lobe members are default-initialized via the Lobe struct's in-class
@@ -244,7 +247,8 @@ void MoserTemperatureSource::build_scan(double start_time,
                                              double x1, double y1,
                                              double laser_plane_z,
                                              double speed,
-                                             int repeats)
+                                             int repeats,
+                                             double pause_between_repeats)
 {
   if (!source_initialized)
     error->all(FLERR,"moser build_scan: source must be set up first");
@@ -258,60 +262,114 @@ void MoserTemperatureSource::build_scan(double start_time,
   scan_laser_plane_z = laser_plane_z;
   scan_speed = speed;
   scan_repeats = repeats;
+  scan_pause_between_repeats = pause_between_repeats;
 
   const double L = std::sqrt((x1-x0)*(x1-x0) + (y1-y0)*(y1-y0));
   if (L <= 0.0)
     error->all(FLERR,"moser build_scan: zero-length path");
   const double dt_scan = L / speed;
-  // Tiny offset between back-to-back repeats so the (xs[i+1]-xs[i])/(ts[i+1]-ts[i])
-  // velocity calculation in the GREENAM constructor stays well-defined.
-  // The intervening segment has power=0 and is culled by the integrator.
-  const double eps_t = 1.0e-12;
+  scan_pass_duration = dt_scan;
+  // Inter-repeat gap. The intervening waypoint segment has power=0 and
+  // is culled by the integrator; its length sets how long the laser is
+  // off between active scans. A floor of 1e-12 s keeps the GREENAM
+  // constructor's (xs[i+1]-xs[i])/(ts[i+1]-ts[i]) velocity calculation
+  // well-defined when the user requests no real pause.
+  const double eps_t = std::max(pause_between_repeats, 1.0e-12);
 
-  const int n_active = repeats;
-  const int n_transit = repeats;          // includes a final 0-power "stop" segment
-  const int nlines    = n_active + n_transit;
-  const int nwp       = nlines + 1;
+  // Pre-schedule all `repeats` passes onto an absolute timeline.
+  // append_pass() can grow this later (used by the app's pause_below
+  // path when only the first pass is pre-scheduled).
+  pass_start_times_.clear();
+  pass_start_times_.reserve(repeats);
+  double t_r = start_time;
+  for (int r = 0; r < repeats; ++r) {
+    pass_start_times_.push_back(t_r);
+    t_r += dt_scan + eps_t;
+  }
 
-  // Build the path waypoints once; only the per-lobe `ps` array varies.
+  rebuild_scan_from_pass_list_();
+}
+
+/* ----------------------------------------------------------------------
+   Append a single new pass to an already-built scan. Used by the app's
+   pause_below logic: once the user's peak-T threshold is met, the next
+   pass is fired immediately by extending pass_start_times_ and
+   rebuilding the GREENAM scan + integrator + fluctuation table.
+
+   No-op if the scan has not yet been built.
+------------------------------------------------------------------------- */
+
+void MoserTemperatureSource::append_pass(double t_start)
+{
+  if (!scan_built) {
+    error->all(FLERR,
+      "moser append_pass: cannot extend before initial build_scan has run");
+  }
+  // Guard against scheduling the new pass before or inside the previous
+  // one. We expect the app to only call this when sim time has cleared
+  // the prior pass.
+  if (!pass_start_times_.empty()) {
+    const double t_prev_end = pass_start_times_.back() + scan_pass_duration;
+    if (t_start < t_prev_end) {
+      t_start = t_prev_end + std::max(scan_pause_between_repeats, 1.0e-12);
+    }
+  }
+  pass_start_times_.push_back(t_start);
+  ++scan_repeats;
+  rebuild_scan_from_pass_list_();
+}
+
+/* ----------------------------------------------------------------------
+   Materialize the GREENAM LaserScan/ScanIntegration (and any active
+   fluctuation tables) from the current pass_start_times_ list and the
+   stashed path geometry (scan_x0..scan_y1, scan_laser_plane_z,
+   scan_speed). Idempotent.
+------------------------------------------------------------------------- */
+
+void MoserTemperatureSource::rebuild_scan_from_pass_list_()
+{
+  const int repeats = static_cast<int>(pass_start_times_.size());
+  if (repeats < 1)
+    error->all(FLERR,"moser rebuild_scan: pass list is empty");
+
+  const double L = std::sqrt((scan_x1-scan_x0)*(scan_x1-scan_x0)
+                             + (scan_y1-scan_y0)*(scan_y1-scan_y0));
+  const double dt_scan = L / scan_speed;
+
+  // Each pass = 1 active waypoint + 1 transit waypoint. Plus a final
+  // velocity-calc sentinel waypoint far in the future.
+  const int nlines = 2 * repeats;
+  const int nwp    = nlines + 1;
+
   sierra::greenam::VectorWrapper<double> ts("Time",  nwp);
   sierra::greenam::VectorWrapper<double> xs("XLaser", nwp);
   sierra::greenam::VectorWrapper<double> ys("YLaser", nwp);
 
-  const double abs_power = lambda * Q;
-  double t = start_time;
   int wp = 0;
-
   for (int r = 0; r < repeats; ++r) {
-    ts(wp) = t;
-    xs(wp) = x0;
-    ys(wp) = y0;
+    ts(wp) = pass_start_times_[r];
+    xs(wp) = scan_x0;
+    ys(wp) = scan_y0;
     ++wp;
 
-    t += dt_scan;
-    ts(wp) = t;
-    xs(wp) = x1;
-    ys(wp) = y1;
+    ts(wp) = pass_start_times_[r] + dt_scan;
+    xs(wp) = scan_x1;
+    ys(wp) = scan_y1;
     ++wp;
-
-    if (r < repeats - 1) {
-      t += eps_t;
-    }
   }
 
-  // The time at which the last active emission ends. The fluctuation
-  // table needs to cover [start_time, t_end_active]; everything past
-  // this is in the 0-power "stop" segment that the integrator culls.
-  const double t_end_active = t;
+  // End time of the last active emission. The fluctuation table only
+  // needs to span [pass_start_times_[0], t_end_active]; anything past
+  // this is in a 0-power stop segment.
+  const double t_end_active = pass_start_times_.back() + dt_scan;
 
-  // Final velocity-calc sentinel waypoint, far in the future.
-  ts(wp) = t + 1.0e6;
-  xs(wp) = x1;
-  ys(wp) = y1;
+  ts(wp) = t_end_active + 1.0e6;
+  xs(wp) = scan_x1;
+  ys(wp) = scan_y1;
   ++wp;
 
   if (wp != nwp) {
-    error->all(FLERR,"moser build_scan: internal waypoint count mismatch");
+    error->all(FLERR,"moser rebuild_scan: internal waypoint count mismatch");
   }
 
   ts.commit();
@@ -319,8 +377,8 @@ void MoserTemperatureSource::build_scan(double start_time,
   ys.commit();
 
   sierra::greenam::ThermalProperties<double> th{k_th, rho, cp};
+  const double abs_power = lambda * Q;
 
-  // Build a per-lobe scan + integrator + (optional) fluctuation table.
   for (int li = 0; li < n_lobes_; ++li) {
     Lobe &L_ref = lobes_[li];
 
@@ -337,19 +395,19 @@ void MoserTemperatureSource::build_scan(double start_time,
     ps.commit();
 
     sierra::greenam::EllipsoidProperties<double> ep{L_ref.sx, L_ref.sy, L_ref.sz};
-    const double zl_eff = laser_plane_z - L_ref.z_offset;
+    const double zl_eff = scan_laser_plane_z - L_ref.z_offset;
 
     try {
       L_ref.scan = std::make_shared<GREENAM_Scan>(th, ep, ts, xs, ys, ps, zl_eff);
     } catch (const std::runtime_error &e) {
-      std::string msg = "moser build_scan: GREENAM LaserScan construction failed: ";
+      std::string msg = "moser rebuild_scan: GREENAM LaserScan construction failed: ";
       msg += e.what();
       error->all(FLERR, msg.c_str());
     }
     L_ref.integrator = std::make_shared<GREENAM_Integ>(*L_ref.scan);
 
     if (L_ref.psd_spec_set) {
-      populate_fluctuation_table(L_ref, start_time, t_end_active);
+      populate_fluctuation_table(L_ref, pass_start_times_.front(), t_end_active);
       L_ref.scan->set_fluctuation_table(&L_ref.fluct_table);
     }
   }
@@ -358,16 +416,17 @@ void MoserTemperatureSource::build_scan(double start_time,
 
   if (domain->me == 0) {
     if (mode == MoserMode::KEYHOLE) {
-      std::cout << "moser keyhole: built " << n_lobes_ << " lobes, "
-                << repeats << " repeats, "
+      std::cout << "moser keyhole: scan now has " << repeats << " passes, "
                 << "L=" << L*1e3 << " mm, dt_scan=" << dt_scan*1e3 << " ms, "
+                << "last pass t_start=" << pass_start_times_.back() << " s, "
                 << "absorbed P_total=" << abs_power << " W ("
                 << "P_top=" << abs_power * lobes_[0].power_fraction
                 << ", P_bot=" << abs_power * lobes_[1].power_fraction
                 << ")" << std::endl;
     } else {
-      std::cout << "moser: built scan with " << repeats << " repeats, "
+      std::cout << "moser: scan now has " << repeats << " passes, "
                 << "L=" << L*1e3 << " mm, dt_scan=" << dt_scan*1e3 << " ms, "
+                << "last pass t_start=" << pass_start_times_.back() << " s, "
                 << "absorbed P=" << abs_power << " W" << std::endl;
     }
     for (int li = 0; li < n_lobes_; ++li) {
@@ -375,10 +434,11 @@ void MoserTemperatureSource::build_scan(double start_time,
         const char *tag = (mode == MoserMode::KEYHOLE)
                           ? (li == LOBE_TOP ? "top" : "bot")
                           : "";
-        std::cout << "moser: attached fluctuation table for lobe " << tag
-                  << " with " << lobes_[li].fluct_table.size() << " samples, "
-                  << "t in [" << start_time << ", " << t_end_active
-                  << "] s" << std::endl;
+        std::cout << "moser: fluctuation table for lobe " << tag
+                  << " covers t in [" << pass_start_times_.front()
+                  << ", " << t_end_active
+                  << "] s with " << lobes_[li].fluct_table.size()
+                  << " samples" << std::endl;
       }
     }
   }
@@ -473,6 +533,7 @@ void MoserTemperatureSource::print_source_info() const
     std::cout << "  scan: (" << scan_x0 << "," << scan_y0 << ") -> ("
               << scan_x1 << "," << scan_y1 << ") at z=" << scan_laser_plane_z
               << ", v=" << scan_speed << " m/s, repeats=" << scan_repeats
+              << ", pause=" << scan_pause_between_repeats << " s"
               << ", t_origin=" << scan_t_origin << " s\n";
   }
   std::cout.flush();

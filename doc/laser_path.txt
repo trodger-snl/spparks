@@ -10,18 +10,27 @@ laser_path command :h3
 
 [Syntax:]
 
-laser_path start X0 Y0 Z0 end X1 Y1 speed V [repeats N] :pre
+laser_path start X0 Y0 Z0 end X1 Y1 speed V \
+    [repeats N] [pause T | pause_below Tk] :pre
 
 X0, Y0, Z0 = path start coordinates in meters (Z0 is the laser plane) :ulb,l
 X1, Y1 = path end coordinates in meters (the path is at constant Z = Z0) :l
 V = laser speed in meters per second (must be > 0) :l
 N = number of times to replay the same linear segment back-to-back
-    (default 1; must be >= 1) :l,ule
+    (default 1; must be >= 1) :l
+T = constant inter-pass pause in seconds (default 0; must be > 0 if given);
+    Moser source only :l
+Tk = peak-temperature threshold in K that gates the inter-pass pause
+     (default unset; must be > 0 if given); Moser source only :l,ule
+
+{pause} and {pause_below} are mutually exclusive.
 
 [Examples:]
 
 laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2
-laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats 5 :pre
+laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats 5
+laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats 5 pause 1.0e-3
+laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats 5 pause_below 700.0 :pre
 
 [Description:]
 
@@ -54,6 +63,49 @@ and materializes any pending PSD fluctuation tables. :l
 For the "hdf5_unstructured / hdf5_csr"_temperature_source_hdf5.html
 sources, this command is accepted but has no effect (the laser
 trajectory is implicit in the FE temperature trace). :l,ule
+
+:line
+
+[Inter-pass pause (Moser only):]
+
+When {repeats > 1} the {pause} and {pause_below} keywords control how
+much simulation time elapses between consecutive passes. Both apply
+only to the time-resolved Moser source. The
+"rosenthal"_temperature_source_rosenthal.html source rejects either
+keyword at parse time because the steady-state moving-point solution
+already gives physically independent passes (no thermal history
+carries across a back-to-back repeat).
+
+{pause T} inserts a fixed cooling interval of {T} seconds between
+each pair of consecutive passes. The interval is realized inside the
+Moser/GREENAM scan as a zero-power transit segment, so the integrand
+naturally captures the cooling tail of the previous pass while no new
+heat is being deposited. The legacy {1e-12 s} numerical floor on the
+inter-repeat time step is preserved automatically when {pause = 0}. :ulb,l
+
+{pause_below Tk} fires each subsequent pass dynamically.  Only the
+first pass is scheduled when {laser_path} is parsed; the remaining
+{repeats - 1} passes sit in a queue.  After the current pass finishes
+emitting, the simulation continues advancing time normally and the
+Moser integrand naturally cools.  As soon as the global peak
+temperature drops below {Tk}, the next queued pass is appended to the
+Moser scan starting at the current simulation time, and emission
+resumes.  This means: if the box is already below {Tk} when pass {r}
+ends, pass {r+1} fires on the very next step (back-to-back); if the
+box stays hot, pass {r+1} is held off until natural cooling brings it
+below {Tk}.  The inter-pass gap is therefore not user-specified — it
+falls out of the physics. :l,ule
+
+The {pause_below} flow gates dynamic-fire on "the current pass has
+finished emitting" so that the laser warm-up window (where peak
+temperature is below {Tk} simply because not enough emission has
+accumulated) does not drain the queue prematurely.
+
+Fluctuations interoperate with both modes.  Under {pause_below}, the
+PSD fluctuation table is regenerated after each {append_pass} so that
+samples at original timestamps remain identical (deterministic in
+seed and t_start) and new samples extend the table to cover the
+appended pass.
 
 :line
 
@@ -94,4 +146,4 @@ with an externally-prepared FE thermal trace.
 
 [Default:]
 
-repeats = 1
+repeats = 1, pause = 0 s, pause_below = (use liquidus tl)

@@ -119,14 +119,59 @@ class MoserTemperatureSource : public TemperatureSource {
   // temperature source is Moser. In KEYHOLE mode, both lobes are built
   // in a single call (path geometry is shared; only ellipsoid widths,
   // zl, and per-lobe waypoint power differ). All units SI.
+  // pause_between_repeats [s]: time gap inserted between consecutive
+  // active scan segments (so the laser is off for that interval). The
+  // GREENAM integrator already skips power=0 transit segments, so a
+  // longer transit means a longer cooling window. Values <= 1e-12 fall
+  // back to a numerical floor that keeps the waypoint velocity calc
+  // well-defined; pass 0 (default) for the legacy near-instant repeat
+  // behavior.
   void build_scan(double start_time,
                   double x0, double y0,
                   double x1, double y1,
                   double laser_plane_z,
                   double speed,
-                  int repeats);
+                  int repeats,
+                  double pause_between_repeats = 0.0);
+
+  // Append a single new pass to an already-built scan starting at
+  // t_start. Reuses the path geometry (x0..y1, plane_z, speed) stashed
+  // by the initial build_scan call. Rebuilds the GREENAM LaserScan /
+  // ScanIntegration and re-materializes the per-lobe fluctuation table
+  // over the extended time window. Used by the app's pause_below logic
+  // to fire the next pass dynamically when peak local temperature
+  // drops below the user-set threshold.
+  void append_pass(double t_start);
 
   bool has_scan() const { return scan_built; }
+
+  // Accessors used by the app-level inter-pass predictor.
+  // (The predictor walks emission time forward without modifying the
+  // scan, evaluating the Green's-function integral at the closest local
+  // bounding-box point; see AppAdditiveTexture::moser_next_active_time.)
+  double get_scan_t_origin() const { return scan_t_origin; }
+  double get_scan_pass_duration() const { return scan_pass_duration; }
+  double get_scan_pause() const { return scan_pause_between_repeats; }
+  int    get_scan_repeats() const { return scan_repeats; }
+  double get_scan_laser_plane_z() const { return scan_laser_plane_z; }
+  double get_scan_x0() const { return scan_x0; }
+  double get_scan_y0() const { return scan_y0; }
+  double get_scan_x1() const { return scan_x1; }
+  double get_scan_y1() const { return scan_y1; }
+  double get_T0() const { return T0_default; }
+  // End time of the most-recently-scheduled active emission window. The
+  // app's pause_below logic uses this to gate `append_pass` on "the
+  // current pass has actually finished emitting" so it doesn't drain
+  // all queued passes during the laser's initial warm-up.
+  double get_last_pass_end_time() const {
+    return pass_start_times_.empty()
+             ? scan_t_origin
+             : pass_start_times_.back() + scan_pass_duration;
+  }
+
+  // Time-resolved source: peak local cooling between passes is meaningful,
+  // so the app's fast-forward path can call its Moser predictor.
+  virtual bool supports_time_queries() const override { return true; }
 
   // Quadrature character length (Moser's `char_length`); 0.5 gives
   // ~1e-4 fractional integration error per the GREENAM comments.
@@ -208,6 +253,15 @@ class MoserTemperatureSource : public TemperatureSource {
   double scan_speed;
   int    scan_repeats;
   bool   scan_built;
+  // Multi-pass timing (consumed by the app-level inter-pass predictor).
+  // scan_pass_duration = L/speed for a single pass [s].
+  // scan_pause_between_repeats = user-specified inter-pass gap [s], 0 if unset.
+  double scan_pass_duration;
+  double scan_pause_between_repeats;
+  // Source of truth for pass scheduling. Populated by build_scan from the
+  // (start_time, repeats, pause) spec, or grown by append_pass when the
+  // app's pause_below path decides the threshold has been met.
+  std::vector<double> pass_start_times_;
 
   // GREENAM integrator pointers (instantiated in the cpp file via
   // forward-declared templates so the GREENAM headers are pulled into
@@ -273,6 +327,11 @@ class MoserTemperatureSource : public TemperatureSource {
   void psd_draw_trivariate(Lobe &lobe, double &eps_W, double &eps_D, double &eps_P);
   void psd_generate_next_sample(Lobe &lobe, double &dW, double &dD, double &dP);
   void populate_fluctuation_table(Lobe &lobe, double t_start, double t_end);
+
+  // Build (or rebuild) the GREENAM LaserScan + ScanIntegration arrays
+  // from the current pass_start_times_ list and stashed path geometry.
+  // Idempotent; called from build_scan and append_pass.
+  void rebuild_scan_from_pass_list_();
 
   // Diagnostic print helper for a single lobe.
   void print_lobe_info(int idx) const;

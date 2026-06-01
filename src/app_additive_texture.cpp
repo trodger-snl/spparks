@@ -186,6 +186,11 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
     scan_layer_active = false;
     laser_path_set = false;
 
+    // Multi-pass pause control (disabled until laser_path specifies pause/pause_below)
+    laser_pause_constant  = 0.0;
+    laser_pause_below     = 0.0;
+    pending_moser_passes  = 0;
+
     // Temperature optimization flags (all enabled by default)
     opt_use_spatial_grid = true;
     opt_use_element_cache = true;
@@ -660,7 +665,10 @@ void AppAdditiveTexture::app_update(double dt)
     if (hdf5_source) {
       fast_forward_threshold = hdf5_source->get_fast_forward_threshold();
     } else if (ros_source || moser_source) {
-      fast_forward_threshold = tl;
+      // `laser_path ... pause_below <Tk>` overrides the default
+      // liquidus-based threshold so the user can pause until temperatures
+      // drop below an explicit value rather than the alloy liquidus.
+      fast_forward_threshold = (laser_pause_below > 0.0) ? laser_pause_below : tl;
     }
 
     for (int i = 0; i < nlocal; i++) {
@@ -678,9 +686,37 @@ void AppAdditiveTexture::app_update(double dt)
     // Time: Fast-forward logic
     t_start = MPI_Wtime();
     if (global_t_active == 0 && time > 1e-6 && temperature_source->supports_time_queries()) {
+     // Moser pause_below: a pending pass is ready to fire whenever the
+     // global peak temperature first drops below the user-supplied
+     // threshold AFTER the current pass has finished emitting. The
+     // "after" guard prevents draining queued passes during the laser
+     // warm-up window (where max-T is below threshold simply because
+     // the integrand has not yet accumulated enough emission). Append
+     // the next pass starting at current sim time; the GREENAM
+     // integrator picks it up on the next get_temperature_at_xyz_and_time
+     // call. Do not advance sim time.
+     bool dynamic_fire = false;
+     if (moser_source && laser_pause_below > 0.0 && pending_moser_passes > 0) {
+       if (time >= moser_source->get_last_pass_end_time()) {
+         moser_source->append_pass(time);
+         --pending_moser_passes;
+         dynamic_fire = true;
+         if (domain->me == 0) {
+           std::cout << "pause_below: max(T) < " << fast_forward_threshold
+                     << " K reached at t=" << time
+                     << " s; firing next Moser pass ("
+                     << pending_moser_passes << " more queued)" << std::endl;
+         }
+         // Refresh temperatures to reflect the just-fired pass.
+         update_temperature_from_source(time);
+       }
+     }
+     if (!dynamic_fire) {
       double local_next_time;
       if (ros_source) {
         local_next_time = rosenthal_next_active_time(time, fast_forward_threshold);
+      } else if (moser_source) {
+        local_next_time = moser_next_active_time(time, fast_forward_threshold);
       } else {
         local_next_time = temperature_source->get_next_time_with_temperature(time, fast_forward_threshold);
       }
@@ -727,6 +763,7 @@ void AppAdditiveTexture::app_update(double dt)
           }
         }
       }
+     }   // end else-branch of pause_below dispatch
     }
     t_end = MPI_Wtime();
     t_fast_forward += (t_end - t_start);
@@ -2519,9 +2556,10 @@ void AppAdditiveTexture::laser_path_cmd(int narg, char **arg)
 
   // Expected token layout (0-based, command name already stripped):
   //   start X0 Y0 Z0 end X1 Y1 speed V [repeats N]
-  // Minimum is 9 tokens (no repeats); with repeats it's 11.
+  //     [pause <T> | pause_below <Tk>]
+  // pause and pause_below are mutually exclusive.
   if (narg < 9)
-    error->all(FLERR,"Illegal laser_path command: expected start X0 Y0 Z0 end X1 Y1 speed V [repeats N]");
+    error->all(FLERR,"Illegal laser_path command: expected start X0 Y0 Z0 end X1 Y1 speed V [repeats N] [pause T | pause_below Tk]");
   if (strcmp(arg[0],"start") != 0)
     error->all(FLERR,"laser_path: expected keyword 'start'");
   const double x0 = atof(arg[1]);
@@ -2538,21 +2576,79 @@ void AppAdditiveTexture::laser_path_cmd(int narg, char **arg)
     error->all(FLERR,"laser_path: speed must be > 0");
 
   int repeats = 1;
-  if (narg > 9) {
-    if (strcmp(arg[9],"repeats") != 0)
-      error->all(FLERR,"laser_path: expected keyword 'repeats' or end-of-command");
-    if (narg < 11)
-      error->all(FLERR,"laser_path: missing value after 'repeats'");
-    repeats = atoi(arg[10]);
-    if (repeats < 1)
-      error->all(FLERR,"laser_path: repeats must be >= 1");
+  double pause_constant = 0.0;
+  double pause_below_T  = 0.0;
+  int i = 9;
+  while (i < narg) {
+    if (strcmp(arg[i],"repeats") == 0) {
+      if (i + 1 >= narg)
+        error->all(FLERR,"laser_path: missing value after 'repeats'");
+      repeats = atoi(arg[i+1]);
+      if (repeats < 1)
+        error->all(FLERR,"laser_path: repeats must be >= 1");
+      i += 2;
+    }
+    else if (strcmp(arg[i],"pause") == 0) {
+      if (i + 1 >= narg)
+        error->all(FLERR,"laser_path: missing value after 'pause'");
+      pause_constant = atof(arg[i+1]);
+      if (pause_constant <= 0.0)
+        error->all(FLERR,"laser_path: pause must be > 0 seconds");
+      i += 2;
+    }
+    else if (strcmp(arg[i],"pause_below") == 0) {
+      if (i + 1 >= narg)
+        error->all(FLERR,"laser_path: missing value after 'pause_below'");
+      pause_below_T = atof(arg[i+1]);
+      if (pause_below_T <= 0.0)
+        error->all(FLERR,"laser_path: pause_below threshold must be > 0 K");
+      i += 2;
+    }
+    else {
+      error->all(FLERR,"laser_path: unknown keyword (expected 'repeats', 'pause', or 'pause_below')");
+    }
   }
 
-  // Build N identical paths in the layer.
+  if (pause_constant > 0.0 && pause_below_T > 0.0)
+    error->all(FLERR,
+      "laser_path: 'pause' and 'pause_below' are mutually exclusive. "
+      "Use 'pause <T>' for a fixed inter-pass delay, or "
+      "'pause_below <Tk>' for a temperature-threshold-gated delay.");
+
+  // Both pause modes require a time-resolved source. Rosenthal is the
+  // steady-state moving-point solution: T(x) is determined purely by
+  // the current laser position, so each pass is already independent of
+  // every preceding pass (no thermal history accumulates between
+  // repeats). Inserting a pause for Rosenthal would only idle the KMC
+  // sweep, which is out of scope for this feature. Reject at parse time.
+  const bool src_is_rosenthal =
+    (dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get()) != nullptr);
+  if ((pause_constant > 0.0 || pause_below_T > 0.0) && src_is_rosenthal) {
+    error->all(FLERR,
+      "laser_path pause/pause_below: not supported for the Rosenthal "
+      "source. Rosenthal is a steady-state moving-point solution; "
+      "multi-pass repeats are already physically independent (no "
+      "thermal history carries between passes). Use a time-resolved "
+      "source (moser, finitediff [planned]) if you need cooling "
+      "between passes.");
+  }
+  if ((pause_constant > 0.0 || pause_below_T > 0.0) && repeats < 2) {
+    if (domain->me == 0) {
+      std::cout << "laser_path: warning: pause keyword specified but "
+                   "repeats=1; no inter-pass interval will occur."
+                << std::endl;
+    }
+  }
+
+  laser_pause_constant = pause_constant;
+  laser_pause_below    = pause_below_T;
+
+  // Build N identical paths back-to-back in the Rosenthal scan_layer
+  // (unchanged behavior; Moser does not consume scan_layer).
   RASTER::Point a(x0,y0,0.0), b(x1,y1,0.0);
   std::vector<RASTER::Path> paths;
   paths.reserve(repeats);
-  for (int i = 0; i < repeats; ++i) paths.emplace_back(a, b, v);
+  for (int r = 0; r < repeats; ++r) paths.emplace_back(a, b, v);
 
   scan_layer = RASTER::Layer(paths, /*thickness*/0);
   scan_layer_z = z0;
@@ -2568,18 +2664,37 @@ void AppAdditiveTexture::laser_path_cmd(int narg, char **arg)
   }
 
   // If the active source is the Moser unsteady Green's-function source,
-  // hand the path geometry over so
-  // it can build its own GREENAM LaserScan/ScanIntegration. The Moser
-  // source is path-aware and consumes simulation time + world-space
-  // coordinates directly; it does not use scan_layer.
+  // hand the path geometry over so it can build its own GREENAM
+  // LaserScan/ScanIntegration. The Moser source is path-aware and
+  // consumes simulation time + world-space coordinates directly; it
+  // does not use scan_layer.
+  //
+  // pause_below mode: only pass 1 is pre-scheduled. The remaining
+  // (repeats - 1) passes are appended dynamically by app_update when
+  // the peak local temperature drops below pause_below_T.
+  //
+  // constant-pause and legacy modes: all repeats are scheduled upfront,
+  // with the pause as the gap between consecutive 0-power transit
+  // segments in the GREENAM scan.
   if (auto* moser = dynamic_cast<MoserTemperatureSource*>(temperature_source.get())) {
-    moser->build_scan(time, x0, y0, x1, y1, z0, v, repeats);
+    if (pause_below_T > 0.0) {
+      moser->build_scan(time, x0, y0, x1, y1, z0, v, /*repeats*/1, /*pause*/0.0);
+      pending_moser_passes = repeats - 1;
+    } else {
+      moser->build_scan(time, x0, y0, x1, y1, z0, v, repeats, pause_constant);
+      pending_moser_passes = 0;
+    }
   }
 
   if (domain->me == 0) {
     std::cout << "laser_path: (" << x0 << "," << y0 << "," << z0
               << ") -> (" << x1 << "," << y1 << "," << z0 << ")"
-              << " speed=" << v << " m/s, repeats=" << repeats << std::endl;
+              << " speed=" << v << " m/s, repeats=" << repeats;
+    if (pause_constant > 0.0)
+      std::cout << ", pause=" << pause_constant << " s";
+    if (pause_below_T > 0.0)
+      std::cout << ", pause_below=" << pause_below_T << " K";
+    std::cout << std::endl;
   }
 }
 
@@ -2844,6 +2959,89 @@ double AppAdditiveTexture::rosenthal_next_active_time(double current_time, doubl
     // Advance the probe by ddt; stop if path is exhausted.
     if (!probe.move(ddt)) return std::numeric_limits<double>::max();
     t += ddt;
+  }
+  return std::numeric_limits<double>::max();
+}
+
+/* ----------------------------------------------------------------------
+   Fast-forward predictor for the Moser source.
+
+   For each remaining active scan interval [t_pass_start, t_pass_end],
+   walks emission time forward in fast_forward_search_window steps.
+   At each step:
+     1. Lerps the laser (x,y) along the scan path for time t.
+     2. Finds the closest world-space point on the local bounding box to
+        that laser position (mirroring the Rosenthal predictor).
+     3. Evaluates Moser's analytical temperature there.
+     4. Returns t if that bound reaches threshold_temp.
+
+   The pause intervals between passes are skipped: with the laser off,
+   the Green's-function integrand contains only past emission and is
+   monotonically decaying, so it cannot raise max-T above an already-
+   missed threshold. This makes the walk O(n_repeats * pass_duration /
+   step), independent of total pause length.
+
+   Like the Rosenthal predictor, the returned time is permitted to be an
+   underestimate (wake too early), which is the safe direction.
+------------------------------------------------------------------------- */
+
+double AppAdditiveTexture::moser_next_active_time(double current_time, double threshold_temp)
+{
+  if (!laser_path_set) return std::numeric_limits<double>::max();
+
+  auto* moser = dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
+  if (!moser || !moser->has_scan()) return std::numeric_limits<double>::max();
+  if (nlocal == 0) return std::numeric_limits<double>::max();
+
+  // Local domain bounding box in physical (meters) coordinates.
+  double xmin = xyz[0][0]*dx, xmax = xmin;
+  double ymin = xyz[0][1]*dx, ymax = ymin;
+  double zmin = xyz[0][2]*dx, zmax = zmin;
+  for (int i = 1; i < nlocal; ++i) {
+    const double sx = xyz[i][0]*dx;
+    const double sy = xyz[i][1]*dx;
+    const double sz = xyz[i][2]*dx;
+    if (sx < xmin) xmin = sx; else if (sx > xmax) xmax = sx;
+    if (sy < ymin) ymin = sy; else if (sy > ymax) ymax = sy;
+    if (sz < zmin) zmin = sz; else if (sz > zmax) zmax = sz;
+  }
+
+  const double t_origin    = moser->get_scan_t_origin();
+  const double pass_dur    = moser->get_scan_pass_duration();
+  const double pause_gap   = moser->get_scan_pause();
+  const int    n_reps      = moser->get_scan_repeats();
+  const double x0          = moser->get_scan_x0();
+  const double y0          = moser->get_scan_y0();
+  const double x1          = moser->get_scan_x1();
+  const double y1          = moser->get_scan_y1();
+  const double laser_z     = moser->get_scan_laser_plane_z();
+
+  const double ddt = (fast_forward_search_window > 0.0)
+                       ? fast_forward_search_window : 0.01;
+  // Walk each remaining active interval forward and check threshold
+  // crossings. The Moser integrator naturally accounts for cumulative
+  // emission from earlier passes; we don't need to model decay
+  // separately.
+  for (int r = 0; r < n_reps; ++r) {
+    const double t_r_start = t_origin + r * pass_dur + r * pause_gap;
+    const double t_r_end   = t_r_start + pass_dur;
+    if (t_r_end <= current_time) continue;  // pass already completed
+
+    double t = std::max(current_time, t_r_start);
+    while (t <= t_r_end) {
+      // Lerp laser (x,y) along this pass.
+      const double s = (t - t_r_start) / pass_dur;
+      const double lx = x0 + s * (x1 - x0);
+      const double ly = y0 + s * (y1 - y0);
+      const double lz = laser_z;
+      // Closest point on local box to laser.
+      const double cx = (lx < xmin) ? xmin : (lx > xmax ? xmax : lx);
+      const double cy = (ly < ymin) ? ymin : (ly > ymax ? ymax : ly);
+      const double cz = (lz < zmin) ? zmin : (lz > zmax ? zmax : lz);
+      const double T_probe = moser->get_temperature_at_xyz_and_time(cx, cy, cz, t);
+      if (T_probe >= threshold_temp) return t;
+      t += ddt;
+    }
   }
   return std::numeric_limits<double>::max();
 }

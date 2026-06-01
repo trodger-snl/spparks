@@ -109,6 +109,15 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   // before all repeats are exhausted.
   double rosenthal_next_active_time(double current_time, double threshold_temp);
 
+  // Fast-forward predictor for the Moser source. Walks emission time
+  // forward through remaining active scan intervals. At each step,
+  // evaluates the Moser integrator at the closest point on the local
+  // bounding box to the current laser position and returns the first
+  // time the result reaches threshold_temp. Pause windows are skipped
+  // (the integrator's contribution is monotonically decaying there).
+  // Returns +inf if no remaining pass crosses threshold.
+  double moser_next_active_time(double current_time, double threshold_temp);
+
   // Void generation methods
   void generate_voids(class RandomPark *);
 
@@ -189,6 +198,22 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   double scan_layer_time;    // sim time at which scan_layer's pose is current
   bool   scan_layer_active;  // true while the path has remaining motion
   bool   laser_path_set;     // true once laser_path has been parsed
+
+  // Multi-pass inter-pass pause control (set by laser_path keywords
+  // `pause <T>` and `pause_below <Tk>`; mutually exclusive). Both apply
+  // only to time-resolved sources (currently Moser; Rosenthal is steady-
+  // state and the parser rejects pause keywords there). The constant
+  // pause is plumbed into MoserTemperatureSource::build_scan as the time
+  // gap between consecutive 0-power transit segments in the GREENAM
+  // scan; pause_below fires each subsequent pass dynamically once the
+  // global peak temperature drops below the user-set threshold.
+  double laser_pause_constant;       // [s], 0 = disabled
+  double laser_pause_below;          // [K], 0 = disabled
+  // Pass scheduling for the Moser pause_below path. The first pass is
+  // built into the Moser source at laser_path_cmd time; the remaining
+  // (repeats - 1) are queued as `pending_moser_passes` and appended one
+  // at a time when the fast-forward block detects max-T < threshold.
+  int    pending_moser_passes;
 
   // Temperature optimization flags (for performance testing)
   bool opt_use_spatial_grid;    // Use spatial grid for element lookup (default: true)

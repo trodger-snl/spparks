@@ -11,7 +11,7 @@ laser_path command :h3
 [Syntax:]
 
 laser_path start X0 Y0 Z0 end X1 Y1 speed V \
-    [repeats N] [pause T | pause_below Tk] :pre
+    [repeats N] [pause T | pause_below Tk] [reset_temperature Tr] :pre
 
 X0, Y0, Z0 = path start coordinates in meters (Z0 is the laser plane) :ulb,l
 X1, Y1 = path end coordinates in meters (the path is at constant Z = Z0) :l
@@ -21,16 +21,22 @@ N = number of times to replay the same linear segment back-to-back
 T = constant inter-pass pause in seconds (default 0; must be > 0 if given);
     Moser source only :l
 Tk = peak-temperature threshold in K that gates the inter-pass pause
+     (default unset; must be > 0 if given); Moser source only :l
+Tr = uniform temperature in K to reset the simulation domain to at
+     each inter-pass boundary; requires `pause` or `pause_below`
      (default unset; must be > 0 if given); Moser source only :l,ule
 
 {pause} and {pause_below} are mutually exclusive.
+{reset_temperature} combines with either one.
 
 [Examples:]
 
 laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2
 laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats 5
 laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats 5 pause 1.0e-3
-laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats 5 pause_below 700.0 :pre
+laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats 5 pause_below 700.0
+laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats 5 pause 1.0e-3 reset_temperature 573
+laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats 5 pause_below 700.0 reset_temperature 573 :pre
 
 [Description:]
 
@@ -106,6 +112,19 @@ PSD fluctuation table is regenerated after each {append_pass} so that
 samples at original timestamps remain identical (deterministic in
 seed and t_start) and new samples extend the table to cover the
 appended pass.
+
+{reset_temperature Tr} can be combined with either {pause T} or
+{pause_below Tk}.  At each inter-pass boundary (when the next pass is
+about to fire), the entire Moser scan history is cleared (only the
+new pass remains scheduled) and the source's ambient T0 is shifted to
+{Tr}.  This simulates the simulation domain having completely cooled
+to a uniform value before the new pass begins: subsequent temperature
+queries return {Tr + integral_over_new_pass_only} with no Green's-
+function tail from earlier passes.  Adding {reset_temperature} also
+switches {pause T} from static N-pass pre-scheduling to per-pass
+dynamic scheduling so the reset can be applied at each gap boundary;
+this is transparent to the user but increases the per-pass rebuild
+work proportionally to {repeats}.
 
 :line
 

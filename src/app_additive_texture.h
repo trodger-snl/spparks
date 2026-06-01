@@ -209,10 +209,17 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   // global peak temperature drops below the user-set threshold.
   double laser_pause_constant;       // [s], 0 = disabled
   double laser_pause_below;          // [K], 0 = disabled
-  // Pass scheduling for the Moser pause_below path. The first pass is
-  // built into the Moser source at laser_path_cmd time; the remaining
-  // (repeats - 1) are queued as `pending_moser_passes` and appended one
-  // at a time when the fast-forward block detects max-T < threshold.
+  // Optional `reset_temperature <Tr>` companion. When > 0, at each
+  // inter-pass boundary the Moser scan history is cleared, the source's
+  // ambient T0 is shifted to Tr, and the next pass starts from a
+  // uniform Tr field. Requires either pause or pause_below to be set
+  // (rejected at parse time otherwise).
+  double laser_reset_temperature;    // [K], 0 = disabled
+  // Pass scheduling for the Moser pause_below / pause+reset paths.  The
+  // first pass is built into the Moser source at laser_path_cmd time;
+  // the remaining (repeats - 1) are queued as `pending_moser_passes`
+  // and appended one at a time when the firing condition is met
+  // (threshold for pause_below; time-elapsed for pause+reset).
   int    pending_moser_passes;
 
   // Temperature optimization flags (for performance testing)

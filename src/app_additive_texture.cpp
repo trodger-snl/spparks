@@ -187,9 +187,10 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
     laser_path_set = false;
 
     // Multi-pass pause control (disabled until laser_path specifies pause/pause_below)
-    laser_pause_constant  = 0.0;
-    laser_pause_below     = 0.0;
-    pending_moser_passes  = 0;
+    laser_pause_constant     = 0.0;
+    laser_pause_below        = 0.0;
+    laser_reset_temperature  = 0.0;
+    pending_moser_passes     = 0;
 
     // Temperature optimization flags (all enabled by default)
     opt_use_spatial_grid = true;
@@ -662,6 +663,34 @@ void AppAdditiveTexture::app_update(double dt)
     MoserTemperatureSource* moser_source =
       (hdf5_source || ros_source) ? nullptr
                   : dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
+
+    // Moser pause + reset_temperature: time-gated dynamic fire. The
+    // user wants the next pass to begin exactly `laser_pause_constant`
+    // seconds after the current pass ends, with the domain reset to
+    // `laser_reset_temperature`. This fires unconditionally on time
+    // (not gated on cool-state), so the check lives outside the
+    // fast-forward block. pause_below uses a different (threshold-
+    // gated) path further down inside the fast-forward block.
+    if (moser_source &&
+        laser_pause_constant > 0.0 &&
+        laser_reset_temperature > 0.0 &&
+        pending_moser_passes > 0) {
+      const double next_fire =
+        moser_source->get_last_pass_end_time() + laser_pause_constant;
+      if (time >= next_fire) {
+        moser_source->reset_history_and_start(time, laser_reset_temperature);
+        --pending_moser_passes;
+        if (domain->me == 0) {
+          std::cout << "pause+reset: gap of " << laser_pause_constant
+                    << " s elapsed at t=" << time
+                    << " s; firing next Moser pass (reset to "
+                    << laser_reset_temperature << " K, "
+                    << pending_moser_passes << " more queued)" << std::endl;
+        }
+        update_temperature_from_source(time);
+      }
+    }
+
     if (hdf5_source) {
       fast_forward_threshold = hdf5_source->get_fast_forward_threshold();
     } else if (ros_source || moser_source) {
@@ -695,17 +724,28 @@ void AppAdditiveTexture::app_update(double dt)
      // the next pass starting at current sim time; the GREENAM
      // integrator picks it up on the next get_temperature_at_xyz_and_time
      // call. Do not advance sim time.
+     //
+     // If reset_temperature is set, the entire domain is treated as
+     // cooled to that uniform value at the moment of firing: the Moser
+     // scan history is wiped (only the new pass remains) and the source
+     // ambient is shifted to reset_temperature.
      bool dynamic_fire = false;
      if (moser_source && laser_pause_below > 0.0 && pending_moser_passes > 0) {
        if (time >= moser_source->get_last_pass_end_time()) {
-         moser_source->append_pass(time);
+         if (laser_reset_temperature > 0.0) {
+           moser_source->reset_history_and_start(time, laser_reset_temperature);
+         } else {
+           moser_source->append_pass(time);
+         }
          --pending_moser_passes;
          dynamic_fire = true;
          if (domain->me == 0) {
            std::cout << "pause_below: max(T) < " << fast_forward_threshold
                      << " K reached at t=" << time
-                     << " s; firing next Moser pass ("
-                     << pending_moser_passes << " more queued)" << std::endl;
+                     << " s; firing next Moser pass (";
+           if (laser_reset_temperature > 0.0)
+             std::cout << "reset to " << laser_reset_temperature << " K, ";
+           std::cout << pending_moser_passes << " more queued)" << std::endl;
          }
          // Refresh temperatures to reflect the just-fired pass.
          update_temperature_from_source(time);
@@ -2576,8 +2616,9 @@ void AppAdditiveTexture::laser_path_cmd(int narg, char **arg)
     error->all(FLERR,"laser_path: speed must be > 0");
 
   int repeats = 1;
-  double pause_constant = 0.0;
-  double pause_below_T  = 0.0;
+  double pause_constant   = 0.0;
+  double pause_below_T    = 0.0;
+  double reset_temperature_T = 0.0;
   int i = 9;
   while (i < narg) {
     if (strcmp(arg[i],"repeats") == 0) {
@@ -2604,8 +2645,16 @@ void AppAdditiveTexture::laser_path_cmd(int narg, char **arg)
         error->all(FLERR,"laser_path: pause_below threshold must be > 0 K");
       i += 2;
     }
+    else if (strcmp(arg[i],"reset_temperature") == 0) {
+      if (i + 1 >= narg)
+        error->all(FLERR,"laser_path: missing value after 'reset_temperature'");
+      reset_temperature_T = atof(arg[i+1]);
+      if (reset_temperature_T <= 0.0)
+        error->all(FLERR,"laser_path: reset_temperature must be > 0 K");
+      i += 2;
+    }
     else {
-      error->all(FLERR,"laser_path: unknown keyword (expected 'repeats', 'pause', or 'pause_below')");
+      error->all(FLERR,"laser_path: unknown keyword (expected 'repeats', 'pause', 'pause_below', or 'reset_temperature')");
     }
   }
 
@@ -2614,6 +2663,10 @@ void AppAdditiveTexture::laser_path_cmd(int narg, char **arg)
       "laser_path: 'pause' and 'pause_below' are mutually exclusive. "
       "Use 'pause <T>' for a fixed inter-pass delay, or "
       "'pause_below <Tk>' for a temperature-threshold-gated delay.");
+  if (reset_temperature_T > 0.0 && pause_constant <= 0.0 && pause_below_T <= 0.0)
+    error->all(FLERR,
+      "laser_path: 'reset_temperature' requires either 'pause <T>' or "
+      "'pause_below <Tk>' to define when the reset is applied.");
 
   // Both pause modes require a time-resolved source. Rosenthal is the
   // steady-state moving-point solution: T(x) is determined purely by
@@ -2640,8 +2693,9 @@ void AppAdditiveTexture::laser_path_cmd(int narg, char **arg)
     }
   }
 
-  laser_pause_constant = pause_constant;
-  laser_pause_below    = pause_below_T;
+  laser_pause_constant    = pause_constant;
+  laser_pause_below       = pause_below_T;
+  laser_reset_temperature = reset_temperature_T;
 
   // Build N identical paths back-to-back in the Rosenthal scan_layer
   // (unchanged behavior; Moser does not consume scan_layer).
@@ -2669,15 +2723,21 @@ void AppAdditiveTexture::laser_path_cmd(int narg, char **arg)
   // consumes simulation time + world-space coordinates directly; it
   // does not use scan_layer.
   //
-  // pause_below mode: only pass 1 is pre-scheduled. The remaining
-  // (repeats - 1) passes are appended dynamically by app_update when
-  // the peak local temperature drops below pause_below_T.
+  // Dynamic scheduling (only pass 1 built upfront, remaining (repeats-1)
+  // appended one at a time) is used in three cases:
+  //   - pause_below alone           (threshold-gated dynamic fire)
+  //   - pause + reset_temperature   (time-gated dynamic fire with reset)
+  //   - pause_below + reset_temperature (threshold-gated + reset)
+  // In these cases the app needs to interpose between passes (apply the
+  // reset, evaluate the threshold), so static N-pass scheduling won't do.
   //
-  // constant-pause and legacy modes: all repeats are scheduled upfront,
-  // with the pause as the gap between consecutive 0-power transit
-  // segments in the GREENAM scan.
+  // Legacy `pause T` and no-pause modes still pre-schedule all repeats
+  // with `pause_constant` baked in as the GREENAM transit gap.
+  const bool dynamic_pass_scheduling =
+    (pause_below_T > 0.0) ||
+    (pause_constant > 0.0 && reset_temperature_T > 0.0);
   if (auto* moser = dynamic_cast<MoserTemperatureSource*>(temperature_source.get())) {
-    if (pause_below_T > 0.0) {
+    if (dynamic_pass_scheduling) {
       moser->build_scan(time, x0, y0, x1, y1, z0, v, /*repeats*/1, /*pause*/0.0);
       pending_moser_passes = repeats - 1;
     } else {
@@ -2694,6 +2754,8 @@ void AppAdditiveTexture::laser_path_cmd(int narg, char **arg)
       std::cout << ", pause=" << pause_constant << " s";
     if (pause_below_T > 0.0)
       std::cout << ", pause_below=" << pause_below_T << " K";
+    if (reset_temperature_T > 0.0)
+      std::cout << ", reset_temperature=" << reset_temperature_T << " K";
     std::cout << std::endl;
   }
 }

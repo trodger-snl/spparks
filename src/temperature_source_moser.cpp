@@ -320,6 +320,40 @@ void MoserTemperatureSource::append_pass(double t_start)
 }
 
 /* ----------------------------------------------------------------------
+   Reset the scan's pass history and seed a single new pass at t_start.
+
+   Used by the laser_path `reset_temperature` keyword to simulate the
+   simulation domain having fully cooled to a uniform value between
+   passes:
+     1. pass_start_times_ is cleared and rebuilt to hold only t_start.
+     2. T0_default is shifted to new_ambient, so subsequent
+        get_temperature_at_xyz_and_time(...) calls return
+        `new_ambient + integral_over_new_pass` (the previous passes'
+        Green's-function tail contributes nothing).
+     3. scan_t_origin and scan_repeats are updated for diagnostics.
+     4. Fluctuation tables re-warmup from their seed and re-materialize
+        over the new (single-pass) time window; the PSD chain restarts.
+
+   The path geometry (x0..y1, plane_z, speed) is preserved.
+------------------------------------------------------------------------- */
+
+void MoserTemperatureSource::reset_history_and_start(double t_start,
+                                                          double new_ambient)
+{
+  if (!scan_built) {
+    error->all(FLERR,
+      "moser reset_history_and_start: cannot reset before initial build_scan has run");
+  }
+  pass_start_times_.clear();
+  pass_start_times_.push_back(t_start);
+  scan_t_origin = t_start;
+  scan_repeats  = 1;
+  T0_default          = new_ambient;
+  ambient_temperature = new_ambient;
+  rebuild_scan_from_pass_list_();
+}
+
+/* ----------------------------------------------------------------------
    Materialize the GREENAM LaserScan/ScanIntegration (and any active
    fluctuation tables) from the current pass_start_times_ list and the
    stashed path geometry (scan_x0..scan_y1, scan_laser_plane_z,
@@ -461,13 +495,20 @@ double MoserTemperatureSource::get_temperature_at_xyz_and_time(double x, double 
 
   if (z > scan_laser_plane_z) return T0_default;
 
-  const double t_local = time - scan_t_origin;
-  if (t_local <= 0.0) return T0_default;
+  // Both bounds and waypoint times inside the GREENAM scan are stored
+  // in absolute simulation time, so the integrator must be queried with
+  // absolute time too. The legacy implementation passed time -
+  // scan_t_origin, which happened to coincide with absolute time only
+  // when scan_t_origin == 0 (always the case prior to the
+  // reset_history_and_start path, where scan_t_origin is shifted to
+  // the reset moment). Pass time directly; the early-return below
+  // guards against queries before the first scheduled pass.
+  if (time <= scan_t_origin) return T0_default;
 
   double rise = 0.0;
   for (int li = 0; li < n_lobes_; ++li) {
     if (!lobes_[li].integrator) continue;
-    rise += lobes_[li].integrator->integrate_point_adaptive(x, y, z, t_local, char_length);
+    rise += lobes_[li].integrator->integrate_point_adaptive(x, y, z, time, char_length);
   }
   return T0_default + rise;
 }

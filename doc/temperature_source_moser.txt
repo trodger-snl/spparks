@@ -178,6 +178,15 @@ when {append_pass} rebuilds the table, samples at original
 timestamps are identical to the prior table and new samples extend
 forward to cover the appended pass.
 
+{reset_temperature Tr} (combinable with either pause keyword) clears
+the Moser scan history at each inter-pass boundary and shifts the
+source's ambient T0 to {Tr}.  The next pass therefore starts from a
+uniform field at {Tr} with no Green's-function tail from earlier
+passes, modelling the simulation domain fully cooling between passes.
+Under reset, the PSD chain re-seeds at each rebuild (same RNG seed,
+re-warmed up, samples drawn from the new pass start time), so the
+fluctuation series is time-shifted but statistically equivalent.
+
 :line
 
 [Restrictions:]

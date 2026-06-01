@@ -143,6 +143,15 @@ class MoserTemperatureSource : public TemperatureSource {
   // drops below the user-set threshold.
   void append_pass(double t_start);
 
+  // Clear all prior pass history and schedule a single new pass at
+  // t_start. Optionally overrides the source's ambient T0 with
+  // new_ambient (used by the laser_path `reset_temperature` keyword to
+  // simulate the domain fully cooling to a uniform value between
+  // passes). After this call, get_temperature_at_xyz_and_time(...)
+  // integrates only over the new pass (no contribution from earlier
+  // passes), and the prefactor ambient is `new_ambient`.
+  void reset_history_and_start(double t_start, double new_ambient);
+
   bool has_scan() const { return scan_built; }
 
   // Accessors used by the app-level inter-pass predictor.

@@ -120,6 +120,13 @@ parameter values for cooling-tail sites, use the
 and absorption fluctuations are therefore not supported on the
 Rosenthal source.
 </P>
+<P>Because each pass under <I>repeats > 1</I> is already independent of every
+preceding pass (no thermal history carries across a back-to-back
+repeat), the <I>pause</I> and <I>pause_below</I> keywords on
+<A HREF = "laser_path.html">laser_path</A> are rejected at parse time for this
+source.  If you need a real inter-pass cooling interval, use the
+<A HREF = "temperature_source_moser.html">moser</A> source.
+</P>
 <P>The <I>keyhole</I> mode requires <I>d > 0</I> and 2 <= <I>n_quad</I> <= 64.  Values
 outside this range are clamped silently.
 </P>

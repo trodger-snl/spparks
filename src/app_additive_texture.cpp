@@ -751,6 +751,25 @@ void AppAdditiveTexture::app_update(double dt)
          update_temperature_from_source(time);
        }
      }
+     // pause_below: once the FINAL pass has finished emitting and the
+     // global peak temperature has dropped below the threshold, end the
+     // run early by advancing time to stoptime. The main solver loop
+     // detects time >= stoptime, calls output->compute(time, 1), and
+     // exits cleanly — flushing stats and any dumps whose next_time
+     // falls at or before stoptime.
+     if (!dynamic_fire && moser_source && laser_pause_below > 0.0 &&
+         pending_moser_passes == 0 &&
+         time >= moser_source->get_last_pass_end_time() &&
+         time < stoptime) {
+       if (domain->me == 0) {
+         std::cout << "pause_below: final pass complete and max(T) < "
+                   << fast_forward_threshold << " K at t=" << time
+                   << " s; advancing to stoptime=" << stoptime
+                   << " s for clean exit." << std::endl;
+       }
+       time = stoptime;
+       return;
+     }
      if (!dynamic_fire) {
       double local_next_time;
       if (ros_source) {

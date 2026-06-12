@@ -1722,8 +1722,16 @@ std::vector<double> AppAdditiveTexture::normal_finder(int site)
 	};
 
 	// Special case: top of melt pool where some neighbors are inactive
-	// Use only neighbors at or below current site's z-coordinate
-	bool is_melt_surface = (active_flag[neighbor[site][13]] <= 1);
+	// Use only neighbors at or below current site's z-coordinate.
+	//
+	// Slot 13 in the SC_26N offset_map is the +z neighbor ({0,0,1}). Low-
+	// coordination global-boundary sites (the corner/edge sites with <14
+	// neighbors) have no valid slot 13: neighbor[site][13] reads an
+	// uninitialized neighbor entry, and active_flag[] of that garbage index
+	// then reads out of bounds (segfault). Such sites are missing the
+	// neighbor directly above, so treat them as melt-surface.
+	bool is_melt_surface = (numneigh[site] <= 13) ||
+	                       (active_flag[neighbor[site][13]] <= 1);
 
 	if (is_melt_surface) {
 		// Filter neighbors to only include those at or below current z-level

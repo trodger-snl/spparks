@@ -123,7 +123,7 @@ laser_fluctuations psd bot lorentzian sigma_W 0.08 sigma_D 0.10 tau 500e-6 rho 0
 # Multi-scan path. Coordinates in meters; Z is the laser plane.
 # 1.5 mm linear scan at 1.2 m/s, repeated ${NSCANS} times.
 # ---------------------------------------------------------------------
-laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats ${NSCANS}
+laser_path start 0.25e-3 0.20e-3 0.30e-3 end 1.75e-3 0.20e-3 speed 1.2 repeats ${NSCANS} pause_below 1523 reset_temperature 573
 
 shell cd DumpFiles_moser_keyhole
 
@@ -137,5 +137,5 @@ dump_modify      1 thresh i2 > 1
 
 # Run for slightly longer than NSCANS * 1.25 ms = 6.25 ms to capture
 # post-scan cooling and the final solidified microstructure.
-run              15e-3
+run              1e-2
 shell cd ../

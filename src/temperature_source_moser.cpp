@@ -798,7 +798,19 @@ void MoserTemperatureSource::populate_fluctuation_table(Lobe &L,
 
   // Reset the chain for reproducibility (multiple build_scan() calls
   // with the same seed produce the same table).
-  L.rng.seed(L.psd_spec.seed);
+  // Use pass-specific seed to ensure different fluctuations for each pass
+  // while maintaining reproducibility. We use a simple hash of the base
+  // seed and start time to create a deterministic but unique seed per pass.
+  unsigned long pass_specific_seed = L.psd_spec.seed;
+  if (t_start > 1e-12) {  // Avoid modifying seed for initial pass at t=0
+    // Use a simple deterministic mixing function to create pass-specific seed
+    // This ensures different passes get different fluctuations while remaining
+    // reproducible across MPI ranks
+    const unsigned long time_hash = static_cast<unsigned long>(t_start * 1e6); // Convert to microseconds
+    pass_specific_seed = L.psd_spec.seed ^ (time_hash + 0x9E3779B9 + (L.psd_spec.seed << 6) + (L.psd_spec.seed >> 2));
+  }
+  L.rng.seed(pass_specific_seed);
+
   L.norm = std::normal_distribution<double>(0.0, 1.0);
   psd_reset_filter_state(L);
   // Warmup so the filter starts in steady state. Pink needs ~K * 2^K =

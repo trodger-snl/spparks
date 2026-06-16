@@ -32,7 +32,7 @@
 # FEM melt-pool snapshot or a single-track cross-section to get
 # quantitatively accurate pool dimensions.
 
-variable NSCANS equal 5
+variable NSCANS equal 3
 
 # app_style additive/texture <nspins> <dx[m]> <dt[s]> <nrefine>
 app_style additive/texture 1000000 5e-6 5e-6 2
@@ -59,7 +59,7 @@ set site range 1 1000000
 set i2 value 1
 
 set i1 value 42      #if z < 40
-set i2 value 3       #if z < 40
+#set i2 value 3       #if z < 40
 set d1 value 1.0     #if z < 40
 set d2 value 0.0     #if z < 40
 set d3 value 0.0     #if z < 40
@@ -88,7 +88,7 @@ nuclei_volume_deviation 1.5625e-17
 # args: <Q[W]> <lambda> <k[W/(mK)]> <alpha[m^2/s]> <T0[K]> <cp[J/(kgK)]>
 #       <sx[m]> <sy[m]> <sz[m]>
 # ---------------------------------------------------------------------
-setup_temperature_source moser 340.0 0.155 11.2 2.0959e-6 573.0 650.0 50e-6 50e-6 75e-6
+setup_temperature_source moser 340.0 0.355 11.2 2.0959e-6 573.0 650.0 50e-6 50e-6 75e-6
 
 # ---------------------------------------------------------------------
 # Stochastic ΔW/W, ΔD/D fluctuations on the Moser source.
@@ -107,7 +107,7 @@ setup_temperature_source moser 340.0 0.155 11.2 2.0959e-6 573.0 650.0 50e-6 50e-
 # spec is in place when the fluctuation table is materialized inside
 # build_scan().
 # ---------------------------------------------------------------------
-laser_fluctuations psd lorentzian sigma_W 0.05 sigma_D 0.06 tau 200e-6 rho 0.5 seed 12345 dt 5e-6
+laser_fluctuations psd lorentzian sigma_W 0.05 sigma_D 0.06 sigma_P 0.5 tau 200e-6 rho 0.5 seed 12345 dt 5e-6
 
 # ---------------------------------------------------------------------
 # Multi-scan path. Coordinates in meters; Z is the laser plane.
@@ -122,10 +122,10 @@ stats            5e-4
 # Dump T (d6 = darray[5]), grain id, active_flag, and the full
 # quaternion (d1..d4) every 0.5 ms. NSCANS=5 passes take 6.25 ms;
 # at 0.5 ms cadence we get ~12 in-scan snapshots plus cool-down frames.
-dump             1 text 5e-4 dump.multiscan.* id i1 i2 d1 d2 d3 d4 d6 x y z
-dump_modify      1 thresh i2 > 1
+dump             1 text 2.5e-3 dump.multiscan.* id i1 i2 d1 d2 d3 d4 d6 x y z
+#dump_modify      1 thresh i2 > 1
 
 # Run for slightly longer than NSCANS * 1.25 ms = 6.25 ms to capture
 # post-scan cooling and the final solidified microstructure.
-run              15e-3
+run              2.5e-3
 shell cd ../

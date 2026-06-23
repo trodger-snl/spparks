@@ -658,6 +658,19 @@ void Input::app_style()
 #include "style_app.h"
 #undef APP_CLASS
 
+#ifndef SPPARKS_HIGHFIVE
+  // additive/texture (and its deprecated alias) are only registered above when SPPARKS is
+  // built with HighFive: its temperature sources use the HighFive C++ API (not the raw
+  // HDF5 C API) and read in parallel via MPI. Without HighFive, emit a feature-specific
+  // hint instead of the generic "Illegal app_style command". SPPARKS_HIGHFIVE is defined
+  // by both the CMake and Makefile builds when HighFive is enabled, so this branch is
+  // compiled only in non-HighFive builds, where these styles are genuinely absent.
+  else if (strcmp(arg[0],"additive/texture") == 0 ||
+           strcmp(arg[0],"additive_temperature_texture") == 0)
+    error->all(FLERR,"app_style additive/texture requires SPPARKS built with HighFive "
+                     "(parallel HDF5) support; reconfigure with --highfive -m mpi and rebuild");
+#endif
+
   else error->all(FLERR,"Illegal app_style command");
 }
 

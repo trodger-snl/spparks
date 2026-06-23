@@ -56,6 +56,8 @@ function(generate_single_style_header CLASS_PATTERN FILE_PREFIX STYLE_NAME DEPEN
         message(WARNING "Style generation for ${STYLE_NAME}: Feature status file not found at ${FEATURE_STATUS_FILE}")
         # Set default values to prevent errors
         set(SPPARKS_HAS_HDF5 FALSE)
+        set(SPPARKS_HAS_HIGHFIVE FALSE)
+        set(SPPARKS_HAS_MPI FALSE)
         set(SPPARKS_HAS_JPEG FALSE)
         set(SPPARKS_HAS_PNG FALSE)
         set(SPPARKS_HAS_HDF5_FOUND FALSE)
@@ -90,20 +92,20 @@ function(generate_single_style_header CLASS_PATTERN FILE_PREFIX STYLE_NAME DEPEN
     
     # Validate feature-dependent headers were included when features are enabled
     if(STYLE_NAME STREQUAL "app")
-        # Check for HDF5-dependent apps
-        if(SPPARKS_HAS_HDF5 AND SPPARKS_HAS_HDF5_FOUND)
-            set(HDF5_APPS "app_additive_texture.h")
-            foreach(HDF5_APP ${HDF5_APPS})
-                set(FOUND_HDF5_APP FALSE)
+        # Check for HighFive-dependent apps (additive/texture requires HighFive + MPI)
+        if(SPPARKS_HAS_HIGHFIVE AND SPPARKS_HAS_MPI)
+            set(HIGHFIVE_APPS "app_additive_texture.h")
+            foreach(HIGHFIVE_APP ${HIGHFIVE_APPS})
+                set(FOUND_HIGHFIVE_APP FALSE)
                 foreach(HEADER ${VALID_HEADERS})
                     get_filename_component(HEADER_NAME "${HEADER}" NAME)
-                    if(HEADER_NAME STREQUAL HDF5_APP)
-                        set(FOUND_HDF5_APP TRUE)
+                    if(HEADER_NAME STREQUAL HIGHFIVE_APP)
+                        set(FOUND_HIGHFIVE_APP TRUE)
                         break()
                     endif()
                 endforeach()
-                if(NOT FOUND_HDF5_APP)
-                    message(WARNING "Style generation: HDF5 is enabled but ${HDF5_APP} was not included in style_app.h")
+                if(NOT FOUND_HIGHFIVE_APP)
+                    message(WARNING "Style generation: HighFive+MPI are enabled but ${HIGHFIVE_APP} was not included in style_app.h")
                     message(WARNING "This may cause 'App_style specific command before app_style set' errors")
                     message(WARNING "Consider regenerating with: rm ${STYLE_HEADER} && sh Make.sh style")
                 endif()
@@ -172,119 +174,6 @@ function(generate_single_style_header CLASS_PATTERN FILE_PREFIX STYLE_NAME DEPEN
     endif()
 endfunction()
 
-# NOTE: Dynamic regenerate_styles.cmake generation removed to prevent race conditions
-# The regenerate_styles.cmake file is now a static file that handles style generation
-if(FALSE) # Disabled
-file(WRITE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_styles.cmake"
-"# Script to regenerate style headers
-function(generate_style_headers)
-    # Get all header files in the source directory
-    file(GLOB ALL_HEADERS \"\${CMAKE_CURRENT_SOURCE_DIR}/*.h\")
-    
-    # Define style generation rules as a list
-    set(STYLE_RULES_LIST
-        \"APP_CLASS|app_|app|input\"
-        \"COMMAND_CLASS||command|input\"
-        \"DIAG_CLASS|diag_|diag|input\"
-        \"DUMP_CLASS|dump_|dump|output\"
-        \"PAIR_CLASS|pair_|pair|potential\"
-        \"REGION_CLASS|region_|region|domain\"
-        \"SOLVE_CLASS|solve_|solve|input\"
-    )
-    
-    foreach(RULE \${STYLE_RULES_LIST})
-        string(REPLACE \"|\" \";\" RULE_PARTS \"\${RULE}\")
-        
-        list(LENGTH RULE_PARTS NUM_PARTS)
-        if(NUM_PARTS EQUAL 4)
-            list(GET RULE_PARTS 0 CLASS_PATTERN)
-            list(GET RULE_PARTS 1 FILE_PREFIX)
-            list(GET RULE_PARTS 2 STYLE_NAME)
-            list(GET RULE_PARTS 3 DEPENDENCY_FILE)
-            
-            # Generate the style header
-            generate_single_style_header(\"\${CLASS_PATTERN}\" \"\${FILE_PREFIX}\" \"\${STYLE_NAME}\" \"\${DEPENDENCY_FILE}\")
-        else()
-            message(WARNING \"Invalid style rule: \${RULE}\")
-        endif()
-    endforeach()
-endfunction()
-
-# Include the style generation functions from the main file
-include(\"\${CMAKE_CURRENT_SOURCE_DIR}/cmake/ConditionalSources.cmake\")
-
-# Copy the generate_single_style_header function (simplified)
-function(generate_single_style_header CLASS_PATTERN FILE_PREFIX STYLE_NAME DEPENDENCY_FILE)
-    set(STYLE_HEADER \"\${CMAKE_CURRENT_SOURCE_DIR}/style_\${STYLE_NAME}.h\")
-    set(STYLE_TEMP \"\${CMAKE_CURRENT_BINARY_DIR}/style_\${STYLE_NAME}.tmp\")
-    
-    # Load feature status first
-    set(FEATURE_STATUS_FILE \"\${CMAKE_CURRENT_BINARY_DIR}/feature_status.cmake\")
-    if(EXISTS \"\${FEATURE_STATUS_FILE}\")
-        include(\"\${FEATURE_STATUS_FILE}\")
-    else()
-        set(SPPARKS_HAS_HDF5 FALSE)
-        set(SPPARKS_HAS_JPEG FALSE)
-        set(SPPARKS_HAS_PNG FALSE)
-        set(SPPARKS_HAS_HDF5_FOUND FALSE)
-    endif()
-    
-    # Find matching header files
-    if(FILE_PREFIX STREQUAL \"\")
-        set(PATTERN_SEARCH \"\${CLASS_PATTERN}\")
-    else()
-        set(PATTERN_SEARCH \"\${FILE_PREFIX}\")
-    endif()
-    
-    file(GLOB MATCHING_HEADERS \"\${CMAKE_CURRENT_SOURCE_DIR}/\${PATTERN_SEARCH}*.h\")
-    
-    # Filter headers
-    set(VALID_HEADERS \"\")
-    foreach(HEADER \${MATCHING_HEADERS})
-        file(READ \"\${HEADER}\" HEADER_CONTENT)
-        if(HEADER_CONTENT MATCHES \"\${CLASS_PATTERN}\")
-            get_filename_component(HEADER_NAME \"\${HEADER}\" NAME)
-            set(INCLUDE_HEADER TRUE)
-            
-            should_include_header(\"\${HEADER_NAME}\" INCLUDE_HEADER)
-            
-            if(INCLUDE_HEADER)
-                list(APPEND VALID_HEADERS \"\${HEADER}\")
-            endif()
-        endif()
-    endforeach()
-    
-    # Generate the temporary file
-    file(WRITE \"\${STYLE_TEMP}\" \"\")
-    foreach(HEADER \${VALID_HEADERS})
-        get_filename_component(HEADER_NAME \"\${HEADER}\" NAME)
-        file(APPEND \"\${STYLE_TEMP}\" \"#include \\\"\${HEADER_NAME}\\\"\\n\")
-    endforeach()
-    
-    # Update if needed
-    set(UPDATE_HEADER FALSE)
-    if(NOT EXISTS \"\${STYLE_HEADER}\")
-        set(UPDATE_HEADER TRUE)
-    elseif(EXISTS \"\${STYLE_TEMP}\")
-        file(READ \"\${STYLE_HEADER}\" CURRENT_CONTENT)
-        file(READ \"\${STYLE_TEMP}\" NEW_CONTENT)
-        if(NOT \"\${CURRENT_CONTENT}\" STREQUAL \"\${NEW_CONTENT}\")
-            set(UPDATE_HEADER TRUE)
-        endif()
-    endif()
-    
-    if(UPDATE_HEADER AND EXISTS \"\${STYLE_TEMP}\")
-        file(RENAME \"\${STYLE_TEMP}\" \"\${STYLE_HEADER}\")
-    elseif(EXISTS \"\${STYLE_TEMP}\")
-        file(REMOVE \"\${STYLE_TEMP}\")
-    endif()
-endfunction()
-
-# Execute the generation
-generate_style_headers()
-")
-endif() # End disabled section
-
 # Add dependencies for style headers
 file(GLOB ALL_APP_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/app_*.h")
 file(GLOB ALL_COMMAND_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/create_*.h" "${CMAKE_CURRENT_SOURCE_DIR}/read_*.h" "${CMAKE_CURRENT_SOURCE_DIR}/set.h" "${CMAKE_CURRENT_SOURCE_DIR}/shell.h")
@@ -303,6 +192,8 @@ add_custom_command(
         -DCLASS_PATTERN=APP_CLASS
         -DFILE_PREFIX=app_
         -DDEPENDENCY_FILE=input
+        -DSPK_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DSPK_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_single_style.cmake"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Regenerating style_app.h based on features and headers"
@@ -316,6 +207,8 @@ add_custom_command(
         -DCLASS_PATTERN=COMMAND_CLASS
         -DFILE_PREFIX=
         -DDEPENDENCY_FILE=input
+        -DSPK_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DSPK_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_single_style.cmake"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Regenerating style_command.h based on features and headers"
@@ -329,6 +222,8 @@ add_custom_command(
         -DCLASS_PATTERN=DIAG_CLASS
         -DFILE_PREFIX=diag_
         -DDEPENDENCY_FILE=input
+        -DSPK_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DSPK_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_single_style.cmake"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Regenerating style_diag.h based on features and headers"
@@ -342,6 +237,8 @@ add_custom_command(
         -DCLASS_PATTERN=DUMP_CLASS
         -DFILE_PREFIX=dump_
         -DDEPENDENCY_FILE=output
+        -DSPK_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DSPK_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_single_style.cmake"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Regenerating style_dump.h based on features and headers"
@@ -355,6 +252,8 @@ add_custom_command(
         -DCLASS_PATTERN=PAIR_CLASS
         -DFILE_PREFIX=pair_
         -DDEPENDENCY_FILE=potential
+        -DSPK_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DSPK_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_single_style.cmake"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Regenerating style_pair.h based on features and headers"
@@ -368,6 +267,8 @@ add_custom_command(
         -DCLASS_PATTERN=REGION_CLASS
         -DFILE_PREFIX=region_
         -DDEPENDENCY_FILE=domain
+        -DSPK_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DSPK_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_single_style.cmake"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Regenerating style_region.h based on features and headers"
@@ -381,6 +282,8 @@ add_custom_command(
         -DCLASS_PATTERN=SOLVE_CLASS
         -DFILE_PREFIX=solve_
         -DDEPENDENCY_FILE=input
+        -DSPK_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DSPK_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_single_style.cmake"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Regenerating style_solve.h based on features and headers"
@@ -408,22 +311,22 @@ function(validate_style_headers)
         return()
     endif()
     
-    # Validate HDF5-dependent apps
-    if(SPPARKS_HAS_HDF5 AND SPPARKS_HAS_HDF5_FOUND)
+    # Validate HighFive-dependent apps (additive/texture requires HighFive + MPI)
+    if(SPPARKS_HAS_HIGHFIVE AND SPPARKS_HAS_MPI)
         set(STYLE_APP_FILE "${CMAKE_CURRENT_SOURCE_DIR}/style_app.h")
         if(EXISTS "${STYLE_APP_FILE}")
             file(READ "${STYLE_APP_FILE}" STYLE_APP_CONTENT)
             if(NOT STYLE_APP_CONTENT MATCHES "app_additive_texture.h")
-                message(FATAL_ERROR 
-                    "CMake Error: HDF5 is enabled but app_additive_texture.h is not included in style_app.h\n"
+                message(FATAL_ERROR
+                    "CMake Error: HighFive+MPI are enabled but app_additive_texture.h is not included in style_app.h\n"
                     "This will cause 'App_style specific command before app_style set' errors.\n"
                     "To fix this issue:\n"
-                    "  1. Clean build: rm -rf build && ./build_cmake.sh -m mac_arm --hdf5\n"
+                    "  1. Clean build: rm -rf build && ./build_cmake.sh -m mpi --highfive\n"
                     "  2. Or regenerate: rm ${STYLE_APP_FILE} && sh Make.sh style && cmake --build build\n"
-                    "  3. Or use hybrid: ./build_cmake.sh -m mac_arm --hdf5 && sh Make.sh style && cmake --build build"
+                    "  3. Or use hybrid: ./build_cmake.sh -m mpi --highfive && sh Make.sh style && cmake --build build"
                 )
             else()
-                message(STATUS "Validation: HDF5 app registration confirmed in style_app.h")
+                message(STATUS "Validation: HighFive app registration confirmed in style_app.h")
             endif()
         endif()
     endif()
@@ -449,7 +352,10 @@ endfunction()
 
 # Custom target to regenerate style headers when source files change
 add_custom_target(generate_styles
-    COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_styles.cmake"
+    COMMAND ${CMAKE_COMMAND}
+        -DSPK_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DSPK_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/regenerate_styles.cmake"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Regenerating style headers..."
 )
@@ -457,23 +363,4 @@ add_custom_target(generate_styles
 # Ensure style headers are generated before building targets
 add_custom_target(style_headers DEPENDS ${STYLE_HEADERS})
 
-# Add validation target that runs after style headers are generated
-# Validation target disabled to prevent script mode issues
-if(FALSE) # Disabled
-add_custom_target(validate_styles
-    COMMAND ${CMAKE_COMMAND} -E echo "Validating style headers..."
-    COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/validate_styles.cmake"
-    DEPENDS style_headers
-    COMMENT "Validating feature-dependent style headers"
-)
-endif() # End disabled section
-
-# Validation script generation disabled to prevent script mode issues
-if(FALSE) # Disabled
-file(WRITE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/validate_styles.cmake"
-"# Style header validation script
-include(\"${CMAKE_CURRENT_SOURCE_DIR}/cmake/generate_styles.cmake\")
-validate_style_headers()
-")
-endif() # End disabled section
 

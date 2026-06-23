@@ -227,16 +227,23 @@ function(install_stitch_package)
             set(STITCH_CXX "${CMAKE_CXX_COMPILER}")
         endif()
 
+        # The stitch library ships a hand-written Makefile, so it must be built with a
+        # real make. Do NOT use CMAKE_MAKE_PROGRAM here: that is the active generator's
+        # build tool (e.g. ninja under -G Ninja), which cannot interpret a Makefile.
+        find_program(SPK_MAKE_EXECUTABLE NAMES gmake make)
+        if(NOT SPK_MAKE_EXECUTABLE)
+            message(FATAL_ERROR "Could not find 'make' (or 'gmake'), required to build the STITCH library")
+        endif()
+
         # Clean before rebuild to ensure no stale objects
         execute_process(
-            COMMAND ${CMAKE_MAKE_PROGRAM} clean
+            COMMAND ${SPK_MAKE_EXECUTABLE} clean
             WORKING_DIRECTORY "${STITCH_BUILD_DIR}"
             OUTPUT_QUIET ERROR_QUIET
         )
 
-        # Use CMAKE_MAKE_PROGRAM for portability (instead of hardcoded make)
         execute_process(
-            COMMAND ${CMAKE_COMMAND} -E env CC=${STITCH_CC} CXX=${STITCH_CXX} ${CMAKE_MAKE_PROGRAM} stitch.lib
+            COMMAND ${CMAKE_COMMAND} -E env CC=${STITCH_CC} CXX=${STITCH_CXX} ${SPK_MAKE_EXECUTABLE} stitch.lib
             WORKING_DIRECTORY "${STITCH_BUILD_DIR}"
             RESULT_VARIABLE BUILD_RESULT
             OUTPUT_VARIABLE BUILD_OUTPUT

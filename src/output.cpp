@@ -273,6 +273,22 @@ void Output::add_dump(int narg, char **arg)
 #include "style_dump.h"
 #undef DUMP_CLASS
 
+#if !defined(SPPARKS_JPEG) && !defined(SPPARKS_PNG)
+  // dump image is only registered above when SPPARKS is built with JPEG or PNG.
+  // Without either, give a feature-specific hint instead of the generic "Invalid
+  // dump style". This branch is compiled out as soon as either macro is defined.
+  else if (strcmp(arg[1],"image") == 0)
+    error->all(FLERR,"dump style image requires SPPARKS built with JPEG or PNG "
+                     "support; reconfigure with --jpeg (or --png) and rebuild");
+#endif
+#ifndef SPK_STITCH
+  // dump stitch is gated on SPK_STITCH (see dump_stitch.h) in both build systems;
+  // hint at the STITCH package when it is requested in a build without it.
+  else if (strcmp(arg[1],"stitch") == 0)
+    error->all(FLERR,"dump style stitch requires SPPARKS built with the STITCH "
+                     "package; reconfigure with --package stitch and rebuild");
+#endif
+
   else error->all(FLERR,"Invalid dump style");
 
   ndump++;

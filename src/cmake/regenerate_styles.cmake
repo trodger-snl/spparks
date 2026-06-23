@@ -1,7 +1,18 @@
-# Script to regenerate style headers
+# Script to regenerate style headers (run via cmake -P)
+#
+# In script mode CMAKE_CURRENT_BINARY_DIR collapses to the working directory, so the
+# caller passes the real dirs as SPK_SOURCE_DIR / SPK_BINARY_DIR. Fall back to the
+# CMAKE_CURRENT_* values for in-tree (source==build) invocations.
+if(NOT DEFINED SPK_SOURCE_DIR)
+    set(SPK_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+endif()
+if(NOT DEFINED SPK_BINARY_DIR)
+    set(SPK_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
+endif()
+
 function(generate_style_headers)
     # Get all header files in the source directory
-    file(GLOB ALL_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
+    file(GLOB ALL_HEADERS "${SPK_SOURCE_DIR}/*.h")
     
     # Define style generation rules as a list
     set(STYLE_RULES_LIST
@@ -33,19 +44,21 @@ function(generate_style_headers)
 endfunction()
 
 # Include the style generation functions from the main file
-include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/ConditionalSources.cmake")
+include("${SPK_SOURCE_DIR}/cmake/ConditionalSources.cmake")
 
 # Copy the generate_single_style_header function (simplified)
 function(generate_single_style_header CLASS_PATTERN FILE_PREFIX STYLE_NAME DEPENDENCY_FILE)
-    set(STYLE_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/style_${STYLE_NAME}.h")
-    set(STYLE_TEMP "${CMAKE_CURRENT_BINARY_DIR}/style_${STYLE_NAME}.tmp")
-    
+    set(STYLE_HEADER "${SPK_SOURCE_DIR}/style_${STYLE_NAME}.h")
+    set(STYLE_TEMP "${SPK_BINARY_DIR}/style_${STYLE_NAME}.tmp")
+
     # Load feature status first
-    set(FEATURE_STATUS_FILE "${CMAKE_CURRENT_BINARY_DIR}/feature_status.cmake")
+    set(FEATURE_STATUS_FILE "${SPK_BINARY_DIR}/feature_status.cmake")
     if(EXISTS "${FEATURE_STATUS_FILE}")
         include("${FEATURE_STATUS_FILE}")
     else()
         set(SPPARKS_HAS_HDF5 FALSE)
+        set(SPPARKS_HAS_HIGHFIVE FALSE)
+        set(SPPARKS_HAS_MPI FALSE)
         set(SPPARKS_HAS_JPEG FALSE)
         set(SPPARKS_HAS_PNG FALSE)
         set(SPPARKS_HAS_HDF5_FOUND FALSE)
@@ -58,7 +71,7 @@ function(generate_single_style_header CLASS_PATTERN FILE_PREFIX STYLE_NAME DEPEN
         set(PATTERN_SEARCH "${FILE_PREFIX}")
     endif()
     
-    file(GLOB MATCHING_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/${PATTERN_SEARCH}*.h")
+    file(GLOB MATCHING_HEADERS "${SPK_SOURCE_DIR}/${PATTERN_SEARCH}*.h")
     
     # Filter headers
     set(VALID_HEADERS "")
@@ -96,7 +109,12 @@ function(generate_single_style_header CLASS_PATTERN FILE_PREFIX STYLE_NAME DEPEN
     endif()
     
     if(UPDATE_HEADER AND EXISTS "${STYLE_TEMP}")
-        file(RENAME "${STYLE_TEMP}" "${STYLE_HEADER}")
+        # COPY+RENAME within the destination dir to support cross-filesystem builds
+        # (STYLE_TEMP may live on a different filesystem than the source tree).
+        file(COPY "${STYLE_TEMP}" DESTINATION "${SPK_SOURCE_DIR}")
+        get_filename_component(_style_tmp_name "${STYLE_TEMP}" NAME)
+        file(RENAME "${SPK_SOURCE_DIR}/${_style_tmp_name}" "${STYLE_HEADER}")
+        file(REMOVE "${STYLE_TEMP}")
     elseif(EXISTS "${STYLE_TEMP}")
         file(REMOVE "${STYLE_TEMP}")
     endif()

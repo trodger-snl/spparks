@@ -721,3 +721,15 @@ else()
     message(STATUS "Integer types: 64-bit bigint (SMALLBIG)")
 endif()
 message(STATUS "=====================================")
+
+# Notify the user about optional app/command/dump styles that were excluded because
+# their feature flag is off (collected in configure_conditional_sources). These styles
+# are silently absent from the build otherwise, and requesting one yields only a generic
+# runtime error -- so surface them here with the flag needed to enable each.
+if(SPPARKS_SKIPPED_STYLES)
+    message(STATUS "┌─ Optional styles NOT built (missing features) ─────────────")
+    foreach(_style IN LISTS SPPARKS_SKIPPED_STYLES)
+        message(STATUS "│  ${_style}")
+    endforeach()
+    message(STATUS "└─ Re-run build_cmake.sh with the flag(s) above to enable these.")
+endif()

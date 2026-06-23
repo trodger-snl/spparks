@@ -1,0 +1,91 @@
+{
+  "version": 2,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "mac",
+      "inherits": "base",
+      "displayName": "macOS (no MPI)",
+      "description": "macOS build, no MPI. Mirrors SPPARKS_MACHINE=mac.",
+      "cacheVariables": { "SPPARKS_MACHINE": "mac" }
+    },
+    {
+      "name": "mac_mpi",
+      "inherits": "base",
+      "displayName": "macOS with MPI",
+      "description": "macOS build with MPI. Mirrors SPPARKS_MACHINE=mac_mpi.",
+      "cacheVariables": { "SPPARKS_MACHINE": "mac_mpi" }
+    },
+    {
+      "name": "mac_arm",
+      "inherits": "base",
+      "displayName": "Apple Silicon (MPI)",
+      "description": "Apple Silicon Mac with MPI. Add -DSPPARKS_ENABLE_HDF5=ON for HDF5.",
+      "cacheVariables": { "SPPARKS_MACHINE": "mac_arm" }
+    },
+    {
+      "name": "linux",
+      "inherits": "base",
+      "displayName": "Linux (no MPI)",
+      "description": "Generic Linux build, no MPI. Mirrors SPPARKS_MACHINE=linux.",
+      "cacheVariables": { "SPPARKS_MACHINE": "linux" }
+    },
+    {
+      "name": "mpi",
+      "inherits": "base",
+      "displayName": "Generic MPI",
+      "description": "Generic MPI build. Mirrors SPPARKS_MACHINE=mpi.",
+      "cacheVariables": { "SPPARKS_MACHINE": "mpi" }
+    },
+    {
+      "name": "serial",
+      "inherits": "base",
+      "displayName": "Serial (no MPI)",
+      "description": "Serial build using MPI stubs. Mirrors SPPARKS_MACHINE=serial.",
+      "cacheVariables": { "SPPARKS_MACHINE": "serial" }
+    },
+    {
+      "name": "debug",
+      "inherits": "base",
+      "displayName": "Debug (no MPI)",
+      "description": "Debug build, no MPI. Mirrors SPPARKS_MACHINE=debug.",
+      "cacheVariables": {
+        "SPPARKS_MACHINE": "debug",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "mpi_debug",
+      "inherits": "base",
+      "displayName": "Debug with MPI",
+      "description": "Debug build with MPI. Mirrors SPPARKS_MACHINE=mpi_debug.",
+      "cacheVariables": {
+        "SPPARKS_MACHINE": "mpi_debug",
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "mac", "configurePreset": "mac" },
+    { "name": "mac_mpi", "configurePreset": "mac_mpi" },
+    { "name": "mac_arm", "configurePreset": "mac_arm" },
+    { "name": "linux", "configurePreset": "linux" },
+    { "name": "mpi", "configurePreset": "mpi" },
+    { "name": "serial", "configurePreset": "serial" },
+    { "name": "debug", "configurePreset": "debug" },
+    { "name": "mpi_debug", "configurePreset": "mpi_debug" }
+  ]
+}

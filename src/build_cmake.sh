@@ -99,6 +99,22 @@ Examples:
       $0 --package stitch                 # Enable STITCH package
       cmake --build build --target package-status  # Check if installed files match source
 
+Using CMake directly:
+    This script is a convenience wrapper -- it is NOT the only interface. CMake can be
+    driven directly, which is what IDEs (VS Code, CLion) and CI systems expect:
+
+      cmake -S . -B build -DSPPARKS_MACHINE=mpi      # configure
+      cmake --build build -j 8                       # build
+
+    Or use the bundled CMakePresets.json (CMake >= 3.21):
+
+      cmake --preset mpi                             # configure preset
+      cmake --build --preset mpi                     # build preset
+      cmake --list-presets                           # show available presets
+
+    Presets map 1:1 to the machine names above (mac, mac_mpi, mac_arm, linux, mpi,
+    serial, debug, mpi_debug) and build into build/<preset-name>.
+
 EOF
 }
 

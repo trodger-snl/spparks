@@ -81,7 +81,6 @@ ThermalManager::ThermalManager(SPPARKS *spk, AppAdditiveTexture *app) :
   g_t_temp_prepare = 0.0;
   g_t_temp_site_loop = 0.0;
   g_t_cache_build = 0.0;
-  g_cache_was_built = false;
 }
 
 /* ----------------------------------------------------------------------
@@ -585,10 +584,8 @@ void ThermalManager::update_temperatures(double simulation_time)
     double prepare_time = t1 - t0;
     if (prepare_time > 1.0) {
       g_t_cache_build += prepare_time;
-      g_cache_was_built = true;
     } else {
       g_t_temp_prepare += prepare_time;
-      g_cache_was_built = false;
     }
     g_t_temp_site_loop += (t2 - t1);
 

@@ -140,7 +140,6 @@ class ThermalManager : protected Pointers {
   double g_t_temp_prepare;    // time in prepare_for_timestep()
   double g_t_temp_site_loop;  // time in the per-site temperature loop
   double g_t_cache_build;     // one-time cache build time (per layer)
-  bool   g_cache_was_built;   // cache build detected this call
 
   // Fast-forward predictors (closest-point bound on local bounding box).
   double rosenthal_next_active_time(double current_time, double threshold_temp);

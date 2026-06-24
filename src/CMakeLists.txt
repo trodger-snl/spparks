@@ -148,6 +148,11 @@ option(SPPARKS_UNORDERED_MAP "Use unordered_map" OFF)
 option(SPPARKS_PACKAGE_KOKKOS "Enable KOKKOS package for GPU acceleration" OFF)
 set(SPPARKS_KOKKOS_BACKEND "OPENMP" CACHE STRING "Kokkos backend (OPENMP, CUDA, HIP, SYCL, SERIAL)")
 set_property(CACHE SPPARKS_KOKKOS_BACKEND PROPERTY STRINGS OPENMP CUDA HIP SYCL SERIAL)
+# GPU architecture for the CUDA/HIP backends. Kokkos does NOT auto-detect this,
+# so it must be set explicitly or the device build silently produces no GPU code.
+# Examples: AMD_GFX1151 (Strix Halo / Radeon 8050S/8060S, RDNA 3.5) for HIP,
+#           AMPERE80 (A100) or ADA89 (RTX 40xx) for CUDA.
+set(SPPARKS_KOKKOS_ARCH "" CACHE STRING "Kokkos GPU architecture token (e.g. AMD_GFX1151, AMPERE80)")
 
 # Performance options
 option(SPPARKS_AGGRESSIVE_OPTIMIZATION "Enable aggressive optimizations (may increase compile time)" ON)
@@ -346,11 +351,20 @@ if(SPPARKS_PACKAGE_KOKKOS)
     elseif(SPPARKS_KOKKOS_BACKEND STREQUAL "CUDA")
         set(Kokkos_ENABLE_CUDA ON CACHE BOOL "Enable CUDA backend" FORCE)
         set(Kokkos_ENABLE_SERIAL ON CACHE BOOL "Enable Serial for host execution" FORCE)
-        message(STATUS "Kokkos: CUDA backend enabled (NVIDIA GPUs)")
+        if(NOT SPPARKS_KOKKOS_ARCH)
+            message(FATAL_ERROR "CUDA backend requires SPPARKS_KOKKOS_ARCH (e.g. AMPERE80, ADA89)")
+        endif()
+        set(Kokkos_ARCH_${SPPARKS_KOKKOS_ARCH} ON CACHE BOOL "Kokkos GPU arch" FORCE)
+        message(STATUS "Kokkos: CUDA backend enabled (NVIDIA GPUs), arch ${SPPARKS_KOKKOS_ARCH}")
     elseif(SPPARKS_KOKKOS_BACKEND STREQUAL "HIP")
         set(Kokkos_ENABLE_HIP ON CACHE BOOL "Enable HIP backend" FORCE)
         set(Kokkos_ENABLE_SERIAL ON CACHE BOOL "Enable Serial for host execution" FORCE)
-        message(STATUS "Kokkos: HIP backend enabled (AMD GPUs)")
+        # AMD GPUs are NOT auto-detected; the gfx target must be set explicitly.
+        if(NOT SPPARKS_KOKKOS_ARCH)
+            message(FATAL_ERROR "HIP backend requires SPPARKS_KOKKOS_ARCH (e.g. AMD_GFX1151)")
+        endif()
+        set(Kokkos_ARCH_${SPPARKS_KOKKOS_ARCH} ON CACHE BOOL "Kokkos GPU arch" FORCE)
+        message(STATUS "Kokkos: HIP backend enabled (AMD GPUs), arch ${SPPARKS_KOKKOS_ARCH}")
     elseif(SPPARKS_KOKKOS_BACKEND STREQUAL "SYCL")
         set(Kokkos_ENABLE_SYCL ON CACHE BOOL "Enable SYCL backend" FORCE)
         set(Kokkos_ENABLE_SERIAL ON CACHE BOOL "Enable Serial for host execution" FORCE)
@@ -393,6 +407,31 @@ if(SPPARKS_PACKAGE_KOKKOS)
             "Kokkos submodule not found at ${KOKKOS_DIR}\n"
             "Please initialize the submodule:\n"
             "  git submodule update --init --recursive\n")
+    endif()
+
+    # Kokkos 4.7.01 does not recognize RDNA 3.5 (gfx1150/gfx1151, e.g. AMD Strix
+    # Halo / Radeon 8050S-8060S APUs). Apply a small bundled patch that registers
+    # those archs and sets the correct 32-wide wavefront size. Idempotent: skipped
+    # if the submodule already supports gfx1151 (e.g. a newer Kokkos).
+    if(SPPARKS_KOKKOS_ARCH MATCHES "^AMD_GFX115")
+        file(READ "${KOKKOS_DIR}/cmake/kokkos_arch.cmake" _kokkos_arch_contents)
+        if(NOT _kokkos_arch_contents MATCHES "GFX1151")
+            find_package(Git REQUIRED)
+            set(_gfx1151_patch "${CMAKE_CURRENT_SOURCE_DIR}/../patches/kokkos-gfx1151.patch")
+            message(STATUS "Applying RDNA 3.5 (gfx1150/gfx1151) support patch to bundled Kokkos")
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} apply "${_gfx1151_patch}"
+                WORKING_DIRECTORY "${KOKKOS_DIR}"
+                RESULT_VARIABLE _patch_result
+                ERROR_VARIABLE _patch_error)
+            if(NOT _patch_result EQUAL 0)
+                message(FATAL_ERROR
+                    "Failed to apply gfx1151 Kokkos patch (${_gfx1151_patch}):\n${_patch_error}"
+                    "\nApply it manually with: cd ${KOKKOS_DIR} && git apply ${_gfx1151_patch}")
+            endif()
+        else()
+            message(STATUS "Bundled Kokkos already supports gfx1151; skipping patch")
+        endif()
     endif()
 
     # Add bundled Kokkos

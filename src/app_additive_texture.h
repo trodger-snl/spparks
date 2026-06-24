@@ -24,9 +24,6 @@ AppStyle(additive_temperature_texture,AppAdditiveTextureDeprecated)
 #define SPK_APP_ADDITIVE_TEXTURE_H
 
 #include "app_potts_quaternion.h"
-#include "temperatureQueues.h"
-#include "temperature_source.h"
-#include "am_raster.h"
 #include <stdlib.h>
 #include <string>
 #include <map>
@@ -37,7 +34,13 @@ AppStyle(additive_temperature_texture,AppAdditiveTextureDeprecated)
 
 namespace SPPARKS_NS {
 
+class ThermalManager;
+
 class AppAdditiveTexture : public AppPottsQuaternion {
+  // ThermalManager owns the temperature-I/O orchestration and reaches the
+  // app's lattice/state arrays (T, xyz, neighbor lists, ghost-comm config,
+  // alloy thresholds) through a typed back-pointer.
+  friend class ThermalManager;
  public:
   enum MisorientationTargetMode {
     MISORI_TARGET_GRADIENT = 0,
@@ -79,44 +82,9 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   // maturing.
   bool flip_single_voxel_grain(int site);
 
-  // Gaussian smoothing of T[] inside a user-specified temperature window
-  // (intended for the solidification band). Gated by active_flag so only
-  // molten/solidifying sites participate. Requires ghost-comm of T; a
-  // comm->all_selective is issued per pass.
-  void apply_temperature_smoothing();
-
-  // In-situ diagnostic: isotherm compactness of the T >= liquidus region.
-  // Counts pool area A (sites with T >= tl) and boundary-site count P
-  // (those with any neighbor whose T < tl), then reports P/sqrt(A).
-  // Ideal circular pool ~= 2*sqrt(pi) ~= 3.545; wiggly tails push it higher.
-  // Requires T ghosts to be current before the call.
-  void compute_smoothing_diagnostics();
-
   // Powder phase activation methods
   bool is_powder_eligible_site(int i);
   void activate_powder_sites();
-
-  // Modular temperature source methods
-  void setup_temperature_source_cmd(int narg, char **arg);
-  void laser_path_cmd(int narg, char **arg);
-  void laser_fluctuations_cmd(int narg, char **arg);
-  void update_temperature_from_source(double simulation_time);
-
-  // Fast-forward predictor for the Rosenthal source. Walks scan_layer
-  // (on a copy) to find the earliest time at which a Rosenthal-driven
-  // temperature on the local domain rises above threshold_temp, given
-  // current sim time. Returns +inf if the laser never reaches threshold
-  // before all repeats are exhausted.
-  double rosenthal_next_active_time(double current_time, double threshold_temp);
-
-  // Fast-forward predictor for the Moser source. Walks emission time
-  // forward through remaining active scan intervals. At each step,
-  // evaluates the Moser integrator at the closest point on the local
-  // bounding box to the current laser position and returns the first
-  // time the result reaches threshold_temp. Pause windows are skipped
-  // (the integrator's contribution is monotonically decaying there).
-  // Returns +inf if no remaining pass crosses threshold.
-  double moser_next_active_time(double current_time, double threshold_temp);
 
   // Void generation methods
   void generate_voids(class RandomPark *);
@@ -186,48 +154,10 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   int enable_voids;              // Flag to enable void generation (0=off, 1=on)
   std::vector<Void> voids;       // List of generated voids for collision detection
 
-  // Modular temperature source interface
-  std::unique_ptr<TemperatureSource> temperature_source;
-  bool use_temperature_source;  // Flag to enable new modular system
-  double fast_forward_search_window;  // Search window for fast-forward (default 0.1s)
-
-  // Laser scan path state for the analytical Rosenthal source.
-  // Coordinates are SI meters; speeds are m/s. Not used by HDF5 sources.
-  RASTER::Layer scan_layer;
-  double scan_layer_z;       // physical Z of the scan plane (meters)
-  double scan_layer_time;    // sim time at which scan_layer's pose is current
-  bool   scan_layer_active;  // true while the path has remaining motion
-  bool   laser_path_set;     // true once laser_path has been parsed
-
-  // Multi-pass inter-pass pause control (set by laser_path keywords
-  // `pause <T>` and `pause_below <Tk>`; mutually exclusive). Both apply
-  // only to time-resolved sources (currently Moser; Rosenthal is steady-
-  // state and the parser rejects pause keywords there). The constant
-  // pause is plumbed into MoserTemperatureSource::build_scan as the time
-  // gap between consecutive 0-power transit segments in the GREENAM
-  // scan; pause_below fires each subsequent pass dynamically once the
-  // global peak temperature drops below the user-set threshold.
-  double laser_pause_constant;       // [s], 0 = disabled
-  double laser_pause_below;          // [K], 0 = disabled
-  // Optional `reset_temperature <Tr>` companion. When > 0, at each
-  // inter-pass boundary the Moser scan history is cleared, the source's
-  // ambient T0 is shifted to Tr, and the next pass starts from a
-  // uniform Tr field. Requires either pause or pause_below to be set
-  // (rejected at parse time otherwise).
-  double laser_reset_temperature;    // [K], 0 = disabled
-  // Pass scheduling for the Moser pause_below / pause+reset paths.  The
-  // first pass is built into the Moser source at laser_path_cmd time;
-  // the remaining (repeats - 1) are queued as `pending_moser_passes`
-  // and appended one at a time when the firing condition is met
-  // (threshold for pause_below; time-elapsed for pause+reset).
-  int    pending_moser_passes;
-
-  // Temperature optimization flags (for performance testing)
-  bool opt_use_spatial_grid;    // Use spatial grid for element lookup (default: true)
-  bool opt_use_element_cache;   // Cache element per site (default: true)
-  bool opt_use_nodal_precompute; // Precompute nodal temps each step (default: true, requires element_cache)
-
-  int t_active;
+  // Temperature-I/O orchestration: source setup/update, laser scan path,
+  // multi-pass pause/reset scheduling, fast-forward predictors, and
+  // solidification-band temperature smoothing + diagnostics all live here.
+  std::unique_ptr<ThermalManager> thermal;
 
   // Index-based selective ghost communication.
   // Only the specified iarray/darray indices are communicated to ghost sites;
@@ -239,22 +169,6 @@ class AppAdditiveTexture : public AppPottsQuaternion {
 
   // Powder activation tracking
   double last_powder_activation_time;  // Track when we last activated powder sites
-
-  // Solidification-band temperature smoothing (opt-in via `temperature_smooth`).
-  // Applied once per temperature update, after T[] has been filled from the
-  // modular source. Only sites whose T falls inside the window participate;
-  // a guard band tapers the blend factor to zero at the outer edges so that
-  // sites crossing in/out of the window don't see a discontinuity.
-  bool   temperature_smooth_enabled;
-  double smooth_tmin;        // lower edge of full-strength window (K)
-  double smooth_tmax;        // upper edge of full-strength window (K)
-  double smooth_guard;       // guard-band half-width (K); blend ramps to 0 here
-  double smooth_sigma_xy;    // Gaussian width in x,y (lattice sites)
-  double smooth_sigma_z;     // Gaussian width in z (lattice sites)
-  double smooth_alpha;       // blend factor (0=off, 1=replace with neighbor avg)
-  int    smooth_passes;      // number of Gaussian passes per step
-  int    smooth_diag_interval;  // report compactness every N steps; 0 disables
-  std::vector<double> smooth_buffer;  // scratch for double-buffered pass
 
   // Post-solidification single-voxel grain cleanup (opt-in via
   // `single_voxel_cleanup`). When a voxel finishes the nrefine smoothing

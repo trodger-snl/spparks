@@ -23,6 +23,7 @@ function(configure_conditional_sources)
     if(SPPARKS_ENABLE_HIGHFIVE AND SPPARKS_ENABLE_MPI)
         list(APPEND SPPARKS_SOURCES
             app_additive_texture.cpp
+            thermal_manager.cpp
             temperature_source.cpp
             temperature_source_rosenthal.cpp
             temperature_source_moser.cpp

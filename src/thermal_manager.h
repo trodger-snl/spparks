@@ -86,10 +86,6 @@ class ThermalManager : protected Pointers {
   ThermalStep advance(double current_time, double stoptime);
 
   // ---- diagnostics ----
-  // Whether the periodic isotherm-compactness diagnostic is configured.
-  bool diagnostics_enabled() const {
-    return temperature_smooth_enabled && smooth_diag_interval > 0;
-  }
   // Run the diagnostic when step_count lands on the configured cadence.
   // Assumes T ghosts are current (caller syncs before this).
   void maybe_run_diagnostics(int step_count);

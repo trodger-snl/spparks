@@ -25,8 +25,6 @@ AppStyle(additive_temperature_texture,AppAdditiveTextureDeprecated)
 
 #include "app_potts_quaternion.h"
 #include <stdlib.h>
-#include <string>
-#include <map>
 #include <unordered_map>
 #include <vector>
 #include <cmath>
@@ -83,7 +81,6 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   bool flip_single_voxel_grain(int site);
 
   // Powder phase activation methods
-  bool is_powder_eligible_site(int i);
   void activate_powder_sites();
 
   // Void generation methods
@@ -105,7 +102,6 @@ class AppAdditiveTexture : public AppPottsQuaternion {
  	// Active flag for site visualization and state tracking
  	// 0: inactive, 1: active layer, 2: molten, 3: solidified, 5: void
  	int *active_flag;
- 	const double R = 8.314459848; // Gas constant (J/mol/K)
 	// Temperature array for thermal field
 	double *T;
   double *G; //Temperature gradient at solidification

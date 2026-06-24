@@ -29,9 +29,7 @@
 #include <sstream>
 #include <iostream>
 #include <random>
-#include <chrono>
 #include <cstring>
-#include <limits>
 #include "math.h"
 #include "math_const.h"
 #include "app_additive_texture.h"
@@ -499,7 +497,7 @@ void AppAdditiveTexture::app_update(double dt)
 {
   // CPU Performance Timing Instrumentation
   static int step_count = 0;
-  static double t_temp_update = 0.0, t_fast_forward = 0.0;
+  static double t_temp_update = 0.0;
   static double t_melting = 0.0, t_mushy = 0.0, t_smoothing = 0.0;
   static double t_comm = 0.0;
   double t_start, t_end;
@@ -662,7 +660,7 @@ void AppAdditiveTexture::app_update(double dt)
     const double g_t_cache_build  = thermal->cache_build_time();
     const double g_t_temp_prepare = thermal->prepare_time();
     const double g_t_temp_site_loop = thermal->site_loop_time();
-    double total_time = t_temp_update + t_fast_forward + t_melting + t_mushy + t_smoothing + t_comm;
+    double total_time = t_temp_update + t_melting + t_mushy + t_smoothing + t_comm;
     double t_temp_other = t_temp_update - g_t_temp_prepare - g_t_temp_site_loop - g_t_cache_build;
     double steady_state_time = total_time - g_t_cache_build;
 
@@ -682,8 +680,6 @@ void AppAdditiveTexture::app_update(double dt)
       fprintf(screen, "    - Other:            %8.3f s (%5.1f%%)  [Layer load, etc.]\n",
               t_temp_other, 100.0*t_temp_other/total_time);
     }
-    fprintf(screen, "  Fast-forward logic:   %8.3f s (%5.1f%%)  [Time skip checks]\n",
-            t_fast_forward, 100.0*t_fast_forward/total_time);
     fprintf(screen, "  Melting:              %8.3f s (%5.1f%%)  [T >= Tl transitions]\n",
             t_melting, 100.0*t_melting/total_time);
     fprintf(screen, "  Mushy phase:          %8.3f s (%5.1f%%)  [Nucleation + solidification + gradients]\n",
@@ -1930,54 +1926,6 @@ void AppAdditiveTexture::nucleation_init() {
         nucleation_temps[i] = dist_T(gen);
         nucleation_sizes[i] = dist_S(gen);
     }
-}
-
-/* ----------------------------------------------------------------------
-   Check if site is eligible to be activated as powder
-
-   Criteria:
-   - Site must not be void (active_flag == 5)
-   - Site must not be molten or solid (active_flag >= 2)
-   - Site is eligible if:
-     1. Temperature >= solidus (in thermal influence zone)
-     2. Has molten or solidified neighbor (adjacent to meltpool)
-     3. At bottom boundary (substrate)
-     4. Below meltpool surface (has active material above)
-------------------------------------------------------------------------- */
-bool AppAdditiveTexture::is_powder_eligible_site(int i) {
-  // Skip voids - they never participate
-  if (active_flag[i] == 5) return false;
-
-  // Skip already molten or solid sites
-  if (active_flag[i] >= 2) return false;
-
-  // Criterion 1: Hot enough (in thermal influence zone)
-  if (T[i] >= ts) return true;
-
-  // Criterion 2: Has solid or molten neighbor (adjacent to meltpool)
-  for (int j = 0; j < numneigh[i]; j++) {
-    int nj = neighbor[i][j];
-    if (active_flag[nj] == 2 || active_flag[nj] == 3) {
-      return true;  // Adjacent to meltpool/solidified region
-    }
-  }
-
-  // Criterion 3: At bottom boundary (substrate layer)
-  double site_z = xyz[i][2];
-  if (site_z <= domain->boxzlo + dx * 0.5) return true;
-
-  // Criterion 4: Below meltpool surface (has active material above)
-  for (int j = 0; j < numneigh[i]; j++) {
-    int nj = neighbor[i][j];
-    double neighbor_z = xyz[nj][2];
-
-    // Check if neighbor is above and is molten or solid
-    if (neighbor_z > site_z && active_flag[nj] >= 2) {
-      return true;  // Material exists above this site
-    }
-  }
-
-  return false;
 }
 
 /* ----------------------------------------------------------------------

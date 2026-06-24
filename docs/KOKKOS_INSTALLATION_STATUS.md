@@ -1,5 +1,52 @@
 # Kokkos Installation Status
 
+## AMD GPU (HIP / gfx1151) — verified working
+
+**Date:** June 24, 2026
+**Branch:** SURGE-kokkos
+**System:** Linux (Fedora), AMD Ryzen AI Max+ 395 / Radeon 8060S APU (gfx1151, RDNA 3.5), ROCm/HIP 7.1
+
+✅ **SPPARKS builds and runs on the GPU with the Kokkos HIP backend.** A `potts/kk`
+run was confirmed on the GPU (`Kokkos::HIP gcnArch gfx1151 : Selected`, Wavefront
+Size 32, energy relaxes correctly).
+
+**Key point — gfx1151 support:** Stock Kokkos 4.7.01 does not list gfx1150/gfx1151
+in `SUPPORTED_AMD_ARCHS` (no released Kokkos through 5.1.1 does; it is in Kokkos
+`develop`). The bundled `patches/kokkos-gfx1151.patch` adds the arch + the correct
+32-wide RDNA wavefront size, and `src/CMakeLists.txt` auto-applies it to the
+submodule when `SPPARKS_KOKKOS_ARCH` matches `AMD_GFX115x` and Kokkos lacks it.
+
+**Build recipe (from repo root):**
+```bash
+git submodule update --init lib/kokkos          # CMake auto-applies the gfx1151 patch
+spack env activate spparks-dev                   # provides MPI/HDF5/HighFive/JPEG/PNG
+cmake -S src -B build-hip \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=hipcc \
+  -DSPPARKS_ENABLE_MPI=ON \
+  -DSPPARKS_ENABLE_HDF5=ON -DSPPARKS_ENABLE_HIGHFIVE=ON \
+  -DSPPARKS_ENABLE_JPEG=ON -DSPPARKS_ENABLE_PNG=ON \
+  -DSPPARKS_PACKAGE_KOKKOS=ON \
+  -DSPPARKS_KOKKOS_BACKEND=HIP -DSPPARKS_KOKKOS_ARCH=AMD_GFX1151
+make -C build-hip -j
+./build-hip/spparks -in examples/kokkos/in.potts_kk    # smoke test on the GPU
+```
+
+**Notes / gotchas:**
+- KOKKOS apps require `sweep color` (not `sweep random`). Styles: `potts/kk`,
+  `potts/neigh/kk`, `potts/neighonly/kk`, `potts/quaternion/kk`,
+  `additive_temperature_texture/kk`.
+- Disabling HDF5/JPEG/PNG causes link errors (`DumpImage`,
+  `AppAdditiveExtTempTexture*`) because the style-header generator registers
+  those styles even when their sources are excluded — keep them enabled.
+- Memory model: gfx1151 supports managed memory (`Kokkos::SharedSpace`,
+  effectively zero-copy on this shared-DRAM APU) but NOT XNACK system-allocation
+  access, so raw host pointers cannot be dereferenced in kernels — allocate
+  through Kokkos.
+
+---
+
+## macOS ARM (OpenMP) — historical
+
 **Date:** November 12, 2025
 **Branch:** SURGE-kokkos
 **System:** macOS ARM (Apple Silicon)

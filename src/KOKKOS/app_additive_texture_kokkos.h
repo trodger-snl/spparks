@@ -300,13 +300,14 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
         T_neigh[j] = d_T(neighbor(i,j));
       }
 
-      // Detect melt surface: check if neighbor directly above (index 13) is inactive or active
-      // Neighbor 13 corresponds to offset [0,0,1] (directly above current site)
-      // If active_flag[neighbor[13]] <= 1, we're at melt pool surface
-      bool is_melt_surface = false;
-      if (nn > 13) {
-        int neighbor_above = neighbor(i, 13);
-        is_melt_surface = (d_active_flag(neighbor_above) <= 1);
+      // Detect melt surface: check if the neighbor directly above (slot 13 =
+      // offset [0,0,1]) is inactive/active (active_flag <= 1). Low-coordination
+      // global-boundary sites (numneigh <= 13) have no valid slot 13, so they
+      // are treated as melt-surface -- matching the CPU normal_finder() and
+      // avoiding an out-of-bounds neighbor read.
+      bool is_melt_surface = (nn <= 13);
+      if (!is_melt_surface) {
+        is_melt_surface = (d_active_flag(neighbor(i, 13)) <= 1);
       }
 
       // Get current site z-coordinate for melt surface filtering

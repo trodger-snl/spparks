@@ -2146,7 +2146,8 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
         fill(time);                 // refill the device field at the advanced time
         host_T_stale = true;
         if (s.activate_powder) {
-          sync_temperature_to_host();   // powder eligibility reads host T
+          // Device powder activation operates on d_active_flag directly; no
+          // host T needed (activate_powder_sites does not read T).
           activate_powder_sites();
           last_powder_activation_time = time;
         }
@@ -2320,14 +2321,12 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   t_end = MPI_Wtime();
   t_sync_host += (t_end - t_start);
 
-  // Sync device data to host for output/dumps
-  // Ensures all iarray/darray fields are up-to-date for stats, dumps, and diagnostics
-  // Overhead: ~1-3% of total runtime, but necessary for correct visualization/output
-  sync_app_data_to_host();
-
-  // Activate powder once when melting first occurs
-  // CRITICAL: Use MPI_Allreduce to check if ANY rank has melting, so all ranks call activate_powder_sites()
-  // This prevents MPI deadlock where only some ranks enter the function that contains MPI_Allreduce calls
+  // Activate powder once melting first occurs, BEFORE syncing to host so the
+  // device activation (which writes d_active_flag) is reflected in the host
+  // copy used for output. Runs on the device.
+  // CRITICAL: MPI_Allreduce the melting flag so ALL ranks call
+  // activate_powder_sites() together (it contains collective calls); otherwise
+  // ranks with no local melting would skip the collective and deadlock.
   if (last_powder_activation_time < 0.0) {
     int local_melting = melting_occurred ? 1 : 0;
     int global_melting = 0;
@@ -2338,6 +2337,11 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       last_powder_activation_time = time;
     }
   }
+
+  // Sync device data to host for output/dumps
+  // Ensures all iarray/darray fields are up-to-date for stats, dumps, and diagnostics
+  // Overhead: ~1-3% of total runtime, but necessary for correct visualization/output
+  sync_app_data_to_host();
 
   // MPI ghost communication - exchange boundary data between processors
   // CRITICAL FIX: Without this, ghost sites retain stale data, causing rectangular
@@ -2468,51 +2472,45 @@ bool AppAdditiveTextureKokkos::is_powder_eligible_site(int i) {
    - After fast forwards > 1 second (new layer deposition)
    - During app_update when meltpool is present
 
-   Note: For Kokkos version, we use a simple CPU-side loop since this
-   operation is infrequent (only at initialization and layer changes).
-   Could be converted to a kernel for very large systems if needed.
+   Runs entirely on the device, operating directly on d_active_flag (the
+   authoritative phase-state array): a parallel_reduce for the meltpool-top z
+   over molten sites, then a parallel_reduce that activates inactive sites at or
+   below it. Keeping it on the device (rather than mutating host active_flag) is
+   what makes it consistent -- a host write here would be overwritten by the
+   device->host sync, and for nprocs==1 never reaches the device at all.
 ------------------------------------------------------------------------- */
 void AppAdditiveTextureKokkos::activate_powder_sites() {
-  // Find local maximum z-coordinate of molten sites
-  double local_max_molten_z = -1e100;  // Very negative initial value
-  bool has_molten_sites = false;
+  ensure_device_xyz();
+  auto d_af = d_active_flag;
+  auto d_xyz_l = d_xyz;
+  const int n = nlocal;
 
-  for (int i = 0; i < nlocal; i++) {
-    if (active_flag[i] == 2) {  // Molten site
-      has_molten_sites = true;
-      double site_z = xyz[i][2];
-      if (site_z > local_max_molten_z) {
-        local_max_molten_z = site_z;
-      }
-    }
-  }
+  // Local meltpool top z over molten sites (active_flag == 2), then the global
+  // max across ranks. z is in lattice units, matching the host comparison.
+  double local_max_molten_z = -1e100;
+  Kokkos::parallel_reduce("MeltpoolTopZ", n,
+    KOKKOS_LAMBDA(const int i, double &m) {
+      if (d_af(i) == 2) { const double z = d_xyz_l(i,2); if (z > m) m = z; }
+    }, Kokkos::Max<double>(local_max_molten_z));
 
-  // Find global maximum z-coordinate of molten sites across all ranks
   double global_max_molten_z = -1e100;
   MPI_Allreduce(&local_max_molten_z, &global_max_molten_z, 1, MPI_DOUBLE, MPI_MAX, world);
+  if (global_max_molten_z <= -1e99) return;   // no meltpool anywhere
 
-  // If no meltpool exists anywhere, don't activate powder
-  if (global_max_molten_z <= -1e99) {
-    return;
-  }
-
-  // Activate all inactive sites at or below meltpool top
+  // Activate all inactive sites (active_flag == 0) at or below the meltpool top;
+  // the reduction returns the count for reporting.
   int powder_activated = 0;
-  for (int i = 0; i < nlocal; i++) {
-    if (active_flag[i] == 0) {  // Inactive site
-      double site_z = xyz[i][2];
-      if (site_z <= global_max_molten_z) {
-        active_flag[i] = 1;  // Set to POWDER state
-        powder_activated++;
+  Kokkos::parallel_reduce("PowderActivate", n,
+    KOKKOS_LAMBDA(const int i, int &cnt) {
+      if (d_af(i) == 0 && d_xyz_l(i,2) <= global_max_molten_z) {
+        d_af(i) = 1;  // POWDER state
+        cnt++;
       }
-    }
-  }
+    }, powder_activated);
+  Kokkos::fence();
 
-  // Sum across all MPI ranks
   int global_powder_activated = 0;
   MPI_Allreduce(&powder_activated, &global_powder_activated, 1, MPI_INT, MPI_SUM, world);
-
-  // Report activation (rank 0 only)
   if (domain->me == 0 && global_powder_activated > 0) {
     fprintf(screen, "Powder activation at t=%.6e s: activated %d sites (meltpool top at z=%.3f)\n",
             time, global_powder_activated, global_max_molten_z);

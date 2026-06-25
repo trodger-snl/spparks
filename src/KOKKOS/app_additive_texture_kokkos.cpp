@@ -2047,22 +2047,11 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
 
   auto k_neighbor_d = k_neighbor.view_device();
   auto k_numneigh_d = k_numneigh.view_device();
-  auto d_grad_x_local = d_grad_x;
-  auto d_grad_y_local = d_grad_y;
-  auto d_grad_z_local = d_grad_z;
-  auto d_symmetries_local = d_symmetries;
   auto rand_pool_local = *rand_pool;
 
-  int nrefine_local = nrefine;
-  double theta_cut_local = theta_cut;
   double temperature_local = temperature;
   double t_inverse_local = t_inverse;
-  int num_symmetries_local = num_symmetries;
-
-  // Texture parameters
-  double c1_local = c1;
-  double c2_local = c2;
-  double c3_local = c3;
+  const bool greedy_local = smooth_greedy_multiproposal_enabled;
 
   // Parallel sweep over ONLY smoothing sites (not all sites!)
   int naccept_local = 0;
@@ -2072,206 +2061,117 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
       int i = d_smoothing_sites(idx);
 
       // All sites in this list need smoothing - no branching needed!
-      int active_flag_i = d_active_flag_local(i);
-      int spin_i = d_spin_local(i);
-      double solid_d_i = d_solid_d_local(i);
-      double q_i[4] = {d_q0_local(i), d_qx_local(i), d_qy_local(i), d_qz_local(i)};
+      const int active_flag_i = d_active_flag_local(i);
+      const int spin_i = d_spin_local(i);
+      const double solid_d_i = d_solid_d_local(i);
 
-      // Get thermal gradient direction at this site
-      double grad_norm = Kokkos::sqrt(
-        d_grad_x_local(i) * d_grad_x_local(i) +
-        d_grad_y_local(i) * d_grad_y_local(i) +
-        d_grad_z_local(i) * d_grad_z_local(i)
-      );
+      // CPU-aligned Potts boundary smoothing (AppAdditiveTexture::smooth_site).
+      // Energy = number of SOLID (active_flag==3) neighbors with a different spin
+      // (site_energy_smooth). Candidates = distinct neighbor spins != self.
+      // Proposal: greedy steepest-descent (evaluate every candidate, keep the
+      // bond-energy minimizer; first-encounter tie-break -> deterministic) or a
+      // random single proposal. Boltzmann accept. On accept the orientation
+      // becomes the sign-aligned average of the selected grain's neighbor
+      // quaternions (get_average_neighbor_quaternion). NB: smoothing sites are
+      // swept in parallel here (vs the CPU's sequential per-site sweep), so the
+      // microstructure is statistically -- not bit -- equal to the CPU even at
+      // temperature 0.
+      const int nn = k_numneigh_d(i);
 
-      double grad_dir[3] = {0.0, 0.0, 1.0};  // Default: +z direction
-      if (grad_norm > 1.0e-10) {
-        grad_dir[0] = d_grad_x_local(i) / grad_norm;
-        grad_dir[1] = d_grad_y_local(i) / grad_norm;
-        grad_dir[2] = d_grad_z_local(i) / grad_norm;
-      }
-
-      // Build list of unique solid/active neighbors
-      int nn = k_numneigh_d(i);
+      // Distinct neighbor spins != self.
       int unique_spins[27];
-      double texture_weights[27];
-      int unique_count = 0;
-
+      int nevent = 0;
       for (int n = 0; n < nn; n++) {
-        int nbr = k_neighbor_d(i, n);
-        int nbr_spin = d_spin_local(nbr);
-        int nbr_flag = d_active_flag_local(nbr);
+        const int v = d_spin_local(k_neighbor_d(i, n));
+        if (v == spin_i) continue;
+        bool found = false;
+        for (int k = 0; k < nevent; k++)
+          if (unique_spins[k] == v) { found = true; break; }
+        if (!found && nevent < 27) unique_spins[nevent++] = v;
+      }
 
-        // Only consider solid/active neighbors
-        if (nbr_spin != -1 && (nbr_flag == 1 || nbr_flag == 3)) {
-          // Check if already in unique list
-          bool found = false;
-          for (int k = 0; k < unique_count; k++) {
-            if (unique_spins[k] == nbr_spin) {
-              found = true;
-              break;
-            }
-          }
-
-          if (!found && unique_count < 27) {
-            unique_spins[unique_count] = nbr_spin;
-
-            // Compute texture weight for this neighbor
-            double q_nbr[4] = {
-              d_q0_local(nbr), d_qx_local(nbr),
-              d_qy_local(nbr), d_qz_local(nbr)
-            };
-
-            // Get cosine of angle between grain <100> and gradient
-            double cos_min_angle = QuaternionOps::get_cosine_angle_q_u(q_nbr, grad_dir);
-            double theta = Kokkos::acos(cos_min_angle);
-
-            // Texture weight: c1 + c2*cos(c3*theta)
-            double weight = c1_local + c2_local * Kokkos::cos(c3_local * theta);
-            texture_weights[unique_count] = (weight > 0.0) ? weight : 0.0;
-
-            unique_count++;
-          }
+      if (nevent > 0) {
+        // einitial: bond energy of the current spin.
+        int einitial = 0;
+        for (int n = 0; n < nn; n++) {
+          const int nbr = k_neighbor_d(i, n);
+          if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != spin_i) einitial++;
         }
-      }
 
-      if (unique_count == 0) {
-        // No neighbors - keep current state
-        d_spin_local(i) = spin_i;
-        d_q0_local(i) = q_i[0];
-        d_qx_local(i) = q_i[1];
-        d_qy_local(i) = q_i[2];
-        d_qz_local(i) = q_i[3];
-        d_active_flag_local(i) = active_flag_i;
-        d_solid_d_local(i) = solid_d_i + 1.0;
-        // CRITICAL FIX: Reset solid_d to 0 when smoothing completes
-        // Keep active_flag unchanged (should remain SOLID=3)
-        // CPU version does NOT change active_flag after smoothing
-        if (d_solid_d_local(i) >= 0.0) {
-          d_solid_d_local(i) = 0.0;
-        }
-        return;
-      }
+        auto generator = rand_pool_local.get_state();
 
-      // Select neighbor using texture-weighted probabilities
-      auto generator = rand_pool_local.get_state();
-
-      // Compute cumulative sum of weights
-      double total_weight = 0.0;
-      for (int k = 0; k < unique_count; k++) {
-        total_weight += texture_weights[k];
-      }
-
-      // Weighted random selection
-      double rand_val = generator.drand() * total_weight;
-      double cumsum = 0.0;
-      int selected_spin = unique_spins[0];
-      int selected_nbr = -1;
-
-      for (int k = 0; k < unique_count; k++) {
-        cumsum += texture_weights[k];
-        if (rand_val <= cumsum) {
-          selected_spin = unique_spins[k];
-          // Find actual neighbor index with this spin
+        int new_spin, efinal;
+        if (greedy_local) {
+          new_spin = unique_spins[0];
+          efinal = 0;
           for (int n = 0; n < nn; n++) {
-            int nbr = k_neighbor_d(i, n);
-            if (d_spin_local(nbr) == selected_spin) {
-              selected_nbr = nbr;
-              break;
+            const int nbr = k_neighbor_d(i, n);
+            if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != new_spin) efinal++;
+          }
+          for (int c = 1; c < nevent; c++) {
+            const int cand = unique_spins[c];
+            int e = 0;
+            for (int n = 0; n < nn; n++) {
+              const int nbr = k_neighbor_d(i, n);
+              if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != cand) e++;
             }
+            if (e < efinal) { efinal = e; new_spin = cand; }  // strict -> first-encounter
           }
-          break;
-        }
-      }
-
-      if (selected_nbr < 0) selected_nbr = k_neighbor_d(i, 0);  // Fallback
-
-      // Get proposed quaternion from selected neighbor
-      double q_new[4] = {
-        d_q0_local(selected_nbr), d_qx_local(selected_nbr),
-        d_qy_local(selected_nbr), d_qz_local(selected_nbr)
-      };
-      int new_spin = d_spin_local(selected_nbr);
-
-      // Compute energy change (Metropolis criterion)
-      // Energy = sum of disorientations with neighbors
-      double energy_initial = 0.0;
-      double energy_final = 0.0;
-
-      for (int n = 0; n < nn; n++) {
-        int nbr = k_neighbor_d(i, n);
-        double q_nbr[4] = {
-          d_q0_local(nbr), d_qx_local(nbr),
-          d_qy_local(nbr), d_qz_local(nbr)
-        };
-
-        // Initial energy
-        double di_init = QuaternionOps::compute_disorientation(
-          d_symmetries_local.data(), num_symmetries_local, q_i, q_nbr
-        );
-        double ratio_init = di_init / theta_cut_local;
-        if (ratio_init > 0.0) {
-          if (ratio_init < 1.0) {
-            energy_initial += ratio_init * (1.0 - Kokkos::log(ratio_init));
-          } else {
-            energy_initial += 1.0;
+        } else {
+          int iran = (int)(nevent * generator.drand());
+          if (iran >= nevent) iran = nevent - 1;
+          new_spin = unique_spins[iran];
+          efinal = 0;
+          for (int n = 0; n < nn; n++) {
+            const int nbr = k_neighbor_d(i, n);
+            if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != new_spin) efinal++;
           }
         }
 
-        // Final energy
-        double di_final = QuaternionOps::compute_disorientation(
-          d_symmetries_local.data(), num_symmetries_local, q_new, q_nbr
-        );
-        double ratio_final = di_final / theta_cut_local;
-        if (ratio_final > 0.0) {
-          if (ratio_final < 1.0) {
-            energy_final += ratio_final * (1.0 - Kokkos::log(ratio_final));
-          } else {
-            energy_final += 1.0;
+        // Boltzmann accept (matches smooth_site).
+        bool accept;
+        if (efinal <= einitial) accept = true;
+        else if (temperature_local == 0.0) accept = false;
+        else accept = (generator.drand() <=
+                       Kokkos::exp((double)(einitial - efinal) * t_inverse_local));
+
+        rand_pool_local.free_state(generator);
+
+        if (accept) {
+          // Orientation = sign-aligned average of neighbors with new_spin.
+          double s0 = 0.0, sx = 0.0, sy = 0.0, sz = 0.0;
+          double r0 = 0.0, rx = 0.0, ry = 0.0, rz = 0.0;
+          int cq = 0; bool first = false;
+          for (int n = 0; n < nn; n++) {
+            const int nbr = k_neighbor_d(i, n);
+            if (d_spin_local(nbr) != new_spin) continue;
+            double n0 = d_q0_local(nbr), nx = d_qx_local(nbr),
+                   ny = d_qy_local(nbr), nz = d_qz_local(nbr);
+            if (!first) { r0 = n0; rx = nx; ry = ny; rz = nz; first = true; }
+            else if (r0*n0 + rx*nx + ry*ny + rz*nz < 0.0) {
+              n0 = -n0; nx = -nx; ny = -ny; nz = -nz;  // q and -q are the same orientation
+            }
+            s0 += n0; sx += nx; sy += ny; sz += nz; cq++;
+          }
+          if (cq > 0) {
+            double a0 = s0/cq, ax = sx/cq, ay = sy/cq, az = sz/cq;
+            const double nrm = Kokkos::sqrt(a0*a0 + ax*ax + ay*ay + az*az);
+            if (nrm > 0.0) { a0/=nrm; ax/=nrm; ay/=nrm; az/=nrm; }
+            d_spin_local(i) = new_spin;
+            d_q0_local(i) = a0; d_qx_local(i) = ax;
+            d_qy_local(i) = ay; d_qz_local(i) = az;
+            count++;
           }
         }
-      }
-      energy_initial *= 0.5;
-      energy_final *= 0.5;
-
-      // Metropolis acceptance
-      bool accept = false;
-      if (energy_final <= energy_initial) {
-        accept = true;
-      } else if (temperature_local > 0.0) {
-        double prob = Kokkos::exp((energy_initial - energy_final) * t_inverse_local);
-        if (generator.drand() < prob) {
-          accept = true;
-        }
+        // Reject / no-grain: spin and quaternion already hold the original
+        // values (this kernel has not written site i up to here).
       }
 
-      // Apply move
-      if (accept) {
-        d_spin_local(i) = new_spin;
-        d_q0_local(i) = q_new[0];
-        d_qx_local(i) = q_new[1];
-        d_qy_local(i) = q_new[2];
-        d_qz_local(i) = q_new[3];
-        count++;
-      } else {
-        d_spin_local(i) = spin_i;
-        d_q0_local(i) = q_i[0];
-        d_qx_local(i) = q_i[1];
-        d_qy_local(i) = q_i[2];
-        d_qz_local(i) = q_i[3];
-      }
-
-      // Increment solid_d counter
+      // Advance the smoothing window (solid_d) and keep the solid state;
+      // active_flag is left unchanged, matching the CPU.
       d_solid_d_local(i) = solid_d_i + 1.0;
-      // CRITICAL FIX: Keep active_flag = 3 (SOLID) when smoothing completes
-      // CPU version does NOT change active_flag after smoothing
-      // Sites remain solid (active_flag=3) permanently until melted
-      if (d_solid_d_local(i) >= 0.0) {
-        d_solid_d_local(i) = 0.0;  // Reset counter
-      }
-      d_active_flag_local(i) = active_flag_i;  // Keep current state (should be 3=SOLID)
-
-      rand_pool_local.free_state(generator);
+      if (d_solid_d_local(i) >= 0.0) d_solid_d_local(i) = 0.0;
+      d_active_flag_local(i) = active_flag_i;
     }, naccept_local);
 
   return naccept_local;
@@ -2904,6 +2804,16 @@ void AppAdditiveTextureKokkos::input_app(char *command, int narg, char **arg)
     for (int i = 1; i < solid_front_length + 1; i++) {
       solid_front_coeffs[i - 1] = atof(arg[i]);
     }
+
+  } else if (strcmp(command, "smooth_greedy_multiproposal") == 0) {
+    // Usage: smooth_greedy_multiproposal on|off  (mirrors the CPU app)
+    if (narg != 1) error->all(FLERR, "Illegal smooth_greedy_multiproposal command");
+    if (strcmp(arg[0], "on") == 0) smooth_greedy_multiproposal_enabled = true;
+    else if (strcmp(arg[0], "off") == 0) smooth_greedy_multiproposal_enabled = false;
+    else error->all(FLERR, "smooth_greedy_multiproposal: argument must be on or off");
+    if (domain->me == 0 && screen)
+      fprintf(screen, "smooth_greedy_multiproposal %s\n",
+              smooth_greedy_multiproposal_enabled ? "enabled" : "disabled");
 
   } else if (strcmp(command, "misorientation_function") == 0) {
     if (narg != 2 && narg != 3) error->all(FLERR, "Illegal misorientation_function command");

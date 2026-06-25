@@ -227,6 +227,12 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   double *solid_front_coeffs;
   int solid_front_length;
 
+  // Boundary-smoothing proposal mode. When true, smoothing_kernel_efficient
+  // does the CPU smooth_greedy_multiproposal steepest descent (evaluate every
+  // distinct neighbor spin, pick the bond-energy minimizer); when false, a
+  // random single proposal. Matches AppAdditiveTexture::smooth_site.
+  bool smooth_greedy_multiproposal_enabled = false;
+
   // Texture model parameters
   double c1, c2, c3;
   double max_misorient;

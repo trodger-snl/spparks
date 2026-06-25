@@ -88,8 +88,10 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // per-site element cache (static per layer) and the per-node temperature
   // slice (per step); the GPU does the per-site barycentric interpolation
   // straight into k_T, reproducing get_temperature_at_site_fast() bit-for-bit.
-  // Fills OWNED sites only (k_T[0,nlocal)); ghost T (which may lie outside this
-  // rank's loaded mesh) is copied from the host T ghost slice -- see the impl.
+  // Fills ALL nall sites (owned + ghost) positionally -- the cache is built over
+  // nall via the chunk-load pad, so ghosts compute their own T with no host
+  // round-trip and no T ghost comm (a ghost equals the owner's value by
+  // construction). See the impl and hdf5_device.h.
   void fill_temperature_hdf5_device(const HDF5DevicePlan &plan);
 
   // Phase 3: Phase transition kernels

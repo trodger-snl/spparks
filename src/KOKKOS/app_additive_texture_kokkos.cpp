@@ -939,8 +939,9 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
     auto h_v   = Kokkos::create_mirror_view(d_hdf5_valid);
     for (int i = 0; i < n; i++) {
       h_v(i) = valid[i];
-      for (int j = 0; j < 4; j++) h_idx(i, j) = node_idx[4 * i + j];
-      for (int j = 0; j < 3; j++) h_w(i, j) = weights[3 * i + j];
+      const size_t i4 = (size_t)i * 4, i3 = (size_t)i * 3;  // avoid int overflow
+      for (int j = 0; j < 4; j++) h_idx(i, j) = node_idx[i4 + j];
+      for (int j = 0; j < 3; j++) h_w(i, j) = weights[i3 + j];
     }
     Kokkos::deep_copy(d_hdf5_node_idx, h_idx);
     Kokkos::deep_copy(d_hdf5_weights, h_w);
@@ -2594,22 +2595,30 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
 
   if (nprocs > 1) {
     // Multi-rank ghost exchange (Phase 2: selective). The kernels read as
-    // NEIGHBORS only the Monte Carlo state -- spin (iarray[0]), active_flag
-    // (iarray[1]), quaternions q0-3 (darray[0-3]). Temperature is device-
-    // resident (positional fill incl. ghosts, so no T ghost comm), and
-    // mobility/solid_d/G/V are never read as neighbors. So we exchange ONLY
-    // those 6 arrays, and sync ONLY them device<->host: owned out (for comm to
-    // send) and the received ghosts back in. This replaces the old full-array
-    // sync_app_data_to_host/device (~10 arrays, host->device over all nall) and
-    // is the dominant multi-rank per-step cost. all_selective uses the same
-    // swap as all(), so the same ghost sites are exchanged.
-    static const int sel_i[2] = {0, 1};        // spin, active_flag
-    static const int sel_d[4] = {0, 1, 2, 3};  // q0, qx, qy, qz
-    sync_ghost_to_host();                       // device owned -> host raw (6 arrays)
+    // NEIGHBORS the Monte Carlo state -- spin (iarray[0]), active_flag
+    // (iarray[1]), quaternions q0-3 (darray[0-3]) -- and, in the solidification
+    // gradient, neighbor temperature T (darray[5]). mobility/solid_d/G/V are
+    // never read as neighbors, so they are dropped (full-synced only at output).
+    //
+    // T is included ONLY on the host-temperature path (device_temp == false:
+    // Rosenthal keyhole / generic xyz / temperature_smooth). There the host fill
+    // covers nlocal only, so ghost T must be exchanged (host owned T is current
+    // from the fill; comm writes host ghost T, picked up by next step's
+    // sync_temperature_to_device). On a device-temp path the fill already wrote
+    // k_T over all nall positionally, so ghost T needs no comm.
+    //
+    // sync_ghost_to_host/device move the OWNED out / ghost in for spin/
+    // active_flag/q0-3 only (T lives in host T[]/k_T, handled above). all_selective
+    // uses the same swap as all(), so the same ghost sites are exchanged.
+    static const int sel_i[2] = {0, 1};            // spin, active_flag
+    static const int sel_d_dev[4]  = {0, 1, 2, 3};       // q0-3 (T device-resident)
+    static const int sel_d_host[5] = {0, 1, 2, 3, 5};    // q0-3 + T (host fill)
+    sync_ghost_to_host();                       // device owned -> host raw
     timer->stamp();
-    comm->all_selective(sel_i, 2, sel_d, 4);    // owned -> ghost (host)
+    if (device_temp) comm->all_selective(sel_i, 2, sel_d_dev, 4);
+    else             comm->all_selective(sel_i, 2, sel_d_host, 5);
     timer->stamp(TIME_COMM);
-    sync_ghost_to_device();                     // host ghost -> device (6 arrays)
+    sync_ghost_to_device();                     // host ghost -> device
 
     // Optional deterministic correctness check (SPK_VERIFY_GHOST): redo the old
     // FULL exchange and confirm the device ghost MC state is bit-identical to

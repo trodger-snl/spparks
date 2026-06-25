@@ -63,6 +63,19 @@ static int spk_visible_gpu_count()
 ------------------------------------------------------------------------- */
 static void spk_bind_gpu_by_local_rank(int argc, char **argv)
 {
+  // The node-local rank comes from a shared-memory split, which is COLLECTIVE
+  // over MPI_COMM_WORLD -- every rank must call it. Do it first, before any
+  // early return: the visible-GPU count is per-node, so a job spanning nodes
+  // with different GPU counts would otherwise have some ranks skip the
+  // collective and deadlock. The env/argv overrides below are local (no
+  // collective), so returning after the split is safe on every rank.
+  MPI_Comm node;
+  MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &node);
+  int local_rank = 0, local_size = 0;
+  MPI_Comm_rank(node, &local_rank);
+  MPI_Comm_size(node, &local_size);
+  MPI_Comm_free(&node);
+
   if (std::getenv("KOKKOS_DEVICE_ID") || std::getenv("KOKKOS_MAP_DEVICE_ID_BY"))
     return;  // explicit user/scheduler device choice -- respect it
   for (int i = 1; i < argc; ++i)
@@ -70,13 +83,6 @@ static void spk_bind_gpu_by_local_rank(int argc, char **argv)
 
   const int ndev = spk_visible_gpu_count();
   if (ndev <= 1) return;  // host backend or single visible GPU: nothing to bind
-
-  MPI_Comm node;
-  MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &node);
-  int local_rank = 0, local_size = 0;
-  MPI_Comm_rank(node, &local_rank);
-  MPI_Comm_size(node, &local_size);
-  MPI_Comm_free(&node);
 
   const int dev = local_rank % ndev;
   char buf[16];

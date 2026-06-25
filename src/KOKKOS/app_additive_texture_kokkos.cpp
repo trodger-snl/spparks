@@ -2483,6 +2483,14 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     auto d_solid_d_check = d_solid_d;
     int nrefine_check = nrefine;
     int nlocal_check = nlocal;
+    // Capture a LOCAL copy of the View handle. Using the member
+    // d_smoothing_sites directly inside KOKKOS_LAMBDA ([=]) would capture
+    // `this` and dereference the host `this` pointer on the device to reach
+    // the View object -> GPU "page not present" fault (and the
+    // -Wdeprecated-this-capture warning). The fault only fired once a site
+    // first entered the smoothing band (final && needs_smoothing), which made
+    // it look like a melt-triggered, run-dependent crash.
+    auto d_smoothing_sites_local = d_smoothing_sites;
 
     // Parallel scan to build compact list of sites needing smoothing
     Kokkos::parallel_scan("BuildSmoothingList", nlocal_check,
@@ -2492,7 +2500,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
 
         if (needs_smoothing) {
           if (final) {
-            d_smoothing_sites(offset) = i;  // Store site index
+            d_smoothing_sites_local(offset) = i;  // Store site index
           }
           offset++;
         }

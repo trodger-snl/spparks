@@ -2354,20 +2354,20 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
 
   // Lazy device->host temperature copy-back: if a device fill left host T (d6)
   // stale and an output step is imminent, refresh host T now so the diagnostic
-  // and dumps see the current field. time is advanced once per sweep by the
-  // AppLatticeKokkos::iterate_rejection loop (time += dt_rkmc, == dt_sweep here)
-  // AFTER this returns, so output fires next when time + dt_sweep >= nextoutput
-  // (or the run ends).
+  // and dumps see the current field. This app sets app_update_only=1, so it runs
+  // via AppLattice::iterate_app_update_only, which advances time once per step
+  // (time += dt, dt == dt_sweep here) AFTER this returns -- so output fires next
+  // when time + dt_sweep >= nextoutput (or the run ends).
   if (host_T_stale &&
       (time + dt_sweep >= nextoutput || time + dt_sweep >= stoptime)) {
     sync_temperature_to_host();
   }
 
-  // NOTE: time is advanced by the iterate_rejection loop (time += dt_rkmc),
-  // exactly as in the CPU AppAdditiveTexture. Do NOT increment time here -- an
-  // earlier version added a second `time += dt_sweep`, double-counting time
-  // (advancing 2x per sweep), which halved the MC sweep resolution and shifted
-  // the temperature sampling phase vs the CPU app.
+  // NOTE: time is advanced by the iterate loop (iterate_app_update_only does
+  // time += dt), exactly as in the CPU AppAdditiveTexture. Do NOT increment time
+  // here -- an earlier version added a second `time += dt_sweep`, double-counting
+  // time (advancing 2x per step), which halved the MC sweep resolution and
+  // shifted the temperature sampling phase vs the CPU app.
 }
 
 /* ----------------------------------------------------------------------

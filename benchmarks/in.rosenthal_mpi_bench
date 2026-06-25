@@ -1,0 +1,42 @@
+# Rosenthal kk benchmark (baseline for Phase 2 multi-rank sync comparison)
+app_style additive/texture/kk 1000000 5e-06 5e-6 2
+
+seed             20307501
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 310 0 316 0 50
+boundary         n n n
+create_box       box
+create_sites     box
+set              site range 1 1000000
+set              i2 value 1
+set              d6 value 573
+set              d7 value 0
+set              d8 value 0
+set              d9 value 0
+
+sector           yes
+sweep            color
+
+diag_style       array d6 sum d6 max
+temperature      0.0
+
+liquidus                1573
+solidus                 1523
+solid_front_vel         4 -1.0302e-7 1.0533e-4 2.2196e-3 0
+nucleation_density      3.403002e+14
+critical_undercooling   5
+undercooling_deviation  2
+mean_nuclei_volume      8.4375e-16
+nuclei_volume_deviation 1.5625e-17
+texture_parameters      2.990000e+00 2
+misorientation_function 1.883553e+01 2
+fast_forward_search_window 0.001
+
+# Rosenthal standard source + linear scan across x at the box mid-width, top plane.
+# Box: 1.555mm x 1.585mm x 0.25mm.  Scan 0.15->1.40mm at y=0.79mm, z=0.25mm.
+setup_temperature_source rosenthal standard 285.0 0.0775 11.2 2.0959e-6 573.0
+laser_path start 0.15e-3 0.79e-3 0.25e-3 end 1.40e-3 0.79e-3 speed 0.5 repeats 1
+
+stats            2e-4
+run              2.5e-3

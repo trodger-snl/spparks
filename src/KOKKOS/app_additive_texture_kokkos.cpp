@@ -2536,23 +2536,32 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     }
   }
 
-  // Sync device data to host for output/dumps
-  // Ensures all iarray/darray fields are up-to-date for stats, dumps, and diagnostics
-  // Overhead: ~1-3% of total runtime, but necessary for correct visualization/output
-  sync_app_data_to_host();
+  // Device->host / ghost sync. The device is the source of truth: the physics
+  // kernels read and write device Views every step. Host iarray/darray are only
+  // consumed by stats, dumps, and diagnostics, so a full device->host copy is
+  // only needed on output steps -- doing it every step (the old behavior) was
+  // the dominant per-step cost (a ~10-array, O(nall) malloc+copy over millions
+  // of sites). "Output fires this step" is time + dt_sweep >= nextoutput (the
+  // iterate loop advances time AFTER app_update; nextoutput spans stats/dumps/
+  // diagnostics), the same gate the lazy temperature copy-back below uses.
+  const bool host_output_imminent =
+      (time + dt_sweep >= nextoutput) || (time + dt_sweep >= stoptime);
 
-  // MPI ghost communication - exchange boundary data between processors
-  // CRITICAL FIX: Without this, ghost sites retain stale data, causing rectangular
-  // boundary artifacts where active_flag values don't propagate across MPI boundaries
-  // This matches the CPU version's behavior (app_additive_ext_temp_texture.cpp:415)
   if (nprocs > 1) {
+    // Multi-rank: the melting/solidification/smoothing kernels read NEIGHBOR
+    // (ghost) spin/quaternion/active_flag, so ghosts must be refreshed every
+    // step or boundary sites compute on stale state (rectangular MPI-boundary
+    // artifacts). comm->all() operates on the host arrays, so the owned data
+    // must be current on host before the exchange and the received ghosts
+    // pushed back to the device after it -- hence the per-step sync here.
+    sync_app_data_to_host();
     timer->stamp();
     comm->all();  // Exchange ghost site data (active_flag, spin, quaternions, etc.)
     timer->stamp(TIME_COMM);
-
-    // Sync updated ghost data back to device for next timestep
-    // Comment at line 284 says "called after MPI ghost exchange" - this is it!
     sync_app_data_to_device();
+  } else if (host_output_imminent) {
+    // Single rank: no ghost exchange; host arrays are only read at output.
+    sync_app_data_to_host();
   }
 
   // Optional isotherm-compactness diagnostic on its configured cadence, matching

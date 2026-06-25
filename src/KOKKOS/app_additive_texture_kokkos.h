@@ -16,37 +16,44 @@
 ------------------------------------------------------------------------- */
 
 #ifdef APP_CLASS
-AppStyle(additive_temperature_texture/kk,AppAdditiveExtTempTextureKokkos)
+AppStyle(additive/texture/kk,AppAdditiveTextureKokkos)
 
 #else
 
-#ifndef SPK_APP_ADDITIVE_EXT_TEMP_TEXTURE_KOKKOS_H
-#define SPK_APP_ADDITIVE_EXT_TEMP_TEXTURE_KOKKOS_H
+#ifndef SPK_APP_ADDITIVE_TEXTURE_KOKKOS_H
+#define SPK_APP_ADDITIVE_TEXTURE_KOKKOS_H
 
 #include "app_potts_quaternion_kokkos.h"
-#include "kokkos_double_buffer.h"
 #include "temperature_source.h"
+#include "thermal_manager.h"
+#include "thermal_host.h"
 #include <Kokkos_Core.hpp>
 #include <Kokkos_DualView.hpp>
-#include <Kokkos_Random.hpp>
 #include <memory>
 
 namespace SPPARKS_NS {
 
-class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
+class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
  public:
-  AppAdditiveExtTempTextureKokkos(class SPPARKS *, int, char **);
-  virtual ~AppAdditiveExtTempTextureKokkos();
+  AppAdditiveTextureKokkos(class SPPARKS *, int, char **);
+  virtual ~AppAdditiveTextureKokkos();
 
   // Override base class methods
-  virtual void grow_app();
-  virtual void init_app();
-  virtual void app_update(double);
-  virtual void input_app(char *, int, char **);
-  virtual void stats(char *);
-  virtual void stats_header(char *);
+  virtual void grow_app() override;
+  virtual void init_app() override;
+  virtual void app_update(double) override;
+  virtual void input_app(char *, int, char **) override;
+  virtual void stats(char *) override;
+  virtual void stats_header(char *) override;
+
+  // Override required virtual methods from AppLatticeKokkos
+  virtual void sync_app_data_to_device() override;
+  virtual void sync_app_data_to_host() override;
+  virtual void allocate_app_views() override;
+  virtual void sweep_color_kokkos(int color, int start, int count) override;
 
   // Temperature field management
+  void refresh_thermal_host();
   void update_temperature_from_source(double simulation_time);
   void sync_temperature_to_device();
   void compute_gradients_kernel();
@@ -58,7 +65,7 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
   int particle_flipper_kernel();
   int solidification_kernel();
   int smoothing_kernel();
-  int smoothing_kernel_efficient(Kokkos::View<int*> d_smoothing_sites, int n_sites);  // Phase 1 optimization
+  int smoothing_kernel_efficient(Kokkos::View<int*> d_smoothing_sites, int n_sites);
 
   // Powder phase activation methods
   bool is_powder_eligible_site(int i);
@@ -77,10 +84,10 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
   Kokkos::View<double*> d_grad_z;   // Gradient z-component
   Kokkos::View<double*> d_V;        // Solidification velocity
 
-  // Phase state arrays (modified during sweeps - need double buffering)
-  KokkosDoubleBuffer<int> buffer_active_flag;      // 0=inactive, 1=active, 2=molten, 3=solidified, 5=void
-  KokkosDoubleBuffer<double> buffer_mobility_out;  // Arrhenius mobility
-  KokkosDoubleBuffer<double> buffer_solid_d;       // Solid front distance
+  // Phase state arrays (device views - simple Views are race-safe for these kernels)
+  Kokkos::View<int*> d_active_flag;      // 0=inactive, 1=active, 2=molten, 3=solidified, 5=void
+  Kokkos::View<double*> d_mobility_out;  // Arrhenius mobility
+  Kokkos::View<double*> d_solid_d;       // Solid front distance
 
   // Per-spin nucleation arrays (device-accessible, initialized once)
   Kokkos::View<int*> d_nucleation_flags;     // Can this spin nucleate? (1=yes, 0=no)
@@ -90,9 +97,6 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
   // Global parameter arrays (device-accessible constants)
   Kokkos::View<double*> d_solid_front_coeffs;  // Solidification velocity polynomial coefficients
   Kokkos::View<double[3]> d_texture_params;    // Texture model parameters: [c1, c2, c3]
-
-  // Random number generator pool (thread-safe device RNG)
-  Kokkos::Random_XorShift64_Pool<> rand_pool;
 
   // Host pointers (mapped to iarray/darray like CPU version)
   int *active_flag;
@@ -104,10 +108,23 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
   double *neigh_dist;
   double *unique_dot;
 
-  // Temperature source interface (CPU-only)
-  std::unique_ptr<TemperatureSource> temperature_source;
-  bool use_temperature_source;
+  // Temperature-I/O orchestration: shared with the CPU app. ThermalManager owns
+  // the temperature_source, laser path, fast-forward predictors, and smoothing;
+  // it reads/writes the lattice state through the ThermalHost snapshot, which
+  // refresh_thermal_host() populates each step. See thermal_manager.h.
+  std::unique_ptr<ThermalManager> thermal;
+  ThermalHost thermal_host_;
+  bool use_temperature_source;        // vestigial; thermal->enabled() is canonical
   double fast_forward_search_window;
+
+  // Index-based selective ghost communication (used by ThermalManager's
+  // optional temperature-smoothing / diagnostics paths). Null/0 disables it,
+  // which is the default for the Kokkos app (device buffers carry the KMC
+  // ghost exchange); set when host-side temperature smoothing is enabled.
+  const int *ghost_iindices = nullptr;
+  int nghost_iarray = 0;
+  const int *ghost_dindices = nullptr;
+  int nghost_darray = 0;
 
   // Physical parameters (same as CPU version)
   double time_step;
@@ -160,11 +177,6 @@ class AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos {
   int debug_nonzero_G_count;
   double debug_G_sum;
   double debug_V_sum;
-
-  // Sync helpers (extend parent class)
-  void sync_data_to_device();
-  void sync_data_to_host();
-  void swap_buffers();
 
   // Device-compatible thermal operations
   //

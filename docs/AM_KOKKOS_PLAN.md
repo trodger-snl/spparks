@@ -1,17 +1,196 @@
 # Additive Manufacturing Kokkos Implementation Plan
 
-**Status:** Phase 3.5 Complete - All Core Features Implemented
-**Date Updated:** November 16, 2025
-**Target:** AppAdditiveExtTempTextureKokkos extending AppPottsQuaternionKokkos
+**Status:** Device kernels implemented; **re-alignment to the SURGE refactor pending** (see Section 0)
+**Date Updated:** June 24, 2026
+**Target:** `AppAdditiveExtTempTextureKokkos` extending `AppPottsQuaternionKokkos`
+**CPU reference (SURGE):** `AppAdditiveTexture` (style `additive/texture`) + `ThermalManager`
 **Expected Speedup:** 30-70x for full AM simulations
-**Progress:**
+
+**GPU device-kernel progress (original roadmap — all built):**
 - Phase 1 (Quaternion Foundation) ✅ Complete
-- Phase 2 (Temperature/Gradients) ✅ Substantially Complete (timing issue documented)
+- Phase 2 (Temperature/Gradients) ✅ Complete (lives inline in the Kokkos app)
 - Phase 3.1 (Melting Kernel + RNG) ✅ Complete
 - Phase 3.2 (Nucleation + Fast-Forward) ✅ Complete
 - Phase 3.3 (Solidification + Texture) ✅ Complete
 - Phase 3.4 (Smoothing + Integration) ✅ Complete
 - Phase 3.5 (Particle Flipper) ✅ Complete
+
+> ⚠️ **This plan was written against the pre-refactor monolithic CPU app
+> `app_additive_ext_temp_texture` (style `additive_temperature_texture`).**
+> Since then the SURGE branch **renamed** that app to `additive/texture`
+> (`AppAdditiveTexture`) and **extracted all temperature I/O into a new
+> `ThermalManager` class**. The Kokkos device kernels are done, but the Kokkos
+> app now tracks a superseded CPU structure and carries its own private copy of
+> temperature I/O + fast-forward logic. **Section 0 is the current source of
+> truth**; Sections 1–17 below are the original design notes, kept for the
+> kernel-level detail but partially historical.
+
+---
+
+## 0. SURGE Refactor Alignment (June 24, 2026) — START HERE
+
+### 0.1 What changed on SURGE (the CPU reference)
+
+The earlier plan assumed a single monolithic CPU file
+(`app_additive_ext_temp_texture.cpp`, style `additive_temperature_texture`) that
+the Kokkos app would mirror. The SURGE branch has since changed that target in
+four ways:
+
+1. **Rename.** `app_additive_ext_temp_texture` → **`app_additive_texture`**;
+   class `AppAdditiveExtTempTexture` → **`AppAdditiveTexture`**; style
+   `additive_temperature_texture` → **`additive/texture`**. The old style name
+   survives only as `AppAdditiveTextureDeprecated` (a thin subclass that prints a
+   one-shot deprecation warning and forwards to the new class).
+
+2. **`ThermalManager` extraction** (`src/thermal_manager.{h,cpp}`). All
+   temperature-I/O orchestration moved out of the app (3179 → 2274 lines). The
+   app holds `std::unique_ptr<ThermalManager> thermal`, declares
+   `friend class ThermalManager`, and the manager reaches the app's lattice
+   arrays (`T`, `xyz`, neighbor lists, `tl`/`ts`/`t_room`, ghost-comm config) via
+   a typed back-pointer. See `[[reference_thermal_manager_refactor]]`.
+
+   **`ThermalManager` owns (all CPU):** the modular `temperature_source`
+   (Rosenthal / Moser / HDF5 3-tier / generic), laser scan-path tracking,
+   Moser multi-pass pause/reset/`reset_temperature` scheduling, the fast-forward
+   idle-skip predictors, the per-step `update_temperatures()` dispatch, optional
+   solidification-band Gaussian smoothing + nodal (mesh-Laplacian) smoothing, and
+   the isotherm-compactness diagnostic.
+
+   **The app keeps (microstructure MC):** melting, `mushy_phase`,
+   `site_event_solidification`, nucleation + `nucleation_particle_flipper`,
+   `melt_misorientation` / `apply_misorientation`, post-solidification
+   `smooth_site`, powder activation, and **void generation** (intentionally kept
+   in the app — it's porosity, not temperature I/O).
+
+   The fast-forward block in `app_update` became
+   `thermal->advance(time, stoptime)` returning
+   `{new_time, activate_powder, end_run}`; the app applies those app-level
+   effects (sim time, powder activation, early exit) itself.
+
+3. **Texture-model reparametrization.** Mobility is
+   **`mobility = c1 + c2*cos(c3*theta)`** (NOT the `c1*exp(-c2/(cosθ+c3))` form
+   written in Sections 5 and Appendix B of this plan — those are wrong and are
+   corrected inline). SURGE further fixed `c1 = 1.0` (only mobility *ratios*
+   matter) and added a `texture_parameters` command taking `c2/c1, c3` with a
+   compile-time-style guard that rejects parameters giving negative minimum
+   mobility. The active Kokkos kernels already use the `c1 + c2*cos(c3*theta)`
+   form, so they match the *physics*; they do **not** yet implement the
+   `texture_parameters` reparametrized command or its validation.
+
+4. **New thermal features** that exist only on the CPU/ThermalManager side:
+   Moser PSD fluctuations (`laser_fluctuations`), multi-pass laser paths with
+   `pause`/`reset`/`pause_below`, two smoothing modes (`temperature_smooth`,
+   `nodal_smooth`), HDF5 optimization toggles, and the isotherm diagnostic.
+
+### 0.2 Reality check on the Kokkos side
+
+The original roadmap (Section 8) reads as if Phase 2 were "next." That is stale.
+The **active** `src/KOKKOS/app_additive_ext_temp_texture_kokkos.{h,cpp}`
+(~2,200 lines, `AppAdditiveExtTempTextureKokkos : public AppPottsQuaternionKokkos`,
+build-gated on `KOKKOS && HDF5` in `src/cmake/ConditionalSources.cmake`) already
+implements every device kernel this plan describes:
+
+| Feature | Kokkos status | Notes |
+|---|---|---|
+| Temperature DualView + CPU→device sync | ✅ | `update_temperature_from_source()` + `sync_temperature_to_device()` |
+| Gradient (`ThermalOps::compute_temperature_gradient`) | ✅ | 26-neighbor weighted least squares, melt-surface skip |
+| Melting kernel | ✅ | T ≥ liquidus → randomize spin + quaternion |
+| Nucleation + particle flipper | ✅ | undercooling threshold, grow-to-volume |
+| Solidification (epitaxial, texture-weighted) | ✅ | `c1 + c2*cos(c3*theta)` |
+| Smoothing (Metropolis) + work-efficient variant | ✅ | compact smoothing list (~3× faster) |
+| Quaternion ops on device | ✅ | parent `QuaternionOps` has all 11 functions |
+| Fast-forward idle skip | ✅ (private copy) | inline in `app_update`, pre-refactor logic |
+| Void generation | ❌ | not ported (CPU-only on SURGE too, but app-owned) |
+| `texture_parameters` reparam command + guard | ❌ | kernels use the right formula; command not added |
+| Moser multi-pass / pause-reset / smoothing modes | ❌ | all now live in `ThermalManager` |
+
+There are also `*.disabled` copies of the Kokkos app in `src/KOKKOS/`; the
+"enable" commit (`4cac6bcd`) switched phase-state arrays from
+`KokkosDoubleBuffer` to plain `Kokkos::View` (phase kernels write only their own
+site, so no race) and fixed the parent-class inheritance chain. The `.disabled`
+files are the older double-buffered variant and can be deleted once the active
+version is settled.
+
+### 0.3 The real remaining work (revised)
+
+The GPU kernels are not the gap. The gap is that the Kokkos app **forked a copy
+of the temperature-I/O / fast-forward code that SURGE has since refactored,
+fixed, and extended.** Keeping that private copy means the Kokkos path silently
+lacks Moser multi-pass, pause/reset, temperature smoothing, nodal smoothing, the
+diagnostic, and the `texture_parameters` validation — and will keep drifting.
+
+**Recommended strategy: adopt the SURGE composition on the Kokkos side too.**
+Make the Kokkos app reuse `ThermalManager` for all CPU-side temperature work,
+and keep only the GPU microstructure kernels Kokkos-specific. Status as of the
+June 24, 2026 implementation pass:
+
+- [x] **R1 — Rebase the CPU reference.** ✅ Brought SURGE's
+      `app_additive_texture.{cpp,h}`, `thermal_manager.{h,cpp}`, the full
+      temperature-source stack (`temperature_source*.{h,cpp}` incl. `_moser`,
+      `_hdf5_csr`), the `GREENAM/` headers (Moser dep), and
+      `comm_lattice.{h,cpp}` (needed for `all_selective`, a SURGE addition).
+      Deleted the old `app_additive_ext_temp_texture.{cpp,h}`. Updated
+      `ConditionalSources.cmake` (HighFive+MPI gating). All rebased CPU TUs
+      compile; the CPU `additive/texture` app **runs a Rosenthal case to
+      completion** on this branch.
+- [x] **R2 — Reparent the Kokkos app.** ✅ Renamed
+      `app_additive_ext_temp_texture_kokkos.*` →
+      `app_additive_texture_kokkos.*`, class →
+      `AppAdditiveTextureKokkos`, style → `additive/texture/kk`. The app now owns
+      a `std::unique_ptr<ThermalManager>`; its private
+      `update_temperature_from_source()` body and the inline fast-forward in
+      `app_update` were replaced with `thermal->advance(time, stoptime)`, and all
+      thermal input commands (`setup_temperature_source`, `laser_path`,
+      `laser_fluctuations`, `temperature_smooth`, `nodal_smooth`,
+      `temperature_optimization`, `fast_forward_search_window`) route to the
+      manager.
+- [x] **R3 — Sync boundary.** ✅ Instead of a typed back-pointer + `friend`,
+      `ThermalManager` was decoupled via a new `ThermalHost` POD snapshot
+      (`thermal_host.h`) that each app populates with `refresh_thermal_host()`;
+      this is what makes a *single* `ThermalManager` reusable by both the CPU app
+      and the Kokkos app (which don't share an additive-app base). The Kokkos app
+      fills host `T[]` through the manager, then `sync_temperature_to_device()`
+      pushes it to `k_T`. `ThermalManager` stays CPU-only.
+- [x] **R4 — Texture command parity.** ✅ `texture_parameters` reparametrized to
+      2 args (`c2 c3`, c1 fixed to 1) with the full positivity/monotonicity
+      guard, mirroring the CPU app. Kernels keep `c1 + c2*cos(c3*theta)`.
+- [ ] **R5 — Port void generation** to the Kokkos app (CPU init + device
+      `active_flag==5` filtering), the one microstructure feature still missing.
+- [~] **R6 — Validate.** ⏳ Rosenthal (standard) validated: CPU `additive/texture`
+      vs GPU `additive/texture/kk` give **bit-identical** temperature sum/max at
+      the init field and the post-scan fast-forwarded ambient state; during the
+      active melt scan they agree to ~4 sig figs in `sum(d6)` and within ~0.5% on
+      `max(d6)`. The sub-percent active-scan gap is **CPU-vs-GPU execution**
+      (confirmed: CPU `sweep color` == CPU `sweep random`, so not the sweep
+      scheme) — likely dt_sweep sampling-time or a device temperature round-trip;
+      worth a look. **Still to do:** Moser + HDF5 validation; tighten the
+      active-scan temperature comparison; microstructure within run-to-run MC
+      noise (`[[reference_additive_texture_nondeterminism]]`).
+- [x] **R7 — Cleanup.** ✅ Deleted the `*.disabled` Kokkos files. Brought SURGE's
+      style-generation infra (`generate_styles.cmake`,
+      `regenerate_single_style.cmake`, `regenerate_styles.cmake`) — the kokkos
+      branch's `-P`-mode regen couldn't find `feature_status.cmake` and silently
+      dropped the HighFive-gated additive styles from `style_app.h`; SURGE's
+      `SPK_SOURCE_DIR`/`SPK_BINARY_DIR` plumbing fixes it. Sections 5 / 8 /
+      Appendix B formula text refreshed.
+
+**Validated build:** `cmake -S src -B build-verify` + `cmake --build build-verify`
+under spack env `spparks-dev`, HIP backend (gfx1151), HighFive+HDF5+MPI on.
+Executable links and both apps run.
+
+### 0.4 Decisions (resolved June 24, 2026)
+
+1. **Rename scope.** ✅ **Rename** to `additive/texture/kk` +
+   `AppAdditiveTextureKokkos` to match SURGE.
+2. **ThermalManager reuse depth.** ✅ **Full reuse** — the Kokkos app owns a
+   `ThermalManager` exactly as the CPU app does (R2/R3).
+3. **Old CPU app.** ✅ **Delete** `app_additive_ext_temp_texture.{cpp,h}` once the
+   rebase (R1) lands. Also delete the `*.disabled` Kokkos files.
+
+**Validation order:** Rosenthal temperature source first, then HDF5.
+
+Build/test for all of the above: `./build_cmake.sh --highfive --package stitch -m mpi`
+under the `spparks-dev` spack env (`[[feedback_spack_build]]`).
 
 ---
 
@@ -627,13 +806,22 @@ double AppAdditiveExtTempTexture::melt_misorientation(int site,
   // Compute angle between crystal orientation and gradient
   double cosine_theta = quaternion::get_cosine_of_minumum_angle_between_q_and_u(
       q_site, grad);
+  double theta = acos(cosine_theta);
 
-  // Mobility factor based on texture model
-  double mobility = c1 * exp(-c2 / (cosine_theta + c3));
+  // Mobility factor based on texture model (CORRECTED to match SURGE)
+  // SURGE uses: mobility = c1 + c2*cos(c3*theta), with c1 fixed to 1.0.
+  // (The earlier c1*exp(-c2/(cosθ+c3)) form in this doc was incorrect.)
+  double mobility = c1 + c2 * cos(c3 * theta);
 
   return mobility;
 }
 ```
+
+> **Note (June 2026):** the canonical texture model is `c1 + c2*cos(c3*theta)`,
+> not the exponential form originally written here. SURGE fixes `c1 = 1.0` and
+> exposes `texture_parameters c2/c1 c3` with a guard rejecting parameters that
+> make the minimum mobility negative. The corrected form is used in the device
+> code below and in Appendix B.
 
 ### 5.2 Device-Compatible Version
 
@@ -673,9 +861,10 @@ struct TextureOps {
     // Compute angle between orientation and gradient
     double cosine_theta = QuaternionOps::get_cosine_angle_q_u(
         q_site, gradient);
+    double theta = Kokkos::acos(cosine_theta);
 
-    // Texture model: mobility ~ exp(-c2 / (cos(theta) + c3))
-    double mobility = c1 * Kokkos::exp(-c2 / (cosine_theta + c3));
+    // Texture model: mobility = c1 + c2*cos(c3*theta)  (c1 fixed to 1.0)
+    double mobility = c1 + c2 * Kokkos::cos(c3 * theta);
 
     return mobility;
   }
@@ -747,7 +936,8 @@ int select_texture_weighted_neighbor(
       // Compute mobility
       double cos_theta = QuaternionOps::get_cosine_angle_q_u(
           q_nbr, grad_nbr);
-      mobilities[n_unique] = c1 * Kokkos::exp(-c2 / (cos_theta + c3));
+      double theta = Kokkos::acos(cos_theta);
+      mobilities[n_unique] = c1 + c2 * Kokkos::cos(c3 * theta);
 
       n_unique++;
     }
@@ -1179,6 +1369,11 @@ int team_size = 256;
 ---
 
 ## 8. Implementation Roadmap
+
+> **⚠️ Historical — superseded by Section 0.3.** The phases below were the
+> original kernel-build roadmap and are now all complete in the active Kokkos
+> app. The real remaining work is the SURGE refactor alignment (R1–R7 in
+> Section 0.3), not these phases. Kept for the per-kernel task detail.
 
 ### Phase 1: Quaternion Foundation ✅ COMPLETE (November 14, 2025)
 
@@ -2103,8 +2298,12 @@ dt_fast / dt_slow = 100
 
 **Existing implementations:**
 - `src/KOKKOS/app_potts_quaternion_kokkos.{h,cpp}` - Base class, quaternion ops
-- `src/kokkos_double_buffer.h` - Double-buffer framework
-- `src/app_additive_ext_temp_texture.{h,cpp}` - Target CPU implementation
+- `src/KOKKOS/app_additive_ext_temp_texture_kokkos.{h,cpp}` - **Active Kokkos AM app** (all device kernels built; `.disabled` variants are the older double-buffered version)
+- `src/kokkos_double_buffer.h` - Double-buffer framework (parent uses plain Views for phase-state arrays)
+- **SURGE branch CPU reference (post-refactor):**
+  - `src/app_additive_texture.{h,cpp}` - `AppAdditiveTexture`, style `additive/texture` (microstructure MC)
+  - `src/thermal_manager.{h,cpp}` - `ThermalManager`, all temperature I/O / fast-forward (CPU)
+- `src/app_additive_ext_temp_texture.{h,cpp}` - **superseded** pre-refactor monolith (this branch only)
 - `src/potts_quaternion/quaternion.h` - Quaternion utilities (CPU)
 - `src/crystalline_orientations/quaternion.h` - Rotation utilities (CPU)
 
@@ -2171,18 +2370,23 @@ R[2][2] = 1 - 2*(qx² + qy²)
 
 ### Appendix B: Texture Model Details
 
-**Melt misorientation model:** (Rappaz, 1989)
+**Melt misorientation model (corrected June 2026 to match SURGE):**
 
 ```
-M(θ) = M₀ * exp(-c2 / (cos(θ) + c3))
+M(θ) = c1 + c2 * cos(c3 * θ)
 ```
 
 Where:
 - M(θ): Mobility (growth rate)
 - θ: Angle between crystal orientation and thermal gradient
-- c1 = M₀: Baseline mobility
-- c2: Texture strength parameter
-- c3: Offset to avoid singularity
+- c1: Baseline mobility — **fixed to 1.0 on SURGE** (only ratios matter)
+- c2: Texture strength parameter (passed as c2/c1 via `texture_parameters`)
+- c3: Angular scaling (passed via `texture_parameters`)
+
+SURGE rejects parameter sets where the minimum mobility
+`1 + c2*cos(c3*theta_max)` goes negative. The older
+`M₀*exp(-c2/(cos(θ)+c3))` form that appeared in earlier drafts of this document
+was **incorrect** and is not what the code implements.
 
 **Physical meaning:**
 - θ = 0° (aligned): Maximum growth rate
@@ -2238,6 +2442,7 @@ Where:
 |------|---------|--------|---------|
 | 2025-11-14 | 1.0 | Claude Code | Initial document creation |
 | 2025-11-14 | 1.1 | Claude Code | Phase 1 completion update - all quaternion operations implemented and validated |
+| 2026-06-24 | 2.0 | Claude Code | SURGE refactor alignment: added Section 0 (rename to `additive/texture`, `ThermalManager` extraction, corrected reality check + R1–R7 remaining work, open decisions). Corrected texture model to `c1 + c2*cos(c3*theta)` in Sections 5 and Appendix B. Flagged Section 8 roadmap as historical. Updated references to renamed SURGE files. |
 
 ---
 

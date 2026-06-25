@@ -28,6 +28,7 @@ class CommLattice : protected Pointers {
   CommLattice(class SPPARKS *); ~CommLattice();
   void init(int, int, int, int *);
   void all();
+  void all_selective(const int *iidx, int ni, const int *didx, int nd);
   void all_reverse();
   void sector(int);
   void reverse_sector(int);

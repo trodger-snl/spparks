@@ -22,8 +22,27 @@
 #include <stdexcept>
 #include <cmath>
 #include <set>
+#include <fstream>
+#include <sstream>
 
 using namespace SPPARKS_NS;
+
+// Helper function to get current memory usage (Linux only)
+static size_t get_memory_usage_kb() {
+#ifdef __linux__
+  std::ifstream status("/proc/self/status");
+  std::string line;
+  while (std::getline(status, line)) {
+    if (line.compare(0, 6, "VmRSS:") == 0) {
+      std::istringstream iss(line.substr(6));
+      size_t kb;
+      iss >> kb;
+      return kb;
+    }
+  }
+#endif
+  return 0;
+}
 
 /* ---------------------------------------------------------------------- */
 
@@ -31,9 +50,26 @@ HDF5UnstructuredTemperatureSource::HDF5UnstructuredTemperatureSource(SPPARKS *sp
   TemperatureSource(spk),
   current_time(std::numeric_limits<double>::lowest()),
   active_layer(std::numeric_limits<unsigned>::max()),
-  cache_valid(false)
+  cache_valid(false),
+  total_layer_load_time(0.0),
+  layer_load_count(0),
+  cached_nodal_time(std::numeric_limits<double>::lowest()),
+  nodal_cache_valid(false),
+  site_intervals_for_layer(std::numeric_limits<unsigned>::max()),
+  grid_cell_size_multiplier(100.0),
+  use_spatial_grid(true),
+  use_element_cache(true),
+  nodal_smooth_enabled(false),
+  nodal_sigma_xy(4.0),
+  nodal_sigma_z(0.3),
+  nodal_passes(1),
+  nodal_alpha(0.5),
+  nodal_adjacency_valid(false)
 {
   source_initialized = false;
+#ifdef H5_HAVE_PARALLEL
+  use_parallel_hdf5 = false;
+#endif
 }
 
 /* ---------------------------------------------------------------------- */
@@ -47,20 +83,39 @@ HDF5UnstructuredTemperatureSource::~HDF5UnstructuredTemperatureSource()
 
 void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vector<std::string> &args)
 {
-  // Parse arguments: filename dx threshold_temp default_temp [bounds_check_mode]
+  // Parse arguments: filename dx threshold_temp default_temp [bounds_check_mode] [grid_cell_mult]
   if (args.size() < 4) {
-    error->all(FLERR, "HDF5 unstructured temperature source requires: filename dx threshold_temp default_temp [bounds_check_mode]");
+    error->all(FLERR, "HDF5 unstructured temperature source requires: filename dx threshold_temp default_temp [bounds_check_mode] [grid_cell_mult]");
   }
-  
+
   filename = args[0];
   dx = std::stod(args[1]);  // Grid spacing in meters
   threshold_temp = std::stod(args[2]);  // Threshold temperature for fast-forward
   default_temp = std::stod(args[3]);    // Default/ambient temperature
   bounds_check_mode = (args.size() > 4) ? std::stoi(args[4]) : 0;
+  grid_cell_size_multiplier = (args.size() > 5) ? std::stod(args[5]) : 100.0;
 
-  // Open HDF5 file
+  // Open HDF5 file with parallel I/O when available
   try {
+#ifdef H5_HAVE_PARALLEL
+    // Create file access property list with MPI-IO
+    HighFive::FileAccessProps fapl;
+    fapl.add(HighFive::MPIOFileAccess(universe->uworld, MPI_INFO_NULL));
+    // NOTE: Do NOT enable MPIOCollectiveMetadata here.  With per-rank
+    // subdomain chunk filtering, some ranks may load zero chunks and
+    // return early from load_layer(), skipping getDataSet() calls that
+    // other ranks execute.  Collective metadata would deadlock in that case.
+    file = std::make_shared<HighFive::File>(filename, HighFive::File::ReadOnly, fapl);
+    use_parallel_hdf5 = true;
+    if (universe->me == 0) {
+      fprintf(screen, "  Parallel HDF5: ENABLED (MPI-IO)\n");
+    }
+#else
     file = std::make_shared<HighFive::File>(filename, HighFive::File::ReadOnly);
+    if (universe->me == 0) {
+      fprintf(screen, "  Parallel HDF5: DISABLED (serial build)\n");
+    }
+#endif
   } catch (const std::exception& e) {
     error->all(FLERR, (std::string("Failed to open HDF5 file: ") + e.what()).c_str());
   }
@@ -277,9 +332,13 @@ void HDF5UnstructuredTemperatureSource::print_source_info() const
 
 void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
 {
+  auto load_start = std::chrono::high_resolution_clock::now();
+  size_t mem_start = get_memory_usage_kb();
+
   if (universe->me == 0) {
     fprintf(screen, "Loading layer %u at time %.6e s\n", layerIdx,
             (layerIdx < layerTimes.size()) ? layerTimes[layerIdx] : -1.0);
+    fprintf(screen, "  [MEM] Start: %zu MB (rank 0)\n", mem_start / 1024);
   }
 
   // Try to open the layer group with error handling
@@ -313,10 +372,15 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   std::vector<unsigned> nodePtr;
   grp->getDataSet("nodePtrs").read(nodePtr);
   
-  // Convert SPPARKS domain bounds from lattice units to physical coordinates (meters)
+  // Convert SPPARKS per-rank subdomain bounds to physical coordinates (meters).
+  // Use subdomain (subxlo/hi) instead of global domain (boxxlo/hi) so each rank
+  // only loads temperature chunks overlapping its own partition.
+  // Pad by one spatial grid cell to capture thermal elements straddling the
+  // subdomain boundary (needed for interpolation at boundary sites).
+  double pad = dx * grid_cell_size_multiplier;
   std::vector<double> spparksPhysicalBbox{
-    domain->boxxlo * dx, domain->boxylo * dx, domain->boxzlo * dx,
-    domain->boxxhi * dx, domain->boxyhi * dx, domain->boxzhi * dx
+    domain->subxlo * dx - pad, domain->subylo * dx - pad, domain->subzlo * dx - pad,
+    domain->subxhi * dx + pad, domain->subyhi * dx + pad, domain->subzhi * dx + pad
   };
   
   // Find overlapping chunks - first pass for chunks that directly overlap SPPARKS domain
@@ -370,16 +434,22 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   }
   
   // Store chunk info for later use in point queries
-  chunk_bboxes = bboxes;
+  // Convert from HDF5 vector<vector<double>> to efficient array storage
+  chunk_bboxes.clear();
+  chunk_bboxes.reserve(bboxes.size());
+  for (const auto& bb : bboxes) {
+    chunk_bboxes.push_back({bb[0], bb[1], bb[2], bb[3], bb[4], bb[5]});
+  }
   selected_chunks = overlappingChunks;
   
-  if (universe->me == 0 && overlappingChunks.size() > 0) {
+  if (overlappingChunks.size() > 0) {
     unsigned totalElements = elemPtr.back();
     unsigned loadedElements = elemOffsets.back();
     unsigned totalNodes = nodePtr.back();
     unsigned loadedNodes = nodeOffsets.back();
 
-    fprintf(screen, "  Loaded %zu/%zu chunks (%.1f%%), %u/%u elements (%.1f%%), %u/%u nodes (%.1f%%)\n",
+    fprintf(screen, "  Rank %d: Loaded %zu/%zu chunks (%.1f%%), %u/%u elements (%.1f%%), %u/%u nodes (%.1f%%)\n",
+            universe->me,
             overlappingChunks.size(), bboxes.size(), 100.0 * overlappingChunks.size() / bboxes.size(),
             loadedElements, totalElements, 100.0 * loadedElements / totalElements,
             loadedNodes, totalNodes, 100.0 * loadedNodes / totalNodes);
@@ -387,41 +457,16 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   node_offsets = nodeOffsets;
   elem_offsets = elemOffsets;
 
-  // Build hyperslabs for selective reading
-  auto build_hyperslab = [](const std::vector<std::array<size_t, 2>>& slices, 
-                           const std::array<size_t, 2>& cols) -> HighFive::HyperSlab {
-    if (slices.empty()) throw std::runtime_error("No slices for hyperslab");
-    
-    HighFive::HyperSlab result(HighFive::RegularHyperSlab(
-      {slices[0][0], cols[0]}, 
-      {slices[0][1] - slices[0][0], cols[1] - cols[0]}));
-    
-    for (size_t r = 1; r < slices.size(); r++) {
-      result |= HighFive::RegularHyperSlab(
-        {slices[r][0], cols[0]}, 
-        {slices[r][1] - slices[r][0], cols[1] - cols[0]});
-    }
-    return result;
-  };
-  
-  auto build_hyperslab_1d = [](const std::vector<std::array<size_t, 2>>& slices) -> HighFive::HyperSlab {
-    if (slices.empty()) throw std::runtime_error("No slices for hyperslab");
-    
-    HighFive::HyperSlab result(HighFive::RegularHyperSlab(
-      {slices[0][0]}, {slices[0][1] - slices[0][0]}));
-    
-    for (size_t r = 1; r < slices.size(); r++) {
-      result |= HighFive::RegularHyperSlab(
-        {slices[r][0]}, {slices[r][1] - slices[r][0]});
-    }
-    return result;
-  };
-  
   // Read element connectivity
   std::vector<unsigned> elemNodeData;
   grp->getDataSet("elementToNode").select(
     build_hyperslab(elemSlices, {0, NODES_PER_ELEM})).read(elemNodeData);
   elemNode = Array2D<unsigned>(NODES_PER_ELEM, std::move(elemNodeData));
+
+  if (universe->me == 0) {
+    fprintf(screen, "  [MEM] After elemNode (%u elems): %zu MB\n",
+            elemOffsets.back(), get_memory_usage_kb() / 1024);
+  }
 
   // Read node coordinates
   std::vector<double> nodeCoordsData;
@@ -429,34 +474,224 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
     build_hyperslab(nodeSlices, {0, DIM})).read(nodeCoordsData);
   nodeCoords = Array2D<double>(DIM, std::move(nodeCoordsData));
 
+  if (universe->me == 0) {
+    fprintf(screen, "  [MEM] After nodeCoords (%u nodes): %zu MB\n",
+            nodeOffsets.back(), get_memory_usage_kb() / 1024);
+  }
+
   // Read data counts
   grp->getDataSet("dataCounts").select(
     build_hyperslab_1d(nodeSlices)).read(dataCounts);
 
-  // Find maximum data count
-  unsigned maxData = 0;
-  for (auto cnt : dataCounts) {
-    maxData = std::max(maxData, cnt);
+  if (universe->me == 0) {
+    fprintf(screen, "  [MEM] After dataCounts: %zu MB\n", get_memory_usage_kb() / 1024);
   }
 
-  // Read time and temperature data
-  auto dataHyperSlab = build_hyperslab(nodeSlices, {0, maxData});
+  // Read time and temperature data (virtual — overridden by CSR subclass)
+  read_time_temperature_data(*grp, nodeSlices);
 
-  std::vector<double> timesData;
-  grp->getDataSet("times").select(dataHyperSlab).read(timesData);
-  times = Array2D<double>(maxData, std::move(timesData));
+  if (universe->me == 0) {
+    size_t times_mem = times.total_elements() * sizeof(double) / 1024 / 1024;
+    size_t temps_mem = temperatures.total_elements() * sizeof(double) / 1024 / 1024;
+    fprintf(screen, "  [MEM] After CSR data (times: %zu MB, temps: %zu MB): %zu MB total\n",
+            times_mem, temps_mem, get_memory_usage_kb() / 1024);
+  }
 
-  std::vector<double> tempData;
-  grp->getDataSet("temperatures").select(dataHyperSlab).read(tempData);
-  temperatures = Array2D<double>(maxData, std::move(tempData));
-  
   // Build element bounding boxes for spatial queries
-  elem_bboxes = build_elem_bounding_boxes(overlappingChunks.size(), 
-                                         nodeOffsets, elemOffsets, 
+  elem_bboxes = build_elem_bounding_boxes(overlappingChunks.size(),
+                                         nodeOffsets, elemOffsets,
                                          elemNode, nodeCoords);
-  
+
+  if (universe->me == 0) {
+    size_t bbox_mem = elem_bboxes.size() * sizeof(std::array<double, 6>) / 1024 / 1024;
+    fprintf(screen, "  [MEM] After elem_bboxes (%zu elems, %zu MB array): %zu MB total\n",
+            elem_bboxes.size(), bbox_mem, get_memory_usage_kb() / 1024);
+  }
+
+  // Build spatial acceleration grid (optional, controlled by use_spatial_grid flag)
+  // Larger cells = less memory but more elements per cell to search
+  // Default 50x lattice spacing (~250 microns), user-configurable via grid_cell_mult parameter
+  if (use_spatial_grid) {
+    build_spatial_grid(dx * grid_cell_size_multiplier);
+
+    if (universe->me == 0) {
+      size_t grid_cells = spatial_grid.dims[0] * spatial_grid.dims[1] * spatial_grid.dims[2];
+      fprintf(screen, "  [MEM] After spatial_grid (%zu cells): %zu MB total\n",
+              grid_cells, get_memory_usage_kb() / 1024);
+    }
+  } else {
+    spatial_grid.valid = false;
+    if (universe->me == 0) {
+      fprintf(screen, "  Spatial grid: DISABLED\n");
+    }
+  }
+
+  // Build node-graph adjacency for mesh-Laplacian smoothing (optional).
+  // Must run AFTER elemNode + nodeCoords + dataCounts are populated for the
+  // new layer and BEFORE any precompute_nodal_temperatures call uses the
+  // result. Rebuilt on every layer load when enabled.
+  if (nodal_smooth_enabled) {
+    build_nodal_adjacency_weighted();
+  } else {
+    nodal_adjacency_valid = false;
+  }
+
   // Compute thermal intervals for efficient time queries
   compute_thermal_intervals_for_layer(layerIdx, threshold_temp);
+
+  // Record timing for performance monitoring
+  auto load_end = std::chrono::high_resolution_clock::now();
+  double load_time = std::chrono::duration<double>(load_end - load_start).count();
+  total_layer_load_time += load_time;
+  layer_load_count++;
+
+  if (universe->me == 0) {
+    size_t mem_end = get_memory_usage_kb();
+    fprintf(screen, "  [MEM] Final: %zu MB (delta: %+zd MB)\n",
+            mem_end / 1024, (long)(mem_end - mem_start) / 1024);
+    fprintf(screen, "  Layer load time: %.3f s (avg: %.3f s over %d loads)\n",
+            load_time, total_layer_load_time / layer_load_count, layer_load_count);
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+
+HighFive::HyperSlab HDF5UnstructuredTemperatureSource::build_hyperslab(
+  const std::vector<std::array<size_t, 2>>& slices,
+  const std::array<size_t, 2>& cols)
+{
+  if (slices.empty()) throw std::runtime_error("No slices for hyperslab");
+
+  HighFive::HyperSlab result(HighFive::RegularHyperSlab(
+    {slices[0][0], cols[0]},
+    {slices[0][1] - slices[0][0], cols[1] - cols[0]}));
+
+  for (size_t r = 1; r < slices.size(); r++) {
+    result |= HighFive::RegularHyperSlab(
+      {slices[r][0], cols[0]},
+      {slices[r][1] - slices[r][0], cols[1] - cols[0]});
+  }
+  return result;
+}
+
+/* ---------------------------------------------------------------------- */
+
+HighFive::HyperSlab HDF5UnstructuredTemperatureSource::build_hyperslab_1d(
+  const std::vector<std::array<size_t, 2>>& slices)
+{
+  if (slices.empty()) throw std::runtime_error("No slices for hyperslab");
+
+  HighFive::HyperSlab result(HighFive::RegularHyperSlab(
+    {slices[0][0]}, {slices[0][1] - slices[0][0]}));
+
+  for (size_t r = 1; r < slices.size(); r++) {
+    result |= HighFive::RegularHyperSlab(
+      {slices[r][0]}, {slices[r][1] - slices[r][0]});
+  }
+  return result;
+}
+
+/* ---------------------------------------------------------------------- */
+
+void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
+  HighFive::Group& grp,
+  const std::vector<std::array<size_t, 2>>& nodeSlices)
+{
+  // Streaming implementation: read one chunk at a time from the padded 2D
+  // datasets, stripping padding on the fly into pre-allocated CSR arrays.
+  // Peak temporary buffer = max_chunk_rows × readCols × 8 bytes.
+
+  auto t_start = std::chrono::high_resolution_clock::now();
+
+  // Determine how many columns to read per row
+  auto timesDset = grp.getDataSet("times");
+  auto timesDims = timesDset.getDimensions();
+  unsigned datasetCols = static_cast<unsigned>(timesDims[1]);
+
+  unsigned maxData = 0;
+  for (auto cnt : dataCounts)
+    maxData = std::max(maxData, cnt);
+
+  unsigned readCols = std::min(datasetCols, maxData);
+
+  // Build CSR offsets from dataCounts
+  size_t nrows = dataCounts.size();
+  std::vector<size_t> offsets(nrows + 1);
+  offsets[0] = 0;
+  for (size_t i = 0; i < nrows; i++)
+    offsets[i + 1] = offsets[i] + dataCounts[i];
+
+  size_t totalElements = offsets[nrows];
+
+  // Pre-allocate flat output arrays to exact CSR size
+  std::vector<double> timesFlat(totalElements);
+  std::vector<double> tempsFlat(totalElements);
+
+  if (universe->me == 0) {
+    size_t rectMB = nrows * static_cast<size_t>(readCols) * sizeof(double) / (1024 * 1024);
+    fprintf(screen, "  Streaming 2D read: %zu nodes, %u readCols, %zu total elements\n",
+            nrows, readCols, totalElements);
+    fprintf(screen, "  [MEM] Rectangular would need: %zu MB per dataset (%zu MB total)\n",
+            rectMB, rectMB * 2);
+  }
+
+  // Reusable chunk buffer — grows to largest chunk, then stays put
+  std::vector<double> buf;
+  auto tempsDset = grp.getDataSet("temperatures");
+  size_t dcPos = 0;  // read cursor into dataCounts / offsets
+
+  for (size_t s = 0; s < nodeSlices.size(); s++) {
+    size_t rowStart  = nodeSlices[s][0];
+    size_t rowEnd    = nodeSlices[s][1];
+    size_t chunkRows = rowEnd - rowStart;
+    if (chunkRows == 0) continue;
+
+    buf.resize(chunkRows * static_cast<size_t>(readCols));
+
+    // --- Read & strip times ---
+    timesDset.select(HighFive::HyperSlab(HighFive::RegularHyperSlab(
+        {rowStart, 0}, {chunkRows, static_cast<size_t>(readCols)})))
+      .read(buf);
+
+    for (size_t r = 0; r < chunkRows; r++) {
+      unsigned count = dataCounts[dcPos + r];
+      std::copy_n(buf.data() + r * readCols, count,
+                  timesFlat.data() + offsets[dcPos + r]);
+    }
+
+    // --- Read & strip temperatures (reuse buf) ---
+    tempsDset.select(HighFive::HyperSlab(HighFive::RegularHyperSlab(
+        {rowStart, 0}, {chunkRows, static_cast<size_t>(readCols)})))
+      .read(buf);
+
+    for (size_t r = 0; r < chunkRows; r++) {
+      unsigned count = dataCounts[dcPos + r];
+      std::copy_n(buf.data() + r * readCols, count,
+                  tempsFlat.data() + offsets[dcPos + r]);
+    }
+
+    if (universe->me == 0) {
+      fprintf(screen, "    Chunk %zu/%zu: %zu rows, buf %.1f MB, [MEM] %zu MB\n",
+              s + 1, nodeSlices.size(), chunkRows,
+              chunkRows * static_cast<size_t>(readCols) * sizeof(double) / (1024.0 * 1024.0),
+              get_memory_usage_kb() / 1024);
+    }
+
+    dcPos += chunkRows;
+  }
+
+  // Build CompressedArray2D via zero-copy move
+  auto offsets2 = offsets;  // copy before first move
+  times = CompressedArray2D<double>(std::move(timesFlat), std::move(offsets));
+  temperatures = CompressedArray2D<double>(std::move(tempsFlat), std::move(offsets2));
+
+  auto t_end = std::chrono::high_resolution_clock::now();
+  double elapsed = std::chrono::duration<double>(t_end - t_start).count();
+
+  if (universe->me == 0) {
+    fprintf(screen, "  [TIMING] Streaming 2D read: %.3f s (%zu elements)\n",
+            elapsed, totalElements);
+  }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -547,43 +782,108 @@ bool HDF5UnstructuredTemperatureSource::do_boxes_overlap(
 /* ---------------------------------------------------------------------- */
 
 bool HDF5UnstructuredTemperatureSource::point_in_bbox(
-  const std::array<double, 3>& pt, 
-  const std::vector<double>& bbox) const
+  const std::array<double, 3>& pt,
+  const std::array<double, 6>& bbox) const
 {
-  return pt[0] >= bbox[0] && pt[0] <= bbox[3] && 
-         pt[1] >= bbox[1] && pt[1] <= bbox[4] && 
+  return pt[0] >= bbox[0] && pt[0] <= bbox[3] &&
+         pt[1] >= bbox[1] && pt[1] <= bbox[4] &&
          pt[2] >= bbox[2] && pt[2] <= bbox[5];
 }
 
 /* ---------------------------------------------------------------------- */
 
-std::pair<std::array<unsigned, 4>, std::array<double, 3>> 
+std::pair<std::array<unsigned, 4>, std::array<double, 3>>
 HDF5UnstructuredTemperatureSource::find_element_point_is_in(
   const std::vector<unsigned>& selectedChunks,
-  const std::vector<std::vector<double>>& chunkBboxes,
+  const std::vector<std::array<double, 6>>& chunkBboxes,
   const std::vector<unsigned>& nodeOffsets,
   const std::vector<unsigned>& elemOffsets,
   const Array2D<unsigned>& elemNode,
   const Array2D<double>& nodeCoords,
-  const std::vector<std::vector<double>>& elemBboxes,
+  const std::vector<std::array<double, 6>>& elemBboxes,
   const std::array<double, 3>& pt) const
 {
   std::array<unsigned, 4> nodeIds;
   std::array<double, 3> parCoords;
-  
+
   constexpr double tol = 1e-14;
   constexpr unsigned invalidId = std::numeric_limits<unsigned>::max();
-  
+
   // Validate input data
-  if (selectedChunks.empty() || chunkBboxes.empty() || 
+  if (selectedChunks.empty() || chunkBboxes.empty() ||
       nodeOffsets.empty() || elemOffsets.empty() || elemBboxes.empty()) {
     return std::make_pair(
       std::array<unsigned, 4>{invalidId, invalidId, invalidId, invalidId},
       std::array<double, 3>{0.0, 0.0, 0.0}
     );
   }
-  
-  // Find possible chunks
+
+  // Reusable storage for tetrahedron coordinates
+  std::vector<std::vector<double>> tetCoords(NODES_PER_ELEM, std::vector<double>(DIM));
+
+  // Lambda to test a single element and return true if point is inside
+  auto test_element = [&](unsigned e) -> bool {
+    if (e >= elemBboxes.size()) return false;
+    if (!point_in_bbox(pt, elemBboxes[e])) return false;
+
+    // Find which chunk this element belongs to (for node offset mapping)
+    // Use O(1) precomputed mapping when spatial grid is valid, else O(n) search
+    unsigned c;
+    if (spatial_grid.valid && e < spatial_grid.elem_to_chunk.size()) {
+      c = spatial_grid.elem_to_chunk[e];
+    } else {
+      c = 0;
+      for (unsigned i = 0; i < elemOffsets.size() - 1; i++) {
+        if (e >= elemOffsets[i] && e < elemOffsets[i + 1]) {
+          c = i;
+          break;
+        }
+      }
+    }
+
+    // Get tetrahedron node coordinates
+    bool validElement = true;
+    for (unsigned n = 0; n < NODES_PER_ELEM; n++) {
+      unsigned localNodeId = elemNode(e, n);
+      if (c >= nodeOffsets.size() - 1) {
+        validElement = false;
+        break;
+      }
+      nodeIds[n] = localNodeId + nodeOffsets[c];
+      for (unsigned d = 0; d < DIM; d++) {
+        tetCoords[n][d] = nodeCoords(nodeIds[n], d);
+      }
+    }
+    if (!validElement) return false;
+
+    parCoords = get_parametric_coordinates_of_point(tetCoords, pt);
+
+    // Check if point is inside tetrahedron
+    return (parCoords[0] > -tol && parCoords[1] > -tol && parCoords[2] > -tol &&
+            1.0 - parCoords[0] - parCoords[1] - parCoords[2] > -tol);
+  };
+
+  // Use spatial grid if available (O(1) cell lookup vs O(n) brute force)
+  if (spatial_grid.valid) {
+    int cell_idx = spatial_grid.point_to_cell(pt);
+    if (cell_idx >= 0 && static_cast<size_t>(cell_idx) < spatial_grid.cell_offsets.size() - 1) {
+      // Iterate over elements in this cell using CSR-style access
+      const unsigned* elem_begin = spatial_grid.cell_begin(cell_idx);
+      const unsigned* elem_end = spatial_grid.cell_end(cell_idx);
+      for (const unsigned* ep = elem_begin; ep != elem_end; ++ep) {
+        if (test_element(*ep)) {
+          return std::make_pair(nodeIds, parCoords);
+        }
+      }
+    }
+    // Point not in grid or not found in cell - return not found
+    return std::make_pair(
+      std::array<unsigned, 4>{invalidId, invalidId, invalidId, invalidId},
+      std::array<double, 3>{0.0, 0.0, 0.0}
+    );
+  }
+
+  // Fallback: brute force search through chunks (used if grid not built)
   std::vector<unsigned> possibleChunks;
   for (unsigned c = 0; c < selectedChunks.size(); c++) {
     if (selectedChunks[c] >= chunkBboxes.size()) continue;
@@ -592,42 +892,16 @@ HDF5UnstructuredTemperatureSource::find_element_point_is_in(
       possibleChunks.push_back(c);
     }
   }
-  
-  // Search elements in possible chunks
+
   for (auto c : possibleChunks) {
     if (c + 1 >= elemOffsets.size()) continue;
-    for (unsigned e = elemOffsets[c]; e < elemOffsets[c+1]; e++) {
-      if (e >= elemBboxes.size()) continue;
-      if (point_in_bbox(pt, elemBboxes[e])) {
-        std::vector<std::vector<double>> tetCoords(4, std::vector<double>(DIM));
-        
-        // Validate array bounds before accessing
-        bool validElement = true;
-        for (unsigned n = 0; n < NODES_PER_ELEM; n++) {
-          unsigned localNodeId = elemNode(e, n);
-          if (c >= nodeOffsets.size() - 1) {
-            validElement = false;
-            break;
-          }
-          nodeIds[n] = localNodeId + nodeOffsets[c];
-          for (unsigned d = 0; d < DIM; d++) {
-            tetCoords[n][d] = nodeCoords(nodeIds[n], d);
-          }
-        }
-        
-        if (!validElement) continue;
-        
-        parCoords = get_parametric_coordinates_of_point(tetCoords, pt);
-        
-        // Check if point is inside tetrahedron
-        if (parCoords[0] > -tol && parCoords[1] > -tol && parCoords[2] > -tol && 
-            1.0 - parCoords[0] - parCoords[1] - parCoords[2] > -tol) {
-          return std::make_pair(nodeIds, parCoords);
-        }
+    for (unsigned e = elemOffsets[c]; e < elemOffsets[c + 1]; e++) {
+      if (test_element(e)) {
+        return std::make_pair(nodeIds, parCoords);
       }
     }
   }
-  
+
   // Point not found in any element
   return std::make_pair(
     std::array<unsigned, 4>{invalidId, invalidId, invalidId, invalidId},
@@ -637,7 +911,7 @@ HDF5UnstructuredTemperatureSource::find_element_point_is_in(
 
 /* ---------------------------------------------------------------------- */
 
-std::vector<std::vector<double>> HDF5UnstructuredTemperatureSource::build_elem_bounding_boxes(
+std::vector<std::array<double, 6>> HDF5UnstructuredTemperatureSource::build_elem_bounding_boxes(
   unsigned nChunks,
   const std::vector<unsigned>& nodeOffsets,
   const std::vector<unsigned>& elemOffsets,
@@ -646,14 +920,21 @@ std::vector<std::vector<double>> HDF5UnstructuredTemperatureSource::build_elem_b
 {
   constexpr double maxVal = std::numeric_limits<double>::max();
   constexpr double minVal = std::numeric_limits<double>::lowest();
-  
-  std::vector<std::vector<double>> result;
-  
+
+  // Pre-calculate total element count and reserve to avoid reallocations
+  size_t totalElems = 0;
+  for (unsigned c = 0; c < nChunks; c++) {
+    totalElems += elemOffsets[c+1] - elemOffsets[c];
+  }
+
+  std::vector<std::array<double, 6>> result;
+  result.reserve(totalElems);
+
   for (unsigned c = 0; c < nChunks; c++) {
     for (unsigned e = elemOffsets[c]; e < elemOffsets[c+1]; e++) {
       std::array<double, 3> bmin{maxVal, maxVal, maxVal};
       std::array<double, 3> bmax{minVal, minVal, minVal};
-      
+
       for (unsigned n = 0; n < NODES_PER_ELEM; n++) {
         for (unsigned d = 0; d < DIM; d++) {
           const double coordVal = nodeCoords(elemNode(e, n) + nodeOffsets[c], d);
@@ -661,12 +942,143 @@ std::vector<std::vector<double>> HDF5UnstructuredTemperatureSource::build_elem_b
           bmax[d] = std::fmax(bmax[d], coordVal);
         }
       }
-      
+
       result.push_back({bmin[0], bmin[1], bmin[2], bmax[0], bmax[1], bmax[2]});
     }
   }
-  
+
   return result;
+}
+
+/* ---------------------------------------------------------------------- */
+
+void HDF5UnstructuredTemperatureSource::build_spatial_grid(double target_cell_size)
+{
+  spatial_grid.valid = false;
+
+  if (elem_bboxes.empty()) return;
+
+  // Find overall bounds from element bounding boxes
+  constexpr double maxVal = std::numeric_limits<double>::max();
+  constexpr double minVal = std::numeric_limits<double>::lowest();
+  std::array<double, 3> domain_min{maxVal, maxVal, maxVal};
+  std::array<double, 3> domain_max{minVal, minVal, minVal};
+
+  for (const auto& bbox : elem_bboxes) {
+    for (unsigned d = 0; d < DIM; d++) {
+      domain_min[d] = std::fmin(domain_min[d], bbox[d]);
+      domain_max[d] = std::fmax(domain_max[d], bbox[d + 3]);
+    }
+  }
+
+  // Add small padding to avoid edge cases
+  for (unsigned d = 0; d < DIM; d++) {
+    double pad = target_cell_size * 0.01;
+    domain_min[d] -= pad;
+    domain_max[d] += pad;
+  }
+
+  // Compute grid dimensions
+  spatial_grid.origin = domain_min;
+  for (unsigned d = 0; d < DIM; d++) {
+    double extent = domain_max[d] - domain_min[d];
+    spatial_grid.dims[d] = std::max(1u, static_cast<unsigned>(std::ceil(extent / target_cell_size)));
+    spatial_grid.cell_size[d] = extent / spatial_grid.dims[d];
+  }
+
+  size_t total_cells = static_cast<size_t>(spatial_grid.dims[0]) *
+                       spatial_grid.dims[1] * spatial_grid.dims[2];
+
+  // Build element-to-chunk mapping for O(1) chunk lookup
+  spatial_grid.elem_to_chunk.resize(elem_bboxes.size());
+  for (unsigned c = 0; c < elem_offsets.size() - 1; c++) {
+    for (unsigned e = elem_offsets[c]; e < elem_offsets[c + 1]; e++) {
+      spatial_grid.elem_to_chunk[e] = c;
+    }
+  }
+
+  // Lambda to compute cell range for an element's bounding box
+  auto get_cell_range = [&](const std::array<double, 6>& bbox,
+                            int& ix_min, int& iy_min, int& iz_min,
+                            int& ix_max, int& iy_max, int& iz_max) {
+    ix_min = static_cast<int>((bbox[0] - spatial_grid.origin[0]) / spatial_grid.cell_size[0]);
+    iy_min = static_cast<int>((bbox[1] - spatial_grid.origin[1]) / spatial_grid.cell_size[1]);
+    iz_min = static_cast<int>((bbox[2] - spatial_grid.origin[2]) / spatial_grid.cell_size[2]);
+    ix_max = static_cast<int>((bbox[3] - spatial_grid.origin[0]) / spatial_grid.cell_size[0]);
+    iy_max = static_cast<int>((bbox[4] - spatial_grid.origin[1]) / spatial_grid.cell_size[1]);
+    iz_max = static_cast<int>((bbox[5] - spatial_grid.origin[2]) / spatial_grid.cell_size[2]);
+    ix_min = std::max(0, ix_min);
+    iy_min = std::max(0, iy_min);
+    iz_min = std::max(0, iz_min);
+    ix_max = std::min(static_cast<int>(spatial_grid.dims[0]) - 1, ix_max);
+    iy_max = std::min(static_cast<int>(spatial_grid.dims[1]) - 1, iy_max);
+    iz_max = std::min(static_cast<int>(spatial_grid.dims[2]) - 1, iz_max);
+  };
+
+  // === CSR-style flat storage: two-pass approach ===
+
+  // Pass 1: Count elements per cell
+  std::vector<size_t> cell_counts(total_cells, 0);
+  for (unsigned e = 0; e < elem_bboxes.size(); e++) {
+    int ix_min, iy_min, iz_min, ix_max, iy_max, iz_max;
+    get_cell_range(elem_bboxes[e], ix_min, iy_min, iz_min, ix_max, iy_max, iz_max);
+
+    for (int iz = iz_min; iz <= iz_max; iz++) {
+      for (int iy = iy_min; iy <= iy_max; iy++) {
+        for (int ix = ix_min; ix <= ix_max; ix++) {
+          size_t cell_idx = ix + iy * spatial_grid.dims[0] +
+                            iz * spatial_grid.dims[0] * spatial_grid.dims[1];
+          cell_counts[cell_idx]++;
+        }
+      }
+    }
+  }
+
+  // Build prefix sum to get offsets
+  spatial_grid.cell_offsets.resize(total_cells + 1);
+  spatial_grid.cell_offsets[0] = 0;
+  for (size_t i = 0; i < total_cells; i++) {
+    spatial_grid.cell_offsets[i + 1] = spatial_grid.cell_offsets[i] + cell_counts[i];
+  }
+
+  // Allocate flat element array
+  size_t total_refs = spatial_grid.cell_offsets[total_cells];
+  spatial_grid.cell_elements.resize(total_refs);
+
+  // Pass 2: Fill the flat array (reuse cell_counts as write positions)
+  std::fill(cell_counts.begin(), cell_counts.end(), 0);
+  for (unsigned e = 0; e < elem_bboxes.size(); e++) {
+    int ix_min, iy_min, iz_min, ix_max, iy_max, iz_max;
+    get_cell_range(elem_bboxes[e], ix_min, iy_min, iz_min, ix_max, iy_max, iz_max);
+
+    for (int iz = iz_min; iz <= iz_max; iz++) {
+      for (int iy = iy_min; iy <= iy_max; iy++) {
+        for (int ix = ix_min; ix <= ix_max; ix++) {
+          size_t cell_idx = ix + iy * spatial_grid.dims[0] +
+                            iz * spatial_grid.dims[0] * spatial_grid.dims[1];
+          size_t write_pos = spatial_grid.cell_offsets[cell_idx] + cell_counts[cell_idx];
+          spatial_grid.cell_elements[write_pos] = e;
+          cell_counts[cell_idx]++;
+        }
+      }
+    }
+  }
+
+  spatial_grid.valid = true;
+
+  if (universe->me == 0) {
+    size_t max_per_cell = 0;
+    for (size_t i = 0; i < total_cells; i++) {
+      max_per_cell = std::max(max_per_cell, spatial_grid.cell_count(i));
+    }
+    // Memory: offsets array + elements array + elem_to_chunk
+    size_t grid_mem_kb = (spatial_grid.cell_offsets.size() * sizeof(size_t) +
+                          spatial_grid.cell_elements.size() * sizeof(unsigned) +
+                          spatial_grid.elem_to_chunk.size() * sizeof(unsigned)) / 1024;
+    fprintf(screen, "  Spatial grid: %u×%u×%u cells, %.1f elements/cell avg, %zu max, %zu KB\n",
+            spatial_grid.dims[0], spatial_grid.dims[1], spatial_grid.dims[2],
+            static_cast<double>(total_refs) / total_cells, max_per_cell, grid_mem_kb);
+  }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -694,12 +1106,12 @@ bool HDF5UnstructuredTemperatureSource::all_temperatures_below_threshold(double 
 
 /* ---------------------------------------------------------------------- */
 
-double HDF5UnstructuredTemperatureSource::get_temperature_at_site(int site_index, double time)
+void HDF5UnstructuredTemperatureSource::prepare_for_timestep(double time)
 {
   if (!source_initialized) {
     error->all(FLERR, "Temperature source not initialized");
   }
-  
+
   // Check if we need to load new layer data
   constexpr double tol = 5.0 * std::numeric_limits<double>::epsilon();
   if (std::fabs(time - current_time) / (std::fabs(time) + tol) > tol) {
@@ -707,64 +1119,60 @@ double HDF5UnstructuredTemperatureSource::get_temperature_at_site(int site_index
     if (currentLayer != active_layer) {
       load_layer(currentLayer);
       active_layer = currentLayer;
-      cache_valid = false;  // Invalidate cache when layer changes
+      cache_valid = false;
+      nodal_cache_valid = false;
+      site_intervals_for_layer = std::numeric_limits<unsigned>::max();
     }
     current_time = time;
   }
-  
-  // Build cache if needed
+
+  // Build element cache if needed
   if (!cache_valid) {
     build_site_element_cache();
   }
-  
-  // Get cached element for this site
-  const ElementCache& cache = get_cached_element(site_index);
-  
-  if (!cache.valid) {
-    return default_temp;  // Site not in any element
+
+  // Once the element cache exists, compute per-site thermal intervals for
+  // the current layer.  These supersede the per-node layer_thermal_intervals
+  // in get_next_time_with_temperature and yield tight, site-accurate skip
+  // windows instead of node-bound unions.
+  if (site_intervals_for_layer != active_layer) {
+    compute_site_thermal_intervals(threshold_temp);
   }
-  
-  // Get temperatures at the four tetrahedral nodes
-  std::array<double, NODES_PER_ELEM> nodalVals;
-  for (unsigned n = 0; n < NODES_PER_ELEM; n++) {
-    const unsigned nodeIdx = cache.nodeIndices[n];
-    
-    const auto timeIter = times.row_iterator(nodeIdx);
-    const auto tempIter = temperatures.row_iterator(nodeIdx);
-    
-    // Check time bounds
-    if (time < *timeIter || time > timeIter[dataCounts[nodeIdx] - 1]) {
-      return default_temp;
-    }
-    
-    // Linear interpolation in time
-    auto lower = std::lower_bound(timeIter, timeIter + dataCounts[nodeIdx], time);
-    auto idx = std::distance(timeIter, lower);
-    idx = (idx == 0) ? 1 : idx;
-    
-    nodalVals[n] = tempIter[idx-1] + 
-                   (tempIter[idx] - tempIter[idx-1]) / 
-                   (timeIter[idx] - timeIter[idx-1]) * 
-                   (time - timeIter[idx-1]);
-  }
-  
-  // Tetrahedral interpolation using cached barycentric coordinates
-  return nodalVals[0] + 
-         cache.weights[0] * (nodalVals[1] - nodalVals[0]) + 
-         cache.weights[1] * (nodalVals[2] - nodalVals[0]) + 
-         cache.weights[2] * (nodalVals[3] - nodalVals[0]);
+
+  // Precompute nodal temperatures for this timestep
+  precompute_nodal_temperatures(time);
+}
+
+/* ---------------------------------------------------------------------- */
+
+double HDF5UnstructuredTemperatureSource::get_temperature_at_site(int site_index, double time)
+{
+  // Ensure caches are ready (for standalone calls)
+  prepare_for_timestep(time);
+
+  // Use fast path
+  return get_temperature_at_site_fast(site_index);
 }
 
 /* ---------------------------------------------------------------------- */
 
 void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
 {
+  auto start_time = std::chrono::high_resolution_clock::now();
+  size_t mem_before = get_memory_usage_kb();
+
   // Get total number of sites from app
   int nlocal = app->nlocal;
-  
+
+  if (universe->me == 0) {
+    size_t cache_size_mb = nlocal * sizeof(ElementCache) / 1024 / 1024;
+    fprintf(screen, "  [MEM] Building site cache for %d sites (%zu MB), current: %zu MB\n",
+            nlocal, cache_size_mb, mem_before / 1024);
+  }
+
   // Resize cache to match number of local sites
   site_element_cache.resize(nlocal);
-  
+
   // For each site, find its containing element and cache the result
   for (int i = 0; i < nlocal; i++) {
     // Get site coordinates 
@@ -785,23 +1193,442 @@ void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
     site_element_cache[i].weights = result.second;
     site_element_cache[i].valid = (result.first[0] != std::numeric_limits<unsigned>::max());
   }
-  
+
+  // Collect unique node indices from valid cached elements
+  // This allows precompute_nodal_temperatures to skip unused nodes
+  std::set<unsigned> unique_nodes;
+  for (int i = 0; i < nlocal; i++) {
+    if (site_element_cache[i].valid) {
+      for (int j = 0; j < 4; j++) {
+        unique_nodes.insert(site_element_cache[i].nodeIndices[j]);
+      }
+    }
+  }
+  active_node_indices.assign(unique_nodes.begin(), unique_nodes.end());
+
+  // Build BFS-expanded node sets used to keep the per-step interpolation
+  // and smoothing tight. Requires adjacency; safe to skip otherwise.
+  if (nodal_smooth_enabled && nodal_adjacency_valid) {
+    build_smooth_node_sets();
+  } else {
+    smooth_interp_indices.clear();
+    smooth_update_indices.clear();
+  }
+
   cache_valid = true;
-  
+
+  auto end_time = std::chrono::high_resolution_clock::now();
+  double cache_build_time = std::chrono::duration<double>(end_time - start_time).count();
+
   if (universe->me == 0) {
-    fprintf(screen, "  Built element cache for %d sites\n", nlocal);
+    size_t mem_after = get_memory_usage_kb();
+    fprintf(screen, "  Built element cache for %d sites in %.3f s\n", nlocal, cache_build_time);
+    fprintf(screen, "  Active nodes: %zu / %zu (%.1f%% of loaded nodes)\n",
+            active_node_indices.size(), dataCounts.size(),
+            100.0 * active_node_indices.size() / dataCounts.size());
+    fprintf(screen, "  [MEM] After site cache: %zu MB (delta: %+zd MB)\n",
+            mem_after / 1024, (long)(mem_after - mem_before) / 1024);
   }
 }
 
 /* ---------------------------------------------------------------------- */
 
-const HDF5UnstructuredTemperatureSource::ElementCache& 
+const HDF5UnstructuredTemperatureSource::ElementCache&
 HDF5UnstructuredTemperatureSource::get_cached_element(int site_index) const
 {
   if (site_index < 0 || site_index >= static_cast<int>(site_element_cache.size())) {
     error->all(FLERR, "Invalid site index in get_cached_element");
   }
   return site_element_cache[site_index];
+}
+
+/* ---------------------------------------------------------------------- */
+
+void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double time) const
+{
+  // Skip if already computed for this time
+  constexpr double tol = 1e-12;
+  if (nodal_cache_valid && std::fabs(time - cached_nodal_time) < tol) {
+    return;
+  }
+
+  // Performance diagnostics
+  static int precompute_call_count = 0;
+  static double t_total = 0.0;
+  static size_t total_nodes_processed = 0, total_nodes_interpolated = 0;
+  precompute_call_count++;
+  auto t_start = std::chrono::high_resolution_clock::now();
+
+  const size_t num_nodes = dataCounts.size();
+  cached_nodal_temps.resize(num_nodes);
+  constexpr unsigned LINEAR_SEARCH_THRESHOLD = 32;
+
+  size_t nodes_interpolated = 0;
+
+  // Pick the tightest interpolation set that still satisfies downstream reads:
+  //   • smoothing on + BFS sets built → (K+1)-hop expansion of active set
+  //   • smoothing off                → active set (tet nodes of cached sites)
+  //   • otherwise (cache not yet built) → all loaded nodes
+  const std::vector<unsigned>* subset = nullptr;
+  if (nodal_smooth_enabled && !smooth_interp_indices.empty()) {
+    subset = &smooth_interp_indices;
+  } else if (!nodal_smooth_enabled && !active_node_indices.empty()) {
+    subset = &active_node_indices;
+  }
+  const size_t num_to_process = subset ? subset->size() : num_nodes;
+
+  for (size_t i = 0; i < num_to_process; i++) {
+    const size_t nodeIdx = subset ? (*subset)[i] : i;
+    const unsigned count = dataCounts[nodeIdx];
+    const auto timeIter = times.row_iterator(nodeIdx);
+    const auto tempIter = temperatures.row_iterator(nodeIdx);
+
+    // Check time bounds - use default_temp if out of range
+    if (time < *timeIter || time > timeIter[count - 1]) {
+      cached_nodal_temps[nodeIdx] = default_temp;
+      continue;
+    }
+
+    nodes_interpolated++;
+
+    // Find time index - use linear search for small arrays, binary for large
+    unsigned idx;
+    if (count <= LINEAR_SEARCH_THRESHOLD) {
+      idx = 1;
+      while (idx < count && timeIter[idx] < time) {
+        ++idx;
+      }
+    } else {
+      auto lower = std::lower_bound(timeIter, timeIter + count, time);
+      idx = std::distance(timeIter, lower);
+      if (idx == 0) idx = 1;
+    }
+
+    // Linear interpolation in time
+    cached_nodal_temps[nodeIdx] = tempIter[idx-1] +
+                                  (tempIter[idx] - tempIter[idx-1]) /
+                                  (timeIter[idx] - timeIter[idx-1]) *
+                                  (time - timeIter[idx-1]);
+  }
+
+  auto t_end = std::chrono::high_resolution_clock::now();
+  double elapsed = std::chrono::duration<double>(t_end - t_start).count();
+  t_total += elapsed;
+  total_nodes_processed += num_to_process;
+  total_nodes_interpolated += nodes_interpolated;
+
+  // Print diagnostics every 100 calls
+  if (precompute_call_count % 100 == 0 && universe->me == 0) {
+    fprintf(screen, "  [PRECOMPUTE] After %d calls: total=%.3f s (%.3f ms/call), "
+            "active: %zu/%zu nodes (%.1f%%), interpolated: %zu (%.1f%%)\n",
+            precompute_call_count, t_total, 1000.0*t_total/precompute_call_count,
+            num_to_process, num_nodes, 100.0*num_to_process/num_nodes,
+            total_nodes_interpolated/precompute_call_count,
+            100.0*total_nodes_interpolated/total_nodes_processed);
+  }
+
+  // Apply mesh-Laplacian smoothing on the FEA node graph before any
+  // barycentric query sees the result. Adjacency was built in load_layer.
+  if (nodal_smooth_enabled) smooth_nodal_temps();
+
+  cached_nodal_time = time;
+  nodal_cache_valid = true;
+}
+
+/* ----------------------------------------------------------------------
+   Enable anisotropic mesh-Laplacian smoothing. Stores params and clears
+   the adjacency-valid flag so the CSR is rebuilt on the next load_layer.
+   If a layer is already loaded, build the adjacency immediately so the
+   very next precompute_nodal_temperatures call finds it ready.
+------------------------------------------------------------------------- */
+
+void HDF5UnstructuredTemperatureSource::enable_nodal_smoothing(
+    double sigma_xy, double sigma_z, int passes, double alpha)
+{
+  nodal_sigma_xy = sigma_xy;
+  nodal_sigma_z  = sigma_z;
+  nodal_passes   = passes;
+  nodal_alpha    = alpha;
+  nodal_smooth_enabled = true;
+  nodal_adjacency_valid = false;
+  smooth_interp_indices.clear();
+  smooth_update_indices.clear();
+
+  // Nodal smoothing is rank-local and relies on the chunk-load pad for
+  // interior-accurate values near subdomain boundaries. Each pass widens
+  // the effective support by one tet-edge; the pad gives ~one tet hop of
+  // halo, so at passes>=4 boundary nodes near the subdomain seam start
+  // seeing staler values. Warn the user to bump grid_cell_size_multiplier
+  // or implement node-halo exchange in that regime.
+  if (passes >= 4 && universe->me == 0) {
+    fprintf(screen,
+      "WARNING: nodal_smooth passes=%d exceeds the one-hop halo implied by "
+      "the default chunk-load pad; near-subdomain-boundary nodes may see "
+      "stale neighbors. Bump grid_cell_size_multiplier or keep passes <= 3 "
+      "for accurate boundary behavior.\n", passes);
+  }
+
+  // If elemNode / nodeCoords are already populated from a prior load_layer,
+  // build adjacency now so the caller doesn't need to reload the layer.
+  if (!dataCounts.empty()) {
+    build_nodal_adjacency_weighted();
+    // If the site cache is already built, we can also compute the BFS
+    // expansions right away. Otherwise they'll be built lazily in
+    // build_site_element_cache on the next prepare_for_timestep.
+    if (cache_valid) build_smooth_node_sets();
+  }
+}
+
+/* ----------------------------------------------------------------------
+   Build symmetric edge-weighted CSR node adjacency from the loaded tet
+   connectivity (elemNode) and node coordinates. Weight per edge:
+
+     w(i,j) = exp( -( (Δx² + Δy²)/(2 σ_xy²)  +  Δz²/(2 σ_z²) ) )
+
+   where Δ is the edge vector expressed in lattice units (physical / dx).
+   Duplicate edges arising from tets sharing a face have their weights
+   summed, matching build_node_adjacency_aniso in the Python prototype.
+------------------------------------------------------------------------- */
+
+void HDF5UnstructuredTemperatureSource::build_nodal_adjacency_weighted()
+{
+  auto t_start = std::chrono::high_resolution_clock::now();
+
+  const unsigned n_nodes = static_cast<unsigned>(dataCounts.size());
+  const unsigned n_elems = elem_offsets.empty() ? 0u : elem_offsets.back();
+
+  nbr_offsets.assign(n_nodes + 1, 0u);
+  nbr_indices.clear();
+  nbr_weights.clear();
+  nodal_adjacency_valid = false;
+
+  if (n_nodes == 0 || n_elems == 0) {
+    nodal_adjacency_valid = true;
+    return;
+  }
+
+  const double two_sxy2 = 2.0 * nodal_sigma_xy * nodal_sigma_xy;
+  const double two_sz2  = 2.0 * nodal_sigma_z  * nodal_sigma_z;
+  const double inv_dx   = 1.0 / dx;
+
+  // Collect undirected edges (a < b) with weights. Each tet contributes
+  // 6 edges; an interior face-shared edge will appear once per incident
+  // tet and the weights will be summed via sort+merge below.
+  std::vector<std::tuple<unsigned, unsigned, double>> edges;
+  edges.reserve(static_cast<size_t>(n_elems) * 6);
+
+  static constexpr int PAIRS[6][2] = {
+      {0,1},{0,2},{0,3},{1,2},{1,3},{2,3}};
+
+  for (unsigned e = 0; e < n_elems; e++) {
+    unsigned n[4];
+    for (int k = 0; k < 4; k++) n[k] = elemNode(e, k);
+
+    for (int p = 0; p < 6; p++) {
+      unsigned a = n[PAIRS[p][0]];
+      unsigned b = n[PAIRS[p][1]];
+      if (a == b) continue;
+      unsigned i = std::min(a, b);
+      unsigned j = std::max(a, b);
+
+      const double dxe = (nodeCoords(j, 0) - nodeCoords(i, 0)) * inv_dx;
+      const double dye = (nodeCoords(j, 1) - nodeCoords(i, 1)) * inv_dx;
+      const double dze = (nodeCoords(j, 2) - nodeCoords(i, 2)) * inv_dx;
+      const double expo = (dxe*dxe + dye*dye) / two_sxy2 + dze*dze / two_sz2;
+      edges.emplace_back(i, j, std::exp(-expo));
+    }
+  }
+
+  std::sort(edges.begin(), edges.end(),
+    [](const std::tuple<unsigned,unsigned,double>& a,
+       const std::tuple<unsigned,unsigned,double>& b) {
+      if (std::get<0>(a) != std::get<0>(b)) return std::get<0>(a) < std::get<0>(b);
+      return std::get<1>(a) < std::get<1>(b);
+    });
+
+  // Merge duplicate edges by summing weights.
+  size_t merged = 0;
+  for (size_t k = 0; k < edges.size(); ) {
+    size_t kk = k + 1;
+    double wsum = std::get<2>(edges[k]);
+    while (kk < edges.size() &&
+           std::get<0>(edges[kk]) == std::get<0>(edges[k]) &&
+           std::get<1>(edges[kk]) == std::get<1>(edges[k])) {
+      wsum += std::get<2>(edges[kk]);
+      ++kk;
+    }
+    edges[merged] = std::make_tuple(std::get<0>(edges[k]),
+                                    std::get<1>(edges[k]),
+                                    wsum);
+    ++merged;
+    k = kk;
+  }
+  edges.resize(merged);
+
+  // Count degree per node (undirected → add to both endpoints).
+  for (const auto& t : edges) {
+    ++nbr_offsets[std::get<0>(t) + 1];
+    ++nbr_offsets[std::get<1>(t) + 1];
+  }
+  for (unsigned i = 0; i < n_nodes; i++) nbr_offsets[i + 1] += nbr_offsets[i];
+
+  const size_t total_dir = nbr_offsets[n_nodes];
+  nbr_indices.resize(total_dir);
+  nbr_weights.resize(total_dir);
+
+  std::vector<unsigned> cursor(n_nodes, 0u);
+  for (const auto& t : edges) {
+    unsigned i = std::get<0>(t);
+    unsigned j = std::get<1>(t);
+    double   w = std::get<2>(t);
+    size_t pi = nbr_offsets[i] + cursor[i]++;
+    size_t pj = nbr_offsets[j] + cursor[j]++;
+    nbr_indices[pi] = j; nbr_weights[pi] = w;
+    nbr_indices[pj] = i; nbr_weights[pj] = w;
+  }
+
+  nodal_smooth_buffer.assign(n_nodes, 0.0);
+  nodal_adjacency_valid = true;
+
+  auto t_end = std::chrono::high_resolution_clock::now();
+  if (universe->me == 0) {
+    double elapsed = std::chrono::duration<double>(t_end - t_start).count();
+    size_t edge_bytes = nbr_indices.size() * (sizeof(unsigned) + sizeof(double))
+                      + nbr_offsets.size() * sizeof(unsigned);
+    fprintf(screen,
+      "  Nodal adjacency: %u nodes, %zu directed edges, avg deg %.1f "
+      "(%.1f MB, built in %.3f s)\n",
+      n_nodes, total_dir,
+      n_nodes ? static_cast<double>(total_dir) / n_nodes : 0.0,
+      edge_bytes / (1024.0 * 1024.0), elapsed);
+  }
+}
+
+/* ----------------------------------------------------------------------
+   Build (K+1)-hop and K-hop BFS expansions of active_node_indices over
+   the node adjacency. The K+1 set is the read domain during smoothing;
+   the K set is the write domain. Reads at any update node go one hop
+   outside the update set, which always lands inside the interp set so
+   every read is a freshly-interpolated value.
+------------------------------------------------------------------------- */
+
+void HDF5UnstructuredTemperatureSource::build_smooth_node_sets() const
+{
+  smooth_interp_indices.clear();
+  smooth_update_indices.clear();
+
+  if (!nodal_smooth_enabled || !nodal_adjacency_valid) return;
+  if (active_node_indices.empty()) return;
+  if (nodal_passes <= 0) return;
+
+  auto t_start = std::chrono::high_resolution_clock::now();
+
+  const unsigned n_nodes = static_cast<unsigned>(dataCounts.size());
+  constexpr uint8_t UNSEEN = 255;
+  std::vector<uint8_t> depth(n_nodes, UNSEEN);
+
+  std::vector<unsigned> frontier;
+  frontier.reserve(active_node_indices.size());
+  for (unsigned v : active_node_indices) {
+    if (v < n_nodes && depth[v] == UNSEEN) {
+      depth[v] = 0;
+      frontier.push_back(v);
+    }
+  }
+
+  const int max_depth = nodal_passes + 1;   // read ring
+  std::vector<unsigned> next;
+  next.reserve(frontier.size());
+  for (int d = 1; d <= max_depth; d++) {
+    next.clear();
+    const uint8_t dd = static_cast<uint8_t>(d);
+    for (unsigned u : frontier) {
+      const unsigned beg = nbr_offsets[u];
+      const unsigned end = nbr_offsets[u + 1];
+      for (unsigned k = beg; k < end; k++) {
+        const unsigned v = nbr_indices[k];
+        if (depth[v] == UNSEEN) {
+          depth[v] = dd;
+          next.push_back(v);
+        }
+      }
+    }
+    frontier.swap(next);
+    if (frontier.empty()) break;
+  }
+
+  const uint8_t update_max = static_cast<uint8_t>(nodal_passes);
+  for (unsigned i = 0; i < n_nodes; i++) {
+    if (depth[i] == UNSEEN) continue;
+    smooth_interp_indices.push_back(i);
+    if (depth[i] <= update_max) smooth_update_indices.push_back(i);
+  }
+
+  auto t_end = std::chrono::high_resolution_clock::now();
+  if (universe->me == 0) {
+    double elapsed = std::chrono::duration<double>(t_end - t_start).count();
+    fprintf(screen,
+      "  Nodal BFS expansion: active=%zu, update(K=%d)=%zu, "
+      "interp(K+1=%d)=%zu / %u loaded (%.1f%%); built in %.3f s\n",
+      active_node_indices.size(),
+      nodal_passes, smooth_update_indices.size(),
+      max_depth, smooth_interp_indices.size(),
+      n_nodes,
+      n_nodes ? 100.0 * smooth_interp_indices.size() / n_nodes : 0.0,
+      elapsed);
+  }
+}
+
+/* ----------------------------------------------------------------------
+   K-pass anisotropic Laplacian smoothing on cached_nodal_temps.
+
+     T_new[i] = (1 - alpha) T_old[i]
+              + alpha * (T_old[i] + Σ_j w_ij T_old[j]) / (1 + Σ_j w_ij)
+
+   Double-buffered: writes into nodal_smooth_buffer, then swaps. Rank-local;
+   relies on the grid_cell_size_multiplier pad in load_layer for interior-
+   accurate values at subdomain boundaries (adequate for passes <= 3).
+
+   When smooth_update_indices is populated, the pass only writes entries in
+   the K-hop set and starts by copying cached_nodal_temps so that non-updated
+   entries carry forward unchanged across the swap. Reads at update nodes
+   reach the (K+1)-hop interp set, which was interpolated this step.
+------------------------------------------------------------------------- */
+
+void HDF5UnstructuredTemperatureSource::smooth_nodal_temps() const
+{
+  if (!nodal_adjacency_valid) return;
+  if (nodal_passes <= 0) return;
+
+  const size_t n_nodes = cached_nodal_temps.size();
+  if (n_nodes == 0) return;
+  // Nothing to smooth if no node has been claimed as "active" on this rank
+  // (e.g. a rank whose local sites all fell outside the thermal mesh). The
+  // smoothed values would never be read back through the site cache anyway.
+  if (smooth_update_indices.empty()) return;
+  if (nodal_smooth_buffer.size() != n_nodes) nodal_smooth_buffer.assign(n_nodes, 0.0);
+
+  const double alpha  = nodal_alpha;
+  const double one_ma = 1.0 - alpha;
+
+  for (int pass = 0; pass < nodal_passes; pass++) {
+    // Propagate non-updated entries forward unchanged through the swap.
+    nodal_smooth_buffer = cached_nodal_temps;
+    for (unsigned i : smooth_update_indices) {
+      const unsigned beg = nbr_offsets[i];
+      const unsigned end = nbr_offsets[i + 1];
+      double wsum = 1.0;
+      double tsum = cached_nodal_temps[i];
+      for (unsigned k = beg; k < end; k++) {
+        const double w = nbr_weights[k];
+        tsum += w * cached_nodal_temps[nbr_indices[k]];
+        wsum += w;
+      }
+      nodal_smooth_buffer[i] = one_ma * cached_nodal_temps[i]
+                             + alpha  * (tsum / wsum);
+    }
+    cached_nodal_temps.swap(nodal_smooth_buffer);
+  }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -815,15 +1642,32 @@ double HDF5UnstructuredTemperatureSource::get_next_time_with_temperature(double 
   // Find current layer
   unsigned current_layer = get_active_layer(current_time);
 
-  // Check if we have thermal intervals computed for this layer
-  if (current_layer >= layer_thermal_intervals.size()) {
-    return current_time;
-  }
-
-  // Check remaining intervals in current layer
-  for (const auto& interval : layer_thermal_intervals[current_layer]) {
-    if (interval.start_time > current_time) {
-      return interval.start_time;
+  // Prefer per-site intervals for the currently loaded layer when available.
+  // They are tight (computed from the true barycentric T_site) rather than
+  // the looser union bounds produced by the per-node scan.
+  if (site_intervals_for_layer == current_layer
+      && !current_layer_site_intervals.empty()) {
+    for (const auto& interval : current_layer_site_intervals) {
+      if (current_time >= interval.start_time && current_time <= interval.end_time) {
+        return current_time;
+      }
+      if (interval.start_time > current_time) {
+        return interval.start_time;
+      }
+    }
+  } else {
+    // Fall back to the node-level intervals (e.g., before the element
+    // cache has been built for this layer).
+    if (current_layer >= layer_thermal_intervals.size()) {
+      return current_time;
+    }
+    for (const auto& interval : layer_thermal_intervals[current_layer]) {
+      if (current_time >= interval.start_time && current_time <= interval.end_time) {
+        return current_time;
+      }
+      if (interval.start_time > current_time) {
+        return interval.start_time;
+      }
     }
   }
 
@@ -887,16 +1731,179 @@ void HDF5UnstructuredTemperatureSource::compute_thermal_intervals_for_layer(unsi
   
   // Merge overlapping intervals and store
   layer_thermal_intervals[layerIdx] = merge_overlapping_intervals(intervals);
-  
+
   if (universe->me == 0 && !layer_thermal_intervals[layerIdx].empty()) {
-    fprintf(screen, "  Layer %u: Found %zu thermal intervals\n", 
+    fprintf(screen, "  Layer %u: Found %zu thermal intervals\n",
             layerIdx, layer_thermal_intervals[layerIdx].size());
   }
 }
 
 /* ---------------------------------------------------------------------- */
 
-std::vector<HDF5UnstructuredTemperatureSource::ThermalInterval> 
+void HDF5UnstructuredTemperatureSource::compute_site_thermal_intervals(double threshold)
+{
+  current_layer_site_intervals.clear();
+  site_intervals_for_layer = std::numeric_limits<unsigned>::max();
+
+  if (!cache_valid || !app) return;
+
+  auto t_start = std::chrono::high_resolution_clock::now();
+
+  std::vector<ThermalInterval> raw;
+  raw.reserve(256);
+
+  const int nlocal = app->nlocal;
+  for (int i = 0; i < nlocal; i++) {
+    const ElementCache& cache = site_element_cache[i];
+    if (!cache.valid) continue;
+
+    const unsigned n0 = cache.nodeIndices[0];
+    const unsigned n1 = cache.nodeIndices[1];
+    const unsigned n2 = cache.nodeIndices[2];
+    const unsigned n3 = cache.nodeIndices[3];
+    const unsigned c0 = dataCounts[n0];
+    const unsigned c1 = dataCounts[n1];
+    const unsigned c2 = dataCounts[n2];
+    const unsigned c3 = dataCounts[n3];
+    if (c0 == 0 || c1 == 0 || c2 == 0 || c3 == 0) continue;
+
+    const auto t0 = times.row_iterator(n0);
+    const auto t1 = times.row_iterator(n1);
+    const auto t2 = times.row_iterator(n2);
+    const auto t3 = times.row_iterator(n3);
+    const auto T0 = temperatures.row_iterator(n0);
+    const auto T1 = temperatures.row_iterator(n1);
+    const auto T2 = temperatures.row_iterator(n2);
+    const auto T3 = temperatures.row_iterator(n3);
+
+    const double ww1 = cache.weights[0];
+    const double ww2 = cache.weights[1];
+    const double ww3 = cache.weights[2];
+    const double ww0 = 1.0 - ww1 - ww2 - ww3;
+
+    // The cached barycentric formula used by get_temperature_at_site_fast()
+    // is T_site = T0 + w1*(T1-T0) + w2*(T2-T0) + w3*(T3-T0).  Expanded:
+    //   T_site = (1 - w1 - w2 - w3)*T0 + w1*T1 + w2*T2 + w3*T3
+    //          = ww0*T0 + ww1*T1 + ww2*T2 + ww3*T3
+    // so the weights are a partition of unity and T_site is piecewise
+    // linear between the union of the four nodes' sample times.
+
+    // Per-node cursors: cursor points at the NEXT sample whose time is
+    // strictly greater than the current critical time.  Between calls we
+    // maintain T_j(t_crit) via linear interpolation at the last critical
+    // time.
+    unsigned i0 = 1, i1 = 1, i2 = 1, i3 = 1;
+
+    // Start at the max of the four nodes' first sample times so every
+    // node has data at t_crit; stop at the min of the four nodes' last
+    // sample times for the same reason.
+    double t_crit = std::max({t0[0], t1[0], t2[0], t3[0]});
+    const double t_end = std::min({t0[c0 - 1], t1[c1 - 1],
+                                   t2[c2 - 1], t3[c3 - 1]});
+    if (t_end <= t_crit) continue;
+
+    auto advance_cursor = [](unsigned& idx, unsigned count, auto ti, double t) {
+      while (idx < count - 1 && ti[idx] <= t) ++idx;
+    };
+    advance_cursor(i0, c0, t0, t_crit);
+    advance_cursor(i1, c1, t1, t_crit);
+    advance_cursor(i2, c2, t2, t_crit);
+    advance_cursor(i3, c3, t3, t_crit);
+
+    auto interp = [](auto ti, auto Ti, unsigned idx, double t) -> double {
+      // idx is such that ti[idx-1] <= t <= ti[idx]
+      const double t_lo = ti[idx - 1];
+      const double t_hi = ti[idx];
+      const double frac = (t - t_lo) / (t_hi - t_lo);
+      return Ti[idx - 1] + frac * (Ti[idx] - Ti[idx - 1]);
+    };
+
+    double T_prev = ww0 * interp(t0, T0, i0, t_crit)
+                  + ww1 * interp(t1, T1, i1, t_crit)
+                  + ww2 * interp(t2, T2, i2, t_crit)
+                  + ww3 * interp(t3, T3, i3, t_crit);
+    double t_prev = t_crit;
+    bool in_hot = (T_prev > threshold);
+    double hot_start = in_hot ? t_prev : 0.0;
+
+    while (t_crit < t_end) {
+      // Next critical time = smallest of the four nodes' next sample times.
+      double t_next = t_end;
+      if (i0 < c0 && t0[i0] < t_next) t_next = t0[i0];
+      if (i1 < c1 && t1[i1] < t_next) t_next = t1[i1];
+      if (i2 < c2 && t2[i2] < t_next) t_next = t2[i2];
+      if (i3 < c3 && t3[i3] < t_next) t_next = t3[i3];
+
+      const double T_cur = ww0 * interp(t0, T0, i0, t_next)
+                         + ww1 * interp(t1, T1, i1, t_next)
+                         + ww2 * interp(t2, T2, i2, t_next)
+                         + ww3 * interp(t3, T3, i3, t_next);
+
+      const bool cur_hot = (T_cur > threshold);
+      if (!in_hot && cur_hot) {
+        // Threshold crossing in [t_prev, t_next]; solve for exact crossing.
+        const double denom = T_cur - T_prev;
+        const double alpha = (threshold - T_prev) / denom;
+        hot_start = t_prev + alpha * (t_next - t_prev);
+        in_hot = true;
+      } else if (in_hot && !cur_hot) {
+        const double denom = T_cur - T_prev;
+        const double alpha = (threshold - T_prev) / denom;
+        const double hot_end = t_prev + alpha * (t_next - t_prev);
+        raw.emplace_back(hot_start, hot_end);
+        in_hot = false;
+      }
+
+      // Advance cursors whose sample time equals t_next.
+      if (i0 < c0 && t0[i0] == t_next) ++i0;
+      if (i1 < c1 && t1[i1] == t_next) ++i1;
+      if (i2 < c2 && t2[i2] == t_next) ++i2;
+      if (i3 < c3 && t3[i3] == t_next) ++i3;
+      t_prev = t_next;
+      T_prev = T_cur;
+      t_crit = t_next;
+    }
+
+    if (in_hot) {
+      raw.emplace_back(hot_start, t_end);
+    }
+  }
+
+  current_layer_site_intervals = merge_overlapping_intervals(raw);
+  site_intervals_for_layer = active_layer;
+
+  auto t_end = std::chrono::high_resolution_clock::now();
+  double elapsed = std::chrono::duration<double>(t_end - t_start).count();
+
+  // Aggregate per-rank counts so the diagnostic reflects the whole
+  // communicator, not just rank 0's subdomain.  Build time is reduced with
+  // MAX so the reported elapsed is the slowest rank (the actual bottleneck).
+  long local_site_count = static_cast<long>(current_layer_site_intervals.size());
+  long local_raw_count  = static_cast<long>(raw.size());
+  long local_node_count = (active_layer < layer_thermal_intervals.size())
+    ? static_cast<long>(layer_thermal_intervals[active_layer].size()) : 0L;
+  long total_site_count = 0, total_raw_count = 0, total_node_count = 0;
+  double max_elapsed = 0.0;
+  MPI_Reduce(&local_site_count, &total_site_count, 1, MPI_LONG, MPI_SUM, 0, world);
+  MPI_Reduce(&local_raw_count,  &total_raw_count,  1, MPI_LONG, MPI_SUM, 0, world);
+  MPI_Reduce(&local_node_count, &total_node_count, 1, MPI_LONG, MPI_SUM, 0, world);
+  MPI_Reduce(&elapsed, &max_elapsed, 1, MPI_DOUBLE, MPI_MAX, 0, world);
+
+  if (universe->me == 0) {
+    fprintf(screen, "  Layer %u: Found %ld site-level thermal intervals "
+            "(vs %ld node-level, %ld raw sites) across %d ranks in %.3f s\n",
+            active_layer,
+            total_site_count,
+            total_node_count,
+            total_raw_count,
+            universe->nprocs,
+            max_elapsed);
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+
+std::vector<HDF5UnstructuredTemperatureSource::ThermalInterval>
 HDF5UnstructuredTemperatureSource::merge_overlapping_intervals(const std::vector<ThermalInterval>& intervals) const
 {
   if (intervals.empty()) return {};
@@ -930,7 +1937,11 @@ HDF5UnstructuredTemperatureSource::merge_overlapping_intervals(const std::vector
 
 bool HDF5UnstructuredTemperatureSource::is_point_in_spparks_domain(double x, double y, double z) const
 {
-  // Convert SPPARKS domain bounds from lattice units to physical coordinates (meters)
+  // Use GLOBAL domain bounds — not subdomain — so thermal intervals are not
+  // contaminated by hot nodes outside the SPPARKS simulation box that sit
+  // inside the per-rank chunk-loading padding halo.  Such padding-only nodes
+  // never affect any SPPARKS site but, if included here, would make
+  // fast-forward conservatively refuse to skip quiet periods.
   double x_min = domain->boxxlo * dx;
   double x_max = domain->boxxhi * dx;
   double y_min = domain->boxylo * dx;

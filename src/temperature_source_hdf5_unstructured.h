@@ -20,9 +20,16 @@
 #include <vector>
 #include <string>
 #include <stdexcept>
+#include <chrono>
+
+#ifdef H5_HAVE_PARALLEL
+#include <mpi.h>
+#endif
 
 namespace HighFive {
   class File;
+  class Group;
+  class HyperSlab;
 }
 
 namespace SPPARKS_NS {
@@ -45,17 +52,17 @@ namespace SPPARKS_NS {
 template <typename T>
 class Array2D {
 public:
-  Array2D() {}
-  Array2D(unsigned ncols_, std::vector<T>&& data_) : 
+  Array2D() : ncols(0), nrows(0) {}
+  Array2D(unsigned ncols_, std::vector<T>&& data_) :
     ncols(ncols_), data(std::move(data_)) {
-    if (data.size() % ncols != 0) 
+    if (data.size() % ncols != 0)
       throw std::runtime_error("Data size must be multiple of number of columns");
     nrows = data.size() / ncols;
   }
 
   const T& operator()(unsigned i, unsigned j) const { return data[i*ncols + j]; }
   T& operator()(unsigned i, unsigned j) { return data[i*ncols + j]; }
-  
+
   auto row_iterator(unsigned i) { return data.begin() + i*ncols; }
   const auto row_iterator(unsigned i) const { return data.begin() + i*ncols; }
 
@@ -63,6 +70,54 @@ private:
   unsigned ncols;
   unsigned nrows;
   std::vector<T> data;
+};
+
+// CSR-style compressed 2D array — stores ragged rows without padding.
+// Each row i has (offsets[i+1] - offsets[i]) elements.
+template <typename T>
+class CompressedArray2D {
+public:
+  CompressedArray2D() {}
+
+  // Construct from rectangular Array2D data by compacting rows in-place.
+  // ncols_rect: number of columns in the source rectangular layout
+  // rect_data:  row-major rectangular data (nrows * ncols_rect elements)
+  // row_lengths: actual element count per row (dataCounts)
+  CompressedArray2D(unsigned ncols_rect,
+                    std::vector<T>&& rect_data,
+                    const std::vector<unsigned>& row_lengths)
+  {
+    unsigned nrows = row_lengths.size();
+    offsets.resize(nrows + 1);
+    offsets[0] = 0;
+    for (unsigned i = 0; i < nrows; i++)
+      offsets[i + 1] = offsets[i] + row_lengths[i];
+
+    size_t total = offsets[nrows];
+    data.resize(total);
+    for (unsigned i = 0; i < nrows; i++) {
+      std::copy(rect_data.begin() + i * ncols_rect,
+                rect_data.begin() + i * ncols_rect + row_lengths[i],
+                data.begin() + offsets[i]);
+    }
+  }
+
+  // Construct directly from flat CSR data (zero-copy move).
+  CompressedArray2D(std::vector<T>&& flat_data,
+                    std::vector<size_t>&& row_offsets)
+    : data(std::move(flat_data)), offsets(std::move(row_offsets)) {}
+
+  const T& operator()(unsigned i, unsigned j) const { return data[offsets[i] + j]; }
+  T& operator()(unsigned i, unsigned j) { return data[offsets[i] + j]; }
+
+  auto row_iterator(unsigned i) { return data.begin() + offsets[i]; }
+  const auto row_iterator(unsigned i) const { return data.begin() + offsets[i]; }
+
+  size_t total_elements() const { return data.size(); }
+
+private:
+  std::vector<T> data;
+  std::vector<size_t> offsets;
 };
 
 class HDF5UnstructuredTemperatureSource : public TemperatureSource {
@@ -87,6 +142,10 @@ public:
   bool all_temperatures_below_threshold(double time);
   double get_fast_forward_threshold() const { return threshold_temp; }
   double get_dx() const { return dx; }
+
+  // Optimization control flags
+  void set_use_spatial_grid(bool enable) { use_spatial_grid = enable; }
+  void set_use_element_cache(bool enable) { use_element_cache = enable; }
   
   // Time query interface implementation
   virtual bool supports_time_queries() const override { return true; }
@@ -102,7 +161,26 @@ public:
 
   // Site-based temperature access optimized for lattice
   virtual double get_temperature_at_site(int site_index, double time) override;
-  
+
+  // Enable anisotropic mesh-Laplacian smoothing of the per-node temperature
+  // field. Parameters are stored and the edge-weighted node adjacency is
+  // (re)built on the next load_layer call.
+  virtual void enable_nodal_smoothing(double sigma_xy, double sigma_z,
+                                      int passes, double alpha) override;
+
+  // High-performance batch temperature access:
+  // 1. Call prepare_for_timestep() once at start of timestep
+  // 2. Call get_temperature_at_site_fast() for each site (no redundant checks)
+  void prepare_for_timestep(double time);
+  inline double get_temperature_at_site_fast(int site_index) const {
+    const ElementCache& cache = site_element_cache[site_index];
+    if (!cache.valid) return default_temp;
+    return cached_nodal_temps[cache.nodeIndices[0]] +
+           cache.weights[0] * (cached_nodal_temps[cache.nodeIndices[1]] - cached_nodal_temps[cache.nodeIndices[0]]) +
+           cache.weights[1] * (cached_nodal_temps[cache.nodeIndices[2]] - cached_nodal_temps[cache.nodeIndices[0]]) +
+           cache.weights[2] * (cached_nodal_temps[cache.nodeIndices[3]] - cached_nodal_temps[cache.nodeIndices[0]]);
+  }
+
   // Element cache for performance optimization
   struct ElementCache {
     std::array<unsigned, 4> nodeIndices;
@@ -112,6 +190,35 @@ public:
     ElementCache() : nodeIndices{0,0,0,0}, weights{0.0,0.0,0.0}, valid(false) {}
   };
 
+protected:
+  // Data storage accessible to subclasses for CSR override
+  std::vector<unsigned> dataCounts;
+  CompressedArray2D<double> times;
+  CompressedArray2D<double> temperatures;
+
+  // HDF5 file handle
+  std::shared_ptr<HighFive::File> file;
+
+  // Parallel HDF5 state
+#ifdef H5_HAVE_PARALLEL
+  bool use_parallel_hdf5;
+#endif
+
+  // Virtual hook: read time/temperature arrays for the loaded node slices.
+  // Base implementation reads rectangular 2D datasets and compacts via CompressedArray2D.
+  // CSR subclass overrides to read flat 1D data + nodeOffsets directly.
+  virtual void read_time_temperature_data(
+      HighFive::Group& grp,
+      const std::vector<std::array<size_t, 2>>& nodeSlices);
+
+  // Hyperslab construction helpers (promoted from lambdas for subclass access)
+  static HighFive::HyperSlab build_hyperslab(
+      const std::vector<std::array<size_t, 2>>& slices,
+      const std::array<size_t, 2>& cols);
+
+  static HighFive::HyperSlab build_hyperslab_1d(
+      const std::vector<std::array<size_t, 2>>& slices);
+
 private:
   // File and coordinate parameters
   std::string filename;
@@ -119,72 +226,127 @@ private:
   double threshold_temp;  // Threshold temperature for fast-forward (K)
   double default_temp;    // Default/ambient temperature (K)
   int bounds_check_mode;  // 0 = exact, 1 = subvolume
+  double grid_cell_size_multiplier;  // Spatial grid cell size = dx * multiplier (default 50)
 
-  
-  // HDF5 file handle
-  std::shared_ptr<HighFive::File> file;
-  
+  // Optimization control flags
+  bool use_spatial_grid;   // Use spatial grid for element lookup (default: true)
+  bool use_element_cache;  // Use element cache per site (default: true)
+
   // Layer management
   std::vector<double> layerTimes;
   double current_time;
   unsigned active_layer;
-  
-  // Data storage for current layer
-  std::vector<unsigned> dataCounts;
-  Array2D<double> times;
-  Array2D<double> temperatures;
+
+  // Data storage for current layer (non-CSR members stay private)
   Array2D<unsigned> elemNode;
   Array2D<double> nodeCoords;
-  
+
   // Chunk data for spatial queries
-  std::vector<std::vector<double>> chunk_bboxes;
+  std::vector<std::array<double, 6>> chunk_bboxes;  // [xmin,ymin,zmin,xmax,ymax,zmax]
   std::vector<unsigned> selected_chunks;
   std::vector<unsigned> node_offsets;
   std::vector<unsigned> elem_offsets;
-  std::vector<std::vector<double>> elem_bboxes;
-  
+  std::vector<std::array<double, 6>> elem_bboxes;  // [xmin,ymin,zmin,xmax,ymax,zmax]
+
+  // Spatial acceleration grid for fast element lookup
+  // Uses CSR-style flat storage to minimize memory overhead
+  struct SpatialGrid {
+    std::vector<unsigned> cell_elements;       // Flat array of element indices (CSR data)
+    std::vector<size_t> cell_offsets;          // Offset into cell_elements for each cell (CSR offsets)
+    std::vector<unsigned> elem_to_chunk;       // Maps element index to chunk index
+    std::array<double, 3> origin;              // Grid origin (min corner)
+    std::array<double, 3> cell_size;           // Size of each cell
+    std::array<unsigned, 3> dims;              // Number of cells in each dimension
+    bool valid;
+
+    SpatialGrid() : valid(false) {}
+
+    // Convert point to cell index, returns -1 if outside grid
+    int point_to_cell(const std::array<double, 3>& pt) const {
+      if (!valid) return -1;
+      int ix = static_cast<int>((pt[0] - origin[0]) / cell_size[0]);
+      int iy = static_cast<int>((pt[1] - origin[1]) / cell_size[1]);
+      int iz = static_cast<int>((pt[2] - origin[2]) / cell_size[2]);
+      if (ix < 0 || ix >= static_cast<int>(dims[0]) ||
+          iy < 0 || iy >= static_cast<int>(dims[1]) ||
+          iz < 0 || iz >= static_cast<int>(dims[2])) {
+        return -1;
+      }
+      return ix + iy * dims[0] + iz * dims[0] * dims[1];
+    }
+
+    // Get elements in a cell (CSR-style access)
+    const unsigned* cell_begin(size_t cell_idx) const {
+      return cell_elements.data() + cell_offsets[cell_idx];
+    }
+    const unsigned* cell_end(size_t cell_idx) const {
+      return cell_elements.data() + cell_offsets[cell_idx + 1];
+    }
+    size_t cell_count(size_t cell_idx) const {
+      return cell_offsets[cell_idx + 1] - cell_offsets[cell_idx];
+    }
+  };
+  SpatialGrid spatial_grid;
+
+  // Timing statistics for performance monitoring
+  double total_layer_load_time;
+  int layer_load_count;
+
   // Helper methods from reference implementation
   void load_layer(unsigned layerIdx);
-  
+
   // Anonymous namespace functions (now as private methods)
   std::array<double, 3> get_parametric_coordinates_of_point(
-    const std::vector<std::vector<double>>& tet_coords, 
+    const std::vector<std::vector<double>>& tet_coords,
     const std::array<double, 3>& pt) const;
-  
+
   unsigned get_active_layer(double t) const;
-  
-  bool do_boxes_overlap(const std::vector<double>& b1, 
+
+  bool do_boxes_overlap(const std::vector<double>& b1,
                        const std::vector<double>& b2) const;
-  
-  bool point_in_bbox(const std::array<double, 3>& pt, 
-                    const std::vector<double>& bbox) const;
-  
-  std::pair<std::array<unsigned, 4>, std::array<double, 3>> 
+
+  bool point_in_bbox(const std::array<double, 3>& pt,
+                    const std::array<double, 6>& bbox) const;
+
+  std::pair<std::array<unsigned, 4>, std::array<double, 3>>
   find_element_point_is_in(const std::vector<unsigned>& selectedChunks,
-                          const std::vector<std::vector<double>>& chunkBboxes,
+                          const std::vector<std::array<double, 6>>& chunkBboxes,
                           const std::vector<unsigned>& nodeOffsets,
                           const std::vector<unsigned>& elemOffsets,
                           const Array2D<unsigned>& elemNode,
                           const Array2D<double>& nodeCoords,
-                          const std::vector<std::vector<double>>& elemBboxes,
+                          const std::vector<std::array<double, 6>>& elemBboxes,
                           const std::array<double, 3>& pt) const;
-  
-  std::vector<std::vector<double>> build_elem_bounding_boxes(
+
+  std::vector<std::array<double, 6>> build_elem_bounding_boxes(
     unsigned nChunks,
     const std::vector<unsigned>& nodeOffsets,
     const std::vector<unsigned>& elemOffsets,
     const Array2D<unsigned>& elemNode,
     const Array2D<double>& nodeCoords) const;
-  
+
+  void build_spatial_grid(double target_cell_size);
+
   // Thermal interval management for efficient time queries
   std::vector<std::vector<ThermalInterval>> layer_thermal_intervals;
-  
+
+  // Per-site thermal intervals for the currently loaded layer.
+  // Built lazily after the element cache exists (in prepare_for_timestep)
+  // and supersedes the node-based intervals for that layer when non-empty.
+  // Per-site computation evaluates the true barycentric T_site at merged
+  // node sample times, so these intervals are tight rather than the union
+  // bounds produced by the node-level scan.
+  mutable std::vector<ThermalInterval> current_layer_site_intervals;
+  mutable unsigned site_intervals_for_layer;
+
   void compute_thermal_intervals_for_layer(unsigned layerIdx, double threshold_temp);
+  void compute_site_thermal_intervals(double threshold);
   std::vector<ThermalInterval> merge_overlapping_intervals(const std::vector<ThermalInterval>& intervals) const;
   bool is_point_in_spparks_domain(double x, double y, double z) const;
-  
+
   // Element cache management
   mutable std::vector<ElementCache> site_element_cache;
+  mutable std::vector<unsigned> active_node_indices;  // Nodes actually used by cached sites
   mutable bool cache_valid;
 
   // Build element cache for all sites
@@ -192,6 +354,57 @@ private:
 
   // Get cached element for a site
   const ElementCache& get_cached_element(int site_index) const;
+
+  // Nodal temperature cache - precomputed temps at all loaded nodes for current time
+  // Eliminates redundant time interpolation (36x reduction in time searches)
+  mutable std::vector<double> cached_nodal_temps;
+  mutable double cached_nodal_time;
+  mutable bool nodal_cache_valid;
+
+  // Precompute interpolated temperatures at all loaded nodes for given time
+  void precompute_nodal_temperatures(double time) const;
+
+  // ---- Nodal mesh-Laplacian smoothing (optional) ------------------------
+  // When enabled, an anisotropic-weighted node adjacency (CSR) is built
+  // once per layer load from the tet connectivity. After per-timestep node
+  // interpolation, K passes of alpha-blended weighted averaging are applied
+  // to cached_nodal_temps in place before any barycentric query reads it.
+  bool   nodal_smooth_enabled;
+  double nodal_sigma_xy;   // lattice units
+  double nodal_sigma_z;    // lattice units
+  int    nodal_passes;
+  double nodal_alpha;
+  bool   nodal_adjacency_valid;   // matches the currently loaded layer
+
+  // CSR-style edge-weighted adjacency over loaded nodes.
+  // Each undirected edge is stored once per endpoint (symmetric representation).
+  std::vector<unsigned> nbr_offsets;   // size = n_loaded_nodes + 1
+  std::vector<unsigned> nbr_indices;   // size = total directed edges
+  std::vector<double>   nbr_weights;   // parallel to nbr_indices
+
+  // Scratch buffer for double-buffered smoothing passes.
+  mutable std::vector<double> nodal_smooth_buffer;
+
+  // Node-set expansions used to keep the per-step interpolation tight when
+  // nodal smoothing is enabled. Built in build_site_element_cache after
+  // active_node_indices is known.
+  //   smooth_interp_indices = (K+1)-hop BFS from active → read set
+  //   smooth_update_indices = K-hop BFS from active     → write set
+  // Reads during smoothing go one hop outside the update set; that lands
+  // inside the interp set, so every read is a freshly-interpolated value.
+  mutable std::vector<unsigned> smooth_interp_indices;
+  mutable std::vector<unsigned> smooth_update_indices;
+
+  // Build edge-weighted adjacency CSR from the current elemNode + nodeCoords.
+  // Weights are anisotropic Gaussians in lattice units (divided by dx).
+  void build_nodal_adjacency_weighted();
+
+  // Build the K-hop and (K+1)-hop BFS expansions of active_node_indices.
+  // Requires that active_node_indices and the nodal adjacency are current.
+  void build_smooth_node_sets() const;
+
+  // Apply K passes of alpha-blended weighted averaging to cached_nodal_temps.
+  void smooth_nodal_temps() const;
 };
 
 }

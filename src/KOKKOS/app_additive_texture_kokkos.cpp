@@ -22,7 +22,7 @@
 
 ------------------------------------------------------------------------- */
 
-#include "app_additive_ext_temp_texture_kokkos.h"
+#include "app_additive_texture_kokkos.h"
 #include "app_kokkos.h"
 #include "comm_lattice.h"
 #include "domain.h"
@@ -59,7 +59,7 @@ static char** construct_parent_args(char **arg) {
    Constructor
 ------------------------------------------------------------------------- */
 
-AppAdditiveExtTempTextureKokkos::AppAdditiveExtTempTextureKokkos(SPPARKS *spk, int narg, char **arg) :
+AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char **arg) :
   AppPottsQuaternionKokkos(spk, 3, construct_parent_args(arg))
 {
   // Validate input arguments
@@ -139,6 +139,14 @@ AppAdditiveExtTempTextureKokkos::AppAdditiveExtTempTextureKokkos(SPPARKS *spk, i
   use_temperature_source = false;
   fast_forward_search_window = 0.1;  // seconds
 
+  // Temperature-I/O orchestration (source setup/update, laser scan path,
+  // multi-pass pause/reset scheduling, fast-forward predictors, smoothing)
+  // lives in the shared ThermalManager, exactly as the CPU AppAdditiveTexture.
+  // This Kokkos app populates a ThermalHost snapshot (refresh_thermal_host)
+  // the manager reads/writes; the manager fills the host T[] which we then
+  // sync to the device k_T DualView.
+  thermal = std::unique_ptr<ThermalManager>(new ThermalManager(spk, &thermal_host_));
+
   t_active = 0;
   time_step = dt;
 
@@ -153,15 +161,14 @@ AppAdditiveExtTempTextureKokkos::AppAdditiveExtTempTextureKokkos(SPPARKS *spk, i
   debug_G_sum = 0.0;
   debug_V_sum = 0.0;
 
-  // Initialize RNG pool (seed will be set in init_app() using ranapp->state())
-  rand_pool = Kokkos::Random_XorShift64_Pool<>();
+  // RNG pool is inherited from AppLatticeKokkos - initialized in parent
 }
 
 /* ----------------------------------------------------------------------
    Destructor
 ------------------------------------------------------------------------- */
 
-AppAdditiveExtTempTextureKokkos::~AppAdditiveExtTempTextureKokkos()
+AppAdditiveTextureKokkos::~AppAdditiveTextureKokkos()
 {
   delete[] solid_front_coeffs;
   delete[] nucleation_flags;
@@ -175,66 +182,19 @@ AppAdditiveExtTempTextureKokkos::~AppAdditiveExtTempTextureKokkos()
    Allocate memory for site arrays
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTextureKokkos::grow_app()
+void AppAdditiveTextureKokkos::grow_app()
 {
-  // Follow same pattern as AppPottsQuaternionKokkos:
-  // Call AppPotts::grow_app() then manually set all pointers
-  // Don't call AppPottsQuaternion::grow_app() - it breaks the chain
-  AppPotts::grow_app();
+  // Call parent chain - this sets up spin, quaternions, and neighbor arrays
+  // AppPottsQuaternionKokkos::grow_app() -> AppLatticeKokkos::grow_app() -> allocate_app_views()
+  AppPottsQuaternionKokkos::grow_app();
 
-  // Manually set quaternion pointers (from AppPottsQuaternion)
-  q0 = darray[0];
-  qx = darray[1];
-  qy = darray[2];
-  qz = darray[3];
-
-  // Set up additional AM pointers
+  // Set up additional AM pointers from iarray/darray
   active_flag = iarray[1];
   mobility_out = darray[4];
   T = darray[5];
   solid_d = darray[6];
   G = darray[7];
   V = darray[8];
-
-  int nall = nlocal + nghost;
-
-  // Allocate Kokkos views for device computation
-  // Allocate neighbor arrays (same as AppPottsQuaternionKokkos)
-  k_numneigh = Kokkos::DualView<int*>("numneigh", nall);
-  if (maxneigh > 0) {
-    k_neighbor = Kokkos::DualView<int**>("neighbor", nall, maxneigh);
-  }
-
-  // Allocate double buffers for spin and quaternions (from parent)
-  buffer_spin.allocate("spin", nall);
-  buffer_q0.allocate("q0", nall);
-  buffer_qx.allocate("qx", nall);
-  buffer_qy.allocate("qy", nall);
-  buffer_qz.allocate("qz", nall);
-
-  // Allocate DualView for temperature (CPU updates from HDF5, device reads)
-  k_T = Kokkos::DualView<double*>("temperature", nall);
-
-  // Allocate device-only Views for gradient cache (computed once per timestep on device)
-  d_G = Kokkos::View<double*>("gradient_magnitude", nall);
-  d_grad_x = Kokkos::View<double*>("gradient_x", nall);
-  d_grad_y = Kokkos::View<double*>("gradient_y", nall);
-  d_grad_z = Kokkos::View<double*>("gradient_z", nall);
-  d_V = Kokkos::View<double*>("solidification_velocity", nall);
-
-  // Allocate double buffers for arrays modified during sweeps
-  buffer_active_flag.allocate("active_flag", nall);
-  buffer_mobility_out.allocate("mobility_out", nall);
-  buffer_solid_d.allocate("solid_d", nall);
-
-  // Allocate per-spin nucleation parameter arrays (device-accessible)
-  d_nucleation_flags = Kokkos::View<int*>("nucleation_flags", nspins);
-  d_nucleation_temps = Kokkos::View<double*>("nucleation_temps", nspins);
-  d_nucleation_sizes = Kokkos::View<double*>("nucleation_sizes", nspins);
-
-  // Allocate global parameter arrays (device-accessible constants)
-  d_solid_front_coeffs = Kokkos::View<double*>("solid_front_coeffs", solid_front_length);
-  d_texture_params = Kokkos::View<double[3]>("texture_params");
 
   // Allocate neighbor distance and unique arrays on host (used in site_event methods)
   if (neigh_dist) delete[] neigh_dist;
@@ -245,12 +205,49 @@ void AppAdditiveExtTempTextureKokkos::grow_app()
 }
 
 /* ----------------------------------------------------------------------
+   Allocate app-specific Kokkos views
+------------------------------------------------------------------------- */
+
+void AppAdditiveTextureKokkos::allocate_app_views()
+{
+  // Call parent (allocates d_spin, d_q0, d_qx, d_qy, d_qz)
+  AppPottsQuaternionKokkos::allocate_app_views();
+
+  int nall = nlocal + nghost;
+
+  // AM-specific device views
+  d_active_flag = Kokkos::View<int*>("active_flag", nall);
+  d_mobility_out = Kokkos::View<double*>("mobility_out", nall);
+  d_solid_d = Kokkos::View<double*>("solid_d", nall);
+
+  // Temperature field (CPU updates from HDF5, device reads)
+  k_T = Kokkos::DualView<double*>("temperature", nall);
+
+  // Gradient cache (device-only, computed once per timestep on device)
+  d_G = Kokkos::View<double*>("gradient_magnitude", nall);
+  d_grad_x = Kokkos::View<double*>("gradient_x", nall);
+  d_grad_y = Kokkos::View<double*>("gradient_y", nall);
+  d_grad_z = Kokkos::View<double*>("gradient_z", nall);
+  d_V = Kokkos::View<double*>("solidification_velocity", nall);
+
+  // Per-spin nucleation parameter arrays (device-accessible)
+  d_nucleation_flags = Kokkos::View<int*>("nucleation_flags", nspins);
+  d_nucleation_temps = Kokkos::View<double*>("nucleation_temps", nspins);
+  d_nucleation_sizes = Kokkos::View<double*>("nucleation_sizes", nspins);
+
+  // Global parameter arrays (device-accessible constants)
+  d_solid_front_coeffs = Kokkos::View<double*>("solid_front_coeffs", solid_front_length);
+  d_texture_params = Kokkos::View<double[3]>("texture_params");
+}
+
+/* ----------------------------------------------------------------------
    Initialize application
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTextureKokkos::init_app()
+void AppAdditiveTextureKokkos::init_app()
 {
-  // Call parent initialization
+  // Call parent initialization - sets up color lists, syncs neighbors, etc.
+  // Parent also initializes rand_pool with seed from MPI rank
   AppPottsQuaternionKokkos::init_app();
 
   // Initialize temperature field to room temperature
@@ -263,11 +260,6 @@ void AppAdditiveExtTempTextureKokkos::init_app()
     solid_d[i] = 0.0;
   }
 
-  // Initialize RNG pool with seed from ranapp
-  // Use ranapp->seed to get reproducible seed from MPI rank
-  uint64_t seed = static_cast<uint64_t>(ranapp->seed);
-  rand_pool = Kokkos::Random_XorShift64_Pool<>(seed);
-
   // Set timestep for framework (matches CPU version behavior)
   dt_sweep = dt;
 
@@ -275,193 +267,148 @@ void AppAdditiveExtTempTextureKokkos::init_app()
   initialize_nucleation_parameters();
 
   // Sync initial data to device (including new arrays)
-  sync_data_to_device();
+  sync_app_data_to_device();
 
-  // Initialize temperature source if configured
-  if (use_temperature_source && temperature_source) {
-    temperature_source->update_temperatures(0.0, 0.0);
+  // Initialize temperature field at t=0 via the ThermalManager (fills host T[]).
+  if (thermal->enabled()) {
+    refresh_thermal_host();
+    thermal->update_temperatures(0.0);
   }
 
   // Note: Powder activation happens after meltpool appears, not during init
 }
 
 /* ----------------------------------------------------------------------
-   Sync data from host to device (called after MPI ghost exchange)
+   Sync app data from host to device (implements AppLatticeKokkos pure virtual)
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTextureKokkos::sync_data_to_device()
+void AppAdditiveTextureKokkos::sync_app_data_to_device()
 {
+  // Call parent (syncs spin, quaternions)
+  AppPottsQuaternionKokkos::sync_app_data_to_device();
+
   int nall = nlocal + nghost;
 
-  // Sync parent class arrays (spin and quaternions) - duplicate parent logic
-  // since sync_data_to_device() is private
+  // Sync AM-specific arrays to device
+  auto h_active_flag = Kokkos::create_mirror_view(d_active_flag);
+  auto h_mobility_out = Kokkos::create_mirror_view(d_mobility_out);
+  auto h_solid_d = Kokkos::create_mirror_view(d_solid_d);
 
-  // Sync spin directly
-  buffer_spin.sync_to_device(spin);
-
-  // Sync quaternions with normalization (inline normalization logic)
-  double* q0_norm = new double[nall];
-  double* qx_norm = new double[nall];
-  double* qy_norm = new double[nall];
-  double* qz_norm = new double[nall];
-
-  // Normalize quaternion arrays
   for (int i = 0; i < nall; i++) {
-    double q[4] = {q0[i], qx[i], qy[i], qz[i]};
-    double norm = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
-
-    if (norm > 1.0e-15) {
-      double inv_norm = 1.0 / norm;
-      q0_norm[i] = q[0] * inv_norm;
-      qx_norm[i] = q[1] * inv_norm;
-      qy_norm[i] = q[2] * inv_norm;
-      qz_norm[i] = q[3] * inv_norm;
-    } else {
-      q0_norm[i] = q[0];
-      qx_norm[i] = q[1];
-      qy_norm[i] = q[2];
-      qz_norm[i] = q[3];
-    }
+    h_active_flag(i) = active_flag[i];
+    h_mobility_out(i) = mobility_out[i];
+    h_solid_d(i) = solid_d[i];
   }
 
-  buffer_q0.sync_to_device(q0_norm);
-  buffer_qx.sync_to_device(qx_norm);
-  buffer_qy.sync_to_device(qy_norm);
-  buffer_qz.sync_to_device(qz_norm);
-
-  delete[] q0_norm;
-  delete[] qx_norm;
-  delete[] qy_norm;
-  delete[] qz_norm;
-
-  // Sync our new double-buffered arrays
-  buffer_active_flag.sync_to_device(active_flag);
-  buffer_mobility_out.sync_to_device(mobility_out);
-  buffer_solid_d.sync_to_device(solid_d);
+  Kokkos::deep_copy(d_active_flag, h_active_flag);
+  Kokkos::deep_copy(d_mobility_out, h_mobility_out);
+  Kokkos::deep_copy(d_solid_d, h_solid_d);
 
   // Note: Temperature k_T is synced separately in sync_temperature_to_device()
   // Gradients d_G and d_V are device-computed, synced to host only when needed for output
 }
 
 /* ----------------------------------------------------------------------
-   Sync data from device to host (called before MPI ghost exchange)
+   Sync app data from device to host (implements AppLatticeKokkos pure virtual)
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTextureKokkos::sync_data_to_host()
+void AppAdditiveTextureKokkos::sync_app_data_to_host()
 {
+  // Call parent (syncs spin, quaternions with normalization)
+  AppPottsQuaternionKokkos::sync_app_data_to_host();
+
   int nall = nlocal + nghost;
 
-  // Sync parent class arrays (spin and quaternions) - duplicate parent logic
-  // since sync_data_to_host() is private
+  // Sync AM-specific arrays from device
+  auto h_active_flag = Kokkos::create_mirror_view(d_active_flag);
+  auto h_mobility_out = Kokkos::create_mirror_view(d_mobility_out);
+  auto h_solid_d = Kokkos::create_mirror_view(d_solid_d);
 
-  // Sync spin directly
-  buffer_spin.sync_to_host(spin);
+  Kokkos::deep_copy(h_active_flag, d_active_flag);
+  Kokkos::deep_copy(h_mobility_out, d_mobility_out);
+  Kokkos::deep_copy(h_solid_d, d_solid_d);
 
-  // Sync quaternions with normalization
-  double* q0_temp = new double[nall];
-  double* qx_temp = new double[nall];
-  double* qy_temp = new double[nall];
-  double* qz_temp = new double[nall];
-
-  buffer_q0.sync_to_host(q0_temp);
-  buffer_qx.sync_to_host(qx_temp);
-  buffer_qy.sync_to_host(qy_temp);
-  buffer_qz.sync_to_host(qz_temp);
-
-  // Normalize and copy to final host arrays (inline normalization logic)
-  for (int i = 0; i < nall; i++) {
-    double q[4] = {q0_temp[i], qx_temp[i], qy_temp[i], qz_temp[i]};
-    double norm = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
-
-    if (norm > 1.0e-15) {
-      double inv_norm = 1.0 / norm;
-      q0[i] = q[0] * inv_norm;
-      qx[i] = q[1] * inv_norm;
-      qy[i] = q[2] * inv_norm;
-      qz[i] = q[3] * inv_norm;
-    } else {
-      q0[i] = q[0];
-      qx[i] = q[1];
-      qy[i] = q[2];
-      qz[i] = q[3];
-    }
+  for (int i = 0; i < nlocal; i++) {
+    active_flag[i] = h_active_flag(i);
+    mobility_out[i] = h_mobility_out(i);
+    solid_d[i] = h_solid_d(i);
   }
 
-  delete[] q0_temp;
-  delete[] qx_temp;
-  delete[] qy_temp;
-  delete[] qz_temp;
-
-  // Sync our double-buffered arrays back to host
-  buffer_active_flag.sync_to_host(active_flag);
-  buffer_mobility_out.sync_to_host(mobility_out);
-  buffer_solid_d.sync_to_host(solid_d);
-
-  // CRITICAL FIX: Sync gradient and velocity arrays for output/visualization
+  // Sync gradient and velocity arrays for output/visualization
   // These are device-only views that must be copied to host for STITCH dumps
   auto h_G = Kokkos::create_mirror_view(d_G);
   auto h_V = Kokkos::create_mirror_view(d_V);
   Kokkos::deep_copy(h_G, d_G);
   Kokkos::deep_copy(h_V, d_V);
-  for (int i = 0; i < nall; i++) {
+  for (int i = 0; i < nlocal; i++) {
     G[i] = h_G(i);
     V[i] = h_V(i);
   }
 }
 
 /* ----------------------------------------------------------------------
-   Swap double buffers (called after each sweep)
+   sweep_color_kokkos - Override for additive app
+   For the additive app, the main MC work is done in app_update() via
+   phase transition kernels. This sweep method uses the parent's
+   implementation for any optional Potts sweeping on solidified regions.
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTextureKokkos::swap_buffers()
+void AppAdditiveTextureKokkos::sweep_color_kokkos(int color, int start, int count)
 {
-  // Note: Can't call parent swap_buffers() directly as it's private
-  // Instead, swap all buffers (parent + ours) here
-  AppPottsQuaternionKokkos::buffer_spin.swap();
-  AppPottsQuaternionKokkos::buffer_q0.swap();
-  AppPottsQuaternionKokkos::buffer_qx.swap();
-  AppPottsQuaternionKokkos::buffer_qy.swap();
-  AppPottsQuaternionKokkos::buffer_qz.swap();
-
-  // Swap our new buffers
-  buffer_active_flag.swap();
-  buffer_mobility_out.swap();
-  buffer_solid_d.swap();
-
-  // Note: k_T does NOT need swap() - it's a DualView, not a double buffer
-  // Gradients are device-only Views, no swap needed
+  // For additive manufacturing, the phase transition kernels in app_update()
+  // handle the main simulation work. The sweep is primarily used for
+  // optional grain coarsening in solidified regions.
+  // Delegate to parent class implementation.
+  AppPottsQuaternionKokkos::sweep_color_kokkos(color, start, count);
 }
 
 /* ----------------------------------------------------------------------
    Update temperature from external source (CPU operation)
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTextureKokkos::update_temperature_from_source(double simulation_time)
+// Populate the ThermalHost snapshot ThermalManager reads/writes. Cheap pointer
+// and scalar copies; called before any thermal-> use so the manager sees the
+// current lattice state without a typed back-pointer into this app. Mirrors
+// AppAdditiveTexture::refresh_thermal_host().
+void AppAdditiveTextureKokkos::refresh_thermal_host()
 {
-  if (!use_temperature_source || !temperature_source) return;
+  thermal_host_.T = T;
+  thermal_host_.xyz = xyz;
+  thermal_host_.numneigh = numneigh;
+  thermal_host_.neighbor = neighbor;
+  thermal_host_.nlocal = nlocal;
+  thermal_host_.dx = dx;
+  thermal_host_.tl = tl;
+  thermal_host_.ts = ts;
+  thermal_host_.t_room = t_room;
+  thermal_host_.time = time;
+  thermal_host_.dt = dt;
+  thermal_host_.comm = comm;
+  thermal_host_.ghost_iindices = ghost_iindices;
+  thermal_host_.nghost_iarray = nghost_iarray;
+  thermal_host_.ghost_dindices = ghost_dindices;
+  thermal_host_.nghost_darray = nghost_darray;
+}
 
-  // Update temperature source (may load new HDF5 layer)
-  temperature_source->update_temperatures(dt, simulation_time);
-
-  // Update host temperature array for all local sites
-  for (int i = 0; i < nlocal; i++) {
-    // Use site-based temperature access (faster with element caching)
-    T[i] = temperature_source->get_temperature_at_site(i, simulation_time);
-  }
-
-  // Ghost sites will get temperatures via MPI exchange
+void AppAdditiveTextureKokkos::update_temperature_from_source(double simulation_time)
+{
+  // Delegate to the ThermalManager, which fills host T[] (== this->T) from the
+  // configured source at simulation_time (and applies optional smoothing).
+  if (!thermal->enabled()) return;
+  refresh_thermal_host();
+  thermal->update_temperatures(simulation_time);
 }
 
 /* ----------------------------------------------------------------------
    Sync temperature from host to device (after CPU update from HDF5)
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTextureKokkos::sync_temperature_to_device()
+void AppAdditiveTextureKokkos::sync_temperature_to_device()
 {
   int nall = nlocal + nghost;
 
   // Copy host temperature array to DualView host mirror
-  auto h_T = k_T.h_view;
+  auto h_T = k_T.view_host();
   for (int i = 0; i < nall; i++) {
     h_T(i) = T[i];
   }
@@ -475,12 +422,12 @@ void AppAdditiveExtTempTextureKokkos::sync_temperature_to_device()
    Compute thermal gradients on device (cache for later use)
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTextureKokkos::compute_gradients_kernel()
+void AppAdditiveTextureKokkos::compute_gradients_kernel()
 {
   // Get device views
-  auto d_T = k_T.d_view;  // Read-only temperature on device
-  auto k_numneigh_d = k_numneigh.d_view;
-  auto k_neighbor_d = k_neighbor.d_view;
+  auto d_T = k_T.view_device();  // Read-only temperature on device
+  auto k_numneigh_d = k_numneigh.view_device();
+  auto k_neighbor_d = k_neighbor.view_device();
 
   // Create temporary device view for xyz (xyz comes from CPU parent, not Kokkos)
   // Use unmanaged view wrapped around host xyz array
@@ -491,8 +438,8 @@ void AppAdditiveExtTempTextureKokkos::compute_gradients_kernel()
   Kokkos::View<double*[3], DeviceLayout, HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> h_xyz(xyz[0], nall);
   auto k_xyz_d = Kokkos::create_mirror_view_and_copy(Kokkos::DefaultExecutionSpace(), h_xyz);
 
-  // Get active_flag for melt surface detection
-  auto d_active_flag = buffer_active_flag.read_buffer;
+  // Get active_flag for melt surface detection (simple View)
+  auto d_active_flag_local = this->d_active_flag;
 
   // Capture member variables for lambda
   double dx_lattice = this->dx;
@@ -508,7 +455,7 @@ void AppAdditiveExtTempTextureKokkos::compute_gradients_kernel()
       double gradient[3], magnitude;
 
       ThermalOps::compute_temperature_gradient(
-        i, d_T, d_active_flag, k_numneigh_d, k_neighbor_d, k_xyz_d,
+        i, d_T, d_active_flag_local, k_numneigh_d, k_neighbor_d, k_xyz_d,
         dx_lattice, gradient, &magnitude);
 
       // Cache results for later use
@@ -526,7 +473,7 @@ void AppAdditiveExtTempTextureKokkos::compute_gradients_kernel()
    Phase 3.1: Port per-spin nucleation arrays from CPU to device
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTextureKokkos::initialize_nucleation_parameters()
+void AppAdditiveTextureKokkos::initialize_nucleation_parameters()
 {
   // Allocate host temp arrays for nucleation parameters
   delete[] nucleation_flags;
@@ -599,40 +546,34 @@ void AppAdditiveExtTempTextureKokkos::initialize_nucleation_parameters()
    Phase 3.1: Simplest phase transition kernel (no neighbor interactions)
 ------------------------------------------------------------------------- */
 
-int AppAdditiveExtTempTextureKokkos::melting_kernel()
+int AppAdditiveTextureKokkos::melting_kernel()
 {
-  // Get device views (read-only and read-write)
-  auto d_T_local = k_T.d_view;
-  auto d_spin_current = buffer_spin.read_buffer;
-  auto d_spin_next = buffer_spin.write_buffer;
-  auto d_q0_current = buffer_q0.read_buffer;
-  auto d_q0_next = buffer_q0.write_buffer;
-  auto d_qx_current = buffer_qx.read_buffer;
-  auto d_qx_next = buffer_qx.write_buffer;
-  auto d_qy_current = buffer_qy.read_buffer;
-  auto d_qy_next = buffer_qy.write_buffer;
-  auto d_qz_current = buffer_qz.read_buffer;
-  auto d_qz_next = buffer_qz.write_buffer;
-  auto d_active_flag_current = buffer_active_flag.read_buffer;
-  auto d_active_flag_next = buffer_active_flag.write_buffer;
-  auto d_solid_d_current = buffer_solid_d.read_buffer;
-  auto d_solid_d_next = buffer_solid_d.write_buffer;
+  // Get device views - simple Views (no double buffering needed for self-only writes)
+  auto d_T_local = k_T.view_device();
+  auto d_spin_local = d_spin;
+  auto d_q0_local = d_q0;
+  auto d_qx_local = d_qx;
+  auto d_qy_local = d_qy;
+  auto d_qz_local = d_qz;
+  auto d_active_flag_local = d_active_flag;
+  auto d_solid_d_local = d_solid_d;
+  auto d_G_local = d_G;
+  auto d_V_local = d_V;
 
   // Capture parameters for lambda
   double tl_local = this->tl;
   int nspins_local = this->nspins;
   int nlocal_local = this->nlocal;
-  auto rand_pool_local = this->rand_pool;
-  auto d_G_local = this->d_G;
-  auto d_V_local = this->d_V;
+  auto rand_pool_local = *rand_pool;
 
   // Melting kernel: parallel over all local sites with event tracking
+  // Race-free: each site only reads/writes itself
   int naccept_local = 0;
   Kokkos::parallel_reduce("MeltingKernel", nlocal_local,
     KOKKOS_LAMBDA(int i, int& count) {
       // Read current state
       double T_i = d_T_local(i);
-      int active_flag_i = d_active_flag_current(i);
+      int active_flag_i = d_active_flag_local(i);
 
       // Check if site should melt: T >= liquidus && not already liquid
       if (T_i >= tl_local && active_flag_i != 2) {
@@ -640,10 +581,10 @@ int AppAdditiveExtTempTextureKokkos::melting_kernel()
         auto generator = rand_pool_local.get_state();
 
         // Transition to liquid state
-        d_active_flag_next(i) = 2;  // LIQUID
+        d_active_flag_local(i) = 2;  // LIQUID
 
         // Randomize grain ID (destroy grain structure)
-        d_spin_next(i) = static_cast<int>(nspins_local * generator.drand());
+        d_spin_local(i) = static_cast<int>(nspins_local * generator.drand());
 
         // Randomize orientation (destroy crystallographic texture)
         // Generate random unit quaternion using Marsaglia method
@@ -661,13 +602,13 @@ int AppAdditiveExtTempTextureKokkos::melting_kernel()
         } while (r2 >= 1.0);
 
         double s = Kokkos::sqrt((1.0 - r1) / r2);
-        d_q0_next(i) = x0;
-        d_qx_next(i) = x1;
-        d_qy_next(i) = x2 * s;
-        d_qz_next(i) = x3 * s;
+        d_q0_local(i) = x0;
+        d_qx_local(i) = x1;
+        d_qy_local(i) = x2 * s;
+        d_qz_local(i) = x3 * s;
 
         // Reset solidification tracking
-        d_solid_d_next(i) = 0.0;
+        d_solid_d_local(i) = 0.0;
         d_G_local(i) = 0.0;
         d_V_local(i) = 0.0;
 
@@ -676,19 +617,9 @@ int AppAdditiveExtTempTextureKokkos::melting_kernel()
 
         // Track melting event
         count++;
-      } else {
-        // No change - copy current state to next
-        d_active_flag_next(i) = active_flag_i;
-        d_spin_next(i) = d_spin_current(i);
-        d_q0_next(i) = d_q0_current(i);
-        d_qx_next(i) = d_qx_current(i);
-        d_qy_next(i) = d_qy_current(i);
-        d_qz_next(i) = d_qz_current(i);
-        d_solid_d_next(i) = d_solid_d_current(i);
       }
+      // No else branch needed - site keeps its current values if not melting
     }, naccept_local);
-
-  // Fence removed - single fence at end of app_update() handles all kernels
 
   return naccept_local;
 }
@@ -698,35 +629,28 @@ int AppAdditiveExtTempTextureKokkos::melting_kernel()
    Phase 3.2: Sites transition to solid when undercooling exceeds critical value
 ------------------------------------------------------------------------- */
 
-int AppAdditiveExtTempTextureKokkos::nucleation_kernel()
+int AppAdditiveTextureKokkos::nucleation_kernel()
 {
-  // Get device views
-  auto d_T_local = k_T.d_view;
-  auto d_spin_current = buffer_spin.read_buffer;
-  auto d_spin_next = buffer_spin.write_buffer;
-  auto d_q0_current = buffer_q0.read_buffer;
-  auto d_q0_next = buffer_q0.write_buffer;
-  auto d_qx_current = buffer_qx.read_buffer;
-  auto d_qx_next = buffer_qx.write_buffer;
-  auto d_qy_current = buffer_qy.read_buffer;
-  auto d_qy_next = buffer_qy.write_buffer;
-  auto d_qz_current = buffer_qz.read_buffer;
-  auto d_qz_next = buffer_qz.write_buffer;
-  auto d_active_flag_current = buffer_active_flag.read_buffer;
-  auto d_active_flag_next = buffer_active_flag.write_buffer;
-  auto d_solid_d_current = buffer_solid_d.read_buffer;
-  auto d_solid_d_next = buffer_solid_d.write_buffer;
+  // Get device views - simple Views (no double buffering needed for self-only writes)
+  auto d_T_local = k_T.view_device();
+  auto d_spin_local = d_spin;
+  auto d_q0_local = d_q0;
+  auto d_qx_local = d_qx;
+  auto d_qy_local = d_qy;
+  auto d_qz_local = d_qz;
+  auto d_active_flag_local = d_active_flag;
+  auto d_solid_d_local = d_solid_d;
 
   // Capture parameters for lambda
   double tl_local = this->tl;
   int nlocal_local = this->nlocal;
   int nspins_local = this->nspins;
   int nrefine_local = this->nrefine;
-  auto rand_pool_local = this->rand_pool;
-  auto d_nucleation_flags = this->d_nucleation_flags;
-  auto d_nucleation_temps = this->d_nucleation_temps;
-  auto d_nucleation_sizes = this->d_nucleation_sizes;
-  auto d_solid_front_coeffs = this->d_solid_front_coeffs;
+  auto rand_pool_local = *rand_pool;
+  auto d_nucleation_flags_local = this->d_nucleation_flags;
+  auto d_nucleation_temps_local = this->d_nucleation_temps;
+  auto d_nucleation_sizes_local = this->d_nucleation_sizes;
+  auto d_solid_front_coeffs_local = this->d_solid_front_coeffs;
   int solid_front_length_local = this->solid_front_length;
   auto d_G_local = this->d_G;
   auto d_V_local = this->d_V;
@@ -739,34 +663,34 @@ int AppAdditiveExtTempTextureKokkos::nucleation_kernel()
   double debug_V_sum_local = 0.0;
 
   // Nucleation kernel: parallel over all local sites with event tracking
+  // Race-free: each site only reads/writes itself
   int naccept_local = 0;
   Kokkos::parallel_reduce("NucleationKernel", nlocal_local,
     KOKKOS_LAMBDA(int i, int& count, int& zero_G_count, int& nonzero_G_count, double& G_sum, double& V_sum) {
       // Read current state
       double T_i = d_T_local(i);
-      int active_flag_i = d_active_flag_current(i);
-      int spin_i = d_spin_current(i);
+      int active_flag_i = d_active_flag_local(i);
+      int spin_i = d_spin_local(i);
 
       // Check if site is liquid and below liquidus (undercooled)
       if (active_flag_i == 2 && T_i < tl_local) {
         // Check if this spin can nucleate
-        if (d_nucleation_flags(spin_i) == 1) {
+        if (d_nucleation_flags_local(spin_i) == 1) {
           // Calculate undercooling
           double Tcool = tl_local - T_i;
 
           // Check if undercooling exceeds critical value for this spin
-          if (Tcool >= d_nucleation_temps(spin_i)) {
+          if (Tcool >= d_nucleation_temps_local(spin_i)) {
             // Nucleate: transition to solid
-            d_active_flag_next(i) = 3;  // SOLID
+            d_active_flag_local(i) = 3;  // SOLID
             count++;  // Track nucleation event
 
             // Set solid_d flag to prevent disappearance during smoothing
             // Negative value triggers smoothing countdown later
-            d_solid_d_next(i) = -nrefine_local - 2;
+            d_solid_d_local(i) = -nrefine_local - 2;
 
-            // CRITICAL FIX: Update spin and quaternions to create complete nucleus
             // Keep the assigned spin (already set during initialization)
-            d_spin_next(i) = spin_i;
+            // d_spin_local(i) = spin_i;  // No-op, already has this value
 
             // Generate random unit quaternion for new grain orientation
             // Using Marsaglia method (same as melting kernel)
@@ -785,23 +709,22 @@ int AppAdditiveExtTempTextureKokkos::nucleation_kernel()
             } while (r2 >= 1.0);
 
             double s = Kokkos::sqrt((1.0 - r1) / r2);
-            d_q0_next(i) = x0;
-            d_qx_next(i) = x1;
-            d_qy_next(i) = x2 * s;
-            d_qz_next(i) = x3 * s;
+            d_q0_local(i) = x0;
+            d_qx_local(i) = x1;
+            d_qy_local(i) = x2 * s;
+            d_qz_local(i) = x3 * s;
             rand_pool_local.free_state(generator);
 
             // Compute solidification velocity using polynomial: V = Σ coeffs[k] * Tcool^k
             double V_i = 0.0;
             double Tcool_power = 1.0;
             for (int k = solid_front_length_local - 1; k >= 0; k--) {
-              V_i += d_solid_front_coeffs(k) * Tcool_power;
+              V_i += d_solid_front_coeffs_local(k) * Tcool_power;
               Tcool_power *= Tcool;
             }
             d_V_local(i) = V_i;
 
             // Note: Gradient G is already computed by compute_gradients_kernel()
-            // No need to recompute here
 
             // DEBUG: Check G and V values after nucleation
             double G_val = d_G_local(i);
@@ -813,43 +736,13 @@ int AppAdditiveExtTempTextureKokkos::nucleation_kernel()
               G_sum += G_val;
               V_sum += V_val;
             }
-
-            // TODO Phase 3.2: Particle flipper to grow nucleus
-            // For now, nucleus is single site
-            // Will implement particle growth in separate kernel
-          } else {
-            // Can nucleate but hasn't reached critical undercooling yet
-            d_active_flag_next(i) = active_flag_i;  // Remain liquid
-            d_solid_d_next(i) = d_solid_d_current(i);
-            d_spin_next(i) = d_spin_current(i);
-            d_q0_next(i) = d_q0_current(i);
-            d_qx_next(i) = d_qx_current(i);
-            d_qy_next(i) = d_qy_current(i);
-            d_qz_next(i) = d_qz_current(i);
           }
-        } else {
-          // This spin cannot nucleate
-          d_active_flag_next(i) = active_flag_i;  // Remain liquid
-          d_solid_d_next(i) = d_solid_d_current(i);
-          d_spin_next(i) = d_spin_current(i);
-          d_q0_next(i) = d_q0_current(i);
-          d_qx_next(i) = d_qx_current(i);
-          d_qy_next(i) = d_qy_current(i);
-          d_qz_next(i) = d_qz_current(i);
+          // No else branch - site keeps current values if not nucleating
         }
-      } else {
-        // Not liquid or not undercooled - no change
-        d_active_flag_next(i) = active_flag_i;
-        d_solid_d_next(i) = d_solid_d_current(i);
-        d_spin_next(i) = d_spin_current(i);
-        d_q0_next(i) = d_q0_current(i);
-        d_qx_next(i) = d_qx_current(i);
-        d_qy_next(i) = d_qy_current(i);
-        d_qz_next(i) = d_qz_current(i);
+        // No else branch - site keeps current values if can't nucleate
       }
+      // No else branch - site keeps current values if not liquid/undercooled
     }, naccept_local, debug_zero_G_local, debug_nonzero_G_local, debug_G_sum_local, debug_V_sum_local);
-
-  // Fence removed - single fence at end of app_update() handles all kernels
 
   // DEBUG: Accumulate kernel results into class members
   debug_nucleation_count += naccept_local;
@@ -880,62 +773,49 @@ int AppAdditiveExtTempTextureKokkos::nucleation_kernel()
    to parallelize. This version achieves similar physics with simpler logic.
 ------------------------------------------------------------------------- */
 
-int AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
+int AppAdditiveTextureKokkos::particle_flipper_kernel()
 {
-  // Capture all necessary data for device lambda
-  auto d_spin_current = buffer_spin.read_buffer;
-  auto d_spin_next = buffer_spin.write_buffer;
-  auto d_q0_current = buffer_q0.read_buffer;
-  auto d_q0_next = buffer_q0.write_buffer;
-  auto d_qx_current = buffer_qx.read_buffer;
-  auto d_qx_next = buffer_qx.write_buffer;
-  auto d_qy_current = buffer_qy.read_buffer;
-  auto d_qy_next = buffer_qy.write_buffer;
-  auto d_qz_current = buffer_qz.read_buffer;
-  auto d_qz_next = buffer_qz.write_buffer;
-  auto d_active_flag_current = buffer_active_flag.read_buffer;
-  auto d_active_flag_next = buffer_active_flag.write_buffer;
-  auto d_solid_d_current = buffer_solid_d.read_buffer;
-  auto d_solid_d_next = buffer_solid_d.write_buffer;
+  // Get device views - simple Views (atomic CAS makes neighbor writes race-safe)
+  auto d_spin_local = d_spin;
+  auto d_q0_local = d_q0;
+  auto d_qx_local = d_qx;
+  auto d_qy_local = d_qy;
+  auto d_qz_local = d_qz;
+  auto d_active_flag_local = d_active_flag;
+  auto d_solid_d_local = d_solid_d;
 
-  auto k_neighbor_d = k_neighbor.d_view;
-  auto k_numneigh_d = k_numneigh.d_view;
+  auto k_neighbor_d = k_neighbor.view_device();
+  auto k_numneigh_d = k_numneigh.view_device();
   auto d_G_local = d_G;
   auto d_grad_x_local = d_grad_x;
   auto d_grad_y_local = d_grad_y;
   auto d_grad_z_local = d_grad_z;
   auto d_V_local = d_V;
   auto d_nucleation_sizes_local = d_nucleation_sizes;
-  auto rand_pool_local = rand_pool;
+  auto rand_pool_local = *rand_pool;
 
   int nlocal_local = nlocal;
   int nrefine_local = nrefine;
   double dx_local = dx;
 
   // Parallel over all local sites - each nucleus flips its neighbors with event tracking
+  // Race-safe: uses atomic CAS to claim neighbors
   int naccept_local = 0;
   Kokkos::parallel_reduce("ParticleFlipperKernel", nlocal_local,
     KOKKOS_LAMBDA(int i, int& count) {
       // Only process newly nucleated sites (marked with solid_d = -nrefine-2)
-      double solid_d_i = d_solid_d_current(i);
-      int active_flag_i = d_active_flag_current(i);
+      double solid_d_i = d_solid_d_local(i);
+      int active_flag_i = d_active_flag_local(i);
 
       // Check if this is a newly nucleated site
       if (active_flag_i != 3 || solid_d_i != -nrefine_local - 2) {
-        // Not a nucleus - copy state unchanged
-        d_spin_next(i) = d_spin_current(i);
-        d_q0_next(i) = d_q0_current(i);
-        d_qx_next(i) = d_qx_current(i);
-        d_qy_next(i) = d_qy_current(i);
-        d_qz_next(i) = d_qz_current(i);
-        d_active_flag_next(i) = active_flag_i;
-        d_solid_d_next(i) = solid_d_i;
+        // Not a nucleus - site keeps its current values
         return;
       }
 
       // This is a newly nucleated site - attempt to grow it
-      int spin_i = d_spin_current(i);
-      double q_i[4] = {d_q0_current(i), d_qx_current(i), d_qy_current(i), d_qz_current(i)};
+      int spin_i = d_spin_local(i);
+      double q_i[4] = {d_q0_local(i), d_qx_local(i), d_qy_local(i), d_qz_local(i)};
       double G_i = d_G_local(i);
       double V_i = d_V_local(i);
 
@@ -948,14 +828,8 @@ int AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
       // Nucleus itself counts as 1 site
       if (target_sites <= 1) {
         // No neighbors to flip - just update solid_d to ready state
-        d_spin_next(i) = spin_i;
-        d_q0_next(i) = q_i[0];
-        d_qx_next(i) = q_i[1];
-        d_qy_next(i) = q_i[2];
-        d_qz_next(i) = q_i[3];
-        d_active_flag_next(i) = 3;  // SOLID
-            count++;  // Track nucleation event
-        d_solid_d_next(i) = -nrefine_local - 3;  // Ready for smoothing
+        d_solid_d_local(i) = -nrefine_local - 3;  // Ready for smoothing
+        count++;  // Track nucleation event
         return;
       }
 
@@ -967,7 +841,7 @@ int AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
 
       for (int j = 0; j < nn && j < MAX_NEIGHBORS; j++) {
         int nbr = k_neighbor_d(i, j);
-        int nbr_flag = d_active_flag_current(nbr);
+        int nbr_flag = d_active_flag_local(nbr);
 
         // Only flip liquid neighbors (active_flag == 2)
         if (nbr_flag == 2) {
@@ -1000,17 +874,17 @@ int AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
         int desired = 3;   // SOLID (claimed)
 
         // Atomic CAS: only succeeds if neighbor is still liquid
-        int old_flag = Kokkos::atomic_compare_exchange(&d_active_flag_next(nbr), expected, desired);
+        int old_flag = Kokkos::atomic_compare_exchange(&d_active_flag_local(nbr), expected, desired);
 
         if (old_flag == 2) {
           // We successfully claimed this neighbor - flip it to match nucleus
-          d_spin_next(nbr) = spin_i;
-          d_q0_next(nbr) = q_i[0];
-          d_qx_next(nbr) = q_i[1];
-          d_qy_next(nbr) = q_i[2];
-          d_qz_next(nbr) = q_i[3];
+          d_spin_local(nbr) = spin_i;
+          d_q0_local(nbr) = q_i[0];
+          d_qx_local(nbr) = q_i[1];
+          d_qy_local(nbr) = q_i[2];
+          d_qz_local(nbr) = q_i[3];
           // active_flag already set to SOLID by CAS above
-          d_solid_d_next(nbr) = -nrefine_local - 3;  // Ready for smoothing
+          d_solid_d_local(nbr) = -nrefine_local - 3;  // Ready for smoothing
 
           // Copy thermal properties from nucleus
           d_G_local(nbr) = G_i;
@@ -1025,19 +899,11 @@ int AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
       rand_pool_local.free_state(generator);
 
       // Update nucleus solid_d to ready state
-      d_spin_next(i) = spin_i;
-      d_q0_next(i) = q_i[0];
-      d_qx_next(i) = q_i[1];
-      d_qy_next(i) = q_i[2];
-      d_qz_next(i) = q_i[3];
-      d_active_flag_next(i) = 3;  // SOLID
-      d_solid_d_next(i) = -nrefine_local - 3;  // Ready for smoothing
+      d_solid_d_local(i) = -nrefine_local - 3;  // Ready for smoothing
 
       // Track nucleus growth event
       count++;
     }, naccept_local);
-
-  // Fence removed - single fence at end of app_update() handles all kernels
 
   return naccept_local;
 }
@@ -1047,27 +913,20 @@ int AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
    Phase 3.3: Liquid sites captured by solid neighbors based on texture
 ------------------------------------------------------------------------- */
 
-int AppAdditiveExtTempTextureKokkos::solidification_kernel()
+int AppAdditiveTextureKokkos::solidification_kernel()
 {
-  // Get device views
-  auto d_T_local = k_T.d_view;
-  auto d_spin_current = buffer_spin.read_buffer;
-  auto d_spin_next = buffer_spin.write_buffer;
-  auto d_q0_current = buffer_q0.read_buffer;
-  auto d_q0_next = buffer_q0.write_buffer;
-  auto d_qx_current = buffer_qx.read_buffer;
-  auto d_qx_next = buffer_qx.write_buffer;
-  auto d_qy_current = buffer_qy.read_buffer;
-  auto d_qy_next = buffer_qy.write_buffer;
-  auto d_qz_current = buffer_qz.read_buffer;
-  auto d_qz_next = buffer_qz.write_buffer;
-  auto d_active_flag_current = buffer_active_flag.read_buffer;
-  auto d_active_flag_next = buffer_active_flag.write_buffer;
-  auto d_solid_d_current = buffer_solid_d.read_buffer;
-  auto d_solid_d_next = buffer_solid_d.write_buffer;
+  // Get device views - simple Views (no double buffering needed for self-only writes)
+  auto d_T_local = k_T.view_device();
+  auto d_spin_local = d_spin;
+  auto d_q0_local = d_q0;
+  auto d_qx_local = d_qx;
+  auto d_qy_local = d_qy;
+  auto d_qz_local = d_qz;
+  auto d_active_flag_local = d_active_flag;
+  auto d_solid_d_local = d_solid_d;
 
-  auto k_numneigh_d = k_numneigh.d_view;
-  auto k_neighbor_d = k_neighbor.d_view;
+  auto k_numneigh_d = k_numneigh.view_device();
+  auto k_neighbor_d = k_neighbor.view_device();
 
   // Create device view of xyz coordinates (needed for on-demand gradient computation)
   // Use device's default layout to ensure compatibility with GPU backends (HIP uses LayoutLeft)
@@ -1084,15 +943,15 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
   int nlocal_local = this->nlocal;
   int nrefine_local = this->nrefine;
   double dx_local = this->dx;
-  auto d_solid_front_coeffs = this->d_solid_front_coeffs;
+  auto d_solid_front_coeffs_local = this->d_solid_front_coeffs;
   int solid_front_length_local = this->solid_front_length;
-  auto d_texture_params = this->d_texture_params;
+  auto d_texture_params_local = this->d_texture_params;
   auto d_G_local = this->d_G;
   auto d_V_local = this->d_V;
   auto d_grad_x_local = this->d_grad_x;
   auto d_grad_y_local = this->d_grad_y;
   auto d_grad_z_local = this->d_grad_z;
-  auto rand_pool_local = this->rand_pool;
+  auto rand_pool_local = *rand_pool;
 
   // Misorientation parameters (Phase 3.6)
   double max_misorient_local = this->max_misorient;
@@ -1122,22 +981,23 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
   double debug_V_sum_local = 0.0;
 
   // Solidification kernel: parallel over all local sites with event tracking
+  // Race-free: each site only reads/writes itself
   int naccept_local = 0;
   Kokkos::parallel_reduce("SolidificationKernel", nlocal_local,
     KOKKOS_LAMBDA(int i, int& count, int& zero_G_count, int& nonzero_G_count, double& G_sum, double& V_sum) {
       double T_i = d_T_local(i);
-      int active_flag_i = d_active_flag_current(i);
+      int active_flag_i = d_active_flag_local(i);
 
       // Check if site is liquid and below liquidus
       if (active_flag_i == 2 && T_i < tl_local) {
         double Tcool = tl_local - T_i;
-        double solid_d_i = d_solid_d_current(i);
+        double solid_d_i = d_solid_d_local(i);
 
         // Advance solid front distance: solid_d += V(Tcool) * dt
         double V_advance = 0.0;
         double Tcool_power = 1.0;
         for (int k = solid_front_length_local - 1; k >= 0; k--) {
-          V_advance += d_solid_front_coeffs(k) * Tcool_power;
+          V_advance += d_solid_front_coeffs_local(k) * Tcool_power;
           Tcool_power *= Tcool;
         }
         solid_d_i += V_advance * dt_local;
@@ -1157,7 +1017,7 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
         double cumulative_sum = 0.0;
         for (int j = 0; j < nn && j < 26; j++) {
           int nbr = k_neighbor_d(i, j);
-          int nbr_flag = d_active_flag_current(nbr);
+          int nbr_flag = d_active_flag_local(nbr);
 
           // Check if neighbor is solid (active_flag == 1 or 3) and within reach
           if ((nbr_flag == 1 || nbr_flag == 3) && neigh_dist[j] * dx_local <= solid_d_i) {
@@ -1165,7 +1025,7 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
             if (!gradient_computed) {
               // Use ThermalOps to compute temperature gradient at site i
               ThermalOps::compute_temperature_gradient(
-                i, d_T_local, d_active_flag_current, k_numneigh_d, k_neighbor_d, k_xyz_d, dx_local,
+                i, d_T_local, d_active_flag_local, k_numneigh_d, k_neighbor_d, k_xyz_d, dx_local,
                 grad_dir, &grad_magnitude);
 
               // Store gradient magnitude and components for later use
@@ -1178,17 +1038,17 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
 
             // Get neighbor quaternion
             double q_nbr[4] = {
-              d_q0_current(nbr),
-              d_qx_current(nbr),
-              d_qy_current(nbr),
-              d_qz_current(nbr)
+              d_q0_local(nbr),
+              d_qx_local(nbr),
+              d_qy_local(nbr),
+              d_qz_local(nbr)
             };
 
             // Compute texture weight: mobility = c1 + c2 * cos(c3 * theta)
             // where theta is angle between crystal <100> and gradient
-            double c1 = d_texture_params(0);
-            double c2 = d_texture_params(1);
-            double c3 = d_texture_params(2);
+            double c1 = d_texture_params_local(0);
+            double c2 = d_texture_params_local(1);
+            double c3 = d_texture_params_local(2);
 
             // Use QuaternionOps from parent class to get cosine of min angle
             // This finds the minimum angle between any <100> direction and gradient
@@ -1224,12 +1084,12 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
           int selected_nbr = solid_neighbor_idx[selected_idx];
 
           // Solidify: copy grain ID and quaternion from selected neighbor
-          int new_spin = d_spin_current(selected_nbr);
+          int new_spin = d_spin_local(selected_nbr);
           double q_nbr_inherited[4] = {
-            d_q0_current(selected_nbr),
-            d_qx_current(selected_nbr),
-            d_qy_current(selected_nbr),
-            d_qz_current(selected_nbr)
+            d_q0_local(selected_nbr),
+            d_qx_local(selected_nbr),
+            d_qy_local(selected_nbr),
+            d_qz_local(selected_nbr)
           };
 
           // Phase 3.6: Apply misorientation rotation toward gradient
@@ -1278,31 +1138,30 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
             }
 
             // Use the rotated quaternion
-            d_q0_next(i) = q_rotated[0];
-            d_qx_next(i) = q_rotated[1];
-            d_qy_next(i) = q_rotated[2];
-            d_qz_next(i) = q_rotated[3];
+            d_q0_local(i) = q_rotated[0];
+            d_qx_local(i) = q_rotated[1];
+            d_qy_local(i) = q_rotated[2];
+            d_qz_local(i) = q_rotated[3];
           } else {
             // No misorientation - use neighbor's orientation as-is
-            d_q0_next(i) = q_nbr_inherited[0];
-            d_qx_next(i) = q_nbr_inherited[1];
-            d_qy_next(i) = q_nbr_inherited[2];
-            d_qz_next(i) = q_nbr_inherited[3];
+            d_q0_local(i) = q_nbr_inherited[0];
+            d_qx_local(i) = q_nbr_inherited[1];
+            d_qy_local(i) = q_nbr_inherited[2];
+            d_qz_local(i) = q_nbr_inherited[3];
           }
 
           // Assign grain ID (may be new grain if rotation exceeded threshold)
-          d_spin_next(i) = new_spin;
+          d_spin_local(i) = new_spin;
 
           // Set to solid state
-          d_active_flag_next(i) = 3;  // SOLID
-            count++;  // Track nucleation event
+          d_active_flag_local(i) = 3;  // SOLID
+          count++;  // Track solidification event
 
           // Set solid_d flag to trigger smoothing countdown
-          d_solid_d_next(i) = -1.0;
+          d_solid_d_local(i) = -1.0;
 
           // Record solidification parameters
           d_V_local(i) = V_advance;
-          // Gradient already computed by gradient kernel
 
           // DEBUG: Check G and V values after solidification
           double G_val = d_G_local(i);
@@ -1318,28 +1177,12 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
           // Return RNG state
           rand_pool_local.free_state(generator);
         } else {
-          // No solid neighbors within reach - remain liquid
-          d_spin_next(i) = d_spin_current(i);
-          d_q0_next(i) = d_q0_current(i);
-          d_qx_next(i) = d_qx_current(i);
-          d_qy_next(i) = d_qy_current(i);
-          d_qz_next(i) = d_qz_current(i);
-          d_active_flag_next(i) = active_flag_i;  // Remain liquid
-          d_solid_d_next(i) = solid_d_i;  // Update advanced distance
+          // No solid neighbors within reach - update advanced distance only
+          d_solid_d_local(i) = solid_d_i;
         }
-      } else {
-        // Not liquid or not undercooled - no change
-        d_spin_next(i) = d_spin_current(i);
-        d_q0_next(i) = d_q0_current(i);
-        d_qx_next(i) = d_qx_current(i);
-        d_qy_next(i) = d_qy_current(i);
-        d_qz_next(i) = d_qz_current(i);
-        d_active_flag_next(i) = active_flag_i;
-        d_solid_d_next(i) = d_solid_d_current(i);
       }
+      // No else branch - site keeps current values if not liquid/undercooled
     }, naccept_local, debug_zero_G_local, debug_nonzero_G_local, debug_G_sum_local, debug_V_sum_local);
-
-  // Fence removed - single fence at end of app_update() handles all kernels
 
   // DEBUG: Accumulate kernel results into class members
   debug_solidification_count += naccept_local;
@@ -1369,31 +1212,24 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
    3. Mark as ACTIVE (flag=1) when solid_d reaches 0
 ------------------------------------------------------------------------- */
 
-int AppAdditiveExtTempTextureKokkos::smoothing_kernel()
+int AppAdditiveTextureKokkos::smoothing_kernel()
 {
-  // Capture all necessary data for device lambda
-  auto d_spin_current = buffer_spin.read_buffer;
-  auto d_spin_next = buffer_spin.write_buffer;
-  auto d_q0_current = buffer_q0.read_buffer;
-  auto d_q0_next = buffer_q0.write_buffer;
-  auto d_qx_current = buffer_qx.read_buffer;
-  auto d_qx_next = buffer_qx.write_buffer;
-  auto d_qy_current = buffer_qy.read_buffer;
-  auto d_qy_next = buffer_qy.write_buffer;
-  auto d_qz_current = buffer_qz.read_buffer;
-  auto d_qz_next = buffer_qz.write_buffer;
-  auto d_active_flag_current = buffer_active_flag.read_buffer;
-  auto d_active_flag_next = buffer_active_flag.write_buffer;
-  auto d_solid_d_current = buffer_solid_d.read_buffer;
-  auto d_solid_d_next = buffer_solid_d.write_buffer;
+  // Get device views - simple Views (color-based sweeping makes this race-safe)
+  auto d_spin_local = d_spin;
+  auto d_q0_local = d_q0;
+  auto d_qx_local = d_qx;
+  auto d_qy_local = d_qy;
+  auto d_qz_local = d_qz;
+  auto d_active_flag_local = d_active_flag;
+  auto d_solid_d_local = d_solid_d;
 
-  auto k_neighbor_d = k_neighbor.d_view;
-  auto k_numneigh_d = k_numneigh.d_view;
+  auto k_neighbor_d = k_neighbor.view_device();
+  auto k_numneigh_d = k_numneigh.view_device();
   auto d_grad_x_local = d_grad_x;
   auto d_grad_y_local = d_grad_y;
   auto d_grad_z_local = d_grad_z;
   auto d_symmetries_local = d_symmetries;
-  auto rand_pool_local = rand_pool;
+  auto rand_pool_local = *rand_pool;
 
   int nlocal_local = nlocal;
   int nrefine_local = nrefine;
@@ -1408,41 +1244,30 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel()
   double c3_local = c3;
 
   // Parallel sweep over all local sites with acceptance tracking
+  // Race-free: color-based sweeping ensures no conflicts
   int naccept_local = 0;
   Kokkos::parallel_reduce("SmoothingKernel", nlocal_local,
     KOKKOS_LAMBDA(int i, int& count) {
       // Get current state
-      int active_flag_i = d_active_flag_current(i);
-      double solid_d_i = d_solid_d_current(i);
+      int active_flag_i = d_active_flag_local(i);
+      double solid_d_i = d_solid_d_local(i);
 
       // Only smooth sites in the refinement range: (-nrefine-1, 0)
       if (solid_d_i >= 0.0 || solid_d_i <= -nrefine_local - 1) {
-        // Not eligible for smoothing - copy state unchanged
-        d_spin_next(i) = d_spin_current(i);
-        d_q0_next(i) = d_q0_current(i);
-        d_qx_next(i) = d_qx_current(i);
-        d_qy_next(i) = d_qy_current(i);
-        d_qz_next(i) = d_qz_current(i);
-        d_active_flag_next(i) = active_flag_i;
-
-        // Increment solid_d if in smoothing range
+        // Not eligible for smoothing - increment solid_d if in range
         if (solid_d_i < 0.0 && solid_d_i > -nrefine_local - 1) {
-          d_solid_d_next(i) = solid_d_i + 1.0;
-          // CRITICAL FIX: Reset solid_d to 0 when smoothing completes
-          // Keep active_flag unchanged (should remain SOLID=3)
-          // CPU version does NOT change active_flag after smoothing
-          if (d_solid_d_next(i) >= 0.0) {
-            d_solid_d_next(i) = 0.0;
+          d_solid_d_local(i) = solid_d_i + 1.0;
+          // Reset solid_d to 0 when smoothing completes
+          if (d_solid_d_local(i) >= 0.0) {
+            d_solid_d_local(i) = 0.0;
           }
-        } else {
-          d_solid_d_next(i) = solid_d_i;
         }
         return;
       }
 
       // Site is eligible for smoothing
-      int spin_i = d_spin_current(i);
-      double q_i[4] = {d_q0_current(i), d_qx_current(i), d_qy_current(i), d_qz_current(i)};
+      int spin_i = d_spin_local(i);
+      double q_i[4] = {d_q0_local(i), d_qx_local(i), d_qy_local(i), d_qz_local(i)};
 
       // Get thermal gradient direction at this site
       double grad_norm = Kokkos::sqrt(
@@ -1471,20 +1296,20 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel()
 
       for (int j = 0; j < nn && j < 26; j++) {
         int nbr = k_neighbor_d(i, j);
-        int nbr_flag = d_active_flag_current(nbr);
+        int nbr_flag = d_active_flag_local(nbr);
 
         // Only consider solid or active neighbors (not liquid, molten, or void)
         if (nbr_flag != 1 && nbr_flag != 3) continue;
 
         // Skip neighbors with same spin (no energy change possible)
-        int nbr_spin = d_spin_current(nbr);
+        int nbr_spin = d_spin_local(nbr);
         if (nbr_spin == spin_i) continue;
 
         // Calculate texture weight: mobility = c1 + c2 * cos(c3 * theta)
         // where theta is angle between neighbor's orientation and gradient
         double q_nbr[4] = {
-          d_q0_current(nbr), d_qx_current(nbr),
-          d_qy_current(nbr), d_qz_current(nbr)
+          d_q0_local(nbr), d_qx_local(nbr),
+          d_qy_local(nbr), d_qz_local(nbr)
         };
 
         double cos_min_angle = QuaternionOps::get_cosine_angle_q_u(q_nbr, grad_dir);
@@ -1502,18 +1327,18 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel()
 
       // If no eligible neighbors, keep current state
       if (num_eligible == 0) {
-        d_spin_next(i) = spin_i;
-        d_q0_next(i) = q_i[0];
-        d_qx_next(i) = q_i[1];
-        d_qy_next(i) = q_i[2];
-        d_qz_next(i) = q_i[3];
-        d_active_flag_next(i) = active_flag_i;
-        d_solid_d_next(i) = solid_d_i + 1.0;
+        d_spin_local(i) = spin_i;
+        d_q0_local(i) = q_i[0];
+        d_qx_local(i) = q_i[1];
+        d_qy_local(i) = q_i[2];
+        d_qz_local(i) = q_i[3];
+        d_active_flag_local(i) = active_flag_i;
+        d_solid_d_local(i) = solid_d_i + 1.0;
         // CRITICAL FIX: Reset solid_d to 0 when smoothing completes
         // Keep active_flag unchanged (should remain SOLID=3)
         // CPU version does NOT change active_flag after smoothing
-        if (d_solid_d_next(i) >= 0.0) {
-          d_solid_d_next(i) = 0.0;
+        if (d_solid_d_local(i) >= 0.0) {
+          d_solid_d_local(i) = 0.0;
         }
         return;
       }
@@ -1531,12 +1356,12 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel()
       }
 
       int selected_nbr = eligible_neighbors[selected_idx];
-      int new_spin = d_spin_current(selected_nbr);
+      int new_spin = d_spin_local(selected_nbr);
       double q_new[4] = {
-        d_q0_current(selected_nbr),
-        d_qx_current(selected_nbr),
-        d_qy_current(selected_nbr),
-        d_qz_current(selected_nbr)
+        d_q0_local(selected_nbr),
+        d_qx_local(selected_nbr),
+        d_qy_local(selected_nbr),
+        d_qz_local(selected_nbr)
       };
 
       // Compute energy change using quaternion disorientation
@@ -1544,14 +1369,14 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel()
       double energy_initial = 0.0;
       for (int j = 0; j < nn && j < 26; j++) {
         int nbr = k_neighbor_d(i, j);
-        int nbr_flag = d_active_flag_current(nbr);
+        int nbr_flag = d_active_flag_local(nbr);
 
         // Skip void and non-solid neighbors
         if (nbr_flag == 5 || (nbr_flag != 3 && nbr_flag != 1)) continue;
 
         double q_nbr[4] = {
-          d_q0_current(nbr), d_qx_current(nbr),
-          d_qy_current(nbr), d_qz_current(nbr)
+          d_q0_local(nbr), d_qx_local(nbr),
+          d_qy_local(nbr), d_qz_local(nbr)
         };
 
         double di = QuaternionOps::compute_disorientation(
@@ -1573,13 +1398,13 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel()
       double energy_final = 0.0;
       for (int j = 0; j < nn && j < 26; j++) {
         int nbr = k_neighbor_d(i, j);
-        int nbr_flag = d_active_flag_current(nbr);
+        int nbr_flag = d_active_flag_local(nbr);
 
         if (nbr_flag == 5 || (nbr_flag != 3 && nbr_flag != 1)) continue;
 
         double q_nbr[4] = {
-          d_q0_current(nbr), d_qx_current(nbr),
-          d_qy_current(nbr), d_qz_current(nbr)
+          d_q0_local(nbr), d_qx_local(nbr),
+          d_qy_local(nbr), d_qz_local(nbr)
         };
 
         double di = QuaternionOps::compute_disorientation(
@@ -1612,30 +1437,30 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel()
 
       // Apply move if accepted
       if (accept) {
-        d_spin_next(i) = new_spin;
-        d_q0_next(i) = q_new[0];
-        d_qx_next(i) = q_new[1];
-        d_qy_next(i) = q_new[2];
-        d_qz_next(i) = q_new[3];
+        d_spin_local(i) = new_spin;
+        d_q0_local(i) = q_new[0];
+        d_qx_local(i) = q_new[1];
+        d_qy_local(i) = q_new[2];
+        d_qz_local(i) = q_new[3];
       } else {
         // Keep current state
-        d_spin_next(i) = spin_i;
-        d_q0_next(i) = q_i[0];
-        d_qx_next(i) = q_i[1];
-        d_qy_next(i) = q_i[2];
-        d_qz_next(i) = q_i[3];
+        d_spin_local(i) = spin_i;
+        d_q0_local(i) = q_i[0];
+        d_qx_local(i) = q_i[1];
+        d_qy_local(i) = q_i[2];
+        d_qz_local(i) = q_i[3];
       }
 
       // Increment solid_d counter (moves toward 0)
-      d_solid_d_next(i) = solid_d_i + 1.0;
+      d_solid_d_local(i) = solid_d_i + 1.0;
 
       // CRITICAL FIX: Keep active_flag = 3 (SOLID) when smoothing completes
       // CPU version does NOT change active_flag after smoothing
       // Sites remain solid (active_flag=3) permanently until melted
-      if (d_solid_d_next(i) >= 0.0) {
-        d_solid_d_next(i) = 0.0;  // Reset counter
+      if (d_solid_d_local(i) >= 0.0) {
+        d_solid_d_local(i) = 0.0;  // Reset counter
       }
-      d_active_flag_next(i) = active_flag_i;  // Keep current state (should be 3=SOLID)
+      d_active_flag_local(i) = active_flag_i;  // Keep current state (should be 3=SOLID)
 
       // Track acceptance for stats output
       if (accept) count++;
@@ -1659,32 +1484,25 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel()
    Expected performance: 0.4 ms vs 1.2 ms (3× faster)
 ------------------------------------------------------------------------- */
 
-int AppAdditiveExtTempTextureKokkos::smoothing_kernel_efficient(
+int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
     Kokkos::View<int*> d_smoothing_sites, int n_sites)
 {
-  // Capture all necessary data for device lambda
-  auto d_spin_current = buffer_spin.read_buffer;
-  auto d_spin_next = buffer_spin.write_buffer;
-  auto d_q0_current = buffer_q0.read_buffer;
-  auto d_q0_next = buffer_q0.write_buffer;
-  auto d_qx_current = buffer_qx.read_buffer;
-  auto d_qx_next = buffer_qx.write_buffer;
-  auto d_qy_current = buffer_qy.read_buffer;
-  auto d_qy_next = buffer_qy.write_buffer;
-  auto d_qz_current = buffer_qz.read_buffer;
-  auto d_qz_next = buffer_qz.write_buffer;
-  auto d_active_flag_current = buffer_active_flag.read_buffer;
-  auto d_active_flag_next = buffer_active_flag.write_buffer;
-  auto d_solid_d_current = buffer_solid_d.read_buffer;
-  auto d_solid_d_next = buffer_solid_d.write_buffer;
+  // Get device views - simple Views (color-based sweeping makes this race-safe)
+  auto d_spin_local = d_spin;
+  auto d_q0_local = d_q0;
+  auto d_qx_local = d_qx;
+  auto d_qy_local = d_qy;
+  auto d_qz_local = d_qz;
+  auto d_active_flag_local = d_active_flag;
+  auto d_solid_d_local = d_solid_d;
 
-  auto k_neighbor_d = k_neighbor.d_view;
-  auto k_numneigh_d = k_numneigh.d_view;
+  auto k_neighbor_d = k_neighbor.view_device();
+  auto k_numneigh_d = k_numneigh.view_device();
   auto d_grad_x_local = d_grad_x;
   auto d_grad_y_local = d_grad_y;
   auto d_grad_z_local = d_grad_z;
   auto d_symmetries_local = d_symmetries;
-  auto rand_pool_local = rand_pool;
+  auto rand_pool_local = *rand_pool;
 
   int nrefine_local = nrefine;
   double theta_cut_local = theta_cut;
@@ -1705,10 +1523,10 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel_efficient(
       int i = d_smoothing_sites(idx);
 
       // All sites in this list need smoothing - no branching needed!
-      int active_flag_i = d_active_flag_current(i);
-      int spin_i = d_spin_current(i);
-      double solid_d_i = d_solid_d_current(i);
-      double q_i[4] = {d_q0_current(i), d_qx_current(i), d_qy_current(i), d_qz_current(i)};
+      int active_flag_i = d_active_flag_local(i);
+      int spin_i = d_spin_local(i);
+      double solid_d_i = d_solid_d_local(i);
+      double q_i[4] = {d_q0_local(i), d_qx_local(i), d_qy_local(i), d_qz_local(i)};
 
       // Get thermal gradient direction at this site
       double grad_norm = Kokkos::sqrt(
@@ -1732,8 +1550,8 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel_efficient(
 
       for (int n = 0; n < nn; n++) {
         int nbr = k_neighbor_d(i, n);
-        int nbr_spin = d_spin_current(nbr);
-        int nbr_flag = d_active_flag_current(nbr);
+        int nbr_spin = d_spin_local(nbr);
+        int nbr_flag = d_active_flag_local(nbr);
 
         // Only consider solid/active neighbors
         if (nbr_spin != -1 && (nbr_flag == 1 || nbr_flag == 3)) {
@@ -1751,8 +1569,8 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel_efficient(
 
             // Compute texture weight for this neighbor
             double q_nbr[4] = {
-              d_q0_current(nbr), d_qx_current(nbr),
-              d_qy_current(nbr), d_qz_current(nbr)
+              d_q0_local(nbr), d_qx_local(nbr),
+              d_qy_local(nbr), d_qz_local(nbr)
             };
 
             // Get cosine of angle between grain <100> and gradient
@@ -1770,18 +1588,18 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel_efficient(
 
       if (unique_count == 0) {
         // No neighbors - keep current state
-        d_spin_next(i) = spin_i;
-        d_q0_next(i) = q_i[0];
-        d_qx_next(i) = q_i[1];
-        d_qy_next(i) = q_i[2];
-        d_qz_next(i) = q_i[3];
-        d_active_flag_next(i) = active_flag_i;
-        d_solid_d_next(i) = solid_d_i + 1.0;
+        d_spin_local(i) = spin_i;
+        d_q0_local(i) = q_i[0];
+        d_qx_local(i) = q_i[1];
+        d_qy_local(i) = q_i[2];
+        d_qz_local(i) = q_i[3];
+        d_active_flag_local(i) = active_flag_i;
+        d_solid_d_local(i) = solid_d_i + 1.0;
         // CRITICAL FIX: Reset solid_d to 0 when smoothing completes
         // Keep active_flag unchanged (should remain SOLID=3)
         // CPU version does NOT change active_flag after smoothing
-        if (d_solid_d_next(i) >= 0.0) {
-          d_solid_d_next(i) = 0.0;
+        if (d_solid_d_local(i) >= 0.0) {
+          d_solid_d_local(i) = 0.0;
         }
         return;
       }
@@ -1808,7 +1626,7 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel_efficient(
           // Find actual neighbor index with this spin
           for (int n = 0; n < nn; n++) {
             int nbr = k_neighbor_d(i, n);
-            if (d_spin_current(nbr) == selected_spin) {
+            if (d_spin_local(nbr) == selected_spin) {
               selected_nbr = nbr;
               break;
             }
@@ -1821,10 +1639,10 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel_efficient(
 
       // Get proposed quaternion from selected neighbor
       double q_new[4] = {
-        d_q0_current(selected_nbr), d_qx_current(selected_nbr),
-        d_qy_current(selected_nbr), d_qz_current(selected_nbr)
+        d_q0_local(selected_nbr), d_qx_local(selected_nbr),
+        d_qy_local(selected_nbr), d_qz_local(selected_nbr)
       };
-      int new_spin = d_spin_current(selected_nbr);
+      int new_spin = d_spin_local(selected_nbr);
 
       // Compute energy change (Metropolis criterion)
       // Energy = sum of disorientations with neighbors
@@ -1834,8 +1652,8 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel_efficient(
       for (int n = 0; n < nn; n++) {
         int nbr = k_neighbor_d(i, n);
         double q_nbr[4] = {
-          d_q0_current(nbr), d_qx_current(nbr),
-          d_qy_current(nbr), d_qz_current(nbr)
+          d_q0_local(nbr), d_qx_local(nbr),
+          d_qy_local(nbr), d_qz_local(nbr)
         };
 
         // Initial energy
@@ -1880,29 +1698,29 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel_efficient(
 
       // Apply move
       if (accept) {
-        d_spin_next(i) = new_spin;
-        d_q0_next(i) = q_new[0];
-        d_qx_next(i) = q_new[1];
-        d_qy_next(i) = q_new[2];
-        d_qz_next(i) = q_new[3];
+        d_spin_local(i) = new_spin;
+        d_q0_local(i) = q_new[0];
+        d_qx_local(i) = q_new[1];
+        d_qy_local(i) = q_new[2];
+        d_qz_local(i) = q_new[3];
         count++;
       } else {
-        d_spin_next(i) = spin_i;
-        d_q0_next(i) = q_i[0];
-        d_qx_next(i) = q_i[1];
-        d_qy_next(i) = q_i[2];
-        d_qz_next(i) = q_i[3];
+        d_spin_local(i) = spin_i;
+        d_q0_local(i) = q_i[0];
+        d_qx_local(i) = q_i[1];
+        d_qy_local(i) = q_i[2];
+        d_qz_local(i) = q_i[3];
       }
 
       // Increment solid_d counter
-      d_solid_d_next(i) = solid_d_i + 1.0;
+      d_solid_d_local(i) = solid_d_i + 1.0;
       // CRITICAL FIX: Keep active_flag = 3 (SOLID) when smoothing completes
       // CPU version does NOT change active_flag after smoothing
       // Sites remain solid (active_flag=3) permanently until melted
-      if (d_solid_d_next(i) >= 0.0) {
-        d_solid_d_next(i) = 0.0;  // Reset counter
+      if (d_solid_d_local(i) >= 0.0) {
+        d_solid_d_local(i) = 0.0;  // Reset counter
       }
-      d_active_flag_next(i) = active_flag_i;  // Keep current state (should be 3=SOLID)
+      d_active_flag_local(i) = active_flag_i;  // Keep current state (should be 3=SOLID)
 
       rand_pool_local.free_state(generator);
     }, naccept_local);
@@ -1914,7 +1732,7 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel_efficient(
    App update - main time integration loop
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
+void AppAdditiveTextureKokkos::app_update(double dt_sweep)
 {
   // PHASE 3.1-3.2: Melting and nucleation kernels
   // PHASE 3.3-3.4: Will add solidification and smoothing
@@ -1927,62 +1745,27 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   double t_start, t_end;
   step_count++;
 
-  // 1. Update temperature from HDF5 source on CPU
+  // 1. Update temperature + fast-forward via the shared ThermalManager (CPU).
+  //    advance() fills host T[] from the source at the current time, runs the
+  //    Moser pause/reset + pause_below scheduling, and predicts idle-period
+  //    skips (filling T[] again at the advanced time). We apply the returned
+  //    decision here -- advance sim time, activate powder after a large skip,
+  //    or end the run -- so those app-level effects stay in the app.
+  refresh_thermal_host();
   t_start = MPI_Wtime();
-  update_temperature_from_source(time);
-  t_end = MPI_Wtime();
-  t_temp_update += (t_end - t_start);
-
-  // Phase 3.2: Fast-forward logic - skip inactive thermal periods
-  if (use_temperature_source && temperature_source) {
-    // Determine fast-forward threshold
-    double fast_forward_threshold = t_room;  // Default to room temperature
-
-    // If using HDF5 source, use its specific threshold
-    HDF5UnstructuredTemperatureSource* hdf5_source =
-      dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-    if (hdf5_source) {
-      fast_forward_threshold = hdf5_source->get_fast_forward_threshold();
-    }
-
-    // Check if any local sites have temperature above threshold
-    t_active = 0;
-    for (int i = 0; i < nlocal; i++) {
-      if (T[i] > fast_forward_threshold) {
-        t_active = 1;
-        break;  // Found an active site
-      }
-    }
-
-    // Global check across all MPI ranks
-    int global_t_active = 0;
-    MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, world);
-
-    // If no thermal activity anywhere and source supports time queries
-    if (global_t_active == 0 && time > 1e-6 && temperature_source->supports_time_queries()) {
-      double next_thermal_time = temperature_source->get_next_time_with_temperature(time, fast_forward_threshold);
-
-      if (next_thermal_time > time && next_thermal_time < std::numeric_limits<double>::max()) {
-        double time_skip = next_thermal_time - time;
-        if (domain->me == 0 && time_skip > 1e-6) {  // Report significant skips
-          fprintf(screen, "Fast-forward: Skipping %.6f s from t=%.6f to t=%.6f (all T < %.1f K)\n",
-                  time_skip, time, next_thermal_time, fast_forward_threshold);
-        }
-
-        // Jump to next thermal event
-        time = next_thermal_time;
-
-        // Update temperature at new time
-        update_temperature_from_source(time);
-
-        // Activate powder after significant time skip (new layer deposition)
-        if (time_skip > 1.0) {
-          activate_powder_sites();
-          last_powder_activation_time = time;
-        }
+  if (thermal->enabled()) {
+    ThermalManager::ThermalStep s = thermal->advance(time, stoptime);
+    if (s.end_run) { time = s.new_time; return; }
+    if (s.new_time > time) {
+      time = s.new_time;
+      if (s.activate_powder) {
+        activate_powder_sites();
+        last_powder_activation_time = time;
       }
     }
   }
+  t_end = MPI_Wtime();
+  t_temp_update += (t_end - t_start);
 
   // 2. Sync temperature to device
   t_start = MPI_Wtime();
@@ -2001,8 +1784,8 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   // This avoids launching the expensive kernel when no melting occurs (~80% of timesteps)
   int n_melt_candidates = 0;
   {
-    auto d_T_check = k_T.d_view;
-    auto d_active_flag_check = buffer_active_flag.read_buffer;
+    auto d_T_check = k_T.view_device();
+    auto d_active_flag_check = d_active_flag;
     double tl_check = this->tl;
     int nlocal_check = this->nlocal;
 
@@ -2018,11 +1801,7 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   bool melting_occurred = false;
   if (n_melt_candidates > 0) {
     naccept += melting_kernel();
-    swap_buffers();  // Swap double buffers after melting
     melting_occurred = true;
-  } else {
-    // No melting - buffers unchanged, no swap needed
-    // (Sites remain in current state)
   }
 
   t_end = MPI_Wtime();
@@ -2040,8 +1819,8 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   /* REMOVED: Conditional launch logic that prevented recovery
   int n_nucleation_candidates = 0;
   {
-    auto d_T_check = k_T.d_view;
-    auto d_active_flag_check = buffer_active_flag.read_buffer;
+    auto d_T_check = k_T.view_device();
+    auto d_active_flag_check = d_active_flag;
     double ts_check = this->ts;
     double tl_check = this->tl;
     int nlocal_check = this->nlocal;
@@ -2060,7 +1839,6 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   */
 
   naccept += nucleation_kernel();
-  swap_buffers();
 
   t_end = MPI_Wtime();
   t_nucleation += (t_end - t_start);
@@ -2072,8 +1850,8 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   // Check if any nuclei need growing (selective kernel launch optimization)
   int n_nuclei_sites = 0;
   {
-    auto d_solid_d_check = buffer_solid_d.read_buffer;
-    auto d_active_flag_check = buffer_active_flag.read_buffer;
+    auto d_solid_d_check = d_solid_d;
+    auto d_active_flag_check = d_active_flag;
     int nrefine_check = nrefine;
     Kokkos::parallel_reduce("CheckNucleiSites", nlocal,
       KOKKOS_LAMBDA(int i, int& count) {
@@ -2086,7 +1864,6 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   // Only launch particle kernel if there are nuclei to grow
   if (n_nuclei_sites > 0) {
     naccept += particle_flipper_kernel();
-    swap_buffers();
   }
 
   t_end = MPI_Wtime();
@@ -2095,7 +1872,6 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   // Phase 3.3: Solidification (epitaxial growth with texture weighting)
   t_start = MPI_Wtime();
   naccept += solidification_kernel();
-  swap_buffers();
   t_end = MPI_Wtime();
   t_solidification += (t_end - t_start);
 
@@ -2108,7 +1884,7 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   int n_smoothing_sites = 0;
   Kokkos::View<int*> d_smoothing_sites("smoothing_sites", nlocal);
   {
-    auto d_solid_d_check = buffer_solid_d.read_buffer;
+    auto d_solid_d_check = d_solid_d;
     int nrefine_check = nrefine;
     int nlocal_check = nlocal;
 
@@ -2131,7 +1907,6 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   // Process ONLY the sites in the compact list (not all 2.99M sites!)
   if (n_smoothing_sites > 0) {
     naccept += smoothing_kernel_efficient(d_smoothing_sites, n_smoothing_sites);
-    swap_buffers();
   }
 
   t_end = MPI_Wtime();
@@ -2147,7 +1922,7 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   // Sync device data to host for output/dumps
   // Ensures all iarray/darray fields are up-to-date for stats, dumps, and diagnostics
   // Overhead: ~1-3% of total runtime, but necessary for correct visualization/output
-  sync_data_to_host();
+  sync_app_data_to_host();
 
   // Activate powder once when melting first occurs
   // CRITICAL: Use MPI_Allreduce to check if ANY rank has melting, so all ranks call activate_powder_sites()
@@ -2174,7 +1949,7 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
 
     // Sync updated ghost data back to device for next timestep
     // Comment at line 284 says "called after MPI ghost exchange" - this is it!
-    sync_data_to_device();
+    sync_app_data_to_device();
   }
 
   // DEBUG: Print gradient/velocity statistics every 10 steps
@@ -2232,7 +2007,7 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
      3. At bottom boundary (substrate)
      4. Below meltpool surface (has active material above)
 ------------------------------------------------------------------------- */
-bool AppAdditiveExtTempTextureKokkos::is_powder_eligible_site(int i) {
+bool AppAdditiveTextureKokkos::is_powder_eligible_site(int i) {
   // Skip voids - they never participate
   if (active_flag[i] == 5) return false;
 
@@ -2282,7 +2057,7 @@ bool AppAdditiveExtTempTextureKokkos::is_powder_eligible_site(int i) {
    operation is infrequent (only at initialization and layer changes).
    Could be converted to a kernel for very large systems if needed.
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTextureKokkos::activate_powder_sites() {
+void AppAdditiveTextureKokkos::activate_powder_sites() {
   // Find local maximum z-coordinate of molten sites
   double local_max_molten_z = -1e100;  // Very negative initial value
   bool has_molten_sites = false;
@@ -2333,16 +2108,16 @@ void AppAdditiveExtTempTextureKokkos::activate_powder_sites() {
    Override stats to sync device data before computing statistics
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTextureKokkos::stats(char *strtmp)
+void AppAdditiveTextureKokkos::stats(char *strtmp)
 {
   // Sync device data to host so stats can access current values
-  sync_data_to_host();
+  sync_app_data_to_host();
 
   // Call parent class stats implementation
   AppPottsQuaternionKokkos::stats(strtmp);
 }
 
-void AppAdditiveExtTempTextureKokkos::stats_header(char *strtmp)
+void AppAdditiveTextureKokkos::stats_header(char *strtmp)
 {
   // Just forward to parent - no sync needed for header
   AppPottsQuaternionKokkos::stats_header(strtmp);
@@ -2352,29 +2127,31 @@ void AppAdditiveExtTempTextureKokkos::stats_header(char *strtmp)
    Process input commands
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTextureKokkos::input_app(char *command, int narg, char **arg)
+void AppAdditiveTextureKokkos::input_app(char *command, int narg, char **arg)
 {
-  // Handle temperature source setup (same as CPU version)
+  // Keep the thermal snapshot current before any thermal command handler
+  // (e.g. laser_path reads host->time/dx when building the scan path).
+  refresh_thermal_host();
+
+  // Temperature-I/O commands are delegated to the shared ThermalManager,
+  // exactly as the CPU AppAdditiveTexture routes them.
   if (strcmp(command, "setup_temperature_source") == 0) {
-    if (narg < 2) error->all(FLERR, "Illegal setup_temperature_source command");
+    thermal->setup_cmd(narg, arg);
 
-    std::string source_type(arg[0]);
+  } else if (strcmp(command, "laser_path") == 0) {
+    thermal->laser_path_cmd(narg, arg);
 
-    if (source_type == "rosenthal") {
-      temperature_source = std::make_unique<RosenthalTemperatureSource>(spk);
-    } else if (source_type == "hdf5_unstructured") {
-      temperature_source = std::make_unique<HDF5UnstructuredTemperatureSource>(spk);
-    } else {
-      error->all(FLERR, "Unknown temperature source type");
-    }
+  } else if (strcmp(command, "laser_fluctuations") == 0) {
+    thermal->laser_fluctuations_cmd(narg, arg);
 
-    // Pass remaining args to temperature source for setup (skip arg[0] which is source type)
-    std::vector<std::string> setup_args;
-    for (int i = 1; i < narg; i++) {
-      setup_args.push_back(std::string(arg[i]));
-    }
-    temperature_source->setup_temperature_source(setup_args);
-    use_temperature_source = true;
+  } else if (strcmp(command, "temperature_smooth") == 0) {
+    thermal->smooth_cmd(narg, arg);
+
+  } else if (strcmp(command, "nodal_smooth") == 0) {
+    thermal->nodal_smooth_cmd(narg, arg);
+
+  } else if (strcmp(command, "temperature_optimization") == 0) {
+    thermal->optimization_cmd(narg, arg);
 
   } else if (strcmp(command, "liquidus") == 0) {
     if (narg != 1) error->all(FLERR, "Illegal liquidus command");
@@ -2385,10 +2162,52 @@ void AppAdditiveExtTempTextureKokkos::input_app(char *command, int narg, char **
     ts = atof(arg[0]);
 
   } else if (strcmp(command, "texture_parameters") == 0) {
-    if (narg != 3) error->all(FLERR, "Illegal texture_parameters command");
-    c1 = atof(arg[0]);
-    c2 = atof(arg[1]);
-    c3 = atof(arg[2]);
+    // Reparametrized to match the CPU AppAdditiveTexture: 2 args (c2 c3) with
+    // c1 fixed at 1.0 (only mobility ratios affect roulette-wheel selection).
+    // The device kernels use mobility = c1 + c2*cos(c3*theta) with c1 == 1.0.
+    if (narg == 3)
+      error->all(FLERR,
+        "texture_parameters now takes 2 arguments (c2 c3), not 3. "
+        "The baseline coefficient c1 has been fixed at 1.0 because "
+        "only mobility ratios affect selection. To migrate an old "
+        "input file: texture_parameters c2/c1 c3 (divide old c2 by "
+        "old c1, drop old c1)");
+    if (narg != 2) error->all(FLERR, "Illegal texture_parameters command");
+    c1 = 1.0;
+    c2 = atof(arg[0]);
+    c3 = atof(arg[1]);
+
+    // Validation (mirrors AppAdditiveTexture): mob(theta)=1+c2*cos(c3*theta)
+    // over theta in [0, theta_max], theta_max = acos(1/sqrt(3)).
+    const double theta_max = std::acos(1.0 / std::sqrt(3.0));
+    if (c2 < 0.0)
+      error->all(FLERR,
+        "texture_parameters: c2 must be >= 0 (negative amplitude "
+        "would mean misaligned grains grow faster than aligned ones, "
+        "which is unphysical for cubic solidification)");
+    if (c3 < 0.0)
+      error->all(FLERR, "texture_parameters: c3 must be >= 0");
+    if (c3 * theta_max > MY_PI + 1.0e-12) {
+      char msg[256];
+      snprintf(msg, sizeof(msg),
+        "texture_parameters: c3 = %g exceeds monotonicity limit "
+        "pi/theta_max ~ %g; mobility would be non-monotonic in "
+        "misorientation angle", c3, MY_PI / theta_max);
+      error->all(FLERR, msg);
+    }
+    double mob_min = 1.0 + c2 * std::cos(c3 * theta_max);
+    if (mob_min < -1.0e-12) {
+      char msg[256];
+      snprintf(msg, sizeof(msg),
+        "texture_parameters: minimum mobility = %g < 0 at theta = "
+        "theta_max (= %g rad); roulette-wheel selection requires "
+        "non-negative mobility", mob_min, theta_max);
+      error->all(FLERR, msg);
+    }
+    if (c2 == 0.0 && screen)
+      fprintf(screen,
+        "WARNING: texture_parameters c2 = 0; mobility has no "
+        "orientation dependence\n");
 
   } else if (strcmp(command, "nucleation_density") == 0) {
     if (narg != 1) error->all(FLERR, "Illegal nucleation_density command");
@@ -2404,7 +2223,7 @@ void AppAdditiveExtTempTextureKokkos::input_app(char *command, int narg, char **
 
   } else if (strcmp(command, "fast_forward_search_window") == 0) {
     if (narg != 1) error->all(FLERR, "Illegal fast_forward_search_window command");
-    fast_forward_search_window = atof(arg[0]);
+    thermal->set_fast_forward_search_window(atof(arg[0]));
 
   } else if (strcmp(command, "mean_nuclei_volume") == 0) {
     if (narg != 1) error->all(FLERR, "Illegal mean_nuclei_volume command");
@@ -2434,16 +2253,6 @@ void AppAdditiveExtTempTextureKokkos::input_app(char *command, int narg, char **
       misorient_alpha = atof(arg[2]);
       if (misorient_alpha <= 0)
         error->all(FLERR, "Illegal misorientation_function alpha value: must be greater than 0");
-    }
-
-  } else if (strcmp(command, "sync_profiling") == 0) {
-    if (narg != 1) error->all(FLERR, "Illegal sync_profiling command");
-    if (strcmp(arg[0], "yes") == 0) {
-      enable_sync_profiling(true);
-    } else if (strcmp(arg[0], "no") == 0) {
-      enable_sync_profiling(false);
-    } else {
-      error->all(FLERR, "Illegal sync_profiling command: use 'yes' or 'no'");
     }
 
   } else {

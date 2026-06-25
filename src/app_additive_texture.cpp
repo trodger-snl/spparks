@@ -29,12 +29,10 @@
 #include <sstream>
 #include <iostream>
 #include <random>
-#include <chrono>
 #include <cstring>
-#include <limits>
 #include "math.h"
 #include "math_const.h"
-#include "app_additive_ext_temp_texture.h"
+#include "app_additive_texture.h"
 #include "comm_lattice.h"
 #include "lattice.h"
 #include "timer.h"
@@ -45,19 +43,25 @@
 #include "potts_quaternion/disorientation.h"
 #include "potts_quaternion/hcp_symmetries.h"
 #include "potts_quaternion/quaternion.h"
-#include "temperature_source_rosenthal.h"
-#include "temperature_source_hdf5_unstructured.h"
+#include "thermal_manager.h"
 
 
 using namespace SPPARKS_NS;
 using namespace MathConst;
 
+static std::vector<double> sample_random_unit_vector(RandomPark *random)
+{
+  const double z = 2.0 * random->uniform() - 1.0;
+  const double phi = 2.0 * MY_PI * random->uniform();
+  const double radial = sqrt(std::max(0.0, 1.0 - z * z));
+  return std::vector<double>{radial * cos(phi), radial * sin(phi), z};
+}
 
 /* ---------------------------------------------------------------------- */
 
 static char** construct_parent_args(char **arg) {
   static char* parent_args[3];
-  static char app_name[] = "additive_temperature_texture";
+  static char app_name[] = "additive/texture";
   static char crystal_type[] = "cubic";
   
   parent_args[0] = app_name;
@@ -69,7 +73,7 @@ static char** construct_parent_args(char **arg) {
 
 /* ---------------------------------------------------------------------- */
 
-AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, char **arg) :
+AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
   AppPottsQuaternion(spk,3,construct_parent_args(arg))
 {
 
@@ -84,11 +88,35 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     dt = atof(arg[3]); //The source timestep (in seconds)
     nrefine = atoi(arg[4]); //How many refinement MC steps to perform after a site solidifies
     
-    //I think we need all of these variables still!
+    // Integer arrays (iarray): 0=spin, 1=active_flag
+    // Double arrays (darray):  0=q0, 1=qx, 2=qy, 3=qz,
+    //   4=mobility_out, 5=T, 6=solid_d, 7=G, 8=V
     ndouble = 9;
     allow_app_update = 1;
     app_update_only = 1; //Skip solid-state growth for now.
     ninteger = 2;
+
+    // Ghost-communicated arrays (index-based selective comm):
+    //   iarray: {0,1} = spin, active_flag
+    //   darray: {0,1,2,3,5} = q0,qx,qy,qz,T (skips 4=mobility_out)
+    // Remaining arrays are local-only (used for I/O and physics).
+    ghost_iindices = NULL;
+    ghost_dindices = NULL;
+
+    nghost_iarray = 2;
+    int *gi = new int[nghost_iarray];
+    gi[0] = 0;  // spin
+    gi[1] = 1;  // active_flag
+    ghost_iindices = gi;
+
+    nghost_darray = 5;
+    int *gd = new int[nghost_darray];
+    gd[0] = 0;  // q0
+    gd[1] = 1;  // qx
+    gd[2] = 2;  // qy
+    gd[3] = 3;  // qz
+    gd[4] = 5;  // T (needed by normal_finder on ghost neighbors)
+    ghost_dindices = gd;
     sites = unique = NULL;
     unique_dot = NULL;
     neigh_dist = NULL;
@@ -121,6 +149,8 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
     max_misorient = 0;
     mis_thresh = 10.0 * MY_PI / 180.0; // Default 10 degrees converted to radians
     misorient_alpha = 5.0; // Default exponential steepness parameter
+    misorientation_target_mode = MISORI_TARGET_GRADIENT;
+    nucleation_mode = NUCLEATION_THRESHOLD;
 
     // Void generation defaults
     enable_voids = 0;              // Disabled by default
@@ -133,21 +163,28 @@ AppAdditiveExtTempTexture::AppAdditiveExtTempTexture(SPPARKS *spk, int narg, cha
 
     // Initialize bounds checking variables
 
-    // Initialize modular temperature source system
-    temperature_source = nullptr;
-    use_temperature_source = true;  // Always use modular temperature system
-    fast_forward_search_window = 0.1;  // Default 100ms search window
+    // Temperature-I/O orchestration (source setup/update, laser scan path,
+    // pause/reset scheduling, fast-forward predictors, smoothing) lives in
+    // the ThermalManager. It initializes its own defaults in its ctor.
+    thermal = std::unique_ptr<ThermalManager>(new ThermalManager(spk, &thermal_host_));
 
     // Initialize powder activation tracking
     last_powder_activation_time = -1.0;  // Force activation at init
 
+    // Single-voxel grain cleanup is off until `single_voxel_cleanup on`
+    // is issued in the input script.
+    single_voxel_cleanup_enabled = false;
+    n_single_voxel_flips = 0;
+    smooth_greedy_multiproposal_enabled = false;
+    nuclei_smooth_enabled = false;
+
     //add the double array
-    recreate_arrays();  
+    recreate_arrays();
 }
 
 /* ---------------------------------------------------------------------- */
 
-AppAdditiveExtTempTexture::~AppAdditiveExtTempTexture()
+AppAdditiveTexture::~AppAdditiveTexture()
 {
   // Only delete arrays that are specific to this class
   // Parent class destructors will handle sites, unique, unique_neigh
@@ -157,14 +194,42 @@ AppAdditiveExtTempTexture::~AppAdditiveExtTempTexture()
   if (nucleation_temps) delete[] nucleation_temps;
   if (nucleation_sizes) delete[] nucleation_sizes;
   if (solid_front_coeffs) delete[] solid_front_coeffs;
+  if (ghost_iindices) delete [] ghost_iindices;
+  if (ghost_dindices) delete [] ghost_dindices;
 }
 
 /* ----------------------------------------------------------------------
    input script commands unique to this app
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
+// Populate the ThermalHost snapshot ThermalManager reads/writes. Cheap pointer
+// and scalar copies; called before any thermal-> use so the manager sees the
+// current lattice state without a typed back-pointer into this app.
+void AppAdditiveTexture::refresh_thermal_host()
 {
+  thermal_host_.T = T;
+  thermal_host_.xyz = xyz;
+  thermal_host_.numneigh = numneigh;
+  thermal_host_.neighbor = neighbor;
+  thermal_host_.nlocal = nlocal;
+  thermal_host_.dx = dx;
+  thermal_host_.tl = tl;
+  thermal_host_.ts = ts;
+  thermal_host_.t_room = t_room;
+  thermal_host_.time = time;
+  thermal_host_.dt = dt;
+  thermal_host_.comm = comm;
+  thermal_host_.ghost_iindices = ghost_iindices;
+  thermal_host_.nghost_iarray = nghost_iarray;
+  thermal_host_.ghost_dindices = ghost_dindices;
+  thermal_host_.nghost_darray = nghost_darray;
+}
+
+void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
+{
+  // Keep the thermal snapshot current before any thermal command handler
+  // (e.g. laser_path reads host->time/dx when building the scan path).
+  refresh_thermal_host();
   if (strcmp(command,"liquidus") == 0) {
     if (narg != 1) error->all(FLERR,"Illegal liquidus command");
     tl = atof(arg[0]);
@@ -223,10 +288,78 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
     }
   }
   else if (strcmp(command,"texture_parameters") == 0) {
-     if (narg != 3) error->all(FLERR,"Illegal texture_parameters command");
-     c1 = atof(arg[0]);
-     c2 = atof(arg[1]);
-     c3 = atof(arg[2]);
+     if (narg == 3)
+       error->all(FLERR,
+         "texture_parameters now takes 2 arguments (c2 c3), not 3. "
+         "The baseline coefficient c1 has been fixed at 1.0 because "
+         "only mobility ratios affect selection. To migrate an old "
+         "input file: texture_parameters c2/c1 c3 (divide old c2 by "
+         "old c1, drop old c1)");
+     if (narg != 2) error->all(FLERR,"Illegal texture_parameters command");
+
+     // c1 is fixed at 1.0 by normalization convention. The roulette-wheel
+     // selection in site_event_solidification is invariant under uniform
+     // scaling of mobility (only ratios matter), so c1 is mathematically
+     // non-identifiable. Hardcoding it here removes the degenerate
+     // parameter and makes input files unambiguous.
+     c1 = 1.0;
+     c2 = atof(arg[0]);
+     c3 = atof(arg[1]);
+
+     // -------- Validation --------
+     // Mobility model:  mob(theta) = 1 + c2 * cos(c3 * theta)
+     // theta is the misorientation angle between the grain's <100> family
+     // and the local thermal gradient, folded into the cubic fundamental
+     // zone by get_cosine_of_minumum_angle_between_q_and_u.
+     const double theta_max = std::acos(1.0 / std::sqrt(3.0));  // ~0.9553 rad
+
+     // Rule 1: signs.  c2 < 0 reverses the physical meaning (misaligned
+     // grains preferred), which is unphysical for cubic solidification.
+     // c3 < 0 is mathematically redundant since cosine is even.
+     if (c2 < 0.0) {
+       error->all(FLERR,
+         "texture_parameters: c2 must be >= 0 (negative amplitude "
+         "would mean misaligned grains grow faster than aligned ones, "
+         "which is unphysical for cubic solidification)");
+     }
+     if (c3 < 0.0) {
+       error->all(FLERR,
+         "texture_parameters: c3 must be >= 0");
+     }
+
+     // Rule 2: monotonicity of mob(theta) on [0, theta_max].
+     //   d/dtheta mob = -c2 * c3 * sin(c3 * theta) <= 0
+     //   requires c3 * theta_max <= pi (with c2 >= 0 from Rule 1).
+     if (c3 * theta_max > MY_PI + 1.0e-12) {
+       char msg[256];
+       snprintf(msg, sizeof(msg),
+         "texture_parameters: c3 = %g exceeds monotonicity limit "
+         "pi/theta_max ~ %g; mobility would be non-monotonic in "
+         "misorientation angle",
+         c3, MY_PI / theta_max);
+       error->all(FLERR, msg);
+     }
+
+     // Rule 3: positivity of mobility at every angle in [0, theta_max].
+     //   With c2 >= 0 and c3 * theta_max <= pi, the binding angle is
+     //   theta = theta_max where cos is most negative on the interval.
+     double mob_min = 1.0 + c2 * std::cos(c3 * theta_max);
+     if (mob_min < -1.0e-12) {
+       char msg[256];
+       snprintf(msg, sizeof(msg),
+         "texture_parameters: minimum mobility = %g < 0 at theta = "
+         "theta_max (= %g rad); roulette-wheel selection in "
+         "site_event_solidification requires non-negative mobility",
+         mob_min, theta_max);
+       error->all(FLERR, msg);
+     }
+
+     // -------- Soft warning --------
+     if (c2 == 0.0 && screen) {
+       fprintf(screen,
+         "WARNING: texture_parameters c2 = 0; mobility has no "
+         "orientation dependence\n");
+     }
   }
   else if (strcmp(command,"misorientation_function") == 0) {
      if (narg != 2 && narg != 3) error->all(FLERR,"Illegal misorientation_function command");
@@ -242,11 +375,36 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
      if (mis_thresh < 0)
        error->all(FLERR,"Illegal misorientation_function threshold value: must be greater than 0");
   }
+  else if (strcmp(command,"misorientation_target") == 0) {
+     if (narg != 1) error->all(FLERR,"Illegal misorientation_target command");
+     if (strcmp(arg[0],"gradient") == 0) {
+       misorientation_target_mode = MISORI_TARGET_GRADIENT;
+     } else if (strcmp(arg[0],"random") == 0) {
+       misorientation_target_mode = MISORI_TARGET_RANDOM;
+     } else if (strcmp(arg[0],"random_rotation") == 0) {
+       misorientation_target_mode = MISORI_TARGET_RANDOM_ROTATION;
+     } else {
+       error->all(FLERR,"Illegal misorientation_target value: use gradient, random, or random_rotation");
+     }
+  }
+  else if (strcmp(command,"nucleation_mode") == 0) {
+    if (narg != 1) error->all(FLERR,"Illegal nucleation_mode command");
+    if (strcmp(arg[0],"threshold") == 0) {
+      nucleation_mode = NUCLEATION_THRESHOLD;
+    } else if (strcmp(arg[0],"continuous") == 0) {
+      nucleation_mode = NUCLEATION_CONTINUOUS;
+    } else {
+      error->all(FLERR,"Illegal nucleation_mode value: use threshold or continuous");
+    }
+  }
   else if (strcmp(command,"fast_forward_search_window") == 0) {
      if (narg != 1) error->all(FLERR,"Illegal fast_forward_search_window command");
-     fast_forward_search_window = atof(arg[0]);
-     if (fast_forward_search_window <= 0.0)
-       error->all(FLERR,"Illegal fast_forward_search_window value: must be > 0");
+     thermal->set_fast_forward_search_window(atof(arg[0]));
+  }
+  else if (strcmp(command,"temperature_optimization") == 0) {
+     // Usage: temperature_optimization <option> <on|off>
+     // Options: spatial_grid, element_cache, nodal_precompute
+     thermal->optimization_cmd(narg, arg);
   }
 
   // Void generation commands
@@ -286,12 +444,73 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
       error->all(FLERR,"Illegal void_size_distribution: max must be > min");
   }
 
-  // Modular temperature source commands
+  // Modular temperature source commands (delegated to the ThermalManager)
   else if (strcmp(command,"setup_temperature_source") == 0) {
-    setup_temperature_source_cmd(narg, arg);
+    thermal->setup_cmd(narg, arg);
   }
-  else if (strcmp(command,"scan_path") == 0) {
-    setup_scan_path_cmd(narg, arg);
+  else if (strcmp(command,"laser_path") == 0) {
+    thermal->laser_path_cmd(narg, arg);
+  }
+  else if (strcmp(command,"laser_fluctuations") == 0) {
+    thermal->laser_fluctuations_cmd(narg, arg);
+  }
+
+  else if (strcmp(command,"temperature_smooth") == 0) {
+    // Solidification-band Gaussian smoothing of T[]. See ThermalManager.
+    thermal->smooth_cmd(narg, arg);
+  }
+
+  else if (strcmp(command,"nodal_smooth") == 0) {
+    // Mesh-Laplacian smoothing forwarded to the temperature source.
+    thermal->nodal_smooth_cmd(narg, arg);
+  }
+
+  else if (strcmp(command,"single_voxel_cleanup") == 0) {
+    // Usage: single_voxel_cleanup on|off
+    // Post-smoothing pass that flips 1-voxel grains into the
+    // energy-minimizing neighboring grain. Default off.
+    if (narg != 1)
+      error->all(FLERR,"Illegal single_voxel_cleanup command");
+    if (strcmp(arg[0],"on") == 0) single_voxel_cleanup_enabled = true;
+    else if (strcmp(arg[0],"off") == 0) single_voxel_cleanup_enabled = false;
+    else error->all(FLERR,"single_voxel_cleanup: argument must be on or off");
+    if (domain->me == 0)
+      fprintf(screen,"Single-voxel grain cleanup %s\n",
+              single_voxel_cleanup_enabled ? "enabled" : "disabled");
+  }
+
+  else if (strcmp(command,"smooth_greedy_multiproposal") == 0) {
+    // Usage: smooth_greedy_multiproposal on|off
+    // When on, smooth_site() picks the energy-minimizing distinct
+    // neighbor spin instead of testing one random proposal per pass.
+    // Each nrefine pass becomes a steepest-descent step. Default off
+    // (preserves the historical single-random-proposal behavior).
+    if (narg != 1)
+      error->all(FLERR,"Illegal smooth_greedy_multiproposal command");
+    if (strcmp(arg[0],"on") == 0) smooth_greedy_multiproposal_enabled = true;
+    else if (strcmp(arg[0],"off") == 0) smooth_greedy_multiproposal_enabled = false;
+    else error->all(FLERR,"smooth_greedy_multiproposal: argument must be on or off");
+    if (domain->me == 0)
+      fprintf(screen,"smooth_greedy_multiproposal %s\n",
+              smooth_greedy_multiproposal_enabled ? "enabled" : "disabled");
+  }
+
+  else if (strcmp(command,"nuclei_smooth") == 0) {
+    // Usage: nuclei_smooth on|off
+    // When on, nucleation events (both the seed and the captured shell)
+    // initialize solid_d to -1 instead of the lock-out sentinels
+    // (-nrefine-2 / -nrefine-3), making nucleated sites eligible for
+    // smooth_site() and the greedy multiproposal variant just like
+    // epitaxially solidified sites. Default off preserves the historical
+    // behavior where nuclei skip smoothing entirely.
+    if (narg != 1)
+      error->all(FLERR,"Illegal nuclei_smooth command");
+    if (strcmp(arg[0],"on") == 0) nuclei_smooth_enabled = true;
+    else if (strcmp(arg[0],"off") == 0) nuclei_smooth_enabled = false;
+    else error->all(FLERR,"nuclei_smooth: argument must be on or off");
+    if (domain->me == 0)
+      fprintf(screen,"nuclei_smooth %s\n",
+              nuclei_smooth_enabled ? "enabled" : "disabled");
   }
 
   else error->all(FLERR,"Unrecognized command");
@@ -300,75 +519,43 @@ void AppAdditiveExtTempTexture::input_app(char *command, int narg, char **arg)
 /* ----------------------------------------------------------------------
   When app_update is called, read in an input file
  ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::app_update(double dt)
+void AppAdditiveTexture::app_update(double dt)
 {
   // CPU Performance Timing Instrumentation
   static int step_count = 0;
-  static double t_temp_update = 0.0, t_fast_forward = 0.0;
+  static double t_temp_update = 0.0;
   static double t_melting = 0.0, t_mushy = 0.0, t_smoothing = 0.0;
   static double t_comm = 0.0;
   double t_start, t_end;
   step_count++;
 
-  //Reset t_active to assume we don't have a melt pool right now
-  t_active = 0;
+  // Reset per-call single-voxel cleanup counter
+  n_single_voxel_flips = 0;
 
-  // Update temperature first to get current temperatures
-  if (use_temperature_source) {
-    // Time: Temperature update from HDF5
+  // Refresh the ThermalHost snapshot so the manager sees the current lattice
+  // pointers, sim time, and dt for this step.
+  refresh_thermal_host();
+
+  // Update the temperature field and run fast-forward, delegated to the
+  // ThermalManager. advance() fills T[] from the modular source, runs the
+  // Moser pause/reset + pause_below scheduling, and predicts idle-period
+  // skips. We apply the returned decision here: advance sim time, activate
+  // powder after a large skip, or end the run early. The app-level effects
+  // (sim time, powder activation) stay in the app.
+  if (thermal->enabled()) {
     t_start = MPI_Wtime();
-    // Use new modular temperature source system
-    update_temperature_from_source(time);
+    ThermalManager::ThermalStep s = thermal->advance(time, stoptime);
     t_end = MPI_Wtime();
     t_temp_update += (t_end - t_start);
 
-    // Check for active sites using temperature source's threshold
-    double fast_forward_threshold = t_room; // Default to t_room
-
-    // If using HDF5 temperature source, use its threshold
-    HDF5UnstructuredTemperatureSource* hdf5_source =
-      dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-    if (hdf5_source) {
-      fast_forward_threshold = hdf5_source->get_fast_forward_threshold();
-    }
-
-    for (int i = 0; i < nlocal; i++) {
-      if (T[i] > fast_forward_threshold) t_active = 1;
-    }
-
-    // Use MPI_Allreduce to check if t_active is 0 on all processors
-    int global_t_active;
-    MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-
-
-    // If no active sites and temperature source supports time queries, fast forward
-    // Time: Fast-forward logic
-    t_start = MPI_Wtime();
-    if (global_t_active == 0 && time > 1e-6 && temperature_source->supports_time_queries()) {
-      double next_thermal_time = temperature_source->get_next_time_with_temperature(time, fast_forward_threshold);
-
-      if (next_thermal_time > time && next_thermal_time < std::numeric_limits<double>::max()) {
-        double time_skip = next_thermal_time - time;
-        if (domain->me == 0 && time_skip > 1e-6) {  // Only report significant time skips
-          std::cout << "Fast-forward: Skipping " << time_skip << " seconds from time "
-                    << time << " to " << next_thermal_time << " (all temperatures < " << fast_forward_threshold << "K)" << std::endl;
-        }
-
-        // Update simulation time
-        time = next_thermal_time;
-
-        // Update temperatures at new time
-        update_temperature_from_source(time);
-
-        // Activate powder after significant time skip (new layer deposition)
-        if (time_skip > 1.0) {
-          activate_powder_sites();
-          last_powder_activation_time = time;
-        }
+    if (s.end_run) { time = s.new_time; return; }
+    if (s.new_time > time) {
+      time = s.new_time;
+      if (s.activate_powder) {
+        activate_powder_sites();
+        last_powder_activation_time = time;
       }
     }
-    t_end = MPI_Wtime();
-    t_fast_forward += (t_end - t_start);
   }
 
   // Common processing for both temperature systems
@@ -377,6 +564,12 @@ void AppAdditiveExtTempTexture::app_update(double dt)
   bool melting_occurred = false;
 
   //iterate through all the sites for phase transitions (applies to both systems)
+  // Time each phase-transition category around the loop, not per-site
+  double t_melt_start = 0, t_melt_accum = 0;
+  double t_mushy_start = 0, t_mushy_accum = 0;
+  double t_smooth_start = 0, t_smooth_accum = 0;
+  bool in_melting = false, in_mushy = false, in_smoothing = false;
+
   for (int i=0; i<nlocal; i++) {
     // Skip void sites - they never change state
     if (active_flag[i] == 5) continue;
@@ -386,8 +579,7 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     //to avoid repeated initialization
     if( (T[i] >= tl) && active_flag[i] != 2) {
         melting_occurred = true;
-        // Time: Melting operations
-        t_start = MPI_Wtime();
+        if (!in_melting) { t_melt_start = MPI_Wtime(); in_melting = true; }
         active_flag[i] = 2;
         spin[i] = (int) (nspins * ranapp->uniform());
         // Create random orientation as each site
@@ -399,28 +591,60 @@ void AppAdditiveExtTempTexture::app_update(double dt)
         solid_d[i] = 0;
         G[i] = 0;
         V[i] = 0;
-        t_end = MPI_Wtime();
-        t_melting += (t_end - t_start);
+        if (nucleation_mode == NUCLEATION_CONTINUOUS) {
+          T_prev_map[i] = T[i];
+        }
     }
     //If we're molten, call the mushy_phase function to figure out any phase change
     else if (active_flag[i] == 2 && T[i] <= tl) {
-        // Time: Mushy phase (includes nucleation + solidification + gradient computation)
-        t_start = MPI_Wtime();
+        // Flush melting timer if switching categories
+        if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
+        if (!in_mushy) { t_mushy_start = MPI_Wtime(); in_mushy = true; }
         mushy_phase(i, ranapp);
-        t_end = MPI_Wtime();
-        t_mushy += (t_end - t_start);
+        if (nucleation_mode == NUCLEATION_CONTINUOUS && active_flag[i] == 2) {
+          T_prev_map[i] = T[i];
+        }
     }
     //Call smoothing
     else if(solid_d[i] < 0 && solid_d[i] > -nrefine -1 && active_flag[i] == 3)    {
-            // Time: Smoothing operations
-            t_start = MPI_Wtime();
+            // Flush prior timers if switching categories
+            if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
+            if (in_mushy) { t_mushy_accum += MPI_Wtime() - t_mushy_start; in_mushy = false; }
+            if (!in_smoothing) { t_smooth_start = MPI_Wtime(); in_smoothing = true; }
             mobility_out[i] = 1;
             smooth_site(i);
             solid_d[i]--;
-            t_end = MPI_Wtime();
-            t_smoothing += (t_end - t_start);
+    }
+    // Single-voxel grain cleanup (opt-in). Triggers exactly once per voxel
+    // after it exits the smoothing window. Covers both the epitaxial-end
+    // state (solid_d == -nrefine-1) and the nucleation-start state
+    // (solid_d == -nrefine-2). A resolved voxel is marked with
+    // solid_d = -nrefine-3 so the branch never re-fires.
+    else if (single_voxel_cleanup_enabled &&
+             active_flag[i] == 3 &&
+             solid_d[i] <= -nrefine - 1 &&
+             solid_d[i] >  -nrefine - 3) {
+            if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
+            if (in_mushy) { t_mushy_accum += MPI_Wtime() - t_mushy_start; in_mushy = false; }
+            if (in_smoothing) { t_smooth_accum += MPI_Wtime() - t_smooth_start; in_smoothing = false; }
+            if (flip_single_voxel_grain(i)) {
+                solid_d[i] = -nrefine - 3;
+            }
+    }
+    else {
+        // Non-transition site: flush any open timer
+        if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
+        if (in_mushy) { t_mushy_accum += MPI_Wtime() - t_mushy_start; in_mushy = false; }
+        if (in_smoothing) { t_smooth_accum += MPI_Wtime() - t_smooth_start; in_smoothing = false; }
     }
   }
+  // Flush any timer still open after the loop
+  if (in_melting) t_melt_accum += MPI_Wtime() - t_melt_start;
+  if (in_mushy) t_mushy_accum += MPI_Wtime() - t_mushy_start;
+  if (in_smoothing) t_smooth_accum += MPI_Wtime() - t_smooth_start;
+  t_melting += t_melt_accum;
+  t_mushy += t_mushy_accum;
+  t_smoothing += t_smooth_accum;
 
   // Activate powder once when melting first occurs
   // CRITICAL: Use MPI_Allreduce to check if ANY rank has melting, so all ranks call activate_powder_sites()
@@ -436,30 +660,56 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     }
   }
 
-  //Communicate changes
+  // Communicate only KMC-relevant ghost arrays via index-based selection
   t_start = MPI_Wtime();
   timer->stamp();
-  comm->all();
+  comm->all_selective(ghost_iindices, nghost_iarray,
+                      ghost_dindices, nghost_darray);
   timer->stamp(TIME_COMM);
-
-    // Use MPI_Allreduce to check if t_active is 0 on all processors
-    int global_t_active;
-    timer->stamp();
-    MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-    timer->stamp(TIME_COMM);
   t_end = MPI_Wtime();
   t_comm += (t_end - t_start);
 
+  // Optional isotherm-compactness diagnostic for tuning smoothing.
+  // Ghosts are guaranteed fresh here (just synced above).
+  thermal->maybe_run_diagnostics(step_count);
+
+  // Report single-voxel cleanup activity. Reduced across ranks so the
+  // log line reflects the global domain, not just rank 0.
+  if (single_voxel_cleanup_enabled) {
+    long long local_flips = n_single_voxel_flips;
+    long long global_flips = 0;
+    MPI_Allreduce(&local_flips, &global_flips, 1, MPI_LONG_LONG, MPI_SUM, world);
+    if (global_flips > 0 && domain->me == 0) {
+      fprintf(screen,"single_voxel_cleanup: flipped %lld voxels this step\n",
+              global_flips);
+    }
+  }
+
   // Print timing summary every 100 steps (on rank 0 only)
   if (step_count % 100 == 0 && domain->me == 0) {
-    double total_time = t_temp_update + t_fast_forward + t_melting + t_mushy + t_smoothing + t_comm;
+    const double g_t_cache_build  = thermal->cache_build_time();
+    const double g_t_temp_prepare = thermal->prepare_time();
+    const double g_t_temp_site_loop = thermal->site_loop_time();
+    double total_time = t_temp_update + t_melting + t_mushy + t_smoothing + t_comm;
+    double t_temp_other = t_temp_update - g_t_temp_prepare - g_t_temp_site_loop - g_t_cache_build;
+    double steady_state_time = total_time - g_t_cache_build;
 
     fprintf(screen, "\n=== CPU Timing Summary (after %d steps, %.4f total sec) ===\n",
             step_count, total_time);
-    fprintf(screen, "  Temperature update:   %8.3f s (%5.1f%%)  [HDF5 loading]\n",
+    fprintf(screen, "  Temperature update:   %8.3f s (%5.1f%%)\n",
             t_temp_update, 100.0*t_temp_update/total_time);
-    fprintf(screen, "  Fast-forward logic:   %8.3f s (%5.1f%%)  [Time skip checks]\n",
-            t_fast_forward, 100.0*t_fast_forward/total_time);
+    if (g_t_cache_build > 0.001) {
+      fprintf(screen, "    - Cache build:      %8.3f s (%5.1f%%)  [One-time per layer]\n",
+              g_t_cache_build, 100.0*g_t_cache_build/total_time);
+    }
+    fprintf(screen, "    - Prepare:          %8.3f s (%5.1f%%)  [Nodal temp precompute]\n",
+            g_t_temp_prepare, 100.0*g_t_temp_prepare/total_time);
+    fprintf(screen, "    - Site loop:        %8.3f s (%5.1f%%)  [Per-site interpolation]\n",
+            g_t_temp_site_loop, 100.0*g_t_temp_site_loop/total_time);
+    if (t_temp_other > 0.001) {
+      fprintf(screen, "    - Other:            %8.3f s (%5.1f%%)  [Layer load, etc.]\n",
+              t_temp_other, 100.0*t_temp_other/total_time);
+    }
     fprintf(screen, "  Melting:              %8.3f s (%5.1f%%)  [T >= Tl transitions]\n",
             t_melting, 100.0*t_melting/total_time);
     fprintf(screen, "  Mushy phase:          %8.3f s (%5.1f%%)  [Nucleation + solidification + gradients]\n",
@@ -469,7 +719,8 @@ void AppAdditiveExtTempTexture::app_update(double dt)
     fprintf(screen, "  Communication:        %8.3f s (%5.1f%%)  [MPI comm]\n",
             t_comm, 100.0*t_comm/total_time);
     fprintf(screen, "  --------------------------------------------------------\n");
-    fprintf(screen, "  Average time/step:    %8.4f s\n", total_time / step_count);
+    fprintf(screen, "  Average time/step:    %8.4f s (overall)\n", total_time / step_count);
+    fprintf(screen, "  Steady-state avg:     %8.4f s (excl. cache build)\n", steady_state_time / step_count);
     fprintf(screen, "=========================================================\n\n");
   }
 
@@ -484,7 +735,7 @@ void AppAdditiveExtTempTexture::app_update(double dt)
    than 1 (which we should avoid), allow all spins to nucleate. If not, call a random number
    between zero and one. If the number is less than the fraction, make true. If not, make false.
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::nucleation_spins(RandomPark *random) {
+void AppAdditiveTexture::nucleation_spins(RandomPark *random) {
     timer->stamp();
     
     nucleation_flags = new int[nspins];
@@ -517,7 +768,7 @@ void AppAdditiveExtTempTexture::nucleation_spins(RandomPark *random) {
    set site value ptrs each time iarray/darray are reallocated
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::grow_app()
+void AppAdditiveTexture::grow_app()
 {
   // Call parent to set up quaternion arrays (q0, qx, qy, qz)
   AppPottsQuaternion::grow_app();
@@ -537,7 +788,7 @@ void AppAdditiveExtTempTexture::grow_app()
    check validity of site values
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::init_app()
+void AppAdditiveTexture::init_app()
 {
   // Duplicate parent's array allocation logic without quaternion randomization
   delete[] sites;
@@ -611,7 +862,23 @@ void AppAdditiveExtTempTexture::init_app()
 	MPI_Bcast(nucleation_temps,nspins, MPI_DOUBLE,0,world);
 	MPI_Bcast(nucleation_sizes,nspins, MPI_DOUBLE,0,world);
 	timer->stamp(TIME_COMM);
-	
+
+	// Validate parameters for continuous nucleation mode
+	if (nucleation_mode == NUCLEATION_CONTINUOUS) {
+	  if (tsig <= 0.0)
+	    error->all(FLERR, "undercooling_deviation must be > 0 for continuous nucleation mode");
+	  if (!thermal->uses_temperature_source())
+	    error->all(FLERR, "continuous nucleation mode requires a temperature source");
+	}
+
+	if (domain->me == 0) {
+	  if (nucleation_mode == NUCLEATION_THRESHOLD) {
+	    fprintf(screen, "Nucleation mode: threshold (tc=%.2f, tsig=%.2f)\n", tc, tsig);
+	  } else {
+	    fprintf(screen, "Nucleation mode: continuous Gaussian (tc=%.2f, tsig=%.2f)\n", tc, tsig);
+	  }
+	}
+
 	//Initialize the neigh_dist array need to fill with good values
 	neigh_dist = new double[26];
 	neigh_dist[0] = sqrt3 * dx;
@@ -685,7 +952,7 @@ void AppAdditiveExtTempTexture::init_app()
    and exclude non-solidified neighbors from energy calculation
 ------------------------------------------------------------------------- */
 
-double AppAdditiveExtTempTexture::site_energy(int i) {
+double AppAdditiveTexture::site_energy(int i) {
   timer->stamp();
 
   // Voids have no energy
@@ -732,129 +999,50 @@ double AppAdditiveExtTempTexture::site_energy(int i) {
 }
 
 /* ----------------------------------------------------------------------
-   rKMC method
-   perform a site event with no null bin rejection
-   flip to random neighbor spin without null bin
-   technically this is an incorrect rejection-KMC algorithm
-   I think we can eventually get rid of mobilityout
+   site_event_rejection is intentionally not used by this app.
+
+   AppAdditiveTexture overrides app_update() (see line ~400) to drive
+   site evolution directly via mushy_phase()/site_event_solidification() and
+   smooth_site(); the framework's rejection-KMC sweep loop in
+   AppLattice::iterate_rejection is bypassed entirely. This override exists
+   only to satisfy the pure virtual declared in AppLattice. If something
+   ever calls it, that indicates the standard sweep path has been wired up
+   on this app by mistake -- bail out loudly rather than silently running
+   stale logic.
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
+void AppAdditiveTexture::site_event_rejection(int /*i*/, RandomPark * /*random*/)
 {
-  timer->stamp();
+  error->one(FLERR,
+    "AppAdditiveTexture::site_event_rejection should never be "
+    "called; this app drives site evolution from app_update()");
+}
 
-  // Skip void sites - they never participate in Monte Carlo events
-  if (active_flag[i] == 5) {
-    timer->stamp(TIME_SOLVE);
-    return;
-  }
+/* ----------------------------------------------------------------------
+   Execute a nucleation event at site i with undercooling Tcool.
+   Sets site to solid, computes gradient and solidification rate,
+   and grows the nucleus via nucleation_particle_flipper.
+------------------------------------------------------------------------- */
+void AppAdditiveTexture::execute_nucleation_event(int i, double Tcool) {
+    active_flag[i] = 3;
+    solid_d[i] = nuclei_smooth_enabled ? -1 : -nrefine - 2;
 
-  int oldstate = spin[i];
-  SiteState s_old(spin[i], {q0[i], qx[i], qy[i], qz[i]});
-  double einitial = site_energy(i);
-  double efinal = 0;
-  double Mobloc = 0;
-  double dotValue = 0;
+    std::vector<double> solid_G(4);
+    solid_G = normal_finder(i);
+    G[i] = solid_G[3];
 
-    //Assign the local mobility
-    Mobloc = mobility_out[i];
-    
-    int j,m,value;
-    int nevent = 0;
-    
-    if((Mobloc < 0.0) || (Mobloc > 1.0001)) {
-        mobility_out[i] = 0;
-        return;
-    }
-    
-    if(solid_d[i] < 0 && solid_d[i] > -nrefine -1) {
-        //Go through neighbor list and add them to possible switches
-        for (int j = 0; j < numneigh[i]; j++) {
-            // Exclude void neighbors
-            if(active_flag[neighbor[i][j]] == 5) continue;
-            if(active_flag[neighbor[i][j]] == 3 || active_flag[neighbor[i][j]] == 1) {
-                // Calculate temperature gradient/grain misorientation and store in array
-                // Use cumulative probability for random sampling
-                //Exclude gas or molten sites from the Potts neighbor tally
-                double melt_misori_val = melt_misorientation(neighbor[i][j],c1,c2,c3);
-                dotValue += melt_misori_val;
-                unique_dot[nevent] = dotValue;
-                value = spin[neighbor[i][j]];
-                unique[nevent] = value;
-                unique_neigh[nevent] = neighbor[i][j];
-                nevent++;										
-            }
-        }
-        //If no neighbor is eligible, return before changing anything. Will try next sweep.
-        if (nevent == 0) return;
-        // Use nevent-1 to account for extra event at end
-        double dran = (unique_dot[nevent - 1]*random->uniform());
-        //if (iran >= nevent) iran = nevent-1;
-        //Go through possible events and pick one
-        for( int j = 0; j < nevent -1; j++) {
-            if(dran <= unique_dot[j]) {
-              int neighran = unique_neigh[j];
-              SiteState s_new(unique[j], {q0[neighran], qx[neighran], qy[neighran], qz[neighran]});
-              flip_site(i, s_new);
-              efinal = site_energy(i);
-            }
-        }
+    int power = solid_front_length - 1;
+    for (int k = 0; k < solid_front_length; k++) {
+        V[i] = V[i] + solid_front_coeffs[k] * pow(Tcool, power);
+        power--;
     }
 
-  else {
-      for (j = 0; j < numneigh[i]; j++) {
-        value = spin[neighbor[i][j]];
-        //Exclude gas, powder or molten sites from the Potts neighbor tally
-        if (value == spin[i] || value == nspins || active_flag[neighbor[i][j]] != 3) continue;
-        for (m = 0; m < nevent; m++) 
-          if (value == unique[m]) break;
-        if (m < nevent) continue;
-        unique[nevent] = value;
-        unique_neigh[nevent] = neighbor[i][j];
-        nevent += 1;
-      }
-
-      if (nevent == 0) return;
-      int iran = (int) (nevent*random->uniform());
-      if (iran >= nevent) iran = nevent-1;
-      int neighran = unique_neigh[iran]; // Get neighbor index
-      SiteState s_new(unique[iran], {q0[neighran], qx[neighran], qy[neighran], qz[neighran]});
-      flip_site(i, s_new);
-      efinal = site_energy(i);
-  }
-  // accept or reject via Boltzmann criterion
-
-  if (efinal <= einitial) {
-     if (random->uniform() > Mobloc){
-       flip_site(i, s_old);
-     }
-  }
-  else if (temperature == 0.0) {
-    flip_site(i, s_old);
-
-  } 
-  else if (random->uniform() > Mobloc * exp((einitial-efinal)*t_inverse)) {
-    flip_site(i, s_old);
-
-  }
-
-
-
-  if (spin[i] != oldstate) {
     naccept++;
-  }
+    nucleation_particle_flipper(i, round(nucleation_sizes[spin[i]] / pow(dx, 3)), ranapp);
 
-  // set mask if site could not have changed
-  // if site changed, unset mask of sites with affected propensity
-  // OK to change mask of ghost sites since never used
-  if (Lmask) {
-    if (einitial < 0.5*numneigh[i]) mask[i] = 1;
-    if (spin[i] != oldstate)
-      for (int j = 0; j < numneigh[i]; j++)
-	      mask[neighbor[i][j]] = 0;
-  }
-
-  timer->stamp(TIME_SOLVE);
+    if (nucleation_mode == NUCLEATION_CONTINUOUS) {
+      T_prev_map.erase(i);
+    }
 }
 
 /* ----------------------------------------------------------------------
@@ -870,7 +1058,7 @@ void AppAdditiveExtTempTexture::site_event_rejection(int i, RandomPark *random)
       mobility calculated from undercooling.)
 THIS NEEDS UPDATED TO INCLUDE TEXTURE
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
+void AppAdditiveTexture::mushy_phase(int i, RandomPark *random){
     // Skip void sites - they never change state
     if (active_flag[i] == 5) return;
 
@@ -880,31 +1068,34 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
     //Our site should always be molten and below tl
     //Check if it's eligible to nucleate
     if(nucleation_flags[spin[i]]) {
-        //Can and will nucleate
-        if(Tcool >= nucleation_temps[spin[i]]){
-            active_flag[i] = 3;
-            //Don't let nucleated site disappear during smoothing
-            //Neighboring sites will be flipped during the next iterate_rejection call
-            solid_d[i] = -nrefine-2;
-
-            std::vector<double> solid_G(4);  // Now returns [norm_x, norm_y, norm_z, magnitude]
-            solid_G = normal_finder(i); //Update gradient
-            G[i] = solid_G[3];  // Use the actual gradient magnitude directly
-
-            int power = solid_front_length - 1;
-            for(int k = 0; k < solid_front_length; k++) {
-                V[i] = V[i] + solid_front_coeffs[k] * pow(Tcool, power); //Update solidification rate
-                power--;
+        if (nucleation_mode == NUCLEATION_THRESHOLD) {
+            // Threshold mode: nucleate if undercooling exceeds per-spin critical value
+            if(Tcool >= nucleation_temps[spin[i]]){
+                execute_nucleation_event(i, Tcool);
+                return;
             }
-
-            //Call nucleation particle flipper
-            naccept++;
-            nucleation_particle_flipper(i, round(nucleation_sizes[spin[i]]/pow(dx,3)), ranapp);
-            return;
+            else {
+                site_event_solidification(i, Tcool, random);
+            }
         }
-        //Can nucleate, but won't yet. Allow to solidify if the solidification front captures it first.
         else {
-            // fprintf(screen,"Epitaxialy growing instead of nucleating\n");
+            // Continuous Gaussian nucleation mode: probabilistic activation
+            auto it = T_prev_map.find(i);
+            if (it != T_prev_map.end()) {
+                double dT_increment = it->second - T[i];  // positive when cooling
+                if (dT_increment > 0.0 && Tcool > 0.0) {
+                    double exponent = (Tcool - tc) * (Tcool - tc) / (2.0 * tsig * tsig);
+                    double dn_ddT = (1.0 / (sqrt(2.0 * MY_PI) * tsig)) * exp(-exponent);
+                    double P_nucleate = dn_ddT * dT_increment;
+                    if (P_nucleate > 1.0) P_nucleate = 1.0;
+
+                    if (random->uniform() < P_nucleate) {
+                        execute_nucleation_event(i, Tcool);
+                        return;
+                    }
+                }
+            }
+            // Did not nucleate (or no previous temp): allow epitaxial growth
             site_event_solidification(i, Tcool, random);
         }
     }
@@ -918,7 +1109,7 @@ void AppAdditiveExtTempTexture::mushy_phase(int i, RandomPark *random){
    This handles the common logic for both nucleation and non-nucleation paths.
    Updates solid front distance and attempts epitaxial growth from neighboring sites.
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, RandomPark *random) {
+void AppAdditiveTexture::site_event_solidification(int i, double Tcool, RandomPark *random) {
     int nevent = 0;
     int value;
     double dotValue = 0;
@@ -966,18 +1157,22 @@ void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, R
     //If no neighbor is eligible, return before changing anything. Will try next sweep.
     if (nevent == 0) return;
     
-    // Use nevent-1 to account for extra event at end
+    // unique_dot[nevent - 1] is the total cumulative mobility (last entry).
     double dran = (unique_dot[nevent - 1]*random->uniform());
-    //if (iran >= nevent) iran = nevent-1;
-    //Go through possible events and pick one
-    for( int j = 0; j < nevent - 1; j++) {
+    // Roulette-wheel selection: find the first j with dran <= unique_dot[j].
+    // Loop must run through j = nevent - 1 so the last neighbor is reachable;
+    // the early return after flip_site keeps the body single-shot.
+    for( int j = 0; j < nevent; j++) {
         if(dran <= unique_dot[j]) {
             int neighran = unique_neigh[j];
             SiteState s1(unique[j],{q0[neighran],qx[neighran],qy[neighran],qz[neighran]});
             flip_site(i,s1);
             active_flag[i] = 3;
             solid_d[i] = -1;
-            
+            if (nucleation_mode == NUCLEATION_CONTINUOUS) {
+              T_prev_map.erase(i);
+            }
+
             std::vector<double> solid_G(4);  // Now returns [norm_x, norm_y, norm_z, magnitude]
             solid_G = normal_finder(i); //Update gradient
             G[i] = solid_G[3];  // Use the actual gradient magnitude directly
@@ -999,20 +1194,16 @@ void AppAdditiveExtTempTexture::site_event_solidification(int i, double Tcool, R
 /* ----------------------------------------------------------------------
     Apply misorientation based on temperature gradient and cooling rate
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::apply_misorientation(int i, double Tcool, RandomPark *ranapp) {
+void AppAdditiveTexture::apply_misorientation(int i, double Tcool, RandomPark *ranapp) {
     if(max_misorient <= 0) return;
     
     // Exponential function: grows slowly initially, then rapidly in last ~10%
     double normalized_temp = Tcool / t_cool_max;
     double mis_angle = max_misorient * (exp(misorient_alpha * normalized_temp) - 1.0) / (exp(misorient_alpha) - 1.0) * MY_PI/180;
 
-    //Calculate the unit-vector surface norm (use voxel counting)
-    vector<double> grad_full = normal_finder(i);  // Returns [norm_x, norm_y, norm_z, magnitude]
-    vector<double> grad_out = {grad_full[0], grad_full[1], grad_full[2]};  // Extract direction only
-
     // Create quaternion vector from site's orientation
     vector<double> q_site = {q0[i], qx[i], qy[i], qz[i]};
-    
+
     // Normalize quaternion to ensure it's a unit quaternion
     double q_mag = sqrt(q_site[0]*q_site[0] + q_site[1]*q_site[1] + q_site[2]*q_site[2] + q_site[3]*q_site[3]);
     if (q_mag > 1e-15) {
@@ -1022,22 +1213,53 @@ void AppAdditiveExtTempTexture::apply_misorientation(int i, double Tcool, Random
         q_site[3] /= q_mag;
     }
 
-    vector<double> q_new = quaternion::rotate_q_towards_u(q_site,grad_out, mis_angle);
+    vector<double> q_new;
+    if (misorientation_target_mode == MISORI_TARGET_RANDOM_ROTATION) {
+        // Apply a rotation by mis_angle about a uniformly-random axis,
+        // composed with the existing site quaternion. No <100>-toward-target
+        // alignment step.
+        vector<double> axis = sample_random_unit_vector(ranapp);
+        double half = 0.5 * mis_angle;
+        double s = sin(half);
+        vector<double> dq = {cos(half), s*axis[0], s*axis[1], s*axis[2]};
+        q_new = quaternion::composition(dq, q_site, /*unit=*/false);
+        double m = sqrt(q_new[0]*q_new[0] + q_new[1]*q_new[1]
+                      + q_new[2]*q_new[2] + q_new[3]*q_new[3]);
+        if (m > 1e-15) {
+            q_new[0] /= m; q_new[1] /= m; q_new[2] /= m; q_new[3] /= m;
+        }
+    } else {
+        vector<double> target_dir;
+        if (misorientation_target_mode == MISORI_TARGET_GRADIENT) {
+            // Calculate the unit-vector surface norm (use voxel counting)
+            vector<double> grad_full = normal_finder(i);  // Returns [norm_x, norm_y, norm_z, magnitude]
+            target_dir = {grad_full[0], grad_full[1], grad_full[2]};
+        } else if (misorientation_target_mode == MISORI_TARGET_RANDOM) {
+            target_dir = sample_random_unit_vector(ranapp);
+        } else {
+            error->all(FLERR,"Unknown misorientation target mode");
+        }
+        q_new = quaternion::rotate_q_towards_u(q_site, target_dir, mis_angle);
+    }
 
     q0[i] = q_new[0];
     qx[i] = q_new[1];
     qy[i] = q_new[2];
     qz[i] = q_new[3];
 
-    // Compute direct quaternion rotation angle (without symmetry considerations)
-    double dot_product = q_site[0]*q_new[0] + q_site[1]*q_new[1] + q_site[2]*q_new[2] + q_site[3]*q_new[3];
-    // Handle both positive and negative dot products (quaternion double cover)
-    dot_product = std::abs(dot_product);
-    // Clamp to avoid numerical issues
-    dot_product = std::min(1.0, dot_product);
-    double direct_angle = 2.0 * acos(dot_product);
-    
-    if(direct_angle >= mis_thresh) {
+    // Compute crystal-symmetry-aware disorientation (consistent with site_energy)
+    double di_rad;
+    if (symmetries.empty()) {
+        // Fallback: direct angle (no symmetry)
+        double dot_product = q_site[0]*q_new[0] + q_site[1]*q_new[1]
+                           + q_site[2]*q_new[2] + q_site[3]*q_new[3];
+        di_rad = 2.0 * acos(std::min(1.0, std::abs(dot_product)));
+    } else {
+        double di_deg = disorientation::compute_disorientation(symmetries, q_site, q_new);
+        di_rad = di_deg * MY_PI / 180.0;
+    }
+
+    if(di_rad >= mis_thresh) {
         spin[i] = (int) (nspins * ranapp->uniform()); //If greater than misorientation threshold, make new grain
     }
 }
@@ -1046,7 +1268,7 @@ void AppAdditiveExtTempTexture::apply_misorientation(int i, double Tcool, Random
     Only nucleating one site at a time introduce lattice size dependency. Here we will
     use a user-defined nucleation particle size and flip neighboring sites until that size is met
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, RandomPark *random) {
+void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomPark *random) {
     
     //If one site is big enough to satisfy, skip evertyhing
     if(partRad <= 0) return;
@@ -1072,9 +1294,11 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 int i_chosen = neighbor[i][j];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
-                solid_d[i_chosen] = -nrefine -3;
-                G[i_chosen] = G[i];
-                V[i_chosen] = V[i];
+                if (i_chosen < nlocal) {
+                    solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
+                    G[i_chosen] = G[i];
+                    V[i_chosen] = V[i];
+                }
                 nSites--;
                 naccept++;
             }
@@ -1121,9 +1345,11 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 int i_chosen = neighbor[i][nearest_neigh[idx]];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
-                solid_d[i_chosen] = -nrefine -3;
-                G[i_chosen] = G[i];
-                V[i_chosen] = V[i];
+                if (i_chosen < nlocal) {
+                    solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
+                    G[i_chosen] = G[i];
+                    V[i_chosen] = V[i];
+                }
                 nSites--;
                 naccept++;
             }
@@ -1136,11 +1362,13 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
             int idx = shell2_indices[j];
             if(active_flag[neighbor[i][second_nearest[idx]]] == 2) {
                 int i_chosen = neighbor[i][second_nearest[idx]];
-                flip_site(i_chosen, s_in);            
+                flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
-                solid_d[i_chosen] = -nrefine -3;
-                G[i_chosen] = G[i];
-                V[i_chosen] = V[i];
+                if (i_chosen < nlocal) {
+                    solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
+                    G[i_chosen] = G[i];
+                    V[i_chosen] = V[i];
+                }
                 nSites--;
                 naccept++;
             }
@@ -1155,9 +1383,11 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
                 int i_chosen = neighbor[i][third_nearest[idx]];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
-                solid_d[i_chosen] = -nrefine -3;
-                G[i_chosen] = G[i];
-                V[i_chosen] = V[i];
+                if (i_chosen < nlocal) {
+                    solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
+                    G[i_chosen] = G[i];
+                    V[i_chosen] = V[i];
+                }
                 nSites--;
                 naccept++;
             }
@@ -1188,7 +1418,9 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
     //Otherwise, randomly pick a possilbe neighbor
     int neighran =  round(((nneigh -1) * random->uniform()));
     
-    nucleation_particle_flipper(neighbor[i][possible_neigh[neighran]],nSites, random);
+    int next_site = neighbor[i][possible_neigh[neighran]];
+    if (next_site < nlocal)
+        nucleation_particle_flipper(next_site, nSites, random);
     return;
     
 }
@@ -1198,7 +1430,7 @@ void AppAdditiveExtTempTexture::nucleation_particle_flipper(int i, int partRad, 
 
 // Calculate the local direction of the largest temperature gradient
 // using weighted least squares with multiple neighbors for improved accuracy
-std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
+std::vector<double> AppAdditiveTexture::normal_finder(int site)
 {
 	// Initialize gradient components
 	double grad_x = 0, grad_y = 0, grad_z = 0;
@@ -1218,8 +1450,16 @@ std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
 	};
 
 	// Special case: top of melt pool where some neighbors are inactive
-	// Use only neighbors at or below current site's z-coordinate
-	bool is_melt_surface = (active_flag[neighbor[site][13]] <= 1);
+	// Use only neighbors at or below current site's z-coordinate.
+	//
+	// Slot 13 in the SC_26N offset_map is the +z neighbor ({0,0,1}). Low-
+	// coordination global-boundary sites (the corner/edge sites with <14
+	// neighbors) have no valid slot 13: neighbor[site][13] reads an
+	// uninitialized neighbor entry, and active_flag[] of that garbage index
+	// then reads out of bounds (segfault). Such sites are missing the
+	// neighbor directly above, so treat them as melt-surface.
+	bool is_melt_surface = (numneigh[site] <= 13) ||
+	                       (active_flag[neighbor[site][13]] <= 1);
 
 	if (is_melt_surface) {
 		// Filter neighbors to only include those at or below current z-level
@@ -1415,7 +1655,7 @@ std::vector<double> AppAdditiveExtTempTexture::normal_finder(int site)
      (function should only be called when such neighbors exist) and will
      terminate the simulation with an error message.
 ------------------------------------------------------------------------- */
-std::vector<double> AppAdditiveExtTempTexture::get_average_neighbor_quaternion(int site, int target_spin)
+std::vector<double> AppAdditiveTexture::get_average_neighbor_quaternion(int site, int target_spin)
 {
     // Initialize storage for first quaternion as reference
     double ref_q0 = 0.0, ref_qx = 0.0, ref_qy = 0.0, ref_qz = 0.0;
@@ -1510,7 +1750,7 @@ std::vector<double> AppAdditiveExtTempTexture::get_average_neighbor_quaternion(i
    Inputs: lattice site :: site
    Outputs: double of max dot product
 ------------------------------------------------------------------------- */
-double AppAdditiveExtTempTexture::melt_misorientation(int site, double c1, double c2, double c3)
+double AppAdditiveTexture::melt_misorientation(int site, double c1, double c2, double c3)
 {
 	double dotMax;
 	double theta;
@@ -1544,7 +1784,7 @@ double AppAdditiveExtTempTexture::melt_misorientation(int site, double c1, doubl
    Inputs: lattice site :: site
    Outputs: None
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::smooth_site(int i) {
+void AppAdditiveTexture::smooth_site(int i) {
 
   //Adapt code from potts_neigh_only site_event_rejection.
   int oldstate = spin[i];
@@ -1565,10 +1805,31 @@ void AppAdditiveExtTempTexture::smooth_site(int i) {
   }
 
   if (nevent == 0) return;
-  int iran = (int) (nevent*ranapp->uniform());
-  if (iran >= nevent) iran = nevent-1;
-  spin[i] = unique[iran];
-  double efinal = site_energy_smooth(i);
+
+  double efinal;
+  if (smooth_greedy_multiproposal_enabled) {
+    // Steepest-descent proposal: evaluate every distinct neighbor spin
+    // and pick the energy-minimizing one. First-encountered tie-break
+    // keeps the choice deterministic under MPI.
+    int best_spin = unique[0];
+    spin[i] = unique[0];
+    double best_energy = site_energy_smooth(i);
+    for (int k = 1; k < nevent; k++) {
+      spin[i] = unique[k];
+      double e = site_energy_smooth(i);
+      if (e < best_energy) {
+        best_energy = e;
+        best_spin = unique[k];
+      }
+    }
+    spin[i] = best_spin;
+    efinal = best_energy;
+  } else {
+    int iran = (int) (nevent*ranapp->uniform());
+    if (iran >= nevent) iran = nevent-1;
+    spin[i] = unique[iran];
+    efinal = site_energy_smooth(i);
+  }
 
   // accept or reject via Boltzmann criterion
 
@@ -1605,22 +1866,86 @@ void AppAdditiveExtTempTexture::smooth_site(int i) {
    compute energy of site using only spin values (for boundary smoothing after solidification)
 ------------------------------------------------------------------------- */
 
-double AppAdditiveExtTempTexture::site_energy_smooth(int i)
+double AppAdditiveTexture::site_energy_smooth(int i)
 {
   int isite = spin[i];
   int eng = 0;
   for (int j = 0; j < numneigh[i]; j++) {
-    if(active_flag[i] != 3) continue; //Only include solid sites in energy total
+    // NB: must check neighbor's active_flag, not center site's (bug fix: was active_flag[i])
+    if(active_flag[neighbor[i][j]] != 3) continue;
     if (isite != spin[neighbor[i][j]]) eng++;
   }
   return (double) eng;
 }
 
 /* ----------------------------------------------------------------------
+   Post-smoothing single-voxel grain cleanup. Returns true iff the voxel
+   was resolved (flipped, or confirmed not a 1-voxel grain) this call;
+   returns false to request a deferral when the 26-neighbor first shell
+   is not yet fully solidified.
+
+   A grain in this app is 26-connected through the Potts energy
+   neighborhood, so a site with no same-spin 26-neighbor is by
+   definition a 1-voxel grain. If such a voxel is found, it is flipped
+   to the candidate spin that minimizes site_energy_smooth(i) (tie-break
+   by first-encountered neighbor order → deterministic under MPI). The
+   quaternion is updated via get_average_neighbor_quaternion() to adopt
+   the chosen grain's local orientation. The caller is responsible for
+   marking solid_d to suppress re-firing.
+------------------------------------------------------------------------- */
+bool AppAdditiveTexture::flip_single_voxel_grain(int i)
+{
+  int oldstate = spin[i];
+  int nunique = 0;
+  bool has_same_spin_neighbor = false;
+
+  for (int j = 0; j < numneigh[i]; j++) {
+    int nj = neighbor[i][j];
+    if (active_flag[nj] != 3) return false;  // defer: neighborhood immature
+    int s = spin[nj];
+    if (s == oldstate) {
+      has_same_spin_neighbor = true;
+      continue;
+    }
+    int m;
+    for (m = 0; m < nunique; m++) if (s == unique[m]) break;
+    if (m == nunique) unique[nunique++] = s;
+  }
+
+  // Fully mature neighborhood: decide.
+  if (has_same_spin_neighbor) return true;   // not a 1-voxel grain
+  if (nunique == 0)           return true;   // no solidified neighbors at all
+
+  // Energy-minimizing pick.
+  int best_spin = unique[0];
+  spin[i] = unique[0];
+  double best_energy = site_energy_smooth(i);
+  for (int k = 1; k < nunique; k++) {
+    spin[i] = unique[k];
+    double e = site_energy_smooth(i);
+    if (e < best_energy) {
+      best_energy = e;
+      best_spin = unique[k];
+    }
+  }
+  spin[i] = best_spin;
+
+  vector<double> q_new = get_average_neighbor_quaternion(i, best_spin);
+  q0[i] = q_new[0];
+  qx[i] = q_new[1];
+  qy[i] = q_new[2];
+  qz[i] = q_new[3];
+
+  n_single_voxel_flips++;
+  naccept++;
+  return true;
+}
+
+/* ----------------------------------------------------------------------
     The first version of this just initialized critical nucleation temperatures.
     This version will also initialize nucleii size (starting with a normal dist)
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::nucleation_init() {
+void AppAdditiveTexture::nucleation_init() {
     std::normal_distribution<> dist_T{tc,tsig};
     std::normal_distribution<> dist_S{size_norm,size_sig};
     std::random_device rd{};
@@ -1634,54 +1959,6 @@ void AppAdditiveExtTempTexture::nucleation_init() {
 }
 
 /* ----------------------------------------------------------------------
-   Check if site is eligible to be activated as powder
-
-   Criteria:
-   - Site must not be void (active_flag == 5)
-   - Site must not be molten or solid (active_flag >= 2)
-   - Site is eligible if:
-     1. Temperature >= solidus (in thermal influence zone)
-     2. Has molten or solidified neighbor (adjacent to meltpool)
-     3. At bottom boundary (substrate)
-     4. Below meltpool surface (has active material above)
-------------------------------------------------------------------------- */
-bool AppAdditiveExtTempTexture::is_powder_eligible_site(int i) {
-  // Skip voids - they never participate
-  if (active_flag[i] == 5) return false;
-
-  // Skip already molten or solid sites
-  if (active_flag[i] >= 2) return false;
-
-  // Criterion 1: Hot enough (in thermal influence zone)
-  if (T[i] >= ts) return true;
-
-  // Criterion 2: Has solid or molten neighbor (adjacent to meltpool)
-  for (int j = 0; j < numneigh[i]; j++) {
-    int nj = neighbor[i][j];
-    if (active_flag[nj] == 2 || active_flag[nj] == 3) {
-      return true;  // Adjacent to meltpool/solidified region
-    }
-  }
-
-  // Criterion 3: At bottom boundary (substrate layer)
-  double site_z = xyz[i][2];
-  if (site_z <= domain->boxzlo + dx * 0.5) return true;
-
-  // Criterion 4: Below meltpool surface (has active material above)
-  for (int j = 0; j < numneigh[i]; j++) {
-    int nj = neighbor[i][j];
-    double neighbor_z = xyz[nj][2];
-
-    // Check if neighbor is above and is molten or solid
-    if (neighbor_z > site_z && active_flag[nj] >= 2) {
-      return true;  // Material exists above this site
-    }
-  }
-
-  return false;
-}
-
-/* ----------------------------------------------------------------------
    Activate powder sites that are at or below the meltpool surface
 
    Strategy: Find the maximum z-coordinate of all molten sites (meltpool top),
@@ -1691,7 +1968,7 @@ bool AppAdditiveExtTempTexture::is_powder_eligible_site(int i) {
    - After fast forwards > 1 second (new layer deposition)
    - During app_update when meltpool is present
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::activate_powder_sites() {
+void AppAdditiveTexture::activate_powder_sites() {
   // Find local maximum z-coordinate of molten sites
   double local_max_molten_z = -1e100;  // Very negative initial value
   bool has_molten_sites = false;
@@ -1743,7 +2020,7 @@ void AppAdditiveExtTempTexture::activate_powder_sites() {
    and size distribution. Voids are represented by activeFlag = 5.
    Generation happens on rank 0, then void list is broadcast to all ranks.
 ------------------------------------------------------------------------- */
-void AppAdditiveExtTempTexture::generate_voids(RandomPark *random) {
+void AppAdditiveTexture::generate_voids(RandomPark *random) {
     timer->stamp();
 
     if (!enable_voids) {
@@ -1954,147 +2231,22 @@ void AppAdditiveExtTempTexture::generate_voids(RandomPark *random) {
     timer->stamp(TIME_APP);
 }
 
-/* ----------------------------------------------------------------------
-   Setup modular temperature source command
-   Format: setup_temperature_source type [arguments...]
-------------------------------------------------------------------------- */
-
-void AppAdditiveExtTempTexture::setup_temperature_source_cmd(int narg, char **arg)
-{
-  if (narg < 1) {
-    error->all(FLERR,"Illegal setup_temperature_source command: must specify type");
-  }
-  
-  std::string source_type = arg[0];
-  std::vector<std::string> source_args;
-  
-  // Convert remaining arguments to string vector
-  for (int i = 1; i < narg; i++) {
-    source_args.push_back(std::string(arg[i]));
-  }
-  
-  // Create temperature source using factory
-  temperature_source = SPPARKS_NS::create_temperature_source(source_type, spk);
-  if (!temperature_source) {
-    error->all(FLERR,"Failed to create temperature source");
-  }
-  
-  // Setup the temperature source with provided arguments
-  temperature_source->setup_temperature_source(source_args);
-  
-  // Enable the new temperature source system
-  use_temperature_source = true;
-  
-  if (domain->me == 0) {
-    std::cout << "Modular temperature source (" << source_type << ") enabled" << std::endl;
-  }
-}
 
 /* ----------------------------------------------------------------------
-   Setup scan path command for temperature sources that support it
-   Format: scan_path type [parameters...]
+   Deprecated app_style alias 'additive_temperature_texture'.
+   Forwards to AppAdditiveTexture; emits a one-shot warning so existing
+   input scripts keep running while users migrate to the canonical
+   'additive/texture' app_style.
 ------------------------------------------------------------------------- */
 
-void AppAdditiveExtTempTexture::setup_scan_path_cmd(int narg, char **arg)
+AppAdditiveTextureDeprecated::AppAdditiveTextureDeprecated(SPPARKS *spk,
+                                                           int narg,
+                                                           char **arg)
+  : AppAdditiveTexture(spk, narg, arg)
 {
-  if (!use_temperature_source || !temperature_source) {
-    error->all(FLERR,"scan_path command requires setup_temperature_source to be called first");
-  }
-  
-  if (narg < 1) {
-    error->all(FLERR,"Illegal scan_path command: must specify type");
-  }
-  
-  // Try to cast to RosenthalTemperatureSource (only source that currently supports scan paths)
-  auto rosenthal_source = dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
-  if (!rosenthal_source) {
-    error->all(FLERR,"scan_path command only supported for Rosenthal temperature source");
-  }
-  
-  std::string path_type_str = arg[0];
-  std::vector<double> path_params;
-  
-  // Convert remaining arguments to double vector
-  for (int i = 1; i < narg; i++) {
-    try {
-      path_params.push_back(std::stod(arg[i]));
-    } catch (const std::exception &e) {
-      error->all(FLERR,"Invalid numeric argument in scan_path command");
-    }
-  }
-  
-  // Map string to enum
-  ScanPathType path_type;
-  if (path_type_str == "linear") {
-    path_type = LINEAR;
-  } else if (path_type_str == "serpentine") {
-    path_type = SERPENTINE;
-  } else if (path_type_str == "spiral") {
-    path_type = SPIRAL;
-  } else if (path_type_str == "custom") {
-    path_type = CUSTOM;
-  } else {
-    error->all(FLERR,"Unknown scan path type in scan_path command");
-  }
-  
-  // Setup scan path
-  rosenthal_source->setup_scan_path(path_type, path_params);
-  
-  if (domain->me == 0) {
-    std::cout << "Scan path (" << path_type_str << ") configured" << std::endl;
-  }
+  if (domain->me == 0)
+    error->warning(FLERR,
+      "app_style 'additive_temperature_texture' is deprecated; "
+      "use 'additive/texture' instead. The two are equivalent for now, "
+      "but the deprecated alias will be removed in a future release.");
 }
-
-/* ----------------------------------------------------------------------
-   Update temperature from modular source
-------------------------------------------------------------------------- */
-
-void AppAdditiveExtTempTexture::update_temperature_from_source(double simulation_time)
-{
-  timer->stamp();
-  
-  if (!use_temperature_source || !temperature_source) {
-    timer->stamp(TIME_APP);
-    return; // No temperature source configured
-  }
-  
-  // Update temperature source (may load new data)
-  temperature_source->update_temperatures(dt, simulation_time);
-
-  // Update temperature array for all local sites
-  for (int i = 0; i < nlocal; i++) {
-    // Get site coordinates in lattice units
-    double x_lattice = xyz[i][0];
-    double y_lattice = xyz[i][1];
-    double z_lattice = xyz[i][2];
-    
-    // Convert to physical coordinates (meters) using dx from temperature source
-    // For HDF5 unstructured source, dx is the lattice spacing in meters
-    HDF5UnstructuredTemperatureSource* hdf5_source = 
-      dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-    
-    double x_physical, y_physical, z_physical;
-    if (hdf5_source) {
-      // HDF5 source expects physical coordinates in meters
-      double dx = hdf5_source->get_dx();
-      x_physical = x_lattice * dx;
-      y_physical = y_lattice * dx;
-      z_physical = z_lattice * dx;
-    } else {
-      // Other temperature sources might expect lattice coordinates
-      x_physical = x_lattice;
-      y_physical = y_lattice;
-      z_physical = z_lattice;
-    }
-    
-    // Use site-based temperature access for HDF5 unstructured source (uses caching)
-    if (hdf5_source) {
-      T[i] = temperature_source->get_temperature_at_site(i, simulation_time);
-    } else {
-      T[i] = temperature_source->get_temperature_at_xyz_and_time(x_physical, y_physical, z_physical, simulation_time);
-    }
-  }
-
-  timer->stamp(TIME_APP);
-}
-

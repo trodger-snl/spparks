@@ -143,6 +143,79 @@ void CommLattice::all()
 }
 
 /* ----------------------------------------------------------------------
+   acquire ghost values for entire proc sub-domain
+   communicate only the specific integer and double arrays given by index
+   iidx[0..ni-1] are iarray indices, didx[0..nd-1] are darray indices
+   allows skipping arrays in the middle (unlike all_partial which requires
+   contiguous first-N arrays)
+   buffers were allocated at init() with full counts, so selective is safe
+------------------------------------------------------------------------- */
+
+void CommLattice::all_selective(const int *iidx, int ni,
+                                const int *didx, int nd)
+{
+  if (ni + nd == 0) return;
+
+  // Validate array counts against stack buffer limit
+  static const int MAX_SEL = 32;
+  if (ni > MAX_SEL || nd > MAX_SEL)
+    error->all(FLERR,"CommLattice::all_selective: ni or nd exceeds MAX_SEL");
+
+  // save originals
+  int **save_iarray = iarray;
+  double **save_darray = darray;
+  int save_ninteger = ninteger;
+  int save_ndouble = ndouble;
+  int save_site_only = site_only;
+  int *save_site = site;
+
+  // Validate indices are within original array bounds
+  for (int k = 0; k < ni; k++)
+    if (iidx[k] < 0 || iidx[k] >= save_ninteger)
+      error->all(FLERR,"CommLattice::all_selective: iarray index out of range");
+  for (int k = 0; k < nd; k++)
+    if (didx[k] < 0 || didx[k] >= save_ndouble)
+      error->all(FLERR,"CommLattice::all_selective: darray index out of range");
+
+  // build temporary reordered pointer arrays on the stack
+  int *tmp_iarray[MAX_SEL];
+  double *tmp_darray[MAX_SEL];
+
+  for (int k = 0; k < ni; k++) tmp_iarray[k] = save_iarray[iidx[k]];
+  for (int k = 0; k < nd; k++) tmp_darray[k] = save_darray[didx[k]];
+
+  iarray = tmp_iarray;
+  darray = tmp_darray;
+  ninteger = ni;
+  ndouble = nd;
+  site_only = 0;
+
+  // Dispatch based on buffer types allocated at init().
+  // When original app has both ints and doubles (common case),
+  // only sdbuf/rdbuf are allocated (sibuf/ribuf are NULL).
+  // perform_swap_general safely handles any ni/nd combo via sdbuf.
+  if (save_ndouble == 0 && nd == 0) {
+    if (ni == 1) {
+      site_only = 1;
+      site = tmp_iarray[0];
+      perform_swap_site(allswap);
+    } else perform_swap_int(allswap);
+  } else if (save_ninteger == 0 && ni == 0) {
+    perform_swap_double(allswap);
+  } else {
+    perform_swap_general(allswap);
+  }
+
+  // restore originals
+  iarray = save_iarray;
+  darray = save_darray;
+  ninteger = save_ninteger;
+  ndouble = save_ndouble;
+  site_only = save_site_only;
+  site = save_site;
+}
+
+/* ----------------------------------------------------------------------
    reverse communicate changed border values for entire proc sub-domain
 ------------------------------------------------------------------------- */
 

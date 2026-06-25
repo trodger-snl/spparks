@@ -60,6 +60,12 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   void sync_temperature_to_host();   // device k_T -> host T (for diag/host code)
   void compute_gradients_kernel();
 
+  // Ensure the cached device copy of site coordinates (d_xyz) is built for the
+  // current site count. The host xyz is row-major [nall][3]; this fills d_xyz
+  // by explicit element copy so it is correct regardless of the device View
+  // layout (a LayoutLeft device view would otherwise misread row-major data).
+  void ensure_device_xyz();
+
   // Device-side analytical Rosenthal temperature: evaluate the per-site
   // temperature directly into k_T on the GPU from the host-advanced laser pose,
   // replacing the host per-site exp/sqrt loop. Fills all nlocal+nghost sites

@@ -445,27 +445,32 @@ void AppAdditiveTextureKokkos::sync_temperature_to_host()
    reproduced here device-side -- keep them in sync.
 ------------------------------------------------------------------------- */
 
+void AppAdditiveTextureKokkos::ensure_device_xyz()
+{
+  const int nall = nlocal + nghost;
+  if (d_xyz_n == nall) return;
+
+  // Build a host mirror by explicit element assignment from the double** so the
+  // copy is correct regardless of the device View layout (host xyz is row-major
+  // [nall][3]; a LayoutLeft device view would otherwise misread it as
+  // column-major -- the source of an earlier melt-surface gradient bug).
+  d_xyz = Kokkos::View<double*[3]>("d_xyz", nall);
+  auto h_xyz = Kokkos::create_mirror_view(d_xyz);
+  for (int i = 0; i < nall; i++) {
+    h_xyz(i,0) = xyz[i][0];
+    h_xyz(i,1) = xyz[i][1];
+    h_xyz(i,2) = xyz[i][2];
+  }
+  Kokkos::deep_copy(d_xyz, h_xyz);
+  d_xyz_n = nall;
+}
+
 void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
     const RosenthalDevicePlan &plan)
 {
   const int nall = nlocal + nghost;
 
-  // Upload site coordinates once (static lattice); rebuild only if the site
-  // count changed. Fill a host mirror by explicit element assignment from the
-  // double** so the copy is correct regardless of the device View layout
-  // (host xyz is row-major [nall][3]; a LayoutLeft device view would otherwise
-  // misread it as column-major).
-  if (d_xyz_n != nall) {
-    d_xyz = Kokkos::View<double*[3]>("d_xyz", nall);
-    auto h_xyz = Kokkos::create_mirror_view(d_xyz);
-    for (int i = 0; i < nall; i++) {
-      h_xyz(i,0) = xyz[i][0];
-      h_xyz(i,1) = xyz[i][1];
-      h_xyz(i,2) = xyz[i][2];
-    }
-    Kokkos::deep_copy(d_xyz, h_xyz);
-    d_xyz_n = nall;
-  }
+  ensure_device_xyz();
 
   auto d_T   = k_T.view_device();
   auto d_xyz_local = d_xyz;
@@ -531,14 +536,9 @@ void AppAdditiveTextureKokkos::compute_gradients_kernel()
   auto k_numneigh_d = k_numneigh.view_device();
   auto k_neighbor_d = k_neighbor.view_device();
 
-  // Create temporary device view for xyz (xyz comes from CPU parent, not Kokkos)
-  // Use unmanaged view wrapped around host xyz array
-  // Use device's default layout to ensure compatibility with GPU backends (HIP uses LayoutLeft)
-  int nall = nlocal + nghost;
-  using HostSpace = Kokkos::HostSpace;
-  using DeviceLayout = typename Kokkos::DefaultExecutionSpace::array_layout;
-  Kokkos::View<double*[3], DeviceLayout, HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> h_xyz(xyz[0], nall);
-  auto k_xyz_d = Kokkos::create_mirror_view_and_copy(Kokkos::DefaultExecutionSpace(), h_xyz);
+  // Cached, layout-correct device copy of site coordinates.
+  ensure_device_xyz();
+  auto k_xyz_d = d_xyz;
 
   // Get active_flag for melt surface detection (simple View)
   auto d_active_flag_local = this->d_active_flag;
@@ -1030,13 +1030,10 @@ int AppAdditiveTextureKokkos::solidification_kernel()
   auto k_numneigh_d = k_numneigh.view_device();
   auto k_neighbor_d = k_neighbor.view_device();
 
-  // Create device view of xyz coordinates (needed for on-demand gradient computation)
-  // Use device's default layout to ensure compatibility with GPU backends (HIP uses LayoutLeft)
-  int nall = nlocal + nghost;
-  using HostSpace = Kokkos::HostSpace;
-  using DeviceLayout = typename Kokkos::DefaultExecutionSpace::array_layout;
-  Kokkos::View<double*[3], DeviceLayout, HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> h_xyz(xyz[0], nall);
-  auto k_xyz_d = Kokkos::create_mirror_view_and_copy(Kokkos::DefaultExecutionSpace(), h_xyz);
+  // Cached, layout-correct device copy of site coordinates (used for on-demand
+  // gradient computation in the kernel).
+  ensure_device_xyz();
+  auto k_xyz_d = d_xyz;
 
   // Capture parameters
   double tl_local = this->tl;

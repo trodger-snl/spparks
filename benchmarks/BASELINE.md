@@ -79,6 +79,31 @@ Rosenthal np8 (identical sync code) scales perfectly, so this is a 1-GPU
 hardware/contention limit, not the sync change — it should resolve on the 4-GPU
 cluster (≤2 ranks/GPU) with proper rank→device binding (the remaining task).
 
+## Backend comparison: OpenMP (16-core CPU) vs HIP (integrated GPU)
+
+Same Kokkos code, same 5M-site box, `build-openmp` (Kokkos OpenMP) vs
+`build-verify` (Kokkos HIP, Radeon 8060S APU). CPU configs use all 16 cores
+(MPI ranks x OpenMP threads = 16). Loop time:
+
+| source    | ranks | OpenMP CPU | HIP GPU | GPU speedup |
+|-----------|------:|-----------:|--------:|------------:|
+| Rosenthal | 1 (x16t) |  4.77 s | 5.10 s | 0.94x (CPU faster) |
+| Rosenthal | 4 (x4t)  |  5.42 s | 5.46 s | ~1.0x        |
+| Rosenthal | 8 (x2t)  |  5.57 s | 5.11 s | 1.09x        |
+| Moser     | 1 (x16t) | 45.54 s | 29.33 s | **1.55x**   |
+| Moser     | 4 (x4t)  | 47.56 s | 30.03 s | **1.58x**   |
+
+On this **integrated APU** the GPU only beats the 16-core CPU for the
+compute-heavy Moser quadrature (~1.55x) and ties for the memory-bound Rosenthal
+fill -- because the integrated GPU shares memory bandwidth with the CPU, so its
+only edge is raw FLOPs. (Same reason the CPU app beat the GPU on the HDF5 box:
+HDF5 interpolation is memory-bound like Rosenthal.)
+
+This **understates** the GPU on real cluster hardware: a discrete H100/MI300X has
+far more FLOPs AND dedicated HBM bandwidth (~3 TB/s vs the APU's shared
+~256 GB/s), so it would win decisively for both source types. The APU is the
+pessimistic CPU-vs-GPU case.
+
 ## How to re-run (after Phase 2)
 
 ```bash

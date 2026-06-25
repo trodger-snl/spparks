@@ -1460,19 +1460,15 @@ int AppAdditiveTextureKokkos::solidification_kernel()
   double misorient_alpha_local = this->misorient_alpha;
   int nspins_local = this->nspins;
 
-  // Neighbor distance lookup (26-neighbor sc lattice)
-  // Distance to each neighbor type in lattice units
-  constexpr double neigh_dist[26] = {
-    1.732050808, 1.414213562, 1.732050808,  // Layer z=-1: corners, edges, corners
-    1.414213562, 1.000000000, 1.414213562,
-    1.732050808, 1.414213562, 1.732050808,
-    1.414213562, 1.000000000, 1.414213562,  // Layer z=0: edges, faces, edges
-                 1.000000000,                // (skip center)
-    1.414213562, 1.000000000, 1.414213562,
-    1.732050808, 1.414213562, 1.732050808,  // Layer z=1: corners, edges, corners
-    1.414213562, 1.000000000, 1.414213562,
-    1.732050808, 1.414213562, 1.732050808
-  };
+  // Solid-front reach threshold: a neighbor becomes eligible once the front
+  // distance solid_d has advanced past the farthest SC_26N neighbor (the cube
+  // corner, sqrt(3) lattice units). This matches the CPU reference, which tests
+  // the constant neigh_dist[2] == sqrt3*dx for every neighbor
+  // (app_additive_texture.cpp:1143) -- NOT a per-neighbor-slot distance. Using a
+  // slot-indexed table here was wrong twice over: it deviated from the CPU even
+  // for interior sites, and for low-coordination boundary sites (compacted
+  // neighbor list) the slot did not correspond to the neighbor's real offset.
+  constexpr double solid_reach = 1.7320508075688772;  // sqrt(3), lattice units
 
   // Debug counters for this kernel
   int debug_zero_G_local = 0;
@@ -1520,7 +1516,7 @@ int AppAdditiveTextureKokkos::solidification_kernel()
           int nbr_flag = d_active_flag_local(nbr);
 
           // Check if neighbor is solid (active_flag == 1 or 3) and within reach
-          if ((nbr_flag == 1 || nbr_flag == 3) && neigh_dist[j] * dx_local <= solid_d_i) {
+          if ((nbr_flag == 1 || nbr_flag == 3) && solid_reach * dx_local <= solid_d_i) {
             // Compute gradient on-demand (only once, on first solid neighbor)
             if (!gradient_computed) {
               // Use ThermalOps to compute temperature gradient at site i

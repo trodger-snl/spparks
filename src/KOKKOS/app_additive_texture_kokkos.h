@@ -259,29 +259,15 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   //
   // LATTICE TYPE ASSUMPTION: Simple Cubic with 26 Neighbors (sc/26n)
   // This implementation assumes a simple cubic lattice with 26 neighbors
-  // (3×3×3 cube minus center). The offset_map, neighbor distance calculations,
-  // and gradient computation are specifically designed for this lattice type.
-  //
-  // For other lattice types (fcc, bcc, hcp), the offset_map array and
-  // neighbor-based calculations must be updated accordingly.
+  // (3×3×3 cube minus center). Neighbor offsets are taken from the actual site
+  // coordinates (not a fixed stencil table indexed by neighbor slot), so the
+  // gradient is correct for both interior and low-coordination boundary sites;
+  // the sqrt(3) solid-front reach in the solidification kernel is the SC_26N
+  // cube-corner distance. For other lattices these would need revisiting.
   //
   struct ThermalOps {
     // Maximum neighbors for sc/26n lattice
     static constexpr int MAX_NEIGHBORS_SC26N = 26;
-
-    // 26-neighbor offset map for sc/26n lattice (device constant memory)
-    // Maps neighbor index to [dx, dy, dz] offset in lattice units
-    static constexpr int offset_map[26][3] = {
-      {-1,-1,-1}, {-1,-1, 0}, {-1,-1, 1},  // Layer z=-1
-      {-1, 0,-1}, {-1, 0, 0}, {-1, 0, 1},
-      {-1, 1,-1}, {-1, 1, 0}, {-1, 1, 1},
-      { 0,-1,-1}, { 0,-1, 0}, { 0,-1, 1},  // Layer z=0
-      { 0, 0,-1},             { 0, 0, 1},  // Skip center (0,0,0)
-      { 0, 1,-1}, { 0, 1, 0}, { 0, 1, 1},
-      { 1,-1,-1}, { 1,-1, 0}, { 1,-1, 1},  // Layer z=1
-      { 1, 0,-1}, { 1, 0, 0}, { 1, 0, 1},
-      { 1, 1,-1}, { 1, 1, 0}, { 1, 1, 1}
-    };
 
     // Compute temperature gradient at site i using weighted least-squares
     //
@@ -357,10 +343,16 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
           continue;  // Skip neighbors above current site
         }
 
-        // Get neighbor offset from lookup table
-        double dx_n = offset_map[n][0] * dx_lattice;
-        double dy_n = offset_map[n][1] * dx_lattice;
-        double dz_n = offset_map[n][2] * dx_lattice;
+        // Neighbor offset from the actual site coordinates (lattice units * dx).
+        // Do NOT index a fixed stencil table by the neighbor slot n: low-
+        // coordination global-boundary sites have a COMPACTED neighbor list, so
+        // slot n is the n-th existing neighbor, not the n-th SC_26N stencil
+        // position -- a table lookup would attach the wrong geometry. The
+        // coordinate difference is exact for interior and boundary sites alike
+        // (identical to the old offset_map for full-coordination sites).
+        double dx_n = (xyz(nbr,0) - xyz(i,0)) * dx_lattice;
+        double dy_n = (xyz(nbr,1) - xyz(i,1)) * dx_lattice;
+        double dz_n = (xyz(nbr,2) - xyz(i,2)) * dx_lattice;
 
         // Temperature difference
         double dT = T_neigh[n] - T_center;

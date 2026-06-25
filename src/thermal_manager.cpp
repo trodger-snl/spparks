@@ -737,7 +737,7 @@ ThermalManager::ThermalStep ThermalManager::advance(double current_time, double 
 
   // Use MPI_Allreduce to check if t_active is 0 on all processors
   int global_t_active;
-  MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+  MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, world);
 
   // If no active sites and the source supports time queries, fast forward.
   if (global_t_active == 0 && current_time > 1e-6 && temperature_source->supports_time_queries()) {

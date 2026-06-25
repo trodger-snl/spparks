@@ -2415,6 +2415,12 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     sync_app_data_to_device();
   }
 
+  // Optional isotherm-compactness diagnostic on its configured cadence, matching
+  // the CPU app. A no-op unless temperature_smooth + a diag interval are set
+  // (which also force the host temperature path, so host T is current here).
+  if (host_T_stale) sync_temperature_to_host();
+  thermal->maybe_run_diagnostics(step_count);
+
   // DEBUG: Print gradient/velocity statistics every 10 steps
   if (step_count % 10 == 0 && domain->me == 0) {
     int total_events = debug_nucleation_count + debug_solidification_count;
@@ -2533,8 +2539,11 @@ void AppAdditiveTextureKokkos::activate_powder_sites() {
 
 void AppAdditiveTextureKokkos::stats(char *strtmp)
 {
-  // Sync device data to host so stats can access current values
+  // Sync device data to host so stats can access current values. sync_app_data_
+  // to_host() does not touch the temperature field, so refresh host T (d6) here
+  // too when a device fill left it stale (the d6 diagnostic reads host T).
   sync_app_data_to_host();
+  if (host_T_stale) sync_temperature_to_host();
 
   // Call parent class stats implementation
   AppPottsQuaternionKokkos::stats(strtmp);
@@ -2663,6 +2672,9 @@ void AppAdditiveTextureKokkos::input_app(char *command, int narg, char **arg)
     if (solid_front_length <= 0) {
       error->all(FLERR, "Illegal solidification front velocity specification");
     }
+    if (narg != solid_front_length + 1)
+      error->all(FLERR, "Illegal solid_front_vel command: expected <n> followed "
+                        "by n coefficients");
     solid_front_coeffs = new double[solid_front_length];
     for (int i = 1; i < solid_front_length + 1; i++) {
       solid_front_coeffs[i - 1] = atof(arg[i]);

@@ -60,6 +60,11 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   void update_temperature_from_source(double simulation_time);
   void sync_temperature_to_device();
   void sync_temperature_to_host();   // device k_T -> host T (for diag/host code)
+  // Phase 2 selective ghost sync: move only neighbor-read MC state
+  // (spin/active_flag/q0-3) device<->host raw arrays (owned out, ghost in).
+  void sync_ghost_to_host();
+  void sync_ghost_to_device();
+  double ghost_mc_checksum();        // device ghost-slice MC checksum (verify)
   double device_global_max_temperature();  // parallel_reduce max over k_T + Allreduce
   void compute_gradients_kernel();
 

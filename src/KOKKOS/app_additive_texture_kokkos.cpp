@@ -438,6 +438,78 @@ void AppAdditiveTextureKokkos::sync_temperature_to_host()
 }
 
 /* ----------------------------------------------------------------------
+   Selective ghost sync (Phase 2). Move ONLY the neighbor-read Monte Carlo
+   state -- spin (iarray[0]), active_flag (iarray[1]), quaternions q0-3
+   (darray[0-3]) -- between device and the raw host arrays, wrapping each raw
+   pointer as an unmanaged host View so deep_copy writes straight into the
+   comm-visible iarray/darray memory (one contiguous DMA per array, no serial
+   loop, no per-call mirror allocation). T is device-resident (no ghost comm)
+   and mobility/solid_d/G/V are output-only, so none of those are touched here.
+
+   _to_host copies the OWNED slice (so comm->all_selective sends current values);
+   _to_device copies the received GHOST slice back. Owned device state is left
+   untouched (the kernels are authoritative for owned). Quaternions are moved
+   raw (no renormalization); they stay near-unit through the physics, and the
+   output-step full sync renormalizes for dumps.
+------------------------------------------------------------------------- */
+
+void AppAdditiveTextureKokkos::sync_ghost_to_host()
+{
+  if (nlocal == 0) return;
+  using HUi = Kokkos::View<int*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>;
+  using HUd = Kokkos::View<double*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>;
+  const int nall = nlocal + nghost;
+  const auto owned = Kokkos::make_pair(0, nlocal);
+  Kokkos::deep_copy(Kokkos::subview(HUi(spin, nall), owned),
+                    Kokkos::subview(d_spin, owned));
+  Kokkos::deep_copy(Kokkos::subview(HUi(active_flag, nall), owned),
+                    Kokkos::subview(d_active_flag, owned));
+  Kokkos::deep_copy(Kokkos::subview(HUd(q0, nall), owned), Kokkos::subview(d_q0, owned));
+  Kokkos::deep_copy(Kokkos::subview(HUd(qx, nall), owned), Kokkos::subview(d_qx, owned));
+  Kokkos::deep_copy(Kokkos::subview(HUd(qy, nall), owned), Kokkos::subview(d_qy, owned));
+  Kokkos::deep_copy(Kokkos::subview(HUd(qz, nall), owned), Kokkos::subview(d_qz, owned));
+}
+
+void AppAdditiveTextureKokkos::sync_ghost_to_device()
+{
+  if (nghost == 0) return;
+  using HUi = Kokkos::View<int*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>;
+  using HUd = Kokkos::View<double*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>;
+  const int nall = nlocal + nghost;
+  const auto ghost = Kokkos::make_pair(nlocal, nall);
+  Kokkos::deep_copy(Kokkos::subview(d_spin, ghost),
+                    Kokkos::subview(HUi(spin, nall), ghost));
+  Kokkos::deep_copy(Kokkos::subview(d_active_flag, ghost),
+                    Kokkos::subview(HUi(active_flag, nall), ghost));
+  Kokkos::deep_copy(Kokkos::subview(d_q0, ghost), Kokkos::subview(HUd(q0, nall), ghost));
+  Kokkos::deep_copy(Kokkos::subview(d_qx, ghost), Kokkos::subview(HUd(qx, nall), ghost));
+  Kokkos::deep_copy(Kokkos::subview(d_qy, ghost), Kokkos::subview(HUd(qy, nall), ghost));
+  Kokkos::deep_copy(Kokkos::subview(d_qz, ghost), Kokkos::subview(HUd(qz, nall), ghost));
+}
+
+/* ----------------------------------------------------------------------
+   Checksum of the device GHOST-slice MC state (spin/active_flag/quaternions),
+   used by the SPK_VERIFY_GHOST correctness check to compare the selective and
+   full ghost-exchange paths. Distinct per-array scales keep different fields
+   from cancelling. Reduced over this rank's ghost slice only.
+------------------------------------------------------------------------- */
+
+double AppAdditiveTextureKokkos::ghost_mc_checksum()
+{
+  if (nghost == 0) return 0.0;
+  auto d_s = d_spin; auto d_a = d_active_flag;
+  auto q0v = d_q0; auto qxv = d_qx; auto qyv = d_qy; auto qzv = d_qz;
+  double sum = 0.0;
+  Kokkos::parallel_reduce("ghost_mc_checksum",
+    Kokkos::RangePolicy<>(nlocal, nlocal + nghost),
+    KOKKOS_LAMBDA(const int i, double &s) {
+      s += 1.0 * d_s(i) + 1000.0 * d_a(i)
+         + q0v(i) + 2.0 * qxv(i) + 3.0 * qyv(i) + 4.0 * qzv(i);
+    }, sum);
+  return sum;
+}
+
+/* ----------------------------------------------------------------------
    Global peak temperature over owned sites, reduced on the device (no host T
    needed) and then across ranks. Used by the device fast-forward decision.
 ------------------------------------------------------------------------- */
@@ -2521,21 +2593,40 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       (time + dt_sweep >= nextoutput) || (time + dt_sweep >= stoptime);
 
   if (nprocs > 1) {
-    // Multi-rank: the melting/solidification/smoothing kernels read NEIGHBOR
-    // (ghost) spin/quaternion/active_flag, so ghosts must be refreshed every
-    // step or boundary sites compute on stale state (rectangular MPI-boundary
-    // artifacts). comm->all() operates on the host arrays, so the owned data
-    // must be current on host before the exchange and the received ghosts
-    // pushed back to the device after it -- hence the per-step sync here.
-    sync_app_data_to_host();
+    // Multi-rank ghost exchange (Phase 2: selective). The kernels read as
+    // NEIGHBORS only the Monte Carlo state -- spin (iarray[0]), active_flag
+    // (iarray[1]), quaternions q0-3 (darray[0-3]). Temperature is device-
+    // resident (positional fill incl. ghosts, so no T ghost comm), and
+    // mobility/solid_d/G/V are never read as neighbors. So we exchange ONLY
+    // those 6 arrays, and sync ONLY them device<->host: owned out (for comm to
+    // send) and the received ghosts back in. This replaces the old full-array
+    // sync_app_data_to_host/device (~10 arrays, host->device over all nall) and
+    // is the dominant multi-rank per-step cost. all_selective uses the same
+    // swap as all(), so the same ghost sites are exchanged.
+    static const int sel_i[2] = {0, 1};        // spin, active_flag
+    static const int sel_d[4] = {0, 1, 2, 3};  // q0, qx, qy, qz
+    sync_ghost_to_host();                       // device owned -> host raw (6 arrays)
     timer->stamp();
-    comm->all();  // Exchange ghost site data (active_flag, spin, quaternions, etc.)
+    comm->all_selective(sel_i, 2, sel_d, 4);    // owned -> ghost (host)
     timer->stamp(TIME_COMM);
-    sync_app_data_to_device();
-  } else if (host_output_imminent) {
-    // Single rank: no ghost exchange; host arrays are only read at output.
-    sync_app_data_to_host();
+    sync_ghost_to_device();                     // host ghost -> device (6 arrays)
+
+    // Optional deterministic correctness check (SPK_VERIFY_GHOST): redo the old
+    // FULL exchange and confirm the device ghost MC state is bit-identical to
+    // the selective path. Same owned state + same swap => must match; a mismatch
+    // means a bug in the selective subviews/indices. Debug-only (doubles sync).
+    if (getenv("SPK_VERIFY_GHOST")) {
+      double sel = ghost_mc_checksum();
+      sync_app_data_to_host(); comm->all(); sync_app_data_to_device();
+      double full = ghost_mc_checksum();
+      if (Kokkos::fabs(sel - full) > 1.0e-6 && domain->me == 0)
+        fprintf(stderr, "GHOST MISMATCH step=%d selective=%.17g full=%.17g\n",
+                step_count, sel, full);
+    }
   }
+  // Full device->host of ALL arrays only on output steps (stats/dumps/diags read
+  // the host iarray/darray). Applies to both single and multi rank.
+  if (host_output_imminent) sync_app_data_to_host();
 
   // Optional isotherm-compactness diagnostic on its configured cadence, matching
   // the CPU app. A no-op unless temperature_smooth + a diag interval are set

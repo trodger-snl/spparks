@@ -140,6 +140,10 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   Kokkos::View<double*> d_mobility_out;  // Arrhenius mobility
   Kokkos::View<double*> d_solid_d;       // Solid front distance
 
+  // Compact list of sites needing smoothing, rebuilt each step by a parallel_scan.
+  // Cached (sized to nlocal) so it is not reallocated on the GPU every timestep.
+  Kokkos::View<int*> d_smoothing_sites;
+
   // Per-spin nucleation arrays (device-accessible, initialized once)
   Kokkos::View<int*> d_nucleation_flags;     // Can this spin nucleate? (1=yes, 0=no)
   Kokkos::View<double*> d_nucleation_temps;  // Critical undercooling for nucleation (K)

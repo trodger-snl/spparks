@@ -2340,9 +2340,12 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   // OPTIMIZATION 3: Work-efficient smoothing - only process sites in smoothing range
   t_start = MPI_Wtime();
 
-  // Build compact list of smoothing sites using parallel_scan (Phase 1 optimization)
+  // Build compact list of smoothing sites using parallel_scan (Phase 1
+  // optimization). The list View is cached (member) and reallocated only when
+  // nlocal changes, rather than allocated on the GPU every timestep.
   int n_smoothing_sites = 0;
-  Kokkos::View<int*> d_smoothing_sites("smoothing_sites", nlocal);
+  if ((int)d_smoothing_sites.extent(0) != nlocal)
+    d_smoothing_sites = Kokkos::View<int*>("smoothing_sites", nlocal);
   {
     auto d_solid_d_check = d_solid_d;
     int nrefine_check = nrefine;

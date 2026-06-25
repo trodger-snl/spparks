@@ -51,6 +51,7 @@ HDF5UnstructuredTemperatureSource::HDF5UnstructuredTemperatureSource(SPPARKS *sp
   current_time(std::numeric_limits<double>::lowest()),
   active_layer(std::numeric_limits<unsigned>::max()),
   cache_valid(false),
+  cache_generation_(0),
   total_layer_load_time(0.0),
   layer_load_count(0),
   cached_nodal_time(std::numeric_limits<double>::lowest()),
@@ -1216,6 +1217,8 @@ void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
   }
 
   cache_valid = true;
+  // Bump the generation so a device caller re-uploads its static cache Views.
+  ++cache_generation_;
 
   auto end_time = std::chrono::high_resolution_clock::now();
   double cache_build_time = std::chrono::duration<double>(end_time - start_time).count();
@@ -1228,6 +1231,32 @@ void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
             100.0 * active_node_indices.size() / dataCounts.size());
     fprintf(screen, "  [MEM] After site cache: %zu MB (delta: %+zd MB)\n",
             mem_after / 1024, (long)(mem_after - mem_before) / 1024);
+  }
+}
+
+/* ----------------------------------------------------------------------
+   Flatten the static per-site element cache for device upload. node_idx is
+   [4*nlocal] (tet-node indices into the nodal-temp slice, site-major), weights
+   is [3*nlocal] (barycentric weights), valid is [nlocal] (1/0). Invalid sites
+   (no containing element) get zeroed indices/weights and valid 0 so the device
+   kernel yields default_temp for them. Mirrors get_temperature_at_site_fast().
+------------------------------------------------------------------------- */
+
+void HDF5UnstructuredTemperatureSource::copy_device_cache(
+    std::vector<int> &node_idx,
+    std::vector<double> &weights,
+    std::vector<int> &valid) const
+{
+  const size_t n = site_element_cache.size();
+  node_idx.assign(4 * n, 0);
+  weights.assign(3 * n, 0.0);
+  valid.assign(n, 0);
+  for (size_t i = 0; i < n; i++) {
+    const ElementCache &c = site_element_cache[i];
+    if (!c.valid) continue;
+    valid[i] = 1;
+    for (int j = 0; j < 4; j++) node_idx[4 * i + j] = (int) c.nodeIndices[j];
+    for (int j = 0; j < 3; j++) weights[3 * i + j] = c.weights[j];
   }
 }
 

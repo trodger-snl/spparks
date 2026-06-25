@@ -186,9 +186,36 @@ public:
     std::array<unsigned, 4> nodeIndices;
     std::array<double, 3> weights;
     bool valid;
-    
+
     ElementCache() : nodeIndices{0,0,0,0}, weights{0.0,0.0,0.0}, valid(false) {}
   };
+
+  // ----- Device (Kokkos) evaluation support -----------------------------
+  // Generation counter; bumps whenever the per-site element cache is rebuilt
+  // (build_site_element_cache, i.e. at a layer boundary). A device caller
+  // re-uploads its static cache Views when this changes.
+  long cache_generation() const { return cache_generation_; }
+
+  // Number of loaded mesh nodes == length of the per-node temperature slice
+  // (cached_nodal_temps) that the device kernel indexes through the cache.
+  int num_loaded_nodes() const { return (int) dataCounts.size(); }
+
+  // Ambient/default temperature used for sites with no containing element.
+  double get_default_temp() const { return default_temp; }
+
+  // Copy the STATIC per-site element cache for device upload (call when
+  // cache_generation() changes). node_idx is flattened lobe-major
+  // [4*nlocal] (the 4 tet-node indices into the nodal-temp slice), weights is
+  // [3*nlocal] (the 3 barycentric weights), valid is [nlocal] (1/0). Invalid
+  // sites get node_idx 0 / weights 0 and valid 0 -> device yields default_temp.
+  void copy_device_cache(std::vector<int> &node_idx,
+                         std::vector<double> &weights,
+                         std::vector<int> &valid) const;
+
+  // The per-step, host-computed per-node temperature slice (time-interpolated,
+  // optionally nodal-smoothed). Indexed by the cache's node indices. Valid
+  // after prepare_for_timestep(); re-uploaded every step.
+  const std::vector<double> &nodal_temps() const { return cached_nodal_temps; }
 
 protected:
   // Data storage accessible to subclasses for CSR override
@@ -348,6 +375,10 @@ private:
   mutable std::vector<ElementCache> site_element_cache;
   mutable std::vector<unsigned> active_node_indices;  // Nodes actually used by cached sites
   mutable bool cache_valid;
+
+  // Generation counter bumped each time site_element_cache is rebuilt (layer
+  // boundary). Lets a device caller know its static cache Views are stale.
+  mutable long cache_generation_;
 
   // Build element cache for all sites
   void build_site_element_cache() const;

@@ -12,6 +12,7 @@
 ------------------------------------------------------------------------- */
 
 #include "temperature_source_moser.h"
+#include "moser_device.h"
 #include "error.h"
 #include "domain.h"
 #include "math_const.h"
@@ -476,6 +477,58 @@ void MoserTemperatureSource::rebuild_scan_from_pass_list_()
       }
     }
   }
+
+  // Segment arrays changed; invalidate any device-side cached copy.
+  ++scan_version_;
+}
+
+/* ----------------------------------------------------------------------
+   Device (Kokkos) STANDARD-mode evaluation support.
+------------------------------------------------------------------------- */
+
+bool MoserTemperatureSource::fill_device_plan(MoserDevicePlan &plan) const
+{
+  // Device path handles only the single-lobe STANDARD, no-fluctuation case
+  // with a built scan; everything else uses the host integrator.
+  if (mode != MoserMode::STANDARD) return false;
+  if (n_lobes_ != 1) return false;
+  if (!scan_built || !lobes_[0].scan) return false;
+  if (has_fluctuations()) return false;
+
+  plan.T0 = T0_default;
+  plan.alpha = alpha;
+  plan.c = cp * rho;               // volumetric heat capacity rho*cp
+  plan.sx = lobes_[0].sx;
+  plan.sy = lobes_[0].sy;
+  plan.sz = lobes_[0].sz;
+  plan.zl = scan_laser_plane_z;
+  plan.char_length = char_length;
+  plan.nseg = static_cast<int>(lobes_[0].scan->bounds.size());
+  plan.version = scan_version_;
+  plan.valid = (plan.nseg > 0);
+  return plan.valid;
+}
+
+void MoserTemperatureSource::copy_scan_segments(
+    std::vector<double> &bounds, std::vector<double> &xl,
+    std::vector<double> &yl, std::vector<double> &powers,
+    std::vector<double> &normals_x, std::vector<double> &normals_y,
+    std::vector<double> &speeds) const
+{
+  const auto &scan = *lobes_[0].scan;
+  const int n = static_cast<int>(scan.bounds.size());
+  auto load = [n](std::vector<double> &dst, double *src) {
+    dst.assign(src, src + n);
+  };
+  // VectorWrapper::data() is non-const; cast away constness for a read-only copy.
+  auto &s = const_cast<GREENAM_Scan &>(scan);
+  load(bounds, s.bounds.data());
+  load(xl, s.xl.data());
+  load(yl, s.yl.data());
+  load(powers, s.powers.data());
+  load(normals_x, s.normals_x.data());
+  load(normals_y, s.normals_y.data());
+  load(speeds, s.speeds.data());
 }
 
 /* ----------------------------------------------------------------------

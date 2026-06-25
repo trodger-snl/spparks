@@ -940,6 +940,97 @@ ThermalManager::rosenthal_fast_forward(double current_time, double stoptime,
 }
 
 /* ----------------------------------------------------------------------
+   Device (Kokkos) Moser path: build a MoserDevicePlan for the current step.
+   Unlike Rosenthal there is no scan-path pose to advance (the Moser source
+   integrates over its own absolute-time path history); we just let the source
+   do any per-step bookkeeping and snapshot its scalar parameters. Returns an
+   invalid plan (host path) for non-Moser sources, KEYHOLE / fluctuations, or
+   when a dynamic inter-pass pause/reset is configured.
+------------------------------------------------------------------------- */
+
+MoserDevicePlan ThermalManager::moser_device_plan(double simulation_time)
+{
+  MoserDevicePlan plan;
+
+  MoserTemperatureSource* moser =
+    dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
+  if (!moser) return plan;  // plan.valid stays false
+
+  // Dynamic inter-pass pause/reset firing is handled in advance() against host
+  // T; keep those on the host path for now.
+  if (laser_pause_constant > 0.0 || laser_pause_below > 0.0 ||
+      laser_reset_temperature > 0.0)
+    return plan;
+
+  // Per-step source bookkeeping (no-op for a statically built Moser scan).
+  temperature_source->update_temperatures(host_->dt, simulation_time);
+
+  if (!moser->fill_device_plan(plan)) { plan.valid = false; return plan; }
+  plan.time = simulation_time;
+  return plan;
+}
+
+void ThermalManager::moser_copy_segments(
+    std::vector<double> &bounds, std::vector<double> &xl,
+    std::vector<double> &yl, std::vector<double> &powers,
+    std::vector<double> &normals_x, std::vector<double> &normals_y,
+    std::vector<double> &speeds)
+{
+  MoserTemperatureSource* moser =
+    dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
+  if (!moser) return;
+  moser->copy_scan_segments(bounds, xl, yl, powers, normals_x, normals_y, speeds);
+}
+
+/* ----------------------------------------------------------------------
+   Fast-forward decision for the Moser device path. Like rosenthal_fast_forward
+   but uses the Moser inter-pass predictor. Only the non-dynamic-pause case
+   reaches here (see moser_device_plan), so no Moser pause/reset handling is
+   needed; the threshold is the liquidus.
+------------------------------------------------------------------------- */
+
+ThermalManager::ThermalStep
+ThermalManager::moser_fast_forward(double current_time, double stoptime,
+                                   double global_max_T)
+{
+  ThermalStep step;
+  step.new_time = current_time;
+  step.activate_powder = false;
+  step.end_run = false;
+
+  MoserTemperatureSource* moser =
+    dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
+  if (!moser) return step;
+
+  const double fast_forward_threshold = host_->tl;
+  const bool any_active = (global_max_T > fast_forward_threshold);
+
+  if (!any_active && current_time > 1e-6 && moser->supports_time_queries()) {
+    const double local_next =
+      moser_next_active_time(current_time, fast_forward_threshold);
+    double next_thermal_time;
+    MPI_Allreduce(&local_next, &next_thermal_time, 1, MPI_DOUBLE, MPI_MIN, world);
+
+    if (next_thermal_time > current_time &&
+        next_thermal_time < std::numeric_limits<double>::max()) {
+      const double target_time = std::min(next_thermal_time, stoptime);
+      const double time_skip = target_time - current_time;
+      if (time_skip > 1e-6) {
+        if (domain->me == 0) {
+          std::cout << "Fast-forward (device Moser): skipping " << time_skip
+                    << " s from t=" << current_time << " to " << target_time
+                    << " (all T < " << fast_forward_threshold << " K)"
+                    << std::endl;
+        }
+        step.new_time = target_time;
+        if (time_skip > 1.0) step.activate_powder = true;
+      }
+    }
+  }
+  return step;
+}
+
+/* ----------------------------------------------------------------------
    Run the isotherm-compactness diagnostic on the configured cadence.
 ------------------------------------------------------------------------- */
 

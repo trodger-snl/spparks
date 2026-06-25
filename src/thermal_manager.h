@@ -18,6 +18,7 @@
 #include "temperature_source.h"
 #include "thermal_host.h"
 #include "rosenthal_device.h"
+#include "moser_device.h"
 #include "am_raster.h"
 #include <memory>
 #include <vector>
@@ -105,6 +106,23 @@ class ThermalManager : protected Pointers {
   // skip is returned). Returns {new_time, activate_powder, end_run}.
   ThermalStep rosenthal_fast_forward(double current_time, double stoptime,
                                      double global_max_T);
+
+  // ---- device (Kokkos) Moser path ----
+  // Mirror of the Rosenthal device hooks for the time-domain Green's-function
+  // (Moser) source. moser_device_plan() returns a MoserDevicePlan POD; the
+  // variable-length scan segment arrays are fetched separately via
+  // moser_copy_segments() (only re-copied by the caller when plan.version
+  // changes). plan.valid is false for KEYHOLE / fluctuations / dynamic
+  // inter-pass pause -- those use the host advance() path.
+  MoserDevicePlan moser_device_plan(double simulation_time);
+  void moser_copy_segments(std::vector<double> &bounds,
+                           std::vector<double> &xl, std::vector<double> &yl,
+                           std::vector<double> &powers,
+                           std::vector<double> &normals_x,
+                           std::vector<double> &normals_y,
+                           std::vector<double> &speeds);
+  ThermalStep moser_fast_forward(double current_time, double stoptime,
+                                 double global_max_T);
 
   // ---- diagnostics ----
   // Run the diagnostic when step_count lands on the configured cadence.

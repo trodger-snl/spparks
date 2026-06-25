@@ -189,6 +189,29 @@ class MoserTemperatureSource : public TemperatureSource {
   MoserMode get_mode() const { return mode; }
   int  num_lobes() const { return n_lobes_; }
 
+  // ----- Device (Kokkos) STANDARD-mode evaluation support ---------------
+  // Generation counter; bumps whenever the scan segment arrays are rebuilt
+  // (build_scan / append_pass / reset_history_and_start). A device caller
+  // re-uploads its segment Views when this changes.
+  long scan_version() const { return scan_version_; }
+
+  // Export the scalar parameters needed to evaluate this source on a device.
+  // Returns true only for the device-eligible case: STANDARD mode, a built
+  // scan, and no configured stochastic fluctuations. KEYHOLE / fluctuations
+  // return false (host path). The laser-segment arrays are copied separately
+  // via copy_scan_segments(); plan.time is set by the caller.
+  bool fill_device_plan(struct MoserDevicePlan &plan) const;
+
+  // Copy the single-lobe scan segment arrays (length nseg = bounds.size())
+  // into caller-provided buffers for upload to a device. Order matches the
+  // GREENAM LaserScan layout. Only valid after a successful fill_device_plan.
+  void copy_scan_segments(std::vector<double> &bounds,
+                          std::vector<double> &xl, std::vector<double> &yl,
+                          std::vector<double> &powers,
+                          std::vector<double> &normals_x,
+                          std::vector<double> &normals_y,
+                          std::vector<double> &speeds) const;
+
   // ----- Stochastic ΔW/W, ΔD/D, ΔP/P fluctuations -----------------------
   // Time-domain recursive PSD generator. Pre-builds an emission-time-keyed
   // (factor_W, factor_D, factor_P) table per lobe; the GREENAM integrand
@@ -329,6 +352,10 @@ class MoserTemperatureSource : public TemperatureSource {
 
   std::array<Lobe, 2> lobes_;
   int n_lobes_;        // 1 for STANDARD, 2 for KEYHOLE
+
+  // Generation counter, bumped by rebuild_scan_from_pass_list_(); lets a
+  // device caller cache the uploaded segment arrays and refresh only on change.
+  long scan_version_ = 0;
 
   // PSD helpers (operate on a Lobe by reference)
   void psd_reset_filter_state(Lobe &lobe);

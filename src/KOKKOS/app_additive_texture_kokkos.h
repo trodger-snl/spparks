@@ -28,6 +28,7 @@ AppStyle(additive/texture/kk,AppAdditiveTextureKokkos)
 #include "thermal_manager.h"
 #include "thermal_host.h"
 #include "rosenthal_device.h"
+#include "moser_device.h"
 #include <Kokkos_Core.hpp>
 #include <Kokkos_DualView.hpp>
 #include <memory>
@@ -58,6 +59,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   void update_temperature_from_source(double simulation_time);
   void sync_temperature_to_device();
   void sync_temperature_to_host();   // device k_T -> host T (for diag/host code)
+  double device_global_max_temperature();  // parallel_reduce max over k_T + Allreduce
   void compute_gradients_kernel();
 
   // Ensure the cached device copy of site coordinates (d_xyz) is built for the
@@ -71,6 +73,10 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // replacing the host per-site exp/sqrt loop. Fills all nlocal+nghost sites
   // (Rosenthal is positional, so ghosts compute their own T -- no ghost comm).
   void fill_temperature_rosenthal_device(const RosenthalDevicePlan &plan);
+
+  // Device-side Moser (time-domain Green's function) temperature: integrate the
+  // scan-path history per site on the GPU. STANDARD mode, no fluctuations.
+  void fill_temperature_moser_device(const MoserDevicePlan &plan);
 
   // Phase 3: Phase transition kernels
   void initialize_nucleation_parameters();
@@ -90,11 +96,30 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // Uses DualView because temperature is read-only during device sweeps
   Kokkos::DualView<double*> k_T;  // Temperature field
 
+  // True when a device temperature fill has made the host T (darray d6) stale.
+  // The copy-back is deferred (lazy): host T is only refreshed before a host
+  // consumer reads it -- powder activation, or the d6 diagnostic at an output
+  // step. See app_update().
+  bool host_T_stale = false;
+
   // Cached device copy of site coordinates (lattice units). The lattice is
   // static for the run, so this is uploaded once and reused by the device
   // Rosenthal fill (rebuilt only if the site count changes via grow_app).
   Kokkos::View<double*[3]> d_xyz;
   int d_xyz_n = -1;                 // extent d_xyz was built for (nlocal+nghost)
+
+  // Device Moser support: scan segment arrays (re-uploaded when the scan
+  // version changes) and a precomputed Gauss-Legendre roots/weights table
+  // (orders 2..MOSER_GL_MAX_ORDER; order 1 is the midpoint rule). See
+  // fill_temperature_moser_device().
+  static constexpr int MOSER_GL_MAX_ORDER = 30;
+  Kokkos::View<double*> d_seg_bounds, d_seg_xl, d_seg_yl, d_seg_powers;
+  Kokkos::View<double*> d_seg_nx, d_seg_ny, d_seg_speeds;
+  long d_seg_version = -1;          // scan version the segment Views currently hold
+  Kokkos::View<double*> d_gl_roots, d_gl_weights;  // flat tables, orders 2..30
+  Kokkos::View<int*>    d_gl_offset;               // per-order start index (size 31)
+  bool d_gl_built = false;
+  void build_gl_table();            // host-build + upload the GL table once
 
   // Gradient cache (device-only, computed once per timestep)
   // Uses simple View because computed on device, no host sync needed

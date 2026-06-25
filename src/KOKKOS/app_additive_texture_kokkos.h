@@ -107,6 +107,10 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   Kokkos::View<double*[3]> d_xyz;
   int d_xyz_n = -1;                 // extent d_xyz was built for (nlocal+nghost)
 
+  // Rosenthal KEYHOLE line-integral quadrature (fixed at setup; uploaded once).
+  Kokkos::View<double*> d_ros_qnodes, d_ros_qweights;
+  int d_ros_nquad = -1;
+
   // Device Moser support: scan segment arrays (re-uploaded when the scan
   // version changes) and a precomputed Gauss-Legendre roots/weights table
   // (orders 2..MOSER_GL_MAX_ORDER; order 1 is the midpoint rule). See

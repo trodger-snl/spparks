@@ -112,11 +112,17 @@ class RosenthalTemperatureSource : public TemperatureSource {
   RosenthalMode get_mode() const { return mode; }
 
   // Export the material/source parameters needed to evaluate this source on a
-  // device (mode, lambda*Q, k, alpha, r_min, eta_y/eta_z). The laser pose is
-  // filled separately by the driving app from its scan path. Returns true if
-  // the mode is device-eligible (STANDARD / ANISOTROPIC); false for KEYHOLE,
-  // which needs the quadrature arrays and must use the host path.
+  // device (mode, lambda*Q, k, alpha, r_min, eta_y/eta_z; keyhole adds
+  // lambda_p*Q, lambda_l*Q, n_quad). The laser pose is filled separately by the
+  // driving app from its scan path. Returns true for all modes; KEYHOLE also
+  // needs copy_keyhole_quadrature() for the line-integral nodes.
   bool fill_device_plan(struct RosenthalDevicePlan &plan) const;
+
+  // Copy the keyhole line-integral quadrature nodes/weights (length n_quad,
+  // already mapped to [-d,d] with the Jacobian in the weights) for device
+  // upload. Only meaningful in KEYHOLE mode.
+  void copy_keyhole_quadrature(std::vector<double> &nodes,
+                               std::vector<double> &weights) const;
 
  private:
   RosenthalMode mode;

@@ -100,6 +100,11 @@ class ThermalManager : protected Pointers {
   // NOT also call update_temperatures() (that would double-advance the path).
   RosenthalDevicePlan rosenthal_device_plan(double simulation_time);
 
+  // Copy the Rosenthal keyhole line-integral quadrature (fixed at setup) for
+  // device upload. No-op for a non-Rosenthal or non-keyhole source.
+  void rosenthal_copy_keyhole_quadrature(std::vector<double> &nodes,
+                                         std::vector<double> &weights);
+
   // Fast-forward decision for the Rosenthal device path. Mirrors advance()'s
   // Rosenthal branch but takes the already-computed global max temperature
   // (from a device reduction) instead of scanning host T, and does NOT refill

@@ -202,9 +202,21 @@ bool RosenthalTemperatureSource::fill_device_plan(RosenthalDevicePlan &plan) con
   switch (mode) {
   case RosenthalMode::STANDARD:    plan.mode = 0; return true;
   case RosenthalMode::ANISOTROPIC: plan.mode = 1; return true;
-  case RosenthalMode::KEYHOLE:     return false;  // host path only
+  case RosenthalMode::KEYHOLE:
+    plan.mode = 2;
+    plan.lambda_pQ = lambda_p * Q;
+    plan.lambda_lQ = lambda_l * Q;
+    plan.n_quad = n_quad;
+    return true;
   }
   return false;
+}
+
+void RosenthalTemperatureSource::copy_keyhole_quadrature(
+    std::vector<double> &nodes, std::vector<double> &weights) const
+{
+  nodes = quad_nodes;
+  weights = quad_weights;
 }
 
 /* ----------------------------------------------------------------------

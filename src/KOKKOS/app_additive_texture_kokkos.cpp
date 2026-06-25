@@ -484,6 +484,20 @@ void AppAdditiveTextureKokkos::ensure_device_xyz()
   d_xyz_n = nall;
 }
 
+// Device reproduction of RosenthalTemperatureSource::rosenthal_kernel:
+// Q_eff / (2 pi k R) * exp(-v (xi + R) / (2 alpha)), with the 1/R singularity
+// clamped at r_min. (The image-source factor of 2 is applied by the caller.)
+KOKKOS_INLINE_FUNCTION
+static double rosenthal_device_kernel(double Qeff, double v, double xi, double R,
+                                      double r_min, double k_cond, double alpha,
+                                      double two_pi)
+{
+  double Rk = (R < r_min) ? r_min : R;
+  if (Rk <= 0.0) return 0.0;
+  return (Qeff / (two_pi * k_cond * Rk)) *
+         Kokkos::exp(-v * (xi + Rk) / (2.0 * alpha));
+}
+
 void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
     const RosenthalDevicePlan &plan)
 {
@@ -491,8 +505,28 @@ void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
 
   ensure_device_xyz();
 
+  // KEYHOLE: upload the (fixed) line-integral quadrature once.
+  if (plan.mode == 2 && d_ros_nquad != plan.n_quad) {
+    std::vector<double> nodes, weights;
+    thermal->rosenthal_copy_keyhole_quadrature(nodes, weights);
+    auto up = [](Kokkos::View<double*> &dv, const std::vector<double> &h,
+                 const char *name) {
+      const int n = (int)h.size();
+      dv = Kokkos::View<double*>(name, n);
+      if (n == 0) return;
+      auto hm = Kokkos::create_mirror_view(dv);
+      for (int i = 0; i < n; i++) hm(i) = h[i];
+      Kokkos::deep_copy(dv, hm);
+    };
+    up(d_ros_qnodes, nodes, "ros_qnodes");
+    up(d_ros_qweights, weights, "ros_qweights");
+    d_ros_nquad = plan.n_quad;
+  }
+
   auto d_T   = k_T.view_device();
   auto d_xyz_local = d_xyz;
+  auto qnodes = d_ros_qnodes;
+  auto qweights = d_ros_qweights;
 
   // Capture plan scalars by value for device lambda.
   const double dx_l = this->dx;
@@ -501,6 +535,8 @@ void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
   const double v = plan.v, T0 = plan.T0;
   const double lambdaQ = plan.lambdaQ, k_cond = plan.k_cond, alpha = plan.alpha;
   const double r_min = plan.r_min, eta_y = plan.eta_y, eta_z = plan.eta_z;
+  const double lambda_pQ = plan.lambda_pQ, lambda_lQ = plan.lambda_lQ;
+  const int n_quad = plan.n_quad;
   const int mode = plan.mode;
   const bool scan_active = plan.scan_active;
   const double two_pi = 2.0 * 3.14159265358979323846;
@@ -523,19 +559,31 @@ void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
     double Tval = T0;
     // Free-surface cutoff: vacuum above the laser plane. Inactive path -> T0.
     if (scan_active && z_rel <= 0.0) {
-      double R;
-      if (mode == 1) {                              // ANISOTROPIC
-        const double yy = eta_y * y_rel;
-        const double zz = eta_z * z_rel;
-        R = Kokkos::sqrt(xi*xi + yy*yy + zz*zz);
-      } else {                                      // STANDARD
-        R = Kokkos::sqrt(xi*xi + y_rel*y_rel + z_rel*z_rel);
-      }
-      double Rk = (R < r_min) ? r_min : R;
-      if (Rk > 0.0) {
-        const double prefactor = lambdaQ / (two_pi * k_cond * Rk);
-        const double exponent  = -v * (xi + Rk) / (2.0 * alpha);
-        Tval = T0 + 2.0 * prefactor * Kokkos::exp(exponent);
+      if (mode == 2) {
+        // KEYHOLE: image-doubled surface point source + buried line source
+        // integrated over the Gauss-Legendre nodes (image-doubled per node).
+        const double R = Kokkos::sqrt(xi*xi + y_rel*y_rel + z_rel*z_rel);
+        double T_rise = 2.0 * rosenthal_device_kernel(lambda_pQ, v, xi, R,
+                                                       r_min, k_cond, alpha, two_pi);
+        for (int q = 0; q < n_quad; q++) {
+          const double zarg = qnodes(q) + z_rel;
+          const double Rp = Kokkos::sqrt(xi*xi + y_rel*y_rel + zarg*zarg);
+          T_rise += 2.0 * qweights(q) *
+                    rosenthal_device_kernel(lambda_lQ, v, xi, Rp,
+                                            r_min, k_cond, alpha, two_pi);
+        }
+        Tval = T0 + T_rise;
+      } else {
+        double R;
+        if (mode == 1) {                            // ANISOTROPIC
+          const double yy = eta_y * y_rel;
+          const double zz = eta_z * z_rel;
+          R = Kokkos::sqrt(xi*xi + yy*yy + zz*zz);
+        } else {                                    // STANDARD
+          R = Kokkos::sqrt(xi*xi + y_rel*y_rel + z_rel*z_rel);
+        }
+        Tval = T0 + 2.0 * rosenthal_device_kernel(lambdaQ, v, xi, R,
+                                                   r_min, k_cond, alpha, two_pi);
       }
     }
     d_T(i) = Tval;

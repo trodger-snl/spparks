@@ -43,7 +43,7 @@ struct RosenthalDevicePlan {
   bool   valid = false;       // false => not a device-eligible Rosenthal step;
                               //          caller must use the host path
   bool   scan_active = false; // false => laser path exhausted; T = T0 everywhere
-  int    mode = 0;            // 0 = STANDARD, 1 = ANISOTROPIC
+  int    mode = 0;            // 0 = STANDARD, 1 = ANISOTROPIC, 2 = KEYHOLE
 
   // Laser pose in SPPARKS coordinates (physical meters), current timestep.
   double px = 0.0, py = 0.0;  // laser position (x,y)
@@ -60,6 +60,14 @@ struct RosenthalDevicePlan {
   double r_min   = 0.0;       // 1/R singularity cutoff (meters)
   double eta_y   = 1.0;       // ANISOTROPIC transverse shape factor
   double eta_z   = 1.0;       // ANISOTROPIC depth shape factor
+
+  // KEYHOLE (mode 2): a surface point source (lambda_pQ) plus a buried line
+  // source (lambda_lQ) integrated over n_quad Gauss-Legendre nodes. The node
+  // positions/weights (already mapped to [-d,d] with the Jacobian baked in) are
+  // a fixed array uploaded separately to a device View.
+  double lambda_pQ = 0.0;
+  double lambda_lQ = 0.0;
+  int    n_quad = 0;
 };
 
 }

@@ -889,6 +889,15 @@ RosenthalDevicePlan ThermalManager::rosenthal_device_plan(double simulation_time
   return plan;
 }
 
+void ThermalManager::rosenthal_copy_keyhole_quadrature(
+    std::vector<double> &nodes, std::vector<double> &weights)
+{
+  RosenthalTemperatureSource* ros =
+    dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
+  if (!ros) return;
+  ros->copy_keyhole_quadrature(nodes, weights);
+}
+
 /* ----------------------------------------------------------------------
    Fast-forward decision for the Rosenthal device path. Same logic as the
    Rosenthal branch of advance(), but the active-site test uses the device-

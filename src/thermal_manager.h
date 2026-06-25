@@ -115,12 +115,16 @@ class ThermalManager : protected Pointers {
   // changes). plan.valid is false for KEYHOLE / fluctuations / dynamic
   // inter-pass pause -- those use the host advance() path.
   MoserDevicePlan moser_device_plan(double simulation_time);
-  void moser_copy_segments(std::vector<double> &bounds,
-                           std::vector<double> &xl, std::vector<double> &yl,
-                           std::vector<double> &powers,
-                           std::vector<double> &normals_x,
-                           std::vector<double> &normals_y,
-                           std::vector<double> &speeds);
+  void moser_copy_device_data(std::vector<double> &bounds,
+                              std::vector<double> &xl, std::vector<double> &yl,
+                              std::vector<double> &normals_x,
+                              std::vector<double> &normals_y,
+                              std::vector<double> &speeds,
+                              std::vector<double> &powers,
+                              std::vector<double> &fluct_t,
+                              std::vector<double> &fluct_w,
+                              std::vector<double> &fluct_d,
+                              std::vector<double> &fluct_p);
   ThermalStep moser_fast_forward(double current_time, double stoptime,
                                  double global_max_T);
 

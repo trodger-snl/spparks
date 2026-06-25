@@ -606,6 +606,30 @@ void AppAdditiveTextureKokkos::build_gl_table()
    scalar params (plan) + the scan segment arrays (uploaded on version change).
 ------------------------------------------------------------------------- */
 
+// Device reproduction of FluctuationTable::get_at (binary search + clamped
+// linear interpolation over the [foff, foff+fn) slice). fn <= 0 -> factors = 1.
+KOKKOS_INLINE_FUNCTION
+static void moser_fluct_get_at(
+    const Kokkos::View<double*> &ft, const Kokkos::View<double*> &fw,
+    const Kokkos::View<double*> &fd, const Kokkos::View<double*> &fp,
+    int foff, int fn, double s, double &fW, double &fD, double &fP)
+{
+  if (fn <= 0)            { fW = fD = fP = 1.0; return; }
+  if (s <= ft(foff))      { fW = fw(foff); fD = fd(foff); fP = fp(foff); return; }
+  const int last = foff + fn - 1;
+  if (s >= ft(last))      { fW = fw(last); fD = fd(last); fP = fp(last); return; }
+  int lo = 0, hi = fn - 1;
+  while (lo + 1 < hi) { int mid = (lo + hi) / 2;
+    if (ft(foff + mid) <= s) lo = mid; else hi = mid; }
+  const double t0 = ft(foff + lo), t1 = ft(foff + lo + 1);
+  const double denom = t1 - t0;
+  const double frac = (denom > 0.0) ? (s - t0) / denom : 0.0;
+  const double om = 1.0 - frac;
+  fW = om * fw(foff + lo) + frac * fw(foff + lo + 1);
+  fD = om * fd(foff + lo) + frac * fd(foff + lo + 1);
+  fP = om * fp(foff + lo) + frac * fp(foff + lo + 1);
+}
+
 void AppAdditiveTextureKokkos::fill_temperature_moser_device(
     const MoserDevicePlan &plan)
 {
@@ -613,22 +637,26 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
   ensure_device_xyz();
   build_gl_table();
 
-  // (Re)upload the scan segment arrays when the scan generation changes.
+  // (Re)upload the shared geometry, per-lobe powers, and per-lobe fluctuation
+  // tables when the scan generation changes.
   if (d_seg_version != plan.version) {
-    std::vector<double> b, xl, yl, pw, nx, ny, sp;
-    thermal->moser_copy_segments(b, xl, yl, pw, nx, ny, sp);
-    const int n = (int)b.size();
-    auto up = [n](Kokkos::View<double*> &dv, const std::vector<double> &h,
-                  const char *name) {
-      dv = Kokkos::View<double*>(name, n);
+    std::vector<double> b, xl, yl, nx, ny, sp, pw, ft, fw, fd, fp;
+    thermal->moser_copy_device_data(b, xl, yl, nx, ny, sp, pw, ft, fw, fd, fp);
+    auto up = [](Kokkos::View<double*> &dv, const std::vector<double> &h,
+                 const char *name) {
+      const int n = (int)h.size();
+      dv = Kokkos::View<double*>(name, n);   // n == 0 is valid (never indexed)
+      if (n == 0) return;
       auto hm = Kokkos::create_mirror_view(dv);
       for (int i = 0; i < n; i++) hm(i) = h[i];
       Kokkos::deep_copy(dv, hm);
     };
     up(d_seg_bounds, b, "seg_bounds"); up(d_seg_xl, xl, "seg_xl");
-    up(d_seg_yl, yl, "seg_yl");        up(d_seg_powers, pw, "seg_powers");
-    up(d_seg_nx, nx, "seg_nx");        up(d_seg_ny, ny, "seg_ny");
-    up(d_seg_speeds, sp, "seg_speeds");
+    up(d_seg_yl, yl, "seg_yl");        up(d_seg_nx, nx, "seg_nx");
+    up(d_seg_ny, ny, "seg_ny");        up(d_seg_speeds, sp, "seg_speeds");
+    up(d_seg_powers, pw, "seg_powers");
+    up(d_fluct_t, ft, "fluct_t");      up(d_fluct_w, fw, "fluct_w");
+    up(d_fluct_d, fd, "fluct_d");      up(d_fluct_p, fp, "fluct_p");
     d_seg_version = plan.version;
   }
 
@@ -637,14 +665,22 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
   auto bounds = d_seg_bounds; auto xlv = d_seg_xl; auto ylv = d_seg_yl;
   auto powers = d_seg_powers;  auto nxv = d_seg_nx;  auto nyv = d_seg_ny;
   auto speeds = d_seg_speeds;
+  auto ftv = d_fluct_t; auto fwv = d_fluct_w; auto fdv = d_fluct_d; auto fpv = d_fluct_p;
   auto gl_roots = d_gl_roots; auto gl_weights = d_gl_weights; auto gl_off = d_gl_offset;
 
   const double dx_l = this->dx;
   const double tt = plan.time, T0 = plan.T0;
   const double alpha = plan.alpha, c = plan.c;
-  const double sx = plan.sx, sy = plan.sy, sz = plan.sz, zl = plan.zl;
   const double cl = plan.char_length;
   const int nseg = plan.nseg;
+  const int nlobes = plan.n_lobes;
+  // Per-lobe scalars (captured individually; rebuilt into local arrays in-kernel).
+  const double sx0 = plan.sx[0], sx1 = plan.sx[1];
+  const double sy0 = plan.sy[0], sy1 = plan.sy[1];
+  const double sz0 = plan.sz[0], sz1 = plan.sz[1];
+  const double zl0 = plan.zl[0], zl1 = plan.zl[1];
+  const int fn0 = plan.fluct_n[0], fn1 = plan.fluct_n[1];
+  const double surface_z = plan.zl[0];   // top lobe zl = real free surface (z_offset 0)
   const int maxN = MOSER_GL_MAX_ORDER;
   const double eps = 2.220446049250313e-16;
   const double invPi3_2 = 1.0 / (M_PI * 1.7724538509055160273); // 1/(pi*sqrt(pi))
@@ -654,7 +690,8 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
     const double y = d_xyz_local(site,1) * dx_l;
     const double z = d_xyz_local(site,2) * dx_l;
 
-    if (z > zl || tt <= 0.0 || nseg <= 0) { d_T(site) = T0; return; }
+    // Vacuum above the real free surface; integral is empty before t=0.
+    if (z > surface_z || tt <= 0.0 || nseg <= 0) { d_T(site) = T0; return; }
 
     // binary_search(bounds, tt, nseg): largest i with bounds(i) <= tt.
     int end_idx = -1;
@@ -667,70 +704,73 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
     if (end_idx < 0) { d_T(site) = T0; return; }
     if (Kokkos::fabs(tt - bounds(end_idx)) <= 4.0 * eps) end_idx--;
 
-    const double avg_sigma = (sx + sy + sz) / 3.0;
-    const double avg_sigma_sq = avg_sigma * avg_sigma;
+    const double sxa[2] = {sx0, sx1}, sya[2] = {sy0, sy1};
+    const double sza[2] = {sz0, sz1}, zla[2] = {zl0, zl1};
+    const int    fna[2] = {fn0, fn1};
 
+    // KEYHOLE sums the contributions of both lobes; STANDARD has one.
     double res = 0.0;
-    for (int i = 0; i <= end_idx; i++) {
-      const double p_i = powers(i);
-      if (Kokkos::fabs(p_i) <= 4.0 * eps) continue;
-      const double xl_i = xlv(i), yl_i = ylv(i);
-      const double nx_i = nxv(i), ny_i = nyv(i);
-      const double sp_i = speeds(i), t0_i = bounds(i);
+    for (int lobe = 0; lobe < nlobes; lobe++) {
+      const double sx = sxa[lobe], sy = sya[lobe], sz = sza[lobe], zl = zla[lobe];
+      const int fn = fna[lobe];
+      const int foff = (lobe == 0) ? 0 : fn0;     // fluct slice for this lobe
+      const int poff = lobe * nseg;               // power slice for this lobe
+      const double avg_sigma = (sx + sy + sz) / 3.0;
+      const double avg_sigma_sq = avg_sigma * avg_sigma;
 
-      const double tstart = bounds(i);
-      const double tend = (i + 1 >= nseg) ? tt
-          : (tt <= bounds(i+1) + 4.0*eps ? tt : bounds(i+1));
+      for (int i = 0; i <= end_idx; i++) {
+        const double p_i = powers(poff + i);
+        if (Kokkos::fabs(p_i) <= 4.0 * eps) continue;
+        const double xl_i = xlv(i), yl_i = ylv(i);
+        const double nx_i = nxv(i), ny_i = nyv(i);
+        const double sp_i = speeds(i), t0_i = bounds(i);
 
-      const double sigma_eff = 4.0*alpha*(tt - tend) + avg_sigma_sq;
-      double quad_size = cl*cl*sigma_eff/4.0/alpha;
-      if (sp_i > 4.0*eps)
-        quad_size = Kokkos::fmin(cl*Kokkos::sqrt(sigma_eff)/sp_i, quad_size);
+        const double tstart = bounds(i);
+        const double tend = (i + 1 >= nseg) ? tt
+            : (tt <= bounds(i+1) + 4.0*eps ? tt : bounds(i+1));
 
-      const double n_quad_pts = (tend - tstart)/quad_size;
-      int order = (int)Kokkos::ceil(n_quad_pts); if (order < 1) order = 1;
-      if (order > maxN) order = maxN;
-      const double step_size = quad_size*order;
-      double n_int = Kokkos::ceil((tend - tstart)/step_size);
-      if (n_int < 1.0) n_int = 1.0;
-      const int nint = (int)n_int;
-      const double dt = (tend - tstart)/n_int;
+        const double sigma_eff = 4.0*alpha*(tt - tend) + avg_sigma_sq;
+        double quad_size = cl*cl*sigma_eff/4.0/alpha;
+        if (sp_i > 4.0*eps)
+          quad_size = Kokkos::fmin(cl*Kokkos::sqrt(sigma_eff)/sp_i, quad_size);
 
-      for (int j = 0; j < nint; j++) {
-        const double a = tstart + j*dt;
-        const double bb = tstart + (j+1)*dt;
-        // Variable-order Gauss-Legendre on [a,bb]; order 1 -> midpoint.
-        double acc = 0.0;
-        const double pmid = 0.5*(bb - a), qmid = 0.5*(bb + a);
-        if (order == 1) {
-          const double s = qmid;
-          const double st = 4.0*alpha*(tt - s);
-          const double cx = x - xl_i, cy = y - yl_i;
-          const double xt = cx*nx_i + cy*ny_i;
-          const double yt = -cx*ny_i + cy*nx_i;
-          const double zt = z - zl;
-          const double vx = 1.0/(sx*sx+st), vy = 1.0/(sy*sy+st), vz = 1.0/(sz*sz+st);
-          const double xeff = xt - sp_i*(s - t0_i);
-          const double e = Kokkos::exp(-xeff*xeff*vx - yt*yt*vy - zt*zt*vz);
-          acc = (bb - a) * (2.0*p_i/c*invPi3_2 * e * Kokkos::sqrt(vx*vy*vz));
-        } else {
-          const int off = gl_off(order);
+        const double n_quad_pts = (tend - tstart)/quad_size;
+        int order = (int)Kokkos::ceil(n_quad_pts); if (order < 1) order = 1;
+        if (order > maxN) order = maxN;
+        const double step_size = quad_size*order;
+        double n_int = Kokkos::ceil((tend - tstart)/step_size);
+        if (n_int < 1.0) n_int = 1.0;
+        const int nint = (int)n_int;
+        const double dt = (tend - tstart)/n_int;
+
+        for (int j = 0; j < nint; j++) {
+          const double a = tstart + j*dt;
+          const double bb = tstart + (j+1)*dt;
+          const double pmid = 0.5*(bb - a), qmid = 0.5*(bb + a);
+          // node count: 1 -> midpoint rule, else `order` Gauss-Legendre nodes.
+          const int nnodes = (order == 1) ? 1 : order;
+          const int goff = (order == 1) ? 0 : gl_off(order);
           double sum = 0.0;
-          for (int n = 0; n < order; n++) {
-            const double s = pmid*gl_roots(off+n) + qmid;
+          for (int nn = 0; nn < nnodes; nn++) {
+            const double s = (order == 1) ? qmid : (pmid*gl_roots(goff+nn) + qmid);
+            const double w = (order == 1) ? (bb - a) : gl_weights(goff+nn);
+            // Fluctuation modulation of (sx,sy), sz, power at this emission time.
+            double fW = 1.0, fD = 1.0, fP = 1.0;
+            if (fn > 0) moser_fluct_get_at(ftv, fwv, fdv, fpv, foff, fn, s, fW, fD, fP);
+            const double sxu = sx*fW, syu = sy*fW, szu = sz*fD, pu = p_i*fP;
             const double st = 4.0*alpha*(tt - s);
             const double cx = x - xl_i, cy = y - yl_i;
             const double xt = cx*nx_i + cy*ny_i;
             const double yt = -cx*ny_i + cy*nx_i;
             const double zt = z - zl;
-            const double vx = 1.0/(sx*sx+st), vy = 1.0/(sy*sy+st), vz = 1.0/(sz*sz+st);
+            const double vx = 1.0/(sxu*sxu+st), vy = 1.0/(syu*syu+st), vz = 1.0/(szu*szu+st);
             const double xeff = xt - sp_i*(s - t0_i);
             const double e = Kokkos::exp(-xeff*xeff*vx - yt*yt*vy - zt*zt*vz);
-            sum += (2.0*p_i/c*invPi3_2 * e * Kokkos::sqrt(vx*vy*vz)) * gl_weights(off+n);
+            sum += (2.0*pu/c*invPi3_2 * e * Kokkos::sqrt(vx*vy*vz)) * w;
           }
-          acc = pmid * sum;
+          // GL needs the *pmid scale; the midpoint rule already used (bb-a) as w.
+          res += (order == 1) ? sum : (pmid * sum);
         }
-        res += acc;
       }
     }
     d_T(site) = T0 + res;

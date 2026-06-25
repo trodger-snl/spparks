@@ -483,52 +483,73 @@ void MoserTemperatureSource::rebuild_scan_from_pass_list_()
 }
 
 /* ----------------------------------------------------------------------
-   Device (Kokkos) STANDARD-mode evaluation support.
+   Device (Kokkos) evaluation support. STANDARD (1 lobe) and KEYHOLE (2 lobes),
+   with or without stochastic fluctuations.
 ------------------------------------------------------------------------- */
 
 bool MoserTemperatureSource::fill_device_plan(MoserDevicePlan &plan) const
 {
-  // Device path handles only the single-lobe STANDARD, no-fluctuation case
-  // with a built scan; everything else uses the host integrator.
-  if (mode != MoserMode::STANDARD) return false;
-  if (n_lobes_ != 1) return false;
   if (!scan_built || !lobes_[0].scan) return false;
-  if (has_fluctuations()) return false;
+  if (n_lobes_ > MoserDevicePlan::MAX_LOBES) return false;
 
   plan.T0 = T0_default;
   plan.alpha = alpha;
   plan.c = cp * rho;               // volumetric heat capacity rho*cp
-  plan.sx = lobes_[0].sx;
-  plan.sy = lobes_[0].sy;
-  plan.sz = lobes_[0].sz;
-  plan.zl = scan_laser_plane_z;
   plan.char_length = char_length;
+  plan.n_lobes = n_lobes_;
   plan.nseg = static_cast<int>(lobes_[0].scan->bounds.size());
+
+  for (int li = 0; li < n_lobes_; ++li) {
+    plan.sx[li] = lobes_[li].sx;
+    plan.sy[li] = lobes_[li].sy;
+    plan.sz[li] = lobes_[li].sz;
+    // Per-lobe effective laser-plane z (top lobe z_offset = 0). The vacuum
+    // cutoff is still the real free surface scan_laser_plane_z; the kernel
+    // applies it before summing lobes.
+    plan.zl[li] = scan_laser_plane_z - lobes_[li].z_offset;
+    plan.fluct_n[li] = static_cast<int>(lobes_[li].fluct_table.size());
+  }
+
   plan.version = scan_version_;
   plan.valid = (plan.nseg > 0);
   return plan.valid;
 }
 
-void MoserTemperatureSource::copy_scan_segments(
+void MoserTemperatureSource::copy_device_data(
     std::vector<double> &bounds, std::vector<double> &xl,
-    std::vector<double> &yl, std::vector<double> &powers,
-    std::vector<double> &normals_x, std::vector<double> &normals_y,
-    std::vector<double> &speeds) const
+    std::vector<double> &yl, std::vector<double> &normals_x,
+    std::vector<double> &normals_y, std::vector<double> &speeds,
+    std::vector<double> &powers, std::vector<double> &fluct_t,
+    std::vector<double> &fluct_w, std::vector<double> &fluct_d,
+    std::vector<double> &fluct_p) const
 {
-  const auto &scan = *lobes_[0].scan;
-  const int n = static_cast<int>(scan.bounds.size());
+  // Shared path geometry from lobe 0 (identical across lobes).
+  const auto &geom = *lobes_[0].scan;
+  const int n = static_cast<int>(geom.bounds.size());
   auto load = [n](std::vector<double> &dst, double *src) {
     dst.assign(src, src + n);
   };
-  // VectorWrapper::data() is non-const; cast away constness for a read-only copy.
-  auto &s = const_cast<GREENAM_Scan &>(scan);
-  load(bounds, s.bounds.data());
-  load(xl, s.xl.data());
-  load(yl, s.yl.data());
-  load(powers, s.powers.data());
-  load(normals_x, s.normals_x.data());
-  load(normals_y, s.normals_y.data());
-  load(speeds, s.speeds.data());
+  auto &g = const_cast<GREENAM_Scan &>(geom);
+  load(bounds, g.bounds.data());
+  load(xl, g.xl.data());
+  load(yl, g.yl.data());
+  load(normals_x, g.normals_x.data());
+  load(normals_y, g.normals_y.data());
+  load(speeds, g.speeds.data());
+
+  // Per-lobe powers (lobe-major: lobe 0 segments, then lobe 1 segments) and
+  // per-lobe fluctuation tables (concatenated).
+  powers.clear();
+  fluct_t.clear(); fluct_w.clear(); fluct_d.clear(); fluct_p.clear();
+  for (int li = 0; li < n_lobes_; ++li) {
+    auto &s = const_cast<GREENAM_Scan &>(*lobes_[li].scan);
+    powers.insert(powers.end(), s.powers.data(), s.powers.data() + n);
+    const auto &ft = lobes_[li].fluct_table;
+    fluct_t.insert(fluct_t.end(), ft.t_grid.begin(),   ft.t_grid.end());
+    fluct_w.insert(fluct_w.end(), ft.factor_W.begin(), ft.factor_W.end());
+    fluct_d.insert(fluct_d.end(), ft.factor_D.begin(), ft.factor_D.end());
+    fluct_p.insert(fluct_p.end(), ft.factor_P.begin(), ft.factor_P.end());
+  }
 }
 
 /* ----------------------------------------------------------------------

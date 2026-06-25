@@ -113,9 +113,12 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // (orders 2..MOSER_GL_MAX_ORDER; order 1 is the midpoint rule). See
   // fill_temperature_moser_device().
   static constexpr int MOSER_GL_MAX_ORDER = 30;
+  // Shared path geometry (length nseg) + per-lobe powers (length n_lobes*nseg,
+  // lobe-major) + per-lobe fluctuation tables (concatenated, length sum fluct_n).
   Kokkos::View<double*> d_seg_bounds, d_seg_xl, d_seg_yl, d_seg_powers;
   Kokkos::View<double*> d_seg_nx, d_seg_ny, d_seg_speeds;
-  long d_seg_version = -1;          // scan version the segment Views currently hold
+  Kokkos::View<double*> d_fluct_t, d_fluct_w, d_fluct_d, d_fluct_p;
+  long d_seg_version = -1;          // scan version the device Views currently hold
   Kokkos::View<double*> d_gl_roots, d_gl_weights;  // flat tables, orders 2..30
   Kokkos::View<int*>    d_gl_offset;               // per-order start index (size 31)
   bool d_gl_built = false;

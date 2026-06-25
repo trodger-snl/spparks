@@ -970,16 +970,19 @@ MoserDevicePlan ThermalManager::moser_device_plan(double simulation_time)
   return plan;
 }
 
-void ThermalManager::moser_copy_segments(
+void ThermalManager::moser_copy_device_data(
     std::vector<double> &bounds, std::vector<double> &xl,
-    std::vector<double> &yl, std::vector<double> &powers,
-    std::vector<double> &normals_x, std::vector<double> &normals_y,
-    std::vector<double> &speeds)
+    std::vector<double> &yl, std::vector<double> &normals_x,
+    std::vector<double> &normals_y, std::vector<double> &speeds,
+    std::vector<double> &powers, std::vector<double> &fluct_t,
+    std::vector<double> &fluct_w, std::vector<double> &fluct_d,
+    std::vector<double> &fluct_p)
 {
   MoserTemperatureSource* moser =
     dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
   if (!moser) return;
-  moser->copy_scan_segments(bounds, xl, yl, powers, normals_x, normals_y, speeds);
+  moser->copy_device_data(bounds, xl, yl, normals_x, normals_y, speeds,
+                          powers, fluct_t, fluct_w, fluct_d, fluct_p);
 }
 
 /* ----------------------------------------------------------------------

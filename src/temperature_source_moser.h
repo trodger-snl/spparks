@@ -189,28 +189,33 @@ class MoserTemperatureSource : public TemperatureSource {
   MoserMode get_mode() const { return mode; }
   int  num_lobes() const { return n_lobes_; }
 
-  // ----- Device (Kokkos) STANDARD-mode evaluation support ---------------
-  // Generation counter; bumps whenever the scan segment arrays are rebuilt
-  // (build_scan / append_pass / reset_history_and_start). A device caller
-  // re-uploads its segment Views when this changes.
+  // ----- Device (Kokkos) evaluation support -----------------------------
+  // Generation counter; bumps whenever the scan segment arrays / fluctuation
+  // tables are rebuilt (build_scan / append_pass / reset_history_and_start). A
+  // device caller re-uploads its Views when this changes.
   long scan_version() const { return scan_version_; }
 
-  // Export the scalar parameters needed to evaluate this source on a device.
-  // Returns true only for the device-eligible case: STANDARD mode, a built
-  // scan, and no configured stochastic fluctuations. KEYHOLE / fluctuations
-  // return false (host path). The laser-segment arrays are copied separately
-  // via copy_scan_segments(); plan.time is set by the caller.
+  // Fill the scalar device plan (per-lobe ellipsoid / zl / fluct sizes,
+  // material params, segment count). Supports STANDARD (1 lobe) and KEYHOLE
+  // (2 lobes), with or without fluctuations. Returns true if the scan is built;
+  // false otherwise (host path). plan.time is set by the caller.
   bool fill_device_plan(struct MoserDevicePlan &plan) const;
 
-  // Copy the single-lobe scan segment arrays (length nseg = bounds.size())
-  // into caller-provided buffers for upload to a device. Order matches the
-  // GREENAM LaserScan layout. Only valid after a successful fill_device_plan.
-  void copy_scan_segments(std::vector<double> &bounds,
-                          std::vector<double> &xl, std::vector<double> &yl,
-                          std::vector<double> &powers,
-                          std::vector<double> &normals_x,
-                          std::vector<double> &normals_y,
-                          std::vector<double> &speeds) const;
+  // Copy the variable-length device data for upload. The path geometry
+  // (bounds/xl/yl/normals/speeds, length nseg) is shared across lobes; `powers`
+  // is concatenated per lobe (length n_lobes*nseg, lobe-major); the fluctuation
+  // arrays are concatenated per lobe (length sum of fluct_n). Only valid after
+  // a successful fill_device_plan.
+  void copy_device_data(std::vector<double> &bounds,
+                        std::vector<double> &xl, std::vector<double> &yl,
+                        std::vector<double> &normals_x,
+                        std::vector<double> &normals_y,
+                        std::vector<double> &speeds,
+                        std::vector<double> &powers,
+                        std::vector<double> &fluct_t,
+                        std::vector<double> &fluct_w,
+                        std::vector<double> &fluct_d,
+                        std::vector<double> &fluct_p) const;
 
   // ----- Stochastic ΔW/W, ΔD/D, ΔP/P fluctuations -----------------------
   // Time-domain recursive PSD generator. Pre-builds an emission-time-keyed

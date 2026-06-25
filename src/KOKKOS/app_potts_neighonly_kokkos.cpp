@@ -357,8 +357,8 @@ void AppPottsNeighOnlyKokkos::sweep_color_kokkos(int color, int start, int count
 {
   ColorSweepFunctor functor{
     d_spin,
-    k_numneigh.d_view,
-    k_neighbor.d_view,
+    k_numneigh.view_device(),
+    k_neighbor.view_device(),
     d_color_sites,
     start,
     *rand_pool,

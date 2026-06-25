@@ -382,7 +382,7 @@ void AppAdditiveExtTempTextureKokkos::sync_temperature_to_device()
   int nall = nlocal + nghost;
 
   // Copy host temperature array to DualView host mirror
-  auto h_T = k_T.h_view;
+  auto h_T = k_T.view_host();
   for (int i = 0; i < nall; i++) {
     h_T(i) = T[i];
   }
@@ -399,9 +399,9 @@ void AppAdditiveExtTempTextureKokkos::sync_temperature_to_device()
 void AppAdditiveExtTempTextureKokkos::compute_gradients_kernel()
 {
   // Get device views
-  auto d_T = k_T.d_view;  // Read-only temperature on device
-  auto k_numneigh_d = k_numneigh.d_view;
-  auto k_neighbor_d = k_neighbor.d_view;
+  auto d_T = k_T.view_device();  // Read-only temperature on device
+  auto k_numneigh_d = k_numneigh.view_device();
+  auto k_neighbor_d = k_neighbor.view_device();
 
   // Create temporary device view for xyz (xyz comes from CPU parent, not Kokkos)
   // Use unmanaged view wrapped around host xyz array
@@ -523,7 +523,7 @@ void AppAdditiveExtTempTextureKokkos::initialize_nucleation_parameters()
 int AppAdditiveExtTempTextureKokkos::melting_kernel()
 {
   // Get device views - simple Views (no double buffering needed for self-only writes)
-  auto d_T_local = k_T.d_view;
+  auto d_T_local = k_T.view_device();
   auto d_spin_local = d_spin;
   auto d_q0_local = d_q0;
   auto d_qx_local = d_qx;
@@ -606,7 +606,7 @@ int AppAdditiveExtTempTextureKokkos::melting_kernel()
 int AppAdditiveExtTempTextureKokkos::nucleation_kernel()
 {
   // Get device views - simple Views (no double buffering needed for self-only writes)
-  auto d_T_local = k_T.d_view;
+  auto d_T_local = k_T.view_device();
   auto d_spin_local = d_spin;
   auto d_q0_local = d_q0;
   auto d_qx_local = d_qx;
@@ -758,8 +758,8 @@ int AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
   auto d_active_flag_local = d_active_flag;
   auto d_solid_d_local = d_solid_d;
 
-  auto k_neighbor_d = k_neighbor.d_view;
-  auto k_numneigh_d = k_numneigh.d_view;
+  auto k_neighbor_d = k_neighbor.view_device();
+  auto k_numneigh_d = k_numneigh.view_device();
   auto d_G_local = d_G;
   auto d_grad_x_local = d_grad_x;
   auto d_grad_y_local = d_grad_y;
@@ -890,7 +890,7 @@ int AppAdditiveExtTempTextureKokkos::particle_flipper_kernel()
 int AppAdditiveExtTempTextureKokkos::solidification_kernel()
 {
   // Get device views - simple Views (no double buffering needed for self-only writes)
-  auto d_T_local = k_T.d_view;
+  auto d_T_local = k_T.view_device();
   auto d_spin_local = d_spin;
   auto d_q0_local = d_q0;
   auto d_qx_local = d_qx;
@@ -899,8 +899,8 @@ int AppAdditiveExtTempTextureKokkos::solidification_kernel()
   auto d_active_flag_local = d_active_flag;
   auto d_solid_d_local = d_solid_d;
 
-  auto k_numneigh_d = k_numneigh.d_view;
-  auto k_neighbor_d = k_neighbor.d_view;
+  auto k_numneigh_d = k_numneigh.view_device();
+  auto k_neighbor_d = k_neighbor.view_device();
 
   // Create device view of xyz coordinates (needed for on-demand gradient computation)
   // Use device's default layout to ensure compatibility with GPU backends (HIP uses LayoutLeft)
@@ -1197,8 +1197,8 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel()
   auto d_active_flag_local = d_active_flag;
   auto d_solid_d_local = d_solid_d;
 
-  auto k_neighbor_d = k_neighbor.d_view;
-  auto k_numneigh_d = k_numneigh.d_view;
+  auto k_neighbor_d = k_neighbor.view_device();
+  auto k_numneigh_d = k_numneigh.view_device();
   auto d_grad_x_local = d_grad_x;
   auto d_grad_y_local = d_grad_y;
   auto d_grad_z_local = d_grad_z;
@@ -1470,8 +1470,8 @@ int AppAdditiveExtTempTextureKokkos::smoothing_kernel_efficient(
   auto d_active_flag_local = d_active_flag;
   auto d_solid_d_local = d_solid_d;
 
-  auto k_neighbor_d = k_neighbor.d_view;
-  auto k_numneigh_d = k_numneigh.d_view;
+  auto k_neighbor_d = k_neighbor.view_device();
+  auto k_numneigh_d = k_numneigh.view_device();
   auto d_grad_x_local = d_grad_x;
   auto d_grad_y_local = d_grad_y;
   auto d_grad_z_local = d_grad_z;
@@ -1793,7 +1793,7 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   // This avoids launching the expensive kernel when no melting occurs (~80% of timesteps)
   int n_melt_candidates = 0;
   {
-    auto d_T_check = k_T.d_view;
+    auto d_T_check = k_T.view_device();
     auto d_active_flag_check = d_active_flag;
     double tl_check = this->tl;
     int nlocal_check = this->nlocal;
@@ -1828,7 +1828,7 @@ void AppAdditiveExtTempTextureKokkos::app_update(double dt_sweep)
   /* REMOVED: Conditional launch logic that prevented recovery
   int n_nucleation_candidates = 0;
   {
-    auto d_T_check = k_T.d_view;
+    auto d_T_check = k_T.view_device();
     auto d_active_flag_check = d_active_flag;
     double ts_check = this->ts;
     double tl_check = this->tl;

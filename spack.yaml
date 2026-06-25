@@ -35,8 +35,8 @@ spack:
     # Compression library (provides gzip functionality)
   - zlib
 
-    # Build tools
-  - cmake@3.20
+    # Build tools (CMake >= 3.22 required by Kokkos 5.x)
+  - cmake@3.22:
   - gmake
 
   # Package-level configuration
@@ -53,9 +53,9 @@ spack:
       require: +mpi+hl
       variants: +szip
 
-    # CMake: Allow newer versions
+    # CMake: Allow newer versions (3.22+ required by Kokkos 5.x)
     cmake:
-      version: ['3.20:']
+      version: ['3.22:']
 
   # Concretization settings
   concretizer:

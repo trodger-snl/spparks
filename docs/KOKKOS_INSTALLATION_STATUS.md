@@ -10,11 +10,19 @@
 run was confirmed on the GPU (`Kokkos::HIP gcnArch gfx1151 : Selected`, Wavefront
 Size 32, energy relaxes correctly).
 
-**Key point — gfx1151 support:** Stock Kokkos 4.7.01 does not list gfx1150/gfx1151
-in `SUPPORTED_AMD_ARCHS` (no released Kokkos through 5.1.1 does; it is in Kokkos
-`develop`). The bundled `patches/kokkos-gfx1151.patch` adds the arch + the correct
-32-wide RDNA wavefront size, and `src/CMakeLists.txt` auto-applies it to the
-submodule when `SPPARKS_KOKKOS_ARCH` matches `AMD_GFX115x` and Kokkos lacks it.
+**Kokkos version:** 5.1.1 (submodule tag `5.1.1`). Requires C++20 and CMake >= 3.22.
+
+**Key point — gfx1151 support:** No released Kokkos through 5.1.1 lists gfx1150/gfx1151
+in `SUPPORTED_AMD_ARCHS` (it is in Kokkos `develop`, headed for a future release).
+The bundled `patches/kokkos-gfx1151.patch` backports the arch + the correct 32-wide
+RDNA wavefront size, and `src/CMakeLists.txt` auto-applies it to the submodule when
+`SPPARKS_KOKKOS_ARCH` matches `AMD_GFX115x` and Kokkos lacks it.
+
+**Note on 5.1.1 vs 4.7.01:** Benchmarking `potts/kk` on gfx1151 showed *identical* GPU
+solve time between Kokkos 4.7.01 and 5.1.1 (no performance change for this workload);
+the bump was taken for future-proofing. Moving to 5.x required C++20, CMake >= 3.22,
+and migrating the KOKKOS package off the removed `DualView::h_view`/`d_view` and
+`View::HostMirror` APIs (now `view_host()`/`view_device()` and `host_mirror_type`).
 
 **Build recipe (from repo root):**
 ```bash

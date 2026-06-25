@@ -1,59 +1,56 @@
 diff --git a/cmake/KokkosCore_config.h.in b/cmake/KokkosCore_config.h.in
-index fcc402148..54c5aecd2 100644
+index 81a50d351..000ab650f 100644
 --- a/cmake/KokkosCore_config.h.in
 +++ b/cmake/KokkosCore_config.h.in
-@@ -142,6 +142,8 @@
+@@ -151,6 +151,8 @@
  #cmakedefine KOKKOS_ARCH_AMD_GFX1030
  #cmakedefine KOKKOS_ARCH_AMD_GFX1100
  #cmakedefine KOKKOS_ARCH_AMD_GFX1103
 +#cmakedefine KOKKOS_ARCH_AMD_GFX1150
 +#cmakedefine KOKKOS_ARCH_AMD_GFX1151
+ #cmakedefine KOKKOS_ARCH_AMD_GFX1201
  #cmakedefine KOKKOS_ARCH_AMD_GPU "@KOKKOS_ARCH_AMD_GPU@"
  #cmakedefine KOKKOS_ARCH_VEGA // deprecated
- #cmakedefine KOKKOS_ARCH_VEGA906 // deprecated
 diff --git a/cmake/kokkos_arch.cmake b/cmake/kokkos_arch.cmake
-index 474160313..d16b0831d 100644
+index 4542ddce8..ab9a5b662 100644
 --- a/cmake/kokkos_arch.cmake
 +++ b/cmake/kokkos_arch.cmake
-@@ -121,6 +121,11 @@ list(APPEND CORRESPONDING_AMD_FLAGS gfx90a gfx90a gfx908 gfx908)
- list(APPEND SUPPORTED_AMD_GPUS MI50/60 MI50/60)
- list(APPEND SUPPORTED_AMD_ARCHS VEGA906 AMD_GFX906)
- list(APPEND CORRESPONDING_AMD_FLAGS gfx906 gfx906)
-+# RDNA 3.5 (Strix Point/Strix Halo) - added for gfx1150/gfx1151 support
+@@ -118,6 +118,10 @@ list(APPEND CORRESPONDING_AMD_FLAGS gfx1201 gfx1100 gfx1030 gfx1030)
+ list(APPEND SUPPORTED_AMD_GPUS PHOENIX)
+ list(APPEND SUPPORTED_AMD_ARCHS AMD_GFX1103)
+ list(APPEND CORRESPONDING_AMD_FLAGS gfx1103)
++# RDNA 3.5 (Strix Halo/Strix Point) - added for gfx1150/gfx1151 support
 +list(APPEND SUPPORTED_AMD_GPUS STRIX_HALO STRIX_POINT)
 +list(APPEND SUPPORTED_AMD_ARCHS AMD_GFX1151 AMD_GFX1150)
 +list(APPEND CORRESPONDING_AMD_FLAGS gfx1151 gfx1150)
-+# RDNA 3 (Phoenix/Navi)
- list(APPEND SUPPORTED_AMD_GPUS PHOENIX RX7900XTX V620/W6800 V620/W6800)
- list(APPEND SUPPORTED_AMD_ARCHS AMD_GFX1103 AMD_GFX1100 NAVI1030 AMD_GFX1030)
- list(APPEND CORRESPONDING_AMD_FLAGS gfx1103 gfx1100 gfx1030 gfx1030)
+ 
+ #FIXME CAN BE REPLACED WITH LIST_ZIP IN CMAKE 3.17
+ foreach(ARCH IN LISTS SUPPORTED_AMD_ARCHS)
 diff --git a/core/src/HIP/Kokkos_HIP_Instance.hpp b/core/src/HIP/Kokkos_HIP_Instance.hpp
-index 181a88393..e4e0a21f6 100644
+index bcbfd36a7..8b49127fa 100644
 --- a/core/src/HIP/Kokkos_HIP_Instance.hpp
 +++ b/core/src/HIP/Kokkos_HIP_Instance.hpp
-@@ -40,7 +40,9 @@ struct HIPTraits {
+@@ -29,7 +29,8 @@ struct HIPTraits {
    static constexpr int WarpIndexMask  = 0x003f; /* hexadecimal for 63 */
    static constexpr int WarpIndexShift = 6;      /* WarpSize == 1 << WarpShift*/
  #elif defined(KOKKOS_ARCH_AMD_GFX1030) || defined(KOKKOS_ARCH_AMD_GFX1100) || \
--    defined(KOKKOS_ARCH_AMD_GFX1103)
-+    defined(KOKKOS_ARCH_AMD_GFX1103) || defined(KOKKOS_ARCH_AMD_GFX1150) || \
-+    defined(KOKKOS_ARCH_AMD_GFX1151)
-+  // RDNA 3 (gfx1100/gfx1103) and RDNA 3.5 (gfx1150/gfx1151) use 32-thread wavefronts
+-    defined(KOKKOS_ARCH_AMD_GFX1103) || defined(KOKKOS_ARCH_AMD_GFX1201)
++    defined(KOKKOS_ARCH_AMD_GFX1103) || defined(KOKKOS_ARCH_AMD_GFX1201) ||  \
++    defined(KOKKOS_ARCH_AMD_GFX1150) || defined(KOKKOS_ARCH_AMD_GFX1151)
    static constexpr int WarpSize       = 32;
    static constexpr int WarpIndexMask  = 0x001f; /* hexadecimal for 31 */
    static constexpr int WarpIndexShift = 5;      /* WarpSize == 1 << WarpShift*/
 diff --git a/core/src/HIP/Kokkos_HIP_IsXnack.hpp b/core/src/HIP/Kokkos_HIP_IsXnack.hpp
-index 32a26a46d..88a12e17a 100644
+index c9836d2c1..eb8c643de 100644
 --- a/core/src/HIP/Kokkos_HIP_IsXnack.hpp
 +++ b/core/src/HIP/Kokkos_HIP_IsXnack.hpp
-@@ -54,7 +54,9 @@ constexpr bool gpu_arch_can_access_system_allocations() {
-     defined(KOKKOS_ARCH_AMD_GFX942) || defined(KOKKOS_ARCH_AMD_GFX942_APU)
+@@ -43,7 +43,8 @@ constexpr bool gpu_arch_can_access_system_allocations() {
    return true;
  #elif defined(KOKKOS_ARCH_AMD_GFX906) || defined(KOKKOS_ARCH_AMD_GFX1103) || \
--    defined(KOKKOS_ARCH_AMD_GFX1100) || defined(KOKKOS_ARCH_AMD_GFX1030)
-+    defined(KOKKOS_ARCH_AMD_GFX1100) || defined(KOKKOS_ARCH_AMD_GFX1030) || \
-+    defined(KOKKOS_ARCH_AMD_GFX1150) || defined(KOKKOS_ARCH_AMD_GFX1151)
-+  // RDNA 3 and RDNA 3.5 do not support system memory access
+     defined(KOKKOS_ARCH_AMD_GFX1100) || defined(KOKKOS_ARCH_AMD_GFX1030) ||  \
+-    defined(KOKKOS_ARCH_AMD_GFX1201)
++    defined(KOKKOS_ARCH_AMD_GFX1201) || defined(KOKKOS_ARCH_AMD_GFX1150) ||  \
++    defined(KOKKOS_ARCH_AMD_GFX1151)
    return false;
  #endif
  }

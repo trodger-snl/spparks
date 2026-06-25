@@ -109,7 +109,7 @@ public:
     Kokkos::Timer timer;
     if (_enable_profiling) timer.reset();
 
-    auto h_view = staging.h_view;
+    auto h_view = staging.view_host();
     for (size_t i = 0; i < _size; i++) {
       h_view(i) = host_data[i];
     }
@@ -117,8 +117,8 @@ public:
     staging.sync_device();
 
     // Copy to BOTH buffers (initialization)
-    Kokkos::deep_copy(read_buffer, staging.d_view);
-    Kokkos::deep_copy(write_buffer, staging.d_view);
+    Kokkos::deep_copy(read_buffer, staging.view_device());
+    Kokkos::deep_copy(write_buffer, staging.view_device());
 
     if (_enable_profiling) {
       _time_to_device_full += timer.seconds();
@@ -142,7 +142,7 @@ public:
     Kokkos::Timer timer;
     if (_enable_profiling) timer.reset();
 
-    auto h_view = staging.h_view;
+    auto h_view = staging.view_host();
     for (size_t i = 0; i < _size; i++) {
       h_view(i) = host_data[i];
     }
@@ -150,8 +150,8 @@ public:
     staging.sync_device();
 
     // Copy to BOTH buffers (critical for MPI + sectors correctness)
-    Kokkos::deep_copy(read_buffer, staging.d_view);
-    Kokkos::deep_copy(write_buffer, staging.d_view);
+    Kokkos::deep_copy(read_buffer, staging.view_device());
+    Kokkos::deep_copy(write_buffer, staging.view_device());
 
     if (_enable_profiling) {
       _time_to_device += timer.seconds();
@@ -178,7 +178,7 @@ public:
     Kokkos::Timer timer;
     if (_enable_profiling) timer.reset();
 
-    auto h_view = staging.h_view;
+    auto h_view = staging.view_host();
     for (size_t i = 0; i < _size; i++) {
       h_view(i) = host_data[i];
     }
@@ -187,10 +187,10 @@ public:
 
     // Selectively copy to buffers based on flags
     if (sync_read) {
-      Kokkos::deep_copy(read_buffer, staging.d_view);
+      Kokkos::deep_copy(read_buffer, staging.view_device());
     }
     if (sync_write) {
-      Kokkos::deep_copy(write_buffer, staging.d_view);
+      Kokkos::deep_copy(write_buffer, staging.view_device());
     }
 
     if (_enable_profiling) {
@@ -213,13 +213,13 @@ public:
     if (_enable_profiling) timer.reset();
 
     // Copy from read buffer (final state after swaps) to DualView
-    Kokkos::deep_copy(staging.d_view, read_buffer);
+    Kokkos::deep_copy(staging.view_device(), read_buffer);
 
     staging.modify_device();
     staging.sync_host();
 
     // Copy to host array
-    auto h_view = staging.h_view;
+    auto h_view = staging.view_host();
     for (size_t i = 0; i < _size; i++) {
       host_data[i] = h_view(i);
     }

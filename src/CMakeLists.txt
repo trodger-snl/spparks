@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.22)  # Kokkos >= 5.0 (bundled submodule) requires CMake >= 3.22
 
 # Set project name and version
 project(SPPARKS 
@@ -7,7 +7,8 @@ project(SPPARKS
     LANGUAGES CXX C)
 
 # Set C++ standard
-set(CMAKE_CXX_STANDARD 17)
+# Kokkos >= 5.0 requires C++20; older SPPARKS/Kokkos 4.x built with C++17.
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 

@@ -93,7 +93,7 @@ void AppLatticeKokkos::sync_neighbors_to_device()
 {
   int nall = nlocal + nghost;
 
-  auto h_numneigh = k_numneigh.h_view;
+  auto h_numneigh = k_numneigh.view_host();
   for (int i = 0; i < nall; i++) {
     h_numneigh(i) = numneigh[i];
   }
@@ -101,7 +101,7 @@ void AppLatticeKokkos::sync_neighbors_to_device()
   k_numneigh.sync_device();
 
   if (maxneigh > 0) {
-    auto h_neighbor = k_neighbor.h_view;
+    auto h_neighbor = k_neighbor.view_host();
     for (int i = 0; i < nall; i++) {
       for (int j = 0; j < numneigh[i]; j++) {
         h_neighbor(i, j) = neighbor[i][j];
@@ -230,7 +230,7 @@ void AppLatticeKokkos::iterate_rejection(double stoptime)
 
   // Cache color offsets on host for each sector
   // h_offsets_vec[isector] holds the mirror view for sector isector
-  std::vector<Kokkos::View<int*>::HostMirror> h_offsets_vec(kokkos_nsectors);
+  std::vector<Kokkos::View<int*>::host_mirror_type> h_offsets_vec(kokkos_nsectors);
   for (int s = 0; s < kokkos_nsectors; s++) {
     h_offsets_vec[s] = Kokkos::create_mirror_view(d_color_offsets_vec[s]);
     Kokkos::deep_copy(h_offsets_vec[s], d_color_offsets_vec[s]);

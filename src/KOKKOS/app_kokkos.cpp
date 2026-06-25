@@ -117,14 +117,14 @@ void AppKokkos::sync_arrays_host_to_device()
   int nall = nlocal + nghost;
 
   // Copy site IDs
-  auto h_id = k_id.h_view;
+  auto h_id = k_id.view_host();
   for (int i = 0; i < nall; i++) {
     h_id(i) = id[i];
   }
   k_id.modify_host();
 
   // Copy coordinates
-  auto h_xyz = k_xyz.h_view;
+  auto h_xyz = k_xyz.view_host();
   for (int i = 0; i < nall; i++) {
     h_xyz(i, 0) = xyz[i][0];
     h_xyz(i, 1) = xyz[i][1];
@@ -134,7 +134,7 @@ void AppKokkos::sync_arrays_host_to_device()
 
   // Copy integer arrays
   if (ninteger > 0) {
-    auto h_iarray = k_iarray.h_view;
+    auto h_iarray = k_iarray.view_host();
     for (int i = 0; i < nall; i++) {
       for (int j = 0; j < ninteger; j++) {
         h_iarray(i, j) = iarray[i][j];
@@ -145,7 +145,7 @@ void AppKokkos::sync_arrays_host_to_device()
 
   // Copy double arrays
   if (ndouble > 0) {
-    auto h_darray = k_darray.h_view;
+    auto h_darray = k_darray.view_host();
     for (int i = 0; i < nall; i++) {
       for (int j = 0; j < ndouble; j++) {
         h_darray(i, j) = darray[i][j];
@@ -170,13 +170,13 @@ void AppKokkos::sync_arrays_device_to_host()
   sync_to_host();
 
   // Copy site IDs
-  auto h_id = k_id.h_view;
+  auto h_id = k_id.view_host();
   for (int i = 0; i < nall; i++) {
     id[i] = h_id(i);
   }
 
   // Copy coordinates
-  auto h_xyz = k_xyz.h_view;
+  auto h_xyz = k_xyz.view_host();
   for (int i = 0; i < nall; i++) {
     xyz[i][0] = h_xyz(i, 0);
     xyz[i][1] = h_xyz(i, 1);
@@ -185,7 +185,7 @@ void AppKokkos::sync_arrays_device_to_host()
 
   // Copy integer arrays
   if (ninteger > 0) {
-    auto h_iarray = k_iarray.h_view;
+    auto h_iarray = k_iarray.view_host();
     for (int i = 0; i < nall; i++) {
       for (int j = 0; j < ninteger; j++) {
         iarray[i][j] = h_iarray(i, j);
@@ -195,7 +195,7 @@ void AppKokkos::sync_arrays_device_to_host()
 
   // Copy double arrays
   if (ndouble > 0) {
-    auto h_darray = k_darray.h_view;
+    auto h_darray = k_darray.view_host();
     for (int i = 0; i < nall; i++) {
       for (int j = 0; j < ndouble; j++) {
         darray[i][j] = h_darray(i, j);

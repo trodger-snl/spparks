@@ -849,6 +849,10 @@ RosenthalDevicePlan ThermalManager::rosenthal_device_plan(double simulation_time
     dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
   if (!ros || !laser_path_set) return plan;  // plan.valid stays false
 
+  // Solidification-band smoothing is applied in update_temperatures(), which the
+  // device fill bypasses; keep smoothed runs on the host path.
+  if (temperature_smooth_enabled) return plan;
+
   // Material parameters; false (e.g. KEYHOLE) -> host path.
   if (!ros->fill_device_plan(plan)) { plan.valid = false; return plan; }
 
@@ -961,6 +965,10 @@ MoserDevicePlan ThermalManager::moser_device_plan(double simulation_time)
   if (laser_pause_constant > 0.0 || laser_pause_below > 0.0 ||
       laser_reset_temperature > 0.0)
     return plan;
+
+  // Solidification-band smoothing is applied in update_temperatures(), which the
+  // device fill bypasses; keep smoothed runs on the host path.
+  if (temperature_smooth_enabled) return plan;
 
   // Per-step source bookkeeping (no-op for a statically built Moser scan).
   temperature_source->update_temperatures(host_->dt, simulation_time);

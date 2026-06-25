@@ -2117,43 +2117,53 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     MoserDevicePlan mplan;
     if (!rplan.valid) mplan = thermal->moser_device_plan(time);
 
-    if (rplan.valid || mplan.valid) {
-      // ---- DEVICE temperature path (Rosenthal or Moser) ----
-      // Fill k_T on the GPU; the global peak temperature for the fast-forward
-      // decision is reduced on the device too, so no host T is needed here. The
-      // device->host copy-back is deferred (host_T_stale) and done only before
-      // a host consumer reads T -- powder activation below, or the d6
-      // diagnostic at an output step (end of app_update).
+    // The device->host copy-back is deferred (host_T_stale) and done only before
+    // a host consumer reads T -- powder activation below, or the d6 diagnostic
+    // at an output step (end of app_update). The global peak temperature for the
+    // fast-forward decision is reduced on the device, so no host T is needed.
+    if (rplan.valid) {
+      // ---- DEVICE Rosenthal path ----
       device_temp = true;
-      const bool is_ros = rplan.valid;
-      auto fill = [&](double t_now) {
-        if (is_ros) fill_temperature_rosenthal_device(thermal->rosenthal_device_plan(t_now));
-        else        fill_temperature_moser_device(thermal->moser_device_plan(t_now));
-      };
-
-      if (is_ros) fill_temperature_rosenthal_device(rplan);
-      else        fill_temperature_moser_device(mplan);
+      fill_temperature_rosenthal_device(rplan);
       host_T_stale = true;
-
       double global_max = device_global_max_temperature();
-
       ThermalManager::ThermalStep s =
-        is_ros ? thermal->rosenthal_fast_forward(time, stoptime, global_max)
-               : thermal->moser_fast_forward(time, stoptime, global_max);
+        thermal->rosenthal_fast_forward(time, stoptime, global_max);
       if (s.end_run) { time = s.new_time; sync_temperature_to_host(); return; }
       if (s.new_time > time) {
         time = s.new_time;
-        fill(time);                 // refill the device field at the advanced time
+        fill_temperature_rosenthal_device(thermal->rosenthal_device_plan(time));
         host_T_stale = true;
         if (s.activate_powder) {
-          // Device powder activation operates on d_active_flag directly; no
-          // host T needed (activate_powder_sites does not read T).
+          activate_powder_sites();
+          last_powder_activation_time = time;
+        }
+      }
+    } else if (mplan.valid) {
+      // ---- DEVICE Moser path ----
+      // ThermalManager runs the per-pass pause/reset + fast-forward decisions on
+      // the host (they rebuild the scan from temperature feedback) and calls back
+      // here to do every per-site Green's-function fill on the GPU. The filler
+      // fills k_T at a given time and returns the device-reduced global max; it
+      // also re-uploads segment/fluctuation Views when a fired pass bumps the
+      // scan version. On return the device field is filled at s.new_time.
+      device_temp = true;
+      thermal->set_moser_device_filler([this](double t) -> double {
+        fill_temperature_moser_device(thermal->moser_device_plan(t));
+        host_T_stale = true;
+        return device_global_max_temperature();
+      });
+      ThermalManager::ThermalStep s = thermal->moser_advance_device(time, stoptime);
+      if (s.end_run) { time = s.new_time; sync_temperature_to_host(); return; }
+      if (s.new_time > time) {
+        time = s.new_time;
+        if (s.activate_powder) {
           activate_powder_sites();
           last_powder_activation_time = time;
         }
       }
     } else {
-      // ---- HOST path (HDF5 / Moser-keyhole / fluctuations / dynamic pause) ----
+      // ---- HOST path (HDF5 / Rosenthal-keyhole / temperature_smooth) ----
       ThermalManager::ThermalStep s = thermal->advance(time, stoptime);
       if (s.end_run) { time = s.new_time; return; }
       if (s.new_time > time) {

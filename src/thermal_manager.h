@@ -20,6 +20,7 @@
 #include "rosenthal_device.h"
 #include "moser_device.h"
 #include "am_raster.h"
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -111,9 +112,10 @@ class ThermalManager : protected Pointers {
   // Mirror of the Rosenthal device hooks for the time-domain Green's-function
   // (Moser) source. moser_device_plan() returns a MoserDevicePlan POD; the
   // variable-length scan segment arrays are fetched separately via
-  // moser_copy_segments() (only re-copied by the caller when plan.version
-  // changes). plan.valid is false for KEYHOLE / fluctuations / dynamic
-  // inter-pass pause -- those use the host advance() path.
+  // moser_copy_device_data() (only re-copied by the caller when plan.version
+  // changes). plan.valid is false only for a non-Moser source, configured
+  // temperature smoothing, or an unbuilt/>2-lobe scan -- KEYHOLE, fluctuations,
+  // and dynamic inter-pass pause are all handled on the device.
   MoserDevicePlan moser_device_plan(double simulation_time);
   void moser_copy_device_data(std::vector<double> &bounds,
                               std::vector<double> &xl, std::vector<double> &yl,
@@ -125,8 +127,23 @@ class ThermalManager : protected Pointers {
                               std::vector<double> &fluct_w,
                               std::vector<double> &fluct_d,
                               std::vector<double> &fluct_p);
-  ThermalStep moser_fast_forward(double current_time, double stoptime,
-                                 double global_max_T);
+
+  // Register the device temperature filler used by moser_advance_device(): given
+  // a simulation time, it fills the device temperature field (k_T) at that time
+  // and returns the global (MPI-reduced) max temperature. Set once by the app.
+  void set_moser_device_filler(std::function<double(double)> f) {
+    moser_device_filler_ = std::move(f);
+  }
+
+  // Device Moser driver. Runs the full per-pass inter-pass pause/reset firing
+  // and fast-forward control flow on the host (those rebuild the scan from
+  // temperature feedback), but delegates every per-site temperature fill to the
+  // registered device filler and uses the device-computed global max for the
+  // active-site test -- so the expensive Green's-function integral always runs
+  // on the device. Subsumes the static fast-forward path. The filler leaves the
+  // device field filled at step.new_time on return. Requires the filler to be
+  // set.
+  ThermalStep moser_advance_device(double current_time, double stoptime);
 
   // ---- diagnostics ----
   // Run the diagnostic when step_count lands on the configured cadence.
@@ -140,6 +157,10 @@ class ThermalManager : protected Pointers {
 
  private:
   ThermalHost *host_;   // lattice-state snapshot owned by the app
+
+  // Device temperature filler for moser_advance_device(): fills k_T at a given
+  // time and returns the global max temperature (set by the Kokkos app).
+  std::function<double(double)> moser_device_filler_;
 
   // Modular temperature source interface
   std::unique_ptr<TemperatureSource> temperature_source;

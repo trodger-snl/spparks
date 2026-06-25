@@ -87,8 +87,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   int smoothing_kernel();
   int smoothing_kernel_efficient(Kokkos::View<int*> d_smoothing_sites, int n_sites);
 
-  // Powder phase activation methods
-  bool is_powder_eligible_site(int i);
+  // Powder phase activation
   void activate_powder_sites();
 
  protected:

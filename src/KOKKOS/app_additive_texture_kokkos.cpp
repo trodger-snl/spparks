@@ -2415,54 +2415,6 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
 }
 
 /* ----------------------------------------------------------------------
-   Check if site is eligible to be activated as powder
-
-   Criteria (same as CPU version):
-   - Site must not be void (active_flag == 5)
-   - Site must not be molten or solid (active_flag >= 2)
-   - Site is eligible if:
-     1. Temperature >= solidus (in thermal influence zone)
-     2. Has molten or solidified neighbor (adjacent to meltpool)
-     3. At bottom boundary (substrate)
-     4. Below meltpool surface (has active material above)
-------------------------------------------------------------------------- */
-bool AppAdditiveTextureKokkos::is_powder_eligible_site(int i) {
-  // Skip voids - they never participate
-  if (active_flag[i] == 5) return false;
-
-  // Skip already molten or solid sites
-  if (active_flag[i] >= 2) return false;
-
-  // Criterion 1: Hot enough (in thermal influence zone)
-  if (T[i] >= ts) return true;
-
-  // Criterion 2: Has solid or molten neighbor (adjacent to meltpool)
-  for (int j = 0; j < numneigh[i]; j++) {
-    int nj = neighbor[i][j];
-    if (active_flag[nj] == 2 || active_flag[nj] == 3) {
-      return true;  // Adjacent to meltpool/solidified region
-    }
-  }
-
-  // Criterion 3: At bottom boundary (substrate layer)
-  double site_z = xyz[i][2];
-  if (site_z <= domain->boxzlo + dx * 0.5) return true;
-
-  // Criterion 4: Below meltpool surface (has active material above)
-  for (int j = 0; j < numneigh[i]; j++) {
-    int nj = neighbor[i][j];
-    double neighbor_z = xyz[nj][2];
-
-    // Check if neighbor is above and is molten or solid
-    if (neighbor_z > site_z && active_flag[nj] >= 2) {
-      return true;  // Material exists above this site
-    }
-  }
-
-  return false;
-}
-
-/* ----------------------------------------------------------------------
    Activate powder sites that are at or below the meltpool surface
 
    Strategy: Find the maximum z-coordinate of all molten sites (meltpool top),

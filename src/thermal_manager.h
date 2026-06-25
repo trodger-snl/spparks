@@ -19,6 +19,7 @@
 #include "thermal_host.h"
 #include "rosenthal_device.h"
 #include "moser_device.h"
+#include "hdf5_device.h"
 #include "am_raster.h"
 #include <functional>
 #include <memory>
@@ -150,6 +151,44 @@ class ThermalManager : protected Pointers {
   // set.
   ThermalStep moser_advance_device(double current_time, double stoptime);
 
+  // ---- device (Kokkos) HDF5 unstructured-mesh path ----
+  // Mirror of the Moser device hooks for the HDF5 source. The expensive work
+  // (HDF5 reads, layer load, per-site element search) stays on the host; only
+  // the per-site barycentric interpolation moves to the device, so the device
+  // field matches the host fast path bit-for-bit.
+  //   hdf5_device_eligible() - cheap host gate: source is HDF5 (incl. the CSR
+  //     subclass) and solidification-band temperature_smooth is off (that
+  //     smoothing is applied in update_temperatures(), which the device fill
+  //     bypasses, so smoothed runs stay on the host path).
+  //   hdf5_device_plan()     - runs the per-step host prep (prepare_for_timestep:
+  //     layer load + cache rebuild at a layer boundary + nodal-temp precompute,
+  //     incl. optional nodal mesh smoothing) and returns the scalar POD. This is
+  //     exactly the host fast path minus the per-site T loop.
+  //   hdf5_copy_cache()      - flatten the STATIC per-site element cache for
+  //     upload; the caller re-copies only when plan.version changes (layer
+  //     boundary).
+  //   hdf5_nodal_temps()     - the per-step host-computed nodal-temperature slice
+  //     (uploaded every step); returned by const ref to avoid a copy.
+  bool hdf5_device_eligible() const;
+  HDF5DevicePlan hdf5_device_plan(double simulation_time);
+  void hdf5_copy_cache(std::vector<int> &node_idx, std::vector<double> &weights,
+                       std::vector<int> &valid);
+  const std::vector<double> &hdf5_nodal_temps() const;
+
+  // Register the device temperature filler used by hdf5_advance_device(): given a
+  // simulation time it fills k_T[0,nlocal) on the device and returns the global
+  // (MPI-reduced) max temperature. Set once by the app.
+  void set_hdf5_device_filler(std::function<double(double)> f) {
+    hdf5_device_filler_ = std::move(f);
+  }
+
+  // Device HDF5 driver. Fills the device field via the registered filler (which
+  // returns the global max), then runs the generic fast-forward predictor using
+  // the source's threshold + time-query interface. HDF5 has no pause/reset, so
+  // this is just fill + predict-skip. The filler leaves the device field filled
+  // at step.new_time on return. Requires the filler to be set.
+  ThermalStep hdf5_advance_device(double current_time, double stoptime);
+
   // ---- diagnostics ----
   // Run the diagnostic when step_count lands on the configured cadence.
   // Assumes T ghosts are current (caller syncs before this).
@@ -166,6 +205,10 @@ class ThermalManager : protected Pointers {
   // Device temperature filler for moser_advance_device(): fills k_T at a given
   // time and returns the global max temperature (set by the Kokkos app).
   std::function<double(double)> moser_device_filler_;
+
+  // Device temperature filler for hdf5_advance_device(): fills k_T[0,nlocal) at
+  // a given time and returns the global max temperature (set by the Kokkos app).
+  std::function<double(double)> hdf5_device_filler_;
 
   // Modular temperature source interface
   std::unique_ptr<TemperatureSource> temperature_source;

@@ -1119,6 +1119,118 @@ ThermalManager::moser_advance_device(double current_time, double stoptime)
 }
 
 /* ----------------------------------------------------------------------
+   Device (Kokkos) HDF5 unstructured-mesh path. The expensive host work --
+   HDF5 reads, layer load, per-site element search -- stays on the host; only
+   the per-site barycentric interpolation moves to the device. See hdf5_device.h.
+------------------------------------------------------------------------- */
+
+bool ThermalManager::hdf5_device_eligible() const
+{
+  if (!use_temperature_source || !temperature_source) return false;
+  // Solidification-band smoothing is applied in update_temperatures(), which the
+  // device fill bypasses; keep smoothed runs on the host path.
+  if (temperature_smooth_enabled) return false;
+  return dynamic_cast<HDF5UnstructuredTemperatureSource*>(
+             temperature_source.get()) != nullptr;
+}
+
+HDF5DevicePlan ThermalManager::hdf5_device_plan(double simulation_time)
+{
+  HDF5DevicePlan plan;
+
+  HDF5UnstructuredTemperatureSource* hdf5 =
+    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+  if (!hdf5 || temperature_smooth_enabled) return plan;  // plan.valid stays false
+
+  // Per-step host prep: advance source state, load the layer if needed, rebuild
+  // the per-site element cache at a layer boundary (bumps cache_generation), and
+  // precompute the nodal-temperature slice (time interpolation + optional nodal
+  // mesh smoothing). This is exactly the host fast path (update_temperatures
+  // Path 3) minus the per-site T loop -- that loop is what moves to the device.
+  temperature_source->update_temperatures(host_->dt, simulation_time);
+  hdf5->prepare_for_timestep(simulation_time);
+
+  plan.version = hdf5->cache_generation();
+  plan.nlocal = host_->nlocal;
+  plan.n_nodes = hdf5->num_loaded_nodes();
+  plan.default_temp = hdf5->get_default_temp();
+  plan.valid = true;
+  return plan;
+}
+
+void ThermalManager::hdf5_copy_cache(std::vector<int> &node_idx,
+                                     std::vector<double> &weights,
+                                     std::vector<int> &valid)
+{
+  HDF5UnstructuredTemperatureSource* hdf5 =
+    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+  if (!hdf5) { node_idx.clear(); weights.clear(); valid.clear(); return; }
+  hdf5->copy_device_cache(node_idx, weights, valid);
+}
+
+const std::vector<double> &ThermalManager::hdf5_nodal_temps() const
+{
+  static const std::vector<double> empty;
+  HDF5UnstructuredTemperatureSource* hdf5 =
+    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+  if (!hdf5) return empty;
+  return hdf5->nodal_temps();
+}
+
+/* ----------------------------------------------------------------------
+   Device HDF5 driver. Mirrors the HDF5 branch of advance() -- the global
+   active-site reduction (here via the device-computed global max) and the
+   generic fast-forward predictor (get_next_time_with_temperature) -- but
+   replaces the host per-site fill + host-temperature scan with the registered
+   device filler. HDF5 has no pause/reset, so this is fill + predict-skip. The
+   global max is already MPI-reduced, so the active-site test is consistent on
+   every rank and all ranks make the same collective calls.
+------------------------------------------------------------------------- */
+
+ThermalManager::ThermalStep
+ThermalManager::hdf5_advance_device(double current_time, double stoptime)
+{
+  ThermalStep step;
+  step.new_time = current_time;
+  step.activate_powder = false;
+  step.end_run = false;
+
+  HDF5UnstructuredTemperatureSource* hdf5 =
+    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+  if (!hdf5 || !hdf5_device_filler_) return step;
+
+  // Fill the device field at current_time and get the global peak temperature.
+  double gmax = hdf5_device_filler_(current_time);
+
+  const double fast_forward_threshold = hdf5->get_fast_forward_threshold();
+
+  if (gmax <= fast_forward_threshold && current_time > 1e-6 &&
+      hdf5->supports_time_queries()) {
+    const double local_next =
+      hdf5->get_next_time_with_temperature(current_time, fast_forward_threshold);
+    double next_thermal_time;
+    MPI_Allreduce(&local_next, &next_thermal_time, 1, MPI_DOUBLE, MPI_MIN, world);
+    if (next_thermal_time > current_time &&
+        next_thermal_time < std::numeric_limits<double>::max()) {
+      const double target_time = std::min(next_thermal_time, stoptime);
+      const double time_skip = target_time - current_time;
+      if (time_skip > 1e-6) {
+        if (domain->me == 0) {
+          std::cout << "Fast-forward (device HDF5): skipping " << time_skip
+                    << " s from t=" << current_time << " to " << target_time
+                    << " (all T < " << fast_forward_threshold << " K)"
+                    << std::endl;
+        }
+        step.new_time = target_time;
+        hdf5_device_filler_(target_time);   // refill at the advanced time
+        if (time_skip > 1.0) step.activate_powder = true;
+      }
+    }
+  }
+  return step;
+}
+
+/* ----------------------------------------------------------------------
    Run the isotherm-compactness diagnostic on the configured cadence.
 ------------------------------------------------------------------------- */
 

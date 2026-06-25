@@ -2506,13 +2506,16 @@ void AppAdditiveTextureKokkos::activate_powder_sites() {
 
   // Local meltpool top z over molten sites (active_flag == 2), then the global
   // max across ranks. z is in lattice units, matching the host comparison.
-  double local_max_molten_z = -1e100;
+  // local_max_molten_z is the reduction OUTPUT; Kokkos::Max seeds the reduction
+  // with its own identity (-DBL_MAX), so with no molten sites the result stays
+  // very negative and the -1e99 guard below detects "no meltpool".
+  double local_max_molten_z;
   Kokkos::parallel_reduce("MeltpoolTopZ", n,
     KOKKOS_LAMBDA(const int i, double &m) {
       if (d_af(i) == 2) { const double z = d_xyz_l(i,2); if (z > m) m = z; }
     }, Kokkos::Max<double>(local_max_molten_z));
 
-  double global_max_molten_z = -1e100;
+  double global_max_molten_z;
   MPI_Allreduce(&local_max_molten_z, &global_max_molten_z, 1, MPI_DOUBLE, MPI_MAX, world);
   if (global_max_molten_z <= -1e99) return;   // no meltpool anywhere
 

@@ -52,6 +52,33 @@ match the HDF5 study's ~37 ms. This ~35–40 ms/step is what Phase 2 targets.
 Moser's np1 per-step (97 ms) is dominated by the device Green's-function
 quadrature, not the sync; the sync is the *delta* going multi-rank.
 
+## Phase 2 result (selective microstructure sync)
+
+Commit "Phase 2: selective microstructure ghost sync". Same box, same APU.
+Loop time, baseline (full sync) → Phase 2 (selective):
+
+| source    | ranks | baseline | Phase 2 | speedup | per-step sync overhead (np4−np1) |
+|-----------|------:|---------:|--------:|--------:|---------------------------------:|
+| Rosenthal |     1 |   5.05 s |  5.10 s | —       | —                                |
+| Rosenthal |     4 |  22.39 s |  5.46 s | **4.1×**| 34.7 ms → **0.7 ms** (~48×)       |
+| Rosenthal |     8 |  21.11 s |  5.11 s | **4.1×**|                                  |
+| Moser     |     1 |  29.24 s | 29.33 s | —       |                                  |
+| Moser     |     4 |  40.75 s | 30.03 s | **1.36×** | 38.4 ms → **2.3 ms** (~17×)    |
+| Moser     |     8 |  42.23 s |  (n/a)  | —       |                                  |
+
+The per-step microstructure-sync overhead collapses from ~35–38 ms to ~1–2 ms.
+Rosenthal goes from anti-scaling to **near-perfect scaling** (np1≈np4≈np8).
+Moser's np1 cost is its Green's-function quadrature (untouched by the sync); the
+sync was the multi-rank *delta*, now nearly gone. Correctness: SPK_VERIFY_GHOST
+reported 0 mismatches (selective ghost state bit-identical to the full exchange);
+d6 unchanged.
+
+**Moser np8 is inconclusive on this box**: 8 expensive-kernel ranks oversubscribe
+the single shared GPU, and the runs collided with active desktop GPU use (~94%).
+Rosenthal np8 (identical sync code) scales perfectly, so this is a 1-GPU
+hardware/contention limit, not the sync change — it should resolve on the 4-GPU
+cluster (≤2 ranks/GPU) with proper rank→device binding (the remaining task).
+
 ## How to re-run (after Phase 2)
 
 ```bash

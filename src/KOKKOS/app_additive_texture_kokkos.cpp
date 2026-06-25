@@ -438,6 +438,26 @@ void AppAdditiveTextureKokkos::sync_temperature_to_host()
 }
 
 /* ----------------------------------------------------------------------
+   Copy OWNED device temperature back to host T[0,nlocal), leaving the host
+   ghost slice T[nlocal,nall) untouched. Used by the multi-rank HDF5 device
+   path: the device fills owned k_T only, but the end-of-step comm->all needs
+   current host owned T to send to neighbors' ghosts. The ghost host T is left
+   as the comm maintains it; a subsequent sync_temperature_to_device pushes the
+   full (owned + comm ghost) host T back to the device. Host T is current after
+   this, so host_T_stale is cleared.
+------------------------------------------------------------------------- */
+
+void AppAdditiveTextureKokkos::sync_owned_temperature_to_host()
+{
+  k_T.sync_host();
+  auto h_T = k_T.view_host();
+  for (int i = 0; i < nlocal; i++) {
+    T[i] = h_T(i);
+  }
+  host_T_stale = false;
+}
+
+/* ----------------------------------------------------------------------
    Global peak temperature over owned sites, reduced on the device (no host T
    needed) and then across ranks. Used by the device fast-forward decision.
 ------------------------------------------------------------------------- */
@@ -822,6 +842,85 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
       }
     }
     d_T(site) = T0 + res;
+  });
+  Kokkos::fence();
+  k_T.modify_device();
+}
+
+/* ----------------------------------------------------------------------
+   Device-side HDF5 unstructured-mesh temperature. The host has already done the
+   expensive work in thermal->hdf5_device_plan(): loaded the layer, (re)built the
+   per-site element cache at a layer boundary, and precomputed the per-node
+   temperature slice for this time (cached_nodal_temps; time interpolation +
+   optional nodal mesh smoothing). Here we just upload that data and do the
+   per-site barycentric interpolation on the GPU, reproducing
+   HDF5UnstructuredTemperatureSource::get_temperature_at_site_fast() in the same
+   operation order so the device field matches the host fast path bit-for-bit.
+
+   Fills OWNED sites only (k_T[0,nlocal)). The element cache is built over nlocal
+   only -- in multi-rank runs the HDF5 mesh is MPI-subdomain-partitioned and a
+   ghost site may lie outside this rank's loaded mesh -- so ghost temperatures
+   are handled by the caller (app_update): nghost==0 stays device-resident;
+   nghost>0 copies owned T back to host and reuses the host T sync + comm->all
+   ghost exchange. See hdf5_device.h.
+------------------------------------------------------------------------- */
+
+void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
+    const HDF5DevicePlan &plan)
+{
+  if (!plan.valid) return;
+  const int n = plan.nlocal;
+  const int nnodes = plan.n_nodes;
+
+  // (Re)upload the STATIC per-site element cache only when the host rebuilds it
+  // (layer boundary -> cache generation bumps) or the site count changes.
+  if (d_hdf5_cache_version != plan.version || d_hdf5_nlocal != n) {
+    std::vector<int> node_idx, valid;
+    std::vector<double> weights;
+    thermal->hdf5_copy_cache(node_idx, weights, valid);
+
+    d_hdf5_node_idx = Kokkos::View<int*[4]>("hdf5_node_idx", n);
+    d_hdf5_weights  = Kokkos::View<double*[3]>("hdf5_weights", n);
+    d_hdf5_valid    = Kokkos::View<int*>("hdf5_valid", n);
+    auto h_idx = Kokkos::create_mirror_view(d_hdf5_node_idx);
+    auto h_w   = Kokkos::create_mirror_view(d_hdf5_weights);
+    auto h_v   = Kokkos::create_mirror_view(d_hdf5_valid);
+    for (int i = 0; i < n; i++) {
+      h_v(i) = valid[i];
+      for (int j = 0; j < 4; j++) h_idx(i, j) = node_idx[4 * i + j];
+      for (int j = 0; j < 3; j++) h_w(i, j) = weights[3 * i + j];
+    }
+    Kokkos::deep_copy(d_hdf5_node_idx, h_idx);
+    Kokkos::deep_copy(d_hdf5_weights, h_w);
+    Kokkos::deep_copy(d_hdf5_valid, h_v);
+    d_hdf5_cache_version = plan.version;
+    d_hdf5_nlocal = n;
+  }
+
+  // Upload the per-step nodal temperature slice (resize on node-count change).
+  if ((int) d_hdf5_nodal_temps.extent(0) != nnodes)
+    d_hdf5_nodal_temps = Kokkos::View<double*>("hdf5_nodal_temps", nnodes);
+  if (nnodes > 0) {
+    const std::vector<double> &nt = thermal->hdf5_nodal_temps();
+    auto h_nt = Kokkos::create_mirror_view(d_hdf5_nodal_temps);
+    for (int k = 0; k < nnodes; k++) h_nt(k) = nt[k];
+    Kokkos::deep_copy(d_hdf5_nodal_temps, h_nt);
+  }
+
+  auto d_T = k_T.view_device();
+  auto nidx = d_hdf5_node_idx;
+  auto wts  = d_hdf5_weights;
+  auto vld  = d_hdf5_valid;
+  auto nt   = d_hdf5_nodal_temps;
+  const double def = plan.default_temp;
+
+  Kokkos::parallel_for("HDF5Fill", n, KOKKOS_LAMBDA(const int i) {
+    if (!vld(i)) { d_T(i) = def; return; }
+    const int i0 = nidx(i, 0), i1 = nidx(i, 1), i2 = nidx(i, 2), i3 = nidx(i, 3);
+    const double t0 = nt(i0);
+    d_T(i) = t0 + wts(i, 0) * (nt(i1) - t0)
+                + wts(i, 1) * (nt(i2) - t0)
+                + wts(i, 2) * (nt(i3) - t0);
   });
   Kokkos::fence();
   k_T.modify_device();
@@ -2210,8 +2309,42 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
           last_powder_activation_time = time;
         }
       }
+    } else if (thermal->hdf5_device_eligible()) {
+      // ---- DEVICE HDF5 (unstructured-mesh) path ----
+      // The host still does the expensive HDF5 work (reads, layer load, element
+      // search/cache, nodal precompute) inside hdf5_device_plan(); the GPU does
+      // the per-site barycentric interpolation into k_T[0,nlocal). The filler
+      // fills the device field at a given time and returns the device-reduced
+      // global max for the fast-forward decision.
+      device_temp = true;
+      thermal->set_hdf5_device_filler([this](double t) -> double {
+        fill_temperature_hdf5_device(thermal->hdf5_device_plan(t));
+        host_T_stale = true;
+        return device_global_max_temperature();
+      });
+      ThermalManager::ThermalStep s = thermal->hdf5_advance_device(time, stoptime);
+      if (s.end_run) { time = s.new_time; sync_temperature_to_host(); return; }
+      if (s.new_time > time) {
+        time = s.new_time;
+        if (s.activate_powder) {
+          activate_powder_sites();
+          last_powder_activation_time = time;
+        }
+      }
+      // Ghost temperatures. The element cache covers OWNED sites only, so the
+      // device fill leaves ghost k_T untouched. With nghost==0 (single rank,
+      // non-periodic) there are none -- stay fully device-resident (lazy host
+      // copy-back). With nghost>0 the ghost values must come from the owning
+      // ranks: copy owned device T back to host (so the end-of-step comm->all
+      // sends correct values) and fall through to sync_temperature_to_device,
+      // which repopulates device ghosts from the comm-maintained host ghost
+      // slice -- exactly the host-path semantics (one-step-lagged ghosts).
+      if (nghost > 0) {
+        sync_owned_temperature_to_host();
+        device_temp = false;
+      }
     } else {
-      // ---- HOST path (HDF5 / Rosenthal-keyhole / temperature_smooth) ----
+      // ---- HOST path (Rosenthal-keyhole / temperature_smooth / other) ----
       ThermalManager::ThermalStep s = thermal->advance(time, stoptime);
       if (s.end_run) { time = s.new_time; return; }
       if (s.new_time > time) {

@@ -29,6 +29,7 @@ AppStyle(additive/texture/kk,AppAdditiveTextureKokkos)
 #include "thermal_host.h"
 #include "rosenthal_device.h"
 #include "moser_device.h"
+#include "hdf5_device.h"
 #include <Kokkos_Core.hpp>
 #include <Kokkos_DualView.hpp>
 #include <memory>
@@ -59,6 +60,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   void update_temperature_from_source(double simulation_time);
   void sync_temperature_to_device();
   void sync_temperature_to_host();   // device k_T -> host T (for diag/host code)
+  void sync_owned_temperature_to_host();  // device k_T[0,nlocal) -> host T (ghosts kept)
   double device_global_max_temperature();  // parallel_reduce max over k_T + Allreduce
   void compute_gradients_kernel();
 
@@ -77,6 +79,14 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // Device-side Moser (time-domain Green's function) temperature: integrate the
   // scan-path history per site on the GPU. STANDARD mode, no fluctuations.
   void fill_temperature_moser_device(const MoserDevicePlan &plan);
+
+  // Device-side HDF5 unstructured-mesh temperature: the host precomputes the
+  // per-site element cache (static per layer) and the per-node temperature
+  // slice (per step); the GPU does the per-site barycentric interpolation
+  // straight into k_T, reproducing get_temperature_at_site_fast() bit-for-bit.
+  // Fills OWNED sites only (k_T[0,nlocal)); ghost T (which may lie outside this
+  // rank's loaded mesh) is copied from the host T ghost slice -- see the impl.
+  void fill_temperature_hdf5_device(const HDF5DevicePlan &plan);
 
   // Phase 3: Phase transition kernels
   void initialize_nucleation_parameters();
@@ -126,6 +136,18 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   Kokkos::View<int*>    d_gl_offset;               // per-order start index (size 31)
   bool d_gl_built = false;
   void build_gl_table();            // host-build + upload the GL table once
+
+  // Device HDF5 support. The per-site element cache (4 tet-node indices + 3
+  // barycentric weights + a validity flag, length nlocal) is STATIC within a
+  // layer -- re-uploaded only when the host cache generation changes. The
+  // per-node temperature slice (length n_nodes) is re-uploaded every step.
+  // See fill_temperature_hdf5_device().
+  Kokkos::View<int*[4]>    d_hdf5_node_idx;   // [nlocal] tet-node indices into nodal slice
+  Kokkos::View<double*[3]> d_hdf5_weights;    // [nlocal] barycentric weights
+  Kokkos::View<int*>       d_hdf5_valid;      // [nlocal] 1 = has containing element
+  Kokkos::View<double*>    d_hdf5_nodal_temps;// [n_nodes] per-node T for the step
+  long d_hdf5_cache_version = -1;   // cache generation the static Views hold
+  int  d_hdf5_nlocal = -1;          // nlocal the static Views were sized for
 
   // Gradient cache (device-only, computed once per timestep)
   // Uses simple View because computed on device, no host sync needed

@@ -111,6 +111,13 @@ class RosenthalTemperatureSource : public TemperatureSource {
 
   RosenthalMode get_mode() const { return mode; }
 
+  // Export the material/source parameters needed to evaluate this source on a
+  // device (mode, lambda*Q, k, alpha, r_min, eta_y/eta_z). The laser pose is
+  // filled separately by the driving app from its scan path. Returns true if
+  // the mode is device-eligible (STANDARD / ANISOTROPIC); false for KEYHOLE,
+  // which needs the quadrature arrays and must use the host path.
+  bool fill_device_plan(struct RosenthalDevicePlan &plan) const;
+
  private:
   RosenthalMode mode;
 

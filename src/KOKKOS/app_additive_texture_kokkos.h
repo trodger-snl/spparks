@@ -27,6 +27,7 @@ AppStyle(additive/texture/kk,AppAdditiveTextureKokkos)
 #include "temperature_source.h"
 #include "thermal_manager.h"
 #include "thermal_host.h"
+#include "rosenthal_device.h"
 #include <Kokkos_Core.hpp>
 #include <Kokkos_DualView.hpp>
 #include <memory>
@@ -56,7 +57,14 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   void refresh_thermal_host();
   void update_temperature_from_source(double simulation_time);
   void sync_temperature_to_device();
+  void sync_temperature_to_host();   // device k_T -> host T (for diag/host code)
   void compute_gradients_kernel();
+
+  // Device-side analytical Rosenthal temperature: evaluate the per-site
+  // temperature directly into k_T on the GPU from the host-advanced laser pose,
+  // replacing the host per-site exp/sqrt loop. Fills all nlocal+nghost sites
+  // (Rosenthal is positional, so ghosts compute their own T -- no ghost comm).
+  void fill_temperature_rosenthal_device(const RosenthalDevicePlan &plan);
 
   // Phase 3: Phase transition kernels
   void initialize_nucleation_parameters();
@@ -75,6 +83,12 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // Temperature fields (CPU-updated from HDF5, device-readable)
   // Uses DualView because temperature is read-only during device sweeps
   Kokkos::DualView<double*> k_T;  // Temperature field
+
+  // Cached device copy of site coordinates (lattice units). The lattice is
+  // static for the run, so this is uploaded once and reused by the device
+  // Rosenthal fill (rebuilt only if the site count changes via grow_app).
+  Kokkos::View<double*[3]> d_xyz;
+  int d_xyz_n = -1;                 // extent d_xyz was built for (nlocal+nghost)
 
   // Gradient cache (device-only, computed once per timestep)
   // Uses simple View because computed on device, no host sync needed

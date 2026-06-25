@@ -12,6 +12,7 @@
 ------------------------------------------------------------------------- */
 
 #include "temperature_source_rosenthal.h"
+#include "rosenthal_device.h"
 #include "error.h"
 #include "domain.h"
 #include "math_const.h"
@@ -179,6 +180,31 @@ double RosenthalTemperatureSource::rosenthal_kernel(double Q_eff, double v,
   const double prefactor = Q_eff / (2.0 * MY_PI * k_cond * R);
   const double exponent  = -v * (xi + R) / (2.0 * alpha);
   return prefactor * std::exp(exponent);
+}
+
+/* ----------------------------------------------------------------------
+   Export material/source parameters for device-side evaluation. The laser
+   pose (px/py/layer_z/ux/uy/v/scan_active/T0) is filled by the driving app
+   from its scan path; here we only set the mode and the material constants
+   that the device kernel needs. Keep in sync with rosenthal_pointwise().
+   Returns false for KEYHOLE (needs quadrature arrays -> host path).
+------------------------------------------------------------------------- */
+
+bool RosenthalTemperatureSource::fill_device_plan(RosenthalDevicePlan &plan) const
+{
+  plan.k_cond = k_cond;
+  plan.alpha  = alpha;
+  plan.r_min  = r_min;
+  plan.lambdaQ = lambda * Q;   // image factor of 2 is applied in the kernel
+  plan.eta_y  = eta_y;
+  plan.eta_z  = eta_z;
+
+  switch (mode) {
+  case RosenthalMode::STANDARD:    plan.mode = 0; return true;
+  case RosenthalMode::ANISOTROPIC: plan.mode = 1; return true;
+  case RosenthalMode::KEYHOLE:     return false;  // host path only
+  }
+  return false;
 }
 
 /* ----------------------------------------------------------------------

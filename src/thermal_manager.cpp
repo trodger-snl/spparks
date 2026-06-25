@@ -834,6 +834,112 @@ ThermalManager::ThermalStep ThermalManager::advance(double current_time, double 
 }
 
 /* ----------------------------------------------------------------------
+   Build a RosenthalDevicePlan for the current step: advance the laser scan
+   path to simulation_time on the host and snapshot the laser pose + material
+   parameters so a device kernel can evaluate the temperature per site. See
+   rosenthal_device.h. The scan-path advance mirrors update_temperatures()'s
+   Rosenthal branch exactly, so the device fill matches the host fill.
+------------------------------------------------------------------------- */
+
+RosenthalDevicePlan ThermalManager::rosenthal_device_plan(double simulation_time)
+{
+  RosenthalDevicePlan plan;
+
+  RosenthalTemperatureSource* ros =
+    dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
+  if (!ros || !laser_path_set) return plan;  // plan.valid stays false
+
+  // Material parameters; false (e.g. KEYHOLE) -> host path.
+  if (!ros->fill_device_plan(plan)) { plan.valid = false; return plan; }
+
+  // Let any data-driven source state advance (no-op for Rosenthal, kept for
+  // parity with update_temperatures()).
+  temperature_source->update_temperatures(host_->dt, simulation_time);
+
+  // Sync the laser pose to simulation_time in dt-sized chunks (move(dt) does
+  // not carry remainder across path boundaries) -- identical to the host loop.
+  if (scan_layer_active) {
+    double advance = simulation_time - scan_layer_time;
+    const double step = (host_->dt > 0.0) ? host_->dt : 1.0e-6;
+    while (advance > step) {
+      if (!scan_layer.move(step)) { scan_layer_active = false; break; }
+      advance -= step;
+    }
+    if (scan_layer_active && advance > 0.0) {
+      if (!scan_layer.move(advance)) scan_layer_active = false;
+    }
+  }
+  scan_layer_time = simulation_time;
+
+  const RASTER::Point pos = scan_layer.get_position();
+  const RASTER::Point dir = scan_layer.get_unit_dir();
+  plan.px = pos[0];
+  plan.py = pos[1];
+  plan.layer_z = scan_layer_z;
+  plan.ux = dir[0];
+  plan.uy = dir[1];
+  plan.v = scan_layer.get_speed();
+  plan.scan_active = scan_layer_active;
+  plan.T0 = ros->get_ambient_temperature();
+  plan.valid = true;
+  return plan;
+}
+
+/* ----------------------------------------------------------------------
+   Fast-forward decision for the Rosenthal device path. Same logic as the
+   Rosenthal branch of advance(), but the active-site test uses the device-
+   computed global max temperature instead of a host T scan, and temperatures
+   are NOT refilled here (the caller refills its device view at new_time).
+------------------------------------------------------------------------- */
+
+ThermalManager::ThermalStep
+ThermalManager::rosenthal_fast_forward(double current_time, double stoptime,
+                                       double global_max_T)
+{
+  ThermalStep step;
+  step.new_time = current_time;
+  step.activate_powder = false;
+  step.end_run = false;
+
+  RosenthalTemperatureSource* ros =
+    dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
+  if (!ros) return step;
+
+  // `laser_path ... pause_below <Tk>` overrides the default liquidus threshold.
+  const double fast_forward_threshold =
+    (laser_pause_below > 0.0) ? laser_pause_below : host_->tl;
+
+  // global_max_T is already reduced across ranks, so this test is consistent
+  // on every rank -> all ranks take the same branch (keeps the MIN reduce
+  // below collective-safe).
+  const bool any_active = (global_max_T > fast_forward_threshold);
+
+  if (!any_active && current_time > 1e-6 && ros->supports_time_queries()) {
+    const double local_next =
+      rosenthal_next_active_time(current_time, fast_forward_threshold);
+    double next_thermal_time;
+    MPI_Allreduce(&local_next, &next_thermal_time, 1, MPI_DOUBLE, MPI_MIN, world);
+
+    if (next_thermal_time > current_time &&
+        next_thermal_time < std::numeric_limits<double>::max()) {
+      const double target_time = std::min(next_thermal_time, stoptime);
+      const double time_skip = target_time - current_time;
+      if (time_skip > 1e-6) {
+        if (domain->me == 0) {
+          std::cout << "Fast-forward (device): skipping " << time_skip
+                    << " s from t=" << current_time << " to " << target_time
+                    << " (all T < " << fast_forward_threshold << " K)"
+                    << std::endl;
+        }
+        step.new_time = target_time;
+        if (time_skip > 1.0) step.activate_powder = true;
+      }
+    }
+  }
+  return step;
+}
+
+/* ----------------------------------------------------------------------
    Run the isotherm-compactness diagnostic on the configured cadence.
 ------------------------------------------------------------------------- */
 

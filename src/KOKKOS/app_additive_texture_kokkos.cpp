@@ -419,6 +419,108 @@ void AppAdditiveTextureKokkos::sync_temperature_to_device()
 }
 
 /* ----------------------------------------------------------------------
+   Sync temperature from device to host (after a device-side fill). Copies
+   k_T back into the host T array (darray[5]) so host consumers -- the d6
+   diagnostic, activate_powder_sites(), optional smoothing diagnostics -- see
+   the current field. Cheap O(nall) copy; the expensive per-site evaluation
+   stays on the device.
+------------------------------------------------------------------------- */
+
+void AppAdditiveTextureKokkos::sync_temperature_to_host()
+{
+  int nall = nlocal + nghost;
+  k_T.sync_host();
+  auto h_T = k_T.view_host();
+  for (int i = 0; i < nall; i++) {
+    T[i] = h_T(i);
+  }
+}
+
+/* ----------------------------------------------------------------------
+   Evaluate the analytical Rosenthal temperature on the device, writing k_T
+   for all nlocal+nghost sites. The laser pose + material parameters come from
+   the host-advanced RosenthalDevicePlan; the pool-local transform
+   (am_raster.h compute_position_relative_to_pool) and the Rosenthal kernel
+   (temperature_source_rosenthal.cpp rosenthal_pointwise/rosenthal_kernel) are
+   reproduced here device-side -- keep them in sync.
+------------------------------------------------------------------------- */
+
+void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
+    const RosenthalDevicePlan &plan)
+{
+  const int nall = nlocal + nghost;
+
+  // Upload site coordinates once (static lattice); rebuild only if the site
+  // count changed. Fill a host mirror by explicit element assignment from the
+  // double** so the copy is correct regardless of the device View layout
+  // (host xyz is row-major [nall][3]; a LayoutLeft device view would otherwise
+  // misread it as column-major).
+  if (d_xyz_n != nall) {
+    d_xyz = Kokkos::View<double*[3]>("d_xyz", nall);
+    auto h_xyz = Kokkos::create_mirror_view(d_xyz);
+    for (int i = 0; i < nall; i++) {
+      h_xyz(i,0) = xyz[i][0];
+      h_xyz(i,1) = xyz[i][1];
+      h_xyz(i,2) = xyz[i][2];
+    }
+    Kokkos::deep_copy(d_xyz, h_xyz);
+    d_xyz_n = nall;
+  }
+
+  auto d_T   = k_T.view_device();
+  auto d_xyz_local = d_xyz;
+
+  // Capture plan scalars by value for device lambda.
+  const double dx_l = this->dx;
+  const double px = plan.px, py = plan.py, layer_z = plan.layer_z;
+  const double ux = plan.ux, uy = plan.uy;
+  const double v = plan.v, T0 = plan.T0;
+  const double lambdaQ = plan.lambdaQ, k_cond = plan.k_cond, alpha = plan.alpha;
+  const double r_min = plan.r_min, eta_y = plan.eta_y, eta_z = plan.eta_z;
+  const int mode = plan.mode;
+  const bool scan_active = plan.scan_active;
+  const double two_pi = 2.0 * 3.14159265358979323846;
+
+  Kokkos::parallel_for("RosenthalFill", nall, KOKKOS_LAMBDA(const int i) {
+    // Site physical coordinates (meters).
+    const double x = d_xyz_local(i,0) * dx_l;
+    const double y = d_xyz_local(i,1) * dx_l;
+    const double z = d_xyz_local(i,2) * dx_l;
+
+    // Pool-local frame: project (site - laser) onto scan / transverse axes.
+    const double rsx0 = x - px;
+    const double rsx1 = y - py;
+    const double z_rel = z - layer_z;
+    const double xi = ux*rsx0 + uy*rsx1;            // along scan direction
+    const double tsx0 = rsx0 - xi*ux;
+    const double tsx1 = rsx1 - xi*uy;
+    const double y_rel = -uy*tsx0 + ux*tsx1;        // transverse
+
+    double Tval = T0;
+    // Free-surface cutoff: vacuum above the laser plane. Inactive path -> T0.
+    if (scan_active && z_rel <= 0.0) {
+      double R;
+      if (mode == 1) {                              // ANISOTROPIC
+        const double yy = eta_y * y_rel;
+        const double zz = eta_z * z_rel;
+        R = Kokkos::sqrt(xi*xi + yy*yy + zz*zz);
+      } else {                                      // STANDARD
+        R = Kokkos::sqrt(xi*xi + y_rel*y_rel + z_rel*z_rel);
+      }
+      double Rk = (R < r_min) ? r_min : R;
+      if (Rk > 0.0) {
+        const double prefactor = lambdaQ / (two_pi * k_cond * Rk);
+        const double exponent  = -v * (xi + Rk) / (2.0 * alpha);
+        Tval = T0 + 2.0 * prefactor * Kokkos::exp(exponent);
+      }
+    }
+    d_T(i) = Tval;
+  });
+  Kokkos::fence();
+  k_T.modify_device();
+}
+
+/* ----------------------------------------------------------------------
    Compute thermal gradients on device (cache for later use)
 ------------------------------------------------------------------------- */
 
@@ -1745,31 +1847,69 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   double t_start, t_end;
   step_count++;
 
-  // 1. Update temperature + fast-forward via the shared ThermalManager (CPU).
-  //    advance() fills host T[] from the source at the current time, runs the
-  //    Moser pause/reset + pause_below scheduling, and predicts idle-period
-  //    skips (filling T[] again at the advanced time). We apply the returned
-  //    decision here -- advance sim time, activate powder after a large skip,
-  //    or end the run -- so those app-level effects stay in the app.
+  // 1. Update temperature + fast-forward.
+  //
+  // Rosenthal (STANDARD/ANISOTROPIC): evaluate the per-site temperature on the
+  // DEVICE -- the host only advances the laser pose (cheap) and we fill k_T
+  // directly on the GPU, then copy back to host T for the diagnostic and
+  // host-side consumers. This replaces the dominant host exp/sqrt per-site
+  // loop. Fast-forward uses a global max temperature + ThermalManager's
+  // path-geometry predictor.
+  //
+  // Other sources (HDF5 / Moser / Rosenthal KEYHOLE): host path via
+  // ThermalManager::advance(), which fills host T[]; we then sync to device.
   refresh_thermal_host();
   t_start = MPI_Wtime();
+  bool device_temp = false;
   if (thermal->enabled()) {
-    ThermalManager::ThermalStep s = thermal->advance(time, stoptime);
-    if (s.end_run) { time = s.new_time; return; }
-    if (s.new_time > time) {
-      time = s.new_time;
-      if (s.activate_powder) {
-        activate_powder_sites();
-        last_powder_activation_time = time;
+    RosenthalDevicePlan plan = thermal->rosenthal_device_plan(time);
+    if (plan.valid) {
+      // ---- DEVICE Rosenthal path ----
+      device_temp = true;
+      fill_temperature_rosenthal_device(plan);
+      sync_temperature_to_host();   // make host T / d6 current for diag + powder
+
+      // Global peak temperature for the active-site / fast-forward test.
+      double local_max = 0.0;
+      for (int i = 0; i < nlocal; i++)
+        if (T[i] > local_max) local_max = T[i];
+      double global_max = local_max;
+      MPI_Allreduce(&local_max, &global_max, 1, MPI_DOUBLE, MPI_MAX, world);
+
+      ThermalManager::ThermalStep s =
+        thermal->rosenthal_fast_forward(time, stoptime, global_max);
+      if (s.end_run) { time = s.new_time; return; }
+      if (s.new_time > time) {
+        time = s.new_time;
+        // Refill the device field at the advanced time.
+        RosenthalDevicePlan plan2 = thermal->rosenthal_device_plan(time);
+        fill_temperature_rosenthal_device(plan2);
+        sync_temperature_to_host();
+        if (s.activate_powder) {
+          activate_powder_sites();
+          last_powder_activation_time = time;
+        }
+      }
+    } else {
+      // ---- HOST path (HDF5 / Moser / keyhole) ----
+      ThermalManager::ThermalStep s = thermal->advance(time, stoptime);
+      if (s.end_run) { time = s.new_time; return; }
+      if (s.new_time > time) {
+        time = s.new_time;
+        if (s.activate_powder) {
+          activate_powder_sites();
+          last_powder_activation_time = time;
+        }
       }
     }
   }
   t_end = MPI_Wtime();
   t_temp_update += (t_end - t_start);
 
-  // 2. Sync temperature to device
+  // 2. Sync temperature to device (host path only; the device path already
+  //    wrote k_T on the GPU).
   t_start = MPI_Wtime();
-  sync_temperature_to_device();
+  if (!device_temp) sync_temperature_to_device();
   t_end = MPI_Wtime();
   t_temp_sync += (t_end - t_start);
 

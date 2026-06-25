@@ -17,6 +17,7 @@
 #include "pointers.h"
 #include "temperature_source.h"
 #include "thermal_host.h"
+#include "rosenthal_device.h"
 #include "am_raster.h"
 #include <memory>
 #include <vector>
@@ -85,6 +86,25 @@ class ThermalManager : protected Pointers {
   // before returning. The returned ThermalStep tells the app whether to
   // advance time, activate powder, or end the run.
   ThermalStep advance(double current_time, double stoptime);
+
+  // ---- device (Kokkos) Rosenthal path ----
+  // Advance the laser scan path to simulation_time on the host (cheap) and
+  // return a RosenthalDevicePlan the caller can use to evaluate the Rosenthal
+  // temperature on a device, filling its own T view directly. plan.valid is
+  // false when the active source is not a device-eligible Rosenthal (i.e. not
+  // Rosenthal, or KEYHOLE mode) -- the caller must then use the host
+  // update_temperatures() + sync path. This advances the same scan_layer state
+  // update_temperatures() would, so for a Rosenthal device step the caller must
+  // NOT also call update_temperatures() (that would double-advance the path).
+  RosenthalDevicePlan rosenthal_device_plan(double simulation_time);
+
+  // Fast-forward decision for the Rosenthal device path. Mirrors advance()'s
+  // Rosenthal branch but takes the already-computed global max temperature
+  // (from a device reduction) instead of scanning host T, and does NOT refill
+  // temperatures (the caller refills its device view at step.new_time when a
+  // skip is returned). Returns {new_time, activate_powder, end_run}.
+  ThermalStep rosenthal_fast_forward(double current_time, double stoptime,
+                                     double global_max_T);
 
   // ---- diagnostics ----
   // Run the diagnostic when step_count lands on the configured cadence.

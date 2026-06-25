@@ -1162,43 +1162,54 @@ void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
   auto start_time = std::chrono::high_resolution_clock::now();
   size_t mem_before = get_memory_usage_kb();
 
-  // Get total number of sites from app
+  // Build the cache over OWNED + GHOST sites (nall), not just owned. The chunk
+  // load already pads the subdomain by grid_cell_size_multiplier cells (>> the
+  // one-cell ghost layer), so every ghost site's coordinate lies inside this
+  // rank's loaded mesh and finds its containing element. Giving ghosts valid
+  // cache entries lets the device fill evaluate ghost temperature POSITIONALLY
+  // (like the Rosenthal/Moser device paths) -- ghost T is then correct on-device
+  // with no host round-trip and no T ghost comm, because every rank evaluates
+  // the same global thermal field at the same physical point. Host consumers
+  // (thermal intervals, threshold scan) still loop nlocal, so the extra ghost
+  // entries are used only by the device fill.
   int nlocal = app->nlocal;
+  int nall = nlocal + app->nghost;
 
   if (universe->me == 0) {
-    size_t cache_size_mb = nlocal * sizeof(ElementCache) / 1024 / 1024;
-    fprintf(screen, "  [MEM] Building site cache for %d sites (%zu MB), current: %zu MB\n",
-            nlocal, cache_size_mb, mem_before / 1024);
+    size_t cache_size_mb = (size_t)nall * sizeof(ElementCache) / 1024 / 1024;
+    fprintf(screen, "  [MEM] Building site cache for %d sites (%d owned + %d ghost, %zu MB), current: %zu MB\n",
+            nall, nlocal, app->nghost, cache_size_mb, mem_before / 1024);
   }
 
-  // Resize cache to match number of local sites
-  site_element_cache.resize(nlocal);
+  // Resize cache to match owned+ghost site count
+  site_element_cache.resize(nall);
 
-  // For each site, find its containing element and cache the result
-  for (int i = 0; i < nlocal; i++) {
-    // Get site coordinates 
+  // For each site (owned + ghost), find its containing element and cache it
+  for (int i = 0; i < nall; i++) {
+    // Get site coordinates
     double x = app->xyz[i][0] * dx;  // Convert lattice to physical
     double y = app->xyz[i][1] * dx;
     double z = app->xyz[i][2] * dx;
-    
+
     std::array<double, 3> pt{x, y, z};
-    
+
     // Find element containing this point
-    auto result = find_element_point_is_in(selected_chunks, chunk_bboxes, 
-                                          node_offsets, elem_offsets, 
-                                          elemNode, nodeCoords, 
+    auto result = find_element_point_is_in(selected_chunks, chunk_bboxes,
+                                          node_offsets, elem_offsets,
+                                          elemNode, nodeCoords,
                                           elem_bboxes, pt);
-    
+
     // Store in cache
     site_element_cache[i].nodeIndices = result.first;
     site_element_cache[i].weights = result.second;
     site_element_cache[i].valid = (result.first[0] != std::numeric_limits<unsigned>::max());
   }
 
-  // Collect unique node indices from valid cached elements
-  // This allows precompute_nodal_temperatures to skip unused nodes
+  // Collect unique node indices from valid cached elements (owned + ghost) so
+  // precompute_nodal_temperatures fills every node the device fill will read --
+  // including ghost sites' tet nodes.
   std::set<unsigned> unique_nodes;
-  for (int i = 0; i < nlocal; i++) {
+  for (int i = 0; i < nall; i++) {
     if (site_element_cache[i].valid) {
       for (int j = 0; j < 4; j++) {
         unique_nodes.insert(site_element_cache[i].nodeIndices[j]);
@@ -1225,7 +1236,7 @@ void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
 
   if (universe->me == 0) {
     size_t mem_after = get_memory_usage_kb();
-    fprintf(screen, "  Built element cache for %d sites in %.3f s\n", nlocal, cache_build_time);
+    fprintf(screen, "  Built element cache for %d sites (incl ghosts) in %.3f s\n", nall, cache_build_time);
     fprintf(screen, "  Active nodes: %zu / %zu (%.1f%% of loaded nodes)\n",
             active_node_indices.size(), dataCounts.size(),
             100.0 * active_node_indices.size() / dataCounts.size());

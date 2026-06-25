@@ -200,6 +200,11 @@ public:
   // (cached_nodal_temps) that the device kernel indexes through the cache.
   int num_loaded_nodes() const { return (int) dataCounts.size(); }
 
+  // Number of per-site cache entries (owned + ghost == nall). The device fill
+  // covers exactly this many sites positionally; ghosts have valid entries
+  // because the chunk-load pad covers them. See build_site_element_cache().
+  int num_cache_sites() const { return (int) site_element_cache.size(); }
+
   // Ambient/default temperature used for sites with no containing element.
   double get_default_temp() const { return default_temp; }
 

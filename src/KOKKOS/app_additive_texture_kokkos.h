@@ -60,7 +60,6 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   void update_temperature_from_source(double simulation_time);
   void sync_temperature_to_device();
   void sync_temperature_to_host();   // device k_T -> host T (for diag/host code)
-  void sync_owned_temperature_to_host();  // device k_T[0,nlocal) -> host T (ghosts kept)
   double device_global_max_temperature();  // parallel_reduce max over k_T + Allreduce
   void compute_gradients_kernel();
 
@@ -147,7 +146,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   Kokkos::View<int*>       d_hdf5_valid;      // [nlocal] 1 = has containing element
   Kokkos::View<double*>    d_hdf5_nodal_temps;// [n_nodes] per-node T for the step
   long d_hdf5_cache_version = -1;   // cache generation the static Views hold
-  int  d_hdf5_nlocal = -1;          // nlocal the static Views were sized for
+  int  d_hdf5_nsites = -1;          // site count (nall) the static Views were sized for
 
   // Gradient cache (device-only, computed once per timestep)
   // Uses simple View because computed on device, no host sync needed

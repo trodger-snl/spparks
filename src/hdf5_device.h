@@ -42,11 +42,14 @@ namespace SPPARKS_NS {
          + w1 * (nt[i2] - nt[i0])
          + w2 * (nt[i3] - nt[i0])      (invalid site -> default_temp)
 
-   The cache is built over OWNED sites only (nlocal): in multi-rank runs the
-   HDF5 mesh is MPI-subdomain-partitioned, so a ghost site may lie outside this
-   rank's loaded mesh and has no cache entry. The device kernel therefore fills
-   k_T[0,nlocal) only; ghost temperatures arrive via the host T ghost slice
-   (kept current by the comm->all darray exchange).
+   The cache is built over OWNED + GHOST sites (nall): the chunk-load pads the
+   subdomain by grid_cell_size_multiplier cells (>> the one-cell ghost layer),
+   so every ghost site lies inside this rank's loaded mesh and gets a valid
+   cache entry. The device kernel fills all nall sites POSITIONALLY (like the
+   Rosenthal/Moser device paths) -- ghost T is correct on-device with no host
+   round-trip and no T ghost comm, because every rank evaluates the same global
+   thermal field at the same physical point (a ghost computed from the halo
+   equals the owning rank's value by construction).
 
    valid is false (host path) when the source is not HDF5 or when
    solidification-band temperature_smooth is enabled (that smoothing is applied
@@ -56,7 +59,9 @@ namespace SPPARKS_NS {
 struct HDF5DevicePlan {
   bool   valid = false;
   long   version = -1;       // cache generation; bump -> re-upload cache Views
-  int    nlocal = 0;         // owned sites (device kernel range)
+  int    nsites = 0;         // device kernel range = cache entries = nall
+                             // (owned + ghost; ghosts have valid entries via the
+                             // chunk-load pad, so they fill positionally)
   int    n_nodes = 0;        // loaded nodes (length of the nodal-temp slice)
   double default_temp = 0.0; // ambient T for sites with no containing element
 };

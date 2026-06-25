@@ -1151,7 +1151,7 @@ HDF5DevicePlan ThermalManager::hdf5_device_plan(double simulation_time)
   hdf5->prepare_for_timestep(simulation_time);
 
   plan.version = hdf5->cache_generation();
-  plan.nlocal = host_->nlocal;
+  plan.nsites = hdf5->num_cache_sites();   // nall (owned + ghost); fills positionally
   plan.n_nodes = hdf5->num_loaded_nodes();
   plan.default_temp = hdf5->get_default_temp();
   plan.valid = true;

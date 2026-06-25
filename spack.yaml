@@ -36,7 +36,7 @@ spack:
   - zlib
 
     # Build tools (CMake >= 3.22 required by Kokkos 5.x)
-  - cmake@3.22:
+  - 'cmake@3.22:'
   - gmake
 
   # Package-level configuration

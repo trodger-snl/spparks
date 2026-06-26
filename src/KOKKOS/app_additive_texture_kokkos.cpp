@@ -1331,9 +1331,10 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
    to parallelize. This version achieves similar physics with simpler logic.
 ------------------------------------------------------------------------- */
 
-int AppAdditiveTextureKokkos::particle_flipper_kernel()
+int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_active_sites, int n_active)
 {
   // Get device views - simple Views (atomic CAS makes neighbor writes race-safe)
+  auto d_active_sites_local = d_active_sites;
   auto d_spin_local = d_spin;
   auto d_q0_local = d_q0;
   auto d_qx_local = d_qx;
@@ -1352,15 +1353,15 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel()
   auto d_nucleation_sizes_local = d_nucleation_sizes;
   auto rand_pool_local = *rand_pool;
 
-  int nlocal_local = nlocal;
   int nrefine_local = nrefine;
   double dx_local = dx;
 
-  // Parallel over all local sites - each nucleus flips its neighbors with event tracking
-  // Race-safe: uses atomic CAS to claim neighbors
+  // Parallel over the active-front list - each nucleus flips its neighbors with
+  // event tracking. Race-safe: uses atomic CAS to claim neighbors.
   int naccept_local = 0;
-  Kokkos::parallel_reduce("ParticleFlipperKernel", nlocal_local,
-    KOKKOS_LAMBDA(int i, int& count) {
+  Kokkos::parallel_reduce("ParticleFlipperKernel", n_active,
+    KOKKOS_LAMBDA(int idx, int& count) {
+      const int i = d_active_sites_local(idx);
       // Only process newly nucleated sites (marked with solid_d = -nrefine-2)
       double solid_d_i = d_solid_d_local(i);
       int active_flag_i = d_active_flag_local(i);
@@ -2405,35 +2406,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   t_melting += (t_end - t_start);
 
   // Phase 3.2: Nucleation (stochastic nucleation in undercooled liquid)
-  // OPTIMIZATION 2A: Check if any sites are in undercooled liquid state before launching
   t_start = MPI_Wtime();
-
-  // CRITICAL FIX: Always launch nucleation kernel (no conditional check)
-  // The kernel has internal active_flag checks, so it's safe to launch on all sites.
-  // Conditional launch prevents recovery once all liquid sites are depleted.
-  // Overhead of empty kernel << overhead of parallel_reduce pre-scan.
-
-  /* REMOVED: Conditional launch logic that prevented recovery
-  int n_nucleation_candidates = 0;
-  {
-    auto d_T_check = k_T.view_device();
-    auto d_active_flag_check = d_active_flag;
-    double ts_check = this->ts;
-    double tl_check = this->tl;
-    int nlocal_check = this->nlocal;
-
-    Kokkos::parallel_reduce("CheckNucleationCandidates", nlocal_check,
-      KOKKOS_LAMBDA(int i, int& count) {
-        // Nucleation occurs in undercooled liquid: ts <= T < tl && active_flag == 2
-        if (d_active_flag_check(i) == 2 && d_T_check(i) >= ts_check && d_T_check(i) < tl_check) {
-          count++;
-        }
-      }, n_nucleation_candidates);
-  }
-
-  // Only launch nucleation kernel if there are undercooled liquid sites
-  if (n_nucleation_candidates > 0) {
-  */
 
   // Nucleation ranges over the active-front list, which contains EVERY liquid
   // (active_flag==2) site, so nucleation still sees all liquid every step -- the
@@ -2450,24 +2423,12 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   // Only launch if there are newly nucleated sites (solid_d == -nrefine-2)
   t_start = MPI_Wtime();
 
-  // Check if any nuclei need growing (selective kernel launch optimization)
-  int n_nuclei_sites = 0;
-  {
-    auto d_solid_d_check = d_solid_d;
-    auto d_active_flag_check = d_active_flag;
-    int nrefine_check = nrefine;
-    Kokkos::parallel_reduce("CheckNucleiSites", nlocal,
-      KOKKOS_LAMBDA(int i, int& count) {
-        if (d_active_flag_check(i) == 3 && d_solid_d_check(i) == -nrefine_check - 2) {
-          count++;
-        }
-      }, n_nuclei_sites);
-  }
-
-  // Only launch particle kernel if there are nuclei to grow
-  if (n_nuclei_sites > 0) {
-    naccept += particle_flipper_kernel();
-  }
+  // Grow nuclei over the active-front list. Nucleus sites (active_flag==3 &&
+  // solid_d==-nrefine-2) are a subset of the active list (leftover-nucleus
+  // clause), so the separate CheckNucleiSites pre-scan over nlocal is gone -- the
+  // kernel's own guard rejects non-nuclei, and ranging over n_active==0 is a
+  // correct no-op (no nuclei).
+  naccept += particle_flipper_kernel(d_active_sites, n_active);
 
   t_end = MPI_Wtime();
   t_particle += (t_end - t_start);

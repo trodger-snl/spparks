@@ -322,6 +322,33 @@ Lesson reinforced: trust **within-session back-to-back A/Bs**, not cross-session
 GPU numbers, and not the fence-distorted `space_time_stack` TOTAL on HIP (per-
 kernel *relative* costs are still useful for spotting bottlenecks like the scan).
 
+### Device-side time interpolation — the biggest GPU win (win on both backends)
+
+Profiling + a 65%-GPU/50%-CPU observation showed the per-step **host**
+`precompute_nodal_temperatures` (time-interp of ~33k active mesh nodes) sat on the
+critical path, stalling the GPU each step. Moving it onto the device — upload the
+per-node raw time-series CSR + active-node list once per layer, a
+`ComputeNodalTemps` device kernel interpolates the ~33k active nodes, the fill
+blends as before — removes that host work (precompute + per-step slice copy +
+time-interp). Bit-matches the host (lower_bound + linear interp); d6 identical.
+
+Getting the granularity right mattered: **per-site** interp (4×nall searches into
+the 752 MB series) was **3.2× slower** on OpenMP; **per-node all-nodes** (232k)
+was 1.33× slower; **per-node active-only** (~33k, matching the host subset) is the
+win. Clean A/B (full window, temps identical):
+
+| backend | host precompute | device time interp | Δ |
+|---|---:|---:|---:|
+| OpenMP (16t CPU) | 153.2 s | 151.3 s | **+1.2%** (~neutral) |
+| HIP (GPU) | 270.9 s | **171.8 s** | **+36.6%** |
+
+A win on **both** backends → shipped everywhere (no split). This is the single
+largest optimization of the hot-loop effort; it closed the HIP↔OpenMP gap from
+~2× to **~1.14×** (171.8 vs 151.3 s). Safety: the device path doesn't reproduce
+optional nodal mesh-smoothing, so it falls back to the host precompute when
+nodal_smooth is ON. Origin: the host-bound diagnosis from the 65%-GPU/50%-CPU
+utilization split during a HIP run.
+
 ### The active-front list helps the GPU too (clean A/B; earlier "regression" was noise)
 
 A cross-*session* comparison (HIP no-fusion 318 s vs an earlier 268 s pre-active-

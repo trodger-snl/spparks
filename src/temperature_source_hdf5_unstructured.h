@@ -115,6 +115,10 @@ public:
 
   size_t total_elements() const { return data.size(); }
 
+  // Flat CSR accessors (for device upload of the whole array at once).
+  const std::vector<T>& flat() const { return data; }
+  const std::vector<size_t>& row_offsets() const { return offsets; }
+
 private:
   std::vector<T> data;
   std::vector<size_t> offsets;
@@ -208,6 +212,24 @@ public:
   // Ambient/default temperature used for sites with no containing element.
   double get_default_temp() const { return default_temp; }
 
+  // Device-side time interpolation: when enabled, the per-step host
+  // precompute_nodal_temperatures() is SKIPPED -- the device fill instead
+  // interpolates each tet node's temperature from its raw time series at the
+  // current time (then barycentric-blends). These accessors expose the
+  // immutable-per-layer per-node time-series CSR (times.flat()/temperatures.flat()
+  // share the same row_offsets) for the device to upload once per layer.
+  // Device time interp can only run when nodal mesh-smoothing is OFF (the device
+  // does not reproduce smooth_nodal_temps()); otherwise it stays on the host.
+  void set_device_time_interp(bool b) { device_time_interp_ = b && !nodal_smooth_enabled; }
+  bool device_time_interp_active() const { return device_time_interp_; }
+  const std::vector<double>& timeseries_times() const { return times.flat(); }
+  const std::vector<double>& timeseries_temps() const { return temperatures.flat(); }
+  const std::vector<size_t>& timeseries_offsets() const { return times.row_offsets(); }
+  // The ~active nodes (tet nodes of valid sites) -- the only nodes the device
+  // blend reads, so the device only needs to interpolate these (matches the host
+  // precompute subset when nodal_smooth is off). Static per layer.
+  const std::vector<unsigned>& timeseries_active_nodes() const { return active_node_indices; }
+
   // Copy the STATIC per-site element cache for device upload (call when
   // cache_generation() changes). node_idx is flattened lobe-major
   // [4*nlocal] (the 4 tet-node indices into the nodal-temp slice), weights is
@@ -257,6 +279,7 @@ private:
   double dx;  // Grid spacing in meters
   double threshold_temp;  // Threshold temperature for fast-forward (K)
   double default_temp;    // Default/ambient temperature (K)
+  bool device_time_interp_ = false;  // skip host precompute; device interps in time
   int bounds_check_mode;  // 0 = exact, 1 = subvolume
   double grid_cell_size_multiplier;  // Spatial grid cell size = dx * multiplier (default 50)
 

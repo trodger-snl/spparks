@@ -1154,6 +1154,7 @@ HDF5DevicePlan ThermalManager::hdf5_device_plan(double simulation_time)
   plan.nsites = hdf5->num_cache_sites();   // nall (owned + ghost); fills positionally
   plan.n_nodes = hdf5->num_loaded_nodes();
   plan.default_temp = hdf5->get_default_temp();
+  plan.sim_time = simulation_time;          // device-side time interpolation
   plan.valid = true;
   return plan;
 }
@@ -1175,6 +1176,59 @@ const std::vector<double> &ThermalManager::hdf5_nodal_temps() const
     dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
   if (!hdf5) return empty;
   return hdf5->nodal_temps();
+}
+
+// Device-side time interpolation: toggle the host precompute off and expose the
+// immutable-per-layer per-node time-series CSR for the device to upload once per
+// layer (times.flat()/temperatures.flat() share row_offsets).
+void ThermalManager::hdf5_set_device_time_interp(bool b)
+{
+  HDF5UnstructuredTemperatureSource* hdf5 =
+    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+  if (hdf5) hdf5->set_device_time_interp(b);
+}
+
+bool ThermalManager::hdf5_device_time_interp_active() const
+{
+  HDF5UnstructuredTemperatureSource* hdf5 =
+    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+  return hdf5 && hdf5->device_time_interp_active();
+}
+
+const std::vector<double> &ThermalManager::hdf5_ts_times() const
+{
+  static const std::vector<double> empty;
+  HDF5UnstructuredTemperatureSource* hdf5 =
+    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+  if (!hdf5) return empty;
+  return hdf5->timeseries_times();
+}
+
+const std::vector<double> &ThermalManager::hdf5_ts_temps() const
+{
+  static const std::vector<double> empty;
+  HDF5UnstructuredTemperatureSource* hdf5 =
+    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+  if (!hdf5) return empty;
+  return hdf5->timeseries_temps();
+}
+
+const std::vector<size_t> &ThermalManager::hdf5_ts_offsets() const
+{
+  static const std::vector<size_t> empty;
+  HDF5UnstructuredTemperatureSource* hdf5 =
+    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+  if (!hdf5) return empty;
+  return hdf5->timeseries_offsets();
+}
+
+const std::vector<unsigned> &ThermalManager::hdf5_active_nodes() const
+{
+  static const std::vector<unsigned> empty;
+  HDF5UnstructuredTemperatureSource* hdf5 =
+    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+  if (!hdf5) return empty;
+  return hdf5->timeseries_active_nodes();
 }
 
 /* ----------------------------------------------------------------------

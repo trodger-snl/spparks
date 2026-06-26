@@ -950,10 +950,79 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
     d_hdf5_nsites = n;
   }
 
-  // Upload the per-step nodal temperature slice (resize on node-count change).
+  // Fill the per-node temperature slice d_hdf5_nodal_temps that the blend reads.
+  // PRIMARY (nodal_smooth OFF): the device interpolates it itself from the raw
+  // per-node time series -- skipping the host precompute, the per-step host->
+  // device slice copy, and (its dominant cost) the host time interpolation. This
+  // is the lever for the host-bound GPU. FALLBACK (nodal_smooth ON): the host
+  // precompute already filled the slice (the device doesn't reproduce the mesh
+  // smoothing); upload it per step as before.
+  const bool dti = thermal->hdf5_device_time_interp_active();
   if ((int) d_hdf5_nodal_temps.extent(0) != nnodes)
     d_hdf5_nodal_temps = Kokkos::View<double*>("hdf5_nodal_temps", nnodes);
-  if (nnodes > 0) {
+
+  if (dti) {
+    // (Re)upload the per-node raw time-series CSR + active-node list ONCE per
+    // layer. times/temps are flat (shared offsets, n_nodes+1); the flat double
+    // arrays upload zero-copy (unmanaged host View -> device). The active-node
+    // list is the only nodes the blend reads, so the device interpolates ONLY
+    // those (~33k), matching the host precompute subset (not all n_nodes).
+    if (d_ts_version != plan.version) {
+      const std::vector<double> &ts_t = thermal->hdf5_ts_times();
+      const std::vector<double> &ts_T = thermal->hdf5_ts_temps();
+      const std::vector<size_t> &ts_o = thermal->hdf5_ts_offsets();
+      const size_t n_samp = ts_t.size();
+      const int n_off = (int) ts_o.size();   // == n_nodes + 1
+      if (n_samp > 0 && n_off > 1) {
+        d_ts_times   = Kokkos::View<double*>("ts_times", n_samp);
+        d_ts_temps   = Kokkos::View<double*>("ts_temps", n_samp);
+        d_ts_offsets = Kokkos::View<int*>("ts_offsets", n_off);
+        Kokkos::View<const double*, Kokkos::HostSpace,
+                     Kokkos::MemoryTraits<Kokkos::Unmanaged>> h_t(ts_t.data(), n_samp);
+        Kokkos::View<const double*, Kokkos::HostSpace,
+                     Kokkos::MemoryTraits<Kokkos::Unmanaged>> h_T(ts_T.data(), n_samp);
+        Kokkos::deep_copy(d_ts_times, h_t);
+        Kokkos::deep_copy(d_ts_temps, h_T);
+        auto h_o = Kokkos::create_mirror_view(d_ts_offsets);
+        for (int k = 0; k < n_off; k++) h_o(k) = (int) ts_o[k];
+        Kokkos::deep_copy(d_ts_offsets, h_o);
+
+        const std::vector<unsigned> &an = thermal->hdf5_active_nodes();
+        d_n_active_nodes = (int) an.size();
+        d_active_nodes = Kokkos::View<int*>("active_nodes", d_n_active_nodes > 0 ? d_n_active_nodes : 1);
+        auto h_an = Kokkos::create_mirror_view(d_active_nodes);
+        for (int k = 0; k < d_n_active_nodes; k++) h_an(k) = (int) an[k];
+        Kokkos::deep_copy(d_active_nodes, h_an);
+
+        d_ts_version = plan.version;
+      }
+    }
+
+    // Device per-node time interpolation -> d_hdf5_nodal_temps, active nodes only
+    // (~n_active searches, NOT 4*nall). Bit-matches the host precompute
+    // (lower_bound bracket + linear interp); inactive entries are never read.
+    auto nt_out = d_hdf5_nodal_temps;
+    auto d_act_nodes = d_active_nodes;
+    auto tst = d_ts_times; auto tsT = d_ts_temps; auto tso = d_ts_offsets;
+    const double defn = plan.default_temp; const double simtn = plan.sim_time;
+    Kokkos::parallel_for("ComputeNodalTemps", d_n_active_nodes, KOKKOS_LAMBDA(const int k) {
+      const int nd = d_act_nodes(k);
+      const int start = tso(nd);
+      const int count = tso(nd + 1) - start;
+      const double tfirst = tst(start), tlast = tst(start + count - 1);
+      if (simtn < tfirst || simtn > tlast) { nt_out(nd) = defn; return; }
+      int lo = 0, hi = count;                  // first idx with tst >= simtn
+      while (lo < hi) {
+        const int mid = (lo + hi) >> 1;
+        if (tst(start + mid) < simtn) lo = mid + 1; else hi = mid;
+      }
+      int idx = lo; if (idx == 0) idx = 1;
+      const double ti0 = tst(start + idx - 1), ti1 = tst(start + idx);
+      const double te0 = tsT(start + idx - 1), te1 = tsT(start + idx);
+      nt_out(nd) = te0 + (te1 - te0) / (ti1 - ti0) * (simtn - ti0);
+    });
+  } else if (nnodes > 0) {
+    // Fallback: the host precompute filled the slice; upload it per step.
     const std::vector<double> &nt = thermal->hdf5_nodal_temps();
     auto h_nt = Kokkos::create_mirror_view(d_hdf5_nodal_temps);
     for (int k = 0; k < nnodes; k++) h_nt(k) = nt[k];
@@ -965,16 +1034,11 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
   auto wts  = d_hdf5_weights;
   auto vld  = d_hdf5_valid;
   auto nt   = d_hdf5_nodal_temps;
-  const double def = plan.default_temp;
+  const double def  = plan.default_temp;
 
   // Full fusion: evaluate the active-front predicate here (T is in a register;
   // the fill already visits every site) and ATOMIC-APPEND active owned sites
-  // straight into d_active_sites, so there is no separate compaction scan at all
-  // (the parallel_scan is a multi-pass prefix sum -- the GPU's #2 cost). Owned
-  // sites only (i < nlocal); ghosts just get T. active_flag/solid_d are stable
-  // between the fill and the microstructure kernels (which run after), so this
-  // list matches the full predicate scan as a set (the appended order differs,
-  // which is fine -- kernels process sites independently; temperature untouched).
+  // straight into d_active_sites, so there is no separate compaction scan at all.
   if ((int) d_active_sites.extent(0) != nlocal)
     d_active_sites = Kokkos::View<int*>("active_sites", nlocal);
   if (d_active_count.data() == nullptr)
@@ -2342,6 +2406,13 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       // (owned + ghost, positional). The filler fills the device field at a
       // given time and returns the device-reduced global max for fast-forward.
       device_temp = true;
+      // Device does the per-node time interpolation itself (see
+      // fill_temperature_hdf5_device): tell the source to skip the host
+      // precompute. Set once; must precede the first hdf5_device_plan() below.
+      if (!device_time_interp_set) {
+        thermal->hdf5_set_device_time_interp(true);
+        device_time_interp_set = true;
+      }
       thermal->set_hdf5_device_filler([this](double t) -> double {
         fill_temperature_hdf5_device(thermal->hdf5_device_plan(t));
         host_T_stale = true;

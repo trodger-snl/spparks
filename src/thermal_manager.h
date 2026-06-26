@@ -175,6 +175,15 @@ class ThermalManager : protected Pointers {
                        std::vector<int> &valid);
   const std::vector<double> &hdf5_nodal_temps() const;
 
+  // Device-side time interpolation (skip host precompute; device interps the
+  // per-node time series). Toggle + immutable-per-layer time-series CSR refs.
+  void hdf5_set_device_time_interp(bool b);
+  bool hdf5_device_time_interp_active() const;
+  const std::vector<double> &hdf5_ts_times() const;
+  const std::vector<double> &hdf5_ts_temps() const;
+  const std::vector<size_t> &hdf5_ts_offsets() const;
+  const std::vector<unsigned> &hdf5_active_nodes() const;
+
   // Register the device temperature filler used by hdf5_advance_device(): given a
   // simulation time it fills k_T[0,nlocal) on the device and returns the global
   // (MPI-reduced) max temperature. Set once by the app.

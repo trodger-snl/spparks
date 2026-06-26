@@ -64,6 +64,7 @@ struct HDF5DevicePlan {
                              // chunk-load pad, so they fill positionally)
   int    n_nodes = 0;        // loaded nodes (length of the nodal-temp slice)
   double default_temp = 0.0; // ambient T for sites with no containing element
+  double sim_time = 0.0;     // current simulation time (device-side time interp)
 };
 
 }

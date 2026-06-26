@@ -1140,8 +1140,12 @@ void HDF5UnstructuredTemperatureSource::prepare_for_timestep(double time)
     compute_site_thermal_intervals(threshold_temp);
   }
 
-  // Precompute nodal temperatures for this timestep
-  precompute_nodal_temperatures(time);
+  // Precompute nodal temperatures for this timestep -- UNLESS the device does the
+  // time interpolation itself (device_time_interp_), in which case the per-node
+  // host time-interp is redundant and skipped (its dominant per-step host cost
+  // moves onto the device fill).
+  if (!device_time_interp_)
+    precompute_nodal_temperatures(time);
 }
 
 /* ---------------------------------------------------------------------- */

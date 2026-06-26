@@ -155,6 +155,19 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   long d_hdf5_cache_version = -1;   // cache generation the static Views hold
   int  d_hdf5_nsites = -1;          // site count (nall) the static Views were sized for
 
+  // Device-side time interpolation: the per-node raw time-series CSR, uploaded
+  // once per layer (static within a layer). The fill binary-searches each tet
+  // node's series at the current time + linear-interpolates (bit-matching the
+  // host precompute), replacing the per-step host precompute + nodal-slice
+  // upload. times/temps share one offset array (n_nodes+1).
+  Kokkos::View<double*> d_ts_times;   // flat per-node sample times
+  Kokkos::View<double*> d_ts_temps;   // flat per-node sample temperatures
+  Kokkos::View<int*>    d_ts_offsets; // [n_nodes+1] CSR row offsets
+  Kokkos::View<int*>    d_active_nodes;  // the ~33k nodes the blend reads (interp only these)
+  int  d_n_active_nodes = 0;
+  long d_ts_version = -1;             // cache generation the time-series Views hold
+  bool device_time_interp_set = false;
+
   // Gradient cache (device-only, computed once per timestep)
   // Uses simple View because computed on device, no host sync needed
   Kokkos::View<double*> d_G;        // Gradient magnitude

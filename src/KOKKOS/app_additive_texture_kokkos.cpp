@@ -2497,7 +2497,6 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   {
     auto d_solid_d_check = d_solid_d;
     int nrefine_check = nrefine;
-    int nlocal_check = nlocal;
     // Capture a LOCAL copy of the View handle. Using the member
     // d_smoothing_sites directly inside KOKKOS_LAMBDA ([=]) would capture
     // `this` and dereference the host `this` pointer on the device to reach
@@ -2506,10 +2505,15 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     // first entered the smoothing band (final && needs_smoothing), which made
     // it look like a melt-triggered, run-dependent crash.
     auto d_smoothing_sites_local = d_smoothing_sites;
+    auto d_active_sites_local = d_active_sites;
 
-    // Parallel scan to build compact list of sites needing smoothing
-    Kokkos::parallel_scan("BuildSmoothingList", nlocal_check,
-      KOKKOS_LAMBDA(int i, int& offset, bool final) {
+    // Scan the active-front list (size n_active) rather than nlocal: every
+    // smoothing-band site is in d_active_sites (band clause), and the active
+    // list is in ascending site-index order, so this builds the IDENTICAL
+    // compact smoothing list at O(n_active) instead of O(nlocal).
+    Kokkos::parallel_scan("BuildSmoothingList", n_active,
+      KOKKOS_LAMBDA(int idx, int& offset, bool final) {
+        const int i = d_active_sites_local(idx);
         double sd = d_solid_d_check(i);
         bool needs_smoothing = (sd > -nrefine_check - 1 && sd < 0.0);
 

@@ -646,6 +646,20 @@ if(SPPARKS_BUILD_LIB OR NOT SPPARKS_BUILD_EXECUTABLE)
         target_link_libraries(spparks_lib PUBLIC HighFive)
     endif()
 
+    # Host OpenMP for the non-Kokkos per-site layer-cache loops in the HDF5
+    # temperature source (build_site_element_cache / compute_site_thermal_intervals,
+    # ~40 s/layer serial on a 5M-site box). The OpenMP Kokkos backend already
+    # compiles with -fopenmp; for the HIP/CUDA backends this adds host threading
+    # for those loops while the device still runs the per-step temperature fills.
+    # Harmless (loops just run serially) if OpenMP is unavailable.
+    find_package(OpenMP QUIET)
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(spparks_lib PUBLIC OpenMP::OpenMP_CXX)
+        message(STATUS "Linked OpenMP::OpenMP_CXX to spparks_lib (host layer-cache threading)")
+    else()
+        message(STATUS "OpenMP not found; HDF5 layer-cache loops will run serially")
+    endif()
+
     # Add Kokkos package support
     if(SPPARKS_PACKAGE_KOKKOS)
         target_link_libraries(spparks_lib PUBLIC Kokkos::kokkoscore)
@@ -742,6 +756,22 @@ if(SPPARKS_BUILD_EXECUTABLE)
         
         if(SPPARKS_ENABLE_HIGHFIVE)
             target_link_libraries(spparks HighFive)
+        endif()
+
+        # Host OpenMP for the non-Kokkos per-site layer-cache loops in the HDF5
+        # temperature source (build_site_element_cache /
+        # compute_site_thermal_intervals, ~40 s/layer serial on a 5M-site box).
+        # The OpenMP Kokkos backend already compiles everything with -fopenmp;
+        # for HIP/CUDA this adds host threading for those loops while the device
+        # still runs the per-step temperature fills. Plain (keyword-less)
+        # signature to match the other links on this target. Harmless (loops run
+        # serially) if OpenMP is unavailable.
+        find_package(OpenMP QUIET)
+        if(OpenMP_CXX_FOUND)
+            target_link_libraries(spparks OpenMP::OpenMP_CXX)
+            message(STATUS "Linked OpenMP::OpenMP_CXX to spparks executable (host layer-cache threading)")
+        else()
+            message(STATUS "OpenMP not found; HDF5 layer-cache loops will run serially")
         endif()
 
         # Add Kokkos package support

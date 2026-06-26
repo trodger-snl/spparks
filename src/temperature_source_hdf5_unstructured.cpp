@@ -1184,7 +1184,15 @@ void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
   // Resize cache to match owned+ghost site count
   site_element_cache.resize(nall);
 
-  // For each site (owned + ghost), find its containing element and cache it
+  // For each site (owned + ghost), find its containing element and cache it.
+  // The point-location is independent per site and read-only against the shared
+  // mesh (find_element_point_is_in is const with only function-local scratch),
+  // and each iteration writes its own distinct cache slot -- so this is
+  // embarrassingly parallel. dynamic schedule because sites inside the loaded
+  // mesh find their element in a few tet tests while sites outside it search the
+  // whole grid cell and fail, so the per-site cost is uneven. (Pragma is a no-op
+  // when built without OpenMP.)
+  #pragma omp parallel for schedule(dynamic, 256)
   for (int i = 0; i < nall; i++) {
     // Get site coordinates
     double x = app->xyz[i][0] * dx;  // Convert lattice to physical
@@ -1790,9 +1798,20 @@ void HDF5UnstructuredTemperatureSource::compute_site_thermal_intervals(double th
   auto t_start = std::chrono::high_resolution_clock::now();
 
   std::vector<ThermalInterval> raw;
-  raw.reserve(256);
 
   const int nlocal = app->nlocal;
+
+  // Per-site interval extraction is independent across sites and reads only
+  // shared (immutable here) mesh/cache data. merge_overlapping_intervals()
+  // below sorts, so the accumulation order does not affect the result -- each
+  // thread fills a private buffer and we concatenate. (When built without
+  // OpenMP the pragmas are no-ops, raw_local is a single buffer, and this runs
+  // exactly as the previous serial loop did.)
+  #pragma omp parallel
+  {
+  std::vector<ThermalInterval> raw_local;
+  raw_local.reserve(256);
+  #pragma omp for schedule(dynamic, 512) nowait
   for (int i = 0; i < nlocal; i++) {
     const ElementCache& cache = site_element_cache[i];
     if (!cache.valid) continue;
@@ -1890,7 +1909,7 @@ void HDF5UnstructuredTemperatureSource::compute_site_thermal_intervals(double th
         const double denom = T_cur - T_prev;
         const double alpha = (threshold - T_prev) / denom;
         const double hot_end = t_prev + alpha * (t_next - t_prev);
-        raw.emplace_back(hot_start, hot_end);
+        raw_local.emplace_back(hot_start, hot_end);
         in_hot = false;
       }
 
@@ -1905,9 +1924,12 @@ void HDF5UnstructuredTemperatureSource::compute_site_thermal_intervals(double th
     }
 
     if (in_hot) {
-      raw.emplace_back(hot_start, t_end);
+      raw_local.emplace_back(hot_start, t_end);
     }
   }
+  #pragma omp critical
+  raw.insert(raw.end(), raw_local.begin(), raw_local.end());
+  }  // omp parallel
 
   current_layer_site_intervals = merge_overlapping_intervals(raw);
   site_intervals_for_layer = active_layer;

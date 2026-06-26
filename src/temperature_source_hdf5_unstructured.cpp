@@ -1325,6 +1325,15 @@ void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double tim
   }
   const size_t num_to_process = subset ? subset->size() : num_nodes;
 
+  // Each node's time-interpolation is independent: it reads the shared
+  // (immutable-per-layer) times/temps CSR and writes its own distinct
+  // cached_nodal_temps[nodeIdx] slot, so this loop parallelizes with no
+  // reduction except the informational nodes_interpolated counter -> the result
+  // is bit-identical to serial. This runs every step (~33k nodes here) and was
+  // the dominant host cost in the per-step "Temperature update" timer. Same
+  // proven pattern as build_site_element_cache / compute_site_thermal_intervals.
+  // (Pragma is a no-op when built without OpenMP.)
+  #pragma omp parallel for schedule(static) reduction(+:nodes_interpolated)
   for (size_t i = 0; i < num_to_process; i++) {
     const size_t nodeIdx = subset ? (*subset)[i] : i;
     const unsigned count = dataCounts[nodeIdx];

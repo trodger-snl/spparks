@@ -1469,9 +1469,10 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel()
    Phase 3.3: Liquid sites captured by solid neighbors based on texture
 ------------------------------------------------------------------------- */
 
-int AppAdditiveTextureKokkos::solidification_kernel()
+int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_sites, int n_active)
 {
   // Get device views - simple Views (no double buffering needed for self-only writes)
+  auto d_active_sites_local = d_active_sites;
   auto d_T_local = k_T.view_device();
   auto d_spin_local = d_spin;
   auto d_q0_local = d_q0;
@@ -1493,7 +1494,6 @@ int AppAdditiveTextureKokkos::solidification_kernel()
   double tl_local = this->tl;
   double ts_local = this->ts;
   double dt_local = this->dt;
-  int nlocal_local = this->nlocal;
   int nrefine_local = this->nrefine;
   double dx_local = this->dx;
   auto d_solid_front_coeffs_local = this->d_solid_front_coeffs;
@@ -1533,8 +1533,9 @@ int AppAdditiveTextureKokkos::solidification_kernel()
   // Solidification kernel: parallel over all local sites with event tracking
   // Race-free: each site only reads/writes itself
   int naccept_local = 0;
-  Kokkos::parallel_reduce("SolidificationKernel", nlocal_local,
-    KOKKOS_LAMBDA(int i, int& count, int& zero_G_count, int& nonzero_G_count, double& G_sum, double& V_sum) {
+  Kokkos::parallel_reduce("SolidificationKernel", n_active,
+    KOKKOS_LAMBDA(int idx, int& count, int& zero_G_count, int& nonzero_G_count, double& G_sum, double& V_sum) {
+      const int i = d_active_sites_local(idx);
       double T_i = d_T_local(i);
       int active_flag_i = d_active_flag_local(i);
 
@@ -2479,7 +2480,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
 
   // Phase 3.3: Solidification (epitaxial growth with texture weighting)
   t_start = MPI_Wtime();
-  naccept += solidification_kernel();
+  naccept += solidification_kernel(d_active_sites, n_active);
   t_end = MPI_Wtime();
   t_solidification += (t_end - t_start);
 

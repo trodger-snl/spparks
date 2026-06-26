@@ -99,7 +99,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   int melting_kernel();
   int nucleation_kernel();
   int particle_flipper_kernel();
-  int solidification_kernel();
+  int solidification_kernel(Kokkos::View<int*> d_active_sites, int n_active);
   int smoothing_kernel();
   int smoothing_kernel_efficient(Kokkos::View<int*> d_smoothing_sites, int n_sites);
 

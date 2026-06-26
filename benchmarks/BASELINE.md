@@ -299,6 +299,29 @@ helps the bandwidth-starved CPU more. NB the `space_time_stack` per-kernel view
 under-counts it (3.6% there vs 12.7% wall) — the saved re-read relieves memory
 pressure across the whole loop, not just `BuildActiveList`.
 
+### Full fusion (atomic-append, no scan) — the GPU follow-up, now shipped
+
+Re-profiling showed `BuildActiveListThin` is the GPU's #2 cost (2.81 s vs 0.39 s
+on OpenMP) because a `parallel_scan` over nlocal is a multi-pass prefix sum on a
+GPU regardless of how little it reads. **Full fusion** drops the separate scan
+entirely: the fill `atomic_fetch_add`-appends active sites straight into
+`d_active_sites`. Clean A/B (full window, back-to-back, temps identical):
+
+| backend | partial fusion | full fusion | Δ |
+|---|---:|---:|---:|
+| OpenMP (16t CPU) | 149.8 s | 153.4 s | **−2.4%** (atomic contention) |
+| HIP (GPU) | 305.6 s | **275.0 s** | **+10.0%** (kills the scan) |
+
+Textbook backend split: GPUs want fewer kernels, CPUs want less contention.
+Shipped **full fusion everywhere** (one code path) to favor the GPU — the kk
+port's target; the small OpenMP regression is on a backend used mainly for
+hazard-free validation. (A `if constexpr` backend-conditional could recover the
+OpenMP optimum if ever wanted.)
+
+Lesson reinforced: trust **within-session back-to-back A/Bs**, not cross-session
+GPU numbers, and not the fence-distorted `space_time_stack` TOTAL on HIP (per-
+kernel *relative* costs are still useful for spotting bottlenecks like the scan).
+
 ### The active-front list helps the GPU too (clean A/B; earlier "regression" was noise)
 
 A cross-*session* comparison (HIP no-fusion 318 s vs an earlier 268 s pre-active-

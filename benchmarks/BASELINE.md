@@ -279,5 +279,34 @@ End-to-end full-window run (5,027,937 sites), kk OpenMP 16 threads:
 
 This narrows the gap to native CPU 15-rank MPI (130.5 s) from ~2.1× to **~1.3×**.
 Remaining per-step costs are the legitimate temperature device fill (HDF5Fill)
-and the single O(nlocal) `BuildActiveList` scan (now the 2nd-largest kernel — a
-future incremental-active-set scheme could shrink it further).
+and the single O(nlocal) `BuildActiveList` scan (now the 2nd-largest kernel).
+
+### Partial fusion of the active predicate into the temperature fill
+
+The HDF5 fill already visits every site and has T in a register, so it also
+evaluates the active predicate and writes a 1-byte flag; `BuildActiveListThin`
+compacts that 5 MB flag array instead of re-reading T + active_flag + solid_d
+(~100 MB). Clean back-to-back A/B (full window, same machine), final temperature
+identical in all four:
+
+| backend | no-fusion | fusion | gain |
+|---|---:|---:|---:|
+| OpenMP (16t CPU) | 169.5 s | **148.0 s** | **12.7%** |
+| HIP (GPU) | 318.1 s | **302.7 s** | **4.8%** |
+
+Bandwidth optimization (eliminates the redundant temperature re-read), so it
+helps the bandwidth-starved CPU more. NB the `space_time_stack` per-kernel view
+under-counts it (3.6% there vs 12.7% wall) — the saved re-read relieves memory
+pressure across the whole loop, not just `BuildActiveList`.
+
+### Backend divergence (important, needs a clean GPU A/B to confirm)
+
+HIP no-fusion (318 s) is **slower than the pre-active-front GPU baseline
+(268 s)** — i.e. the active-front list, a large OpenMP win, looks **GPU-negative**:
+a GPU parses 5 M vs ~15 k sites per kernel nearly for free (massive parallelism),
+so it gains little from "touch fewer sites" but pays for the **extra per-step
+`BuildActiveList` kernel launch + fence** (~44 % of the GPU loop is launch/fence/
+host overhead). GPUs want fewer/bigger kernels; CPUs want less data touched. The
+268 s figure is from an earlier session (not a clean A/B); a pre-active-front-vs-
+current GPU A/B is needed to confirm — and if so the active-front path should be
+gated to host backends and bypassed on HIP.

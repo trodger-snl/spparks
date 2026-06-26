@@ -240,6 +240,18 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   double mis_thresh;
   double misorient_alpha;
 
+  // How the per-site misorientation perturbation chooses its target during
+  // solidification (set by the "misorientation_target" command). Mirrors
+  // AppAdditiveTexture's modes/values. NB: the kk default is RANDOM (the CPU
+  // app defaults to GRADIENT) -- this matches the ct15 study inputs and avoids
+  // the device-side surface-normal computation the gradient mode needs.
+  enum MisoriTargetMode {
+    MISORI_TARGET_GRADIENT = 0,
+    MISORI_TARGET_RANDOM = 1,
+    MISORI_TARGET_RANDOM_ROTATION = 2
+  };
+  int misorientation_target_mode = MISORI_TARGET_RANDOM;
+
   // Nucleation data
   int *nucleation_flags;
   double *nucleation_temps;

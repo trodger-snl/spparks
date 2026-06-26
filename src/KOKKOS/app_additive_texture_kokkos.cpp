@@ -1511,6 +1511,7 @@ int AppAdditiveTextureKokkos::solidification_kernel()
   double t_cool_max_local = this->t_cool_max;
   double mis_thresh_local = this->mis_thresh;
   double misorient_alpha_local = this->misorient_alpha;
+  const int misori_mode_local = this->misorientation_target_mode;
   int nspins_local = this->nspins;
 
   // Solid-front reach threshold: a neighbor becomes eligible once the front
@@ -1667,9 +1668,42 @@ int AppAdditiveTextureKokkos::solidification_kernel()
               q_nbr_inherited[3] /= q_mag;
             }
 
-            // Rotate quaternion toward gradient direction
+            // Perturb the inherited orientation per the misorientation_target
+            // mode. random_rotation rotates by mis_angle about a uniformly
+            // random axis (composition, no toward-target step); gradient and
+            // random rotate the orientation TOWARD a target direction -- the
+            // thermal-gradient direction, or a uniform random unit vector (the
+            // kk default). Random unit vector uses the same z/phi sampling as
+            // AppAdditiveTexture::sample_random_unit_vector.
             double q_rotated[4];
-            QuaternionOps::rotate_q_towards_u(q_nbr_inherited, grad_dir, mis_angle, q_rotated);
+            if (misori_mode_local == MISORI_TARGET_RANDOM_ROTATION) {
+              double z = 2.0 * generator.drand() - 1.0;
+              double phi = 2.0 * MY_PI * generator.drand();
+              double radial = Kokkos::sqrt(Kokkos::fmax(0.0, 1.0 - z * z));
+              double half = 0.5 * mis_angle;
+              double s = Kokkos::sin(half);
+              double dq[4] = {Kokkos::cos(half),
+                              s * radial * Kokkos::cos(phi),
+                              s * radial * Kokkos::sin(phi),
+                              s * z};
+              QuaternionOps::composition(dq, q_nbr_inherited, q_rotated);
+              QuaternionOps::normalize(q_rotated);
+            } else {
+              double target_dir[3];
+              if (misori_mode_local == MISORI_TARGET_GRADIENT) {
+                target_dir[0] = grad_dir[0];
+                target_dir[1] = grad_dir[1];
+                target_dir[2] = grad_dir[2];
+              } else { // MISORI_TARGET_RANDOM (default)
+                double z = 2.0 * generator.drand() - 1.0;
+                double phi = 2.0 * MY_PI * generator.drand();
+                double radial = Kokkos::sqrt(Kokkos::fmax(0.0, 1.0 - z * z));
+                target_dir[0] = radial * Kokkos::cos(phi);
+                target_dir[1] = radial * Kokkos::sin(phi);
+                target_dir[2] = z;
+              }
+              QuaternionOps::rotate_q_towards_u(q_nbr_inherited, target_dir, mis_angle, q_rotated);
+            }
 
             // Compute rotation angle between original and rotated quaternion
             // This determines if we create a new grain
@@ -2824,6 +2858,23 @@ void AppAdditiveTextureKokkos::input_app(char *command, int narg, char **arg)
       if (misorient_alpha <= 0)
         error->all(FLERR, "Illegal misorientation_function alpha value: must be greater than 0");
     }
+
+  } else if (strcmp(command, "misorientation_target") == 0) {
+    // Select the target the per-site misorientation rotates toward during
+    // solidification (matches AppAdditiveTexture::input_app). gradient =
+    // thermal-gradient direction; random = uniform random unit vector (the kk
+    // default); random_rotation = rotation by mis_angle about a random axis.
+    if (narg != 1) error->all(FLERR, "Illegal misorientation_target command");
+    if (strcmp(arg[0], "gradient") == 0)
+      misorientation_target_mode = MISORI_TARGET_GRADIENT;
+    else if (strcmp(arg[0], "random") == 0)
+      misorientation_target_mode = MISORI_TARGET_RANDOM;
+    else if (strcmp(arg[0], "random_rotation") == 0)
+      misorientation_target_mode = MISORI_TARGET_RANDOM_ROTATION;
+    else
+      error->all(FLERR, "Illegal misorientation_target value: use gradient, random, or random_rotation");
+    if (domain->me == 0 && screen)
+      fprintf(screen, "misorientation_target = %s\n", arg[0]);
 
   } else {
     // Pass to parent class

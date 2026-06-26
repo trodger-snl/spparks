@@ -967,16 +967,21 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
   auto nt   = d_hdf5_nodal_temps;
   const double def = plan.default_temp;
 
-  // Partial fusion: evaluate the active-front predicate here (T is in a register;
-  // the fill already visits every site) and write a per-owned-site flag, so the
-  // BuildActiveList scan only compacts this 1-byte array instead of re-reading
-  // T + active_flag + solid_d over nlocal. Owned sites only (i < nlocal); ghosts
-  // just get T. active_flag/solid_d are stable between the fill and the scan (the
-  // microstructure kernels that modify them run after), so this flag exactly
-  // matches the full predicate scan.
-  if ((int) d_active_bool.extent(0) != nlocal)
-    d_active_bool = Kokkos::View<char*>("active_bool", nlocal);
-  auto d_abool = d_active_bool;
+  // Full fusion: evaluate the active-front predicate here (T is in a register;
+  // the fill already visits every site) and ATOMIC-APPEND active owned sites
+  // straight into d_active_sites, so there is no separate compaction scan at all
+  // (the parallel_scan is a multi-pass prefix sum -- the GPU's #2 cost). Owned
+  // sites only (i < nlocal); ghosts just get T. active_flag/solid_d are stable
+  // between the fill and the microstructure kernels (which run after), so this
+  // list matches the full predicate scan as a set (the appended order differs,
+  // which is fine -- kernels process sites independently; temperature untouched).
+  if ((int) d_active_sites.extent(0) != nlocal)
+    d_active_sites = Kokkos::View<int*>("active_sites", nlocal);
+  if (d_active_count.data() == nullptr)
+    d_active_count = Kokkos::View<int>("active_count");
+  Kokkos::deep_copy(d_active_count, 0);
+  auto d_asites = d_active_sites;
+  auto d_acount = d_active_count;
   auto d_af = d_active_flag;
   auto d_sd = d_solid_d;
   const double tl_f = this->tl;
@@ -998,14 +1003,17 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
     if (i < nlocal_f) {
       const int af = d_af(i);
       const double sd = d_sd(i);
-      d_abool(i) = (af == 2 || Ti >= tl_f ||
-                    (sd > -nrefine_f - 1 && sd < 0.0) ||
-                    (af == 3 && sd == -nrefine_f - 2)) ? (char)1 : (char)0;
+      if (af == 2 || Ti >= tl_f ||
+          (sd > -nrefine_f - 1 && sd < 0.0) ||
+          (af == 3 && sd == -nrefine_f - 2)) {
+        const int slot = Kokkos::atomic_fetch_add(&d_acount(), 1);
+        d_asites(slot) = i;
+      }
     }
   });
   Kokkos::fence();
   k_T.modify_device();
-  device_active_bool_fresh = true;
+  device_active_list_fresh = true;
 }
 
 /* ----------------------------------------------------------------------
@@ -2275,7 +2283,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   refresh_thermal_host();
   t_start = MPI_Wtime();
   bool device_temp = false;
-  device_active_bool_fresh = false;  // set true only by a fill that wrote d_active_bool (HDF5)
+  device_active_list_fresh = false;  // set true only by a fill that built d_active_sites (HDF5)
   if (thermal->enabled()) {
     RosenthalDevicePlan rplan = thermal->rosenthal_device_plan(time);
     MoserDevicePlan mplan;
@@ -2392,46 +2400,37 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   // BuildSmoothingList below). n_active==0 => no liquid, nothing hot, no band
   // site, no leftover nucleus => nothing for any microstructure kernel to do.
   int n_active = 0;
-  if ((int)d_active_sites.extent(0) != nlocal)
-    d_active_sites = Kokkos::View<int*>("active_sites", nlocal);
-  {
+  if (device_active_list_fresh) {
+    // Full fusion: the temperature fill already atomic-appended the active owned
+    // sites into d_active_sites and counted them -- just read the count back.
+    auto h_count = Kokkos::create_mirror_view(d_active_count);
+    Kokkos::deep_copy(h_count, d_active_count);
+    n_active = h_count();
+  } else {
+    // Full predicate scan (Rosenthal/Moser/host fills that didn't build the list).
+    if ((int)d_active_sites.extent(0) != nlocal)
+      d_active_sites = Kokkos::View<int*>("active_sites", nlocal);
     auto d_active_sites_local = d_active_sites;
     const int nlocal_act = this->nlocal;
-    if (device_active_bool_fresh) {
-      // Partial fusion: the temperature fill already evaluated the predicate into
-      // d_active_bool, so compact that 1-byte array (5 MB) -- no re-read of
-      // T + active_flag + solid_d (~100 MB). Identical result to the full scan
-      // (same predicate, same inputs; flags are stable between fill and here).
-      auto d_abool = d_active_bool;
-      Kokkos::parallel_scan("BuildActiveListThin", nlocal_act,
-        KOKKOS_LAMBDA(int i, int& offset, bool final) {
-          if (d_abool(i)) {
-            if (final) d_active_sites_local(offset) = i;
-            offset++;
-          }
-        }, n_active);
-    } else {
-      // Full predicate scan (Rosenthal/Moser/host fills that don't write the flag).
-      auto d_T_act = k_T.view_device();
-      auto d_active_flag_act = d_active_flag;
-      auto d_solid_d_act = d_solid_d;
-      const double tl_act = this->tl;
-      const int nrefine_act = this->nrefine;
-      Kokkos::parallel_scan("BuildActiveList", nlocal_act,
-        KOKKOS_LAMBDA(int i, int& offset, bool final) {
-          const int af = d_active_flag_act(i);
-          const double sd = d_solid_d_act(i);
-          const bool active =
-              (af == 2) ||
-              (d_T_act(i) >= tl_act) ||
-              (sd > -nrefine_act - 1 && sd < 0.0) ||
-              (af == 3 && sd == -nrefine_act - 2);
-          if (active) {
-            if (final) d_active_sites_local(offset) = i;
-            offset++;
-          }
-        }, n_active);
-    }
+    auto d_T_act = k_T.view_device();
+    auto d_active_flag_act = d_active_flag;
+    auto d_solid_d_act = d_solid_d;
+    const double tl_act = this->tl;
+    const int nrefine_act = this->nrefine;
+    Kokkos::parallel_scan("BuildActiveList", nlocal_act,
+      KOKKOS_LAMBDA(int i, int& offset, bool final) {
+        const int af = d_active_flag_act(i);
+        const double sd = d_solid_d_act(i);
+        const bool active =
+            (af == 2) ||
+            (d_T_act(i) >= tl_act) ||
+            (sd > -nrefine_act - 1 && sd < 0.0) ||
+            (af == 3 && sd == -nrefine_act - 2);
+        if (active) {
+          if (final) d_active_sites_local(offset) = i;
+          offset++;
+        }
+      }, n_active);
   }
 
   // 4. Phase transition kernels with event tracking

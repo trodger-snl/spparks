@@ -179,16 +179,18 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // nlocal (up to 5M). Cached (sized to nlocal) so it is not reallocated per step.
   Kokkos::View<int*> d_active_sites;
 
-  // Partial fusion of the active-front predicate into the temperature fill: the
-  // device fill already visits every site and has T in a register, so it also
-  // evaluates the active predicate and writes this per-owned-site flag. The
-  // BuildActiveList scan then compacts this 1-byte array (5 MB) instead of
-  // re-reading T + active_flag + solid_d over nlocal (~100 MB). device_active_
-  // bool_fresh is set by a fill path that wrote it this step (HDF5 currently);
-  // when false (Rosenthal/Moser/host fills), BuildActiveList falls back to the
-  // full predicate scan. Cached, sized to nlocal.
-  Kokkos::View<char*> d_active_bool;
-  bool device_active_bool_fresh = false;
+  // Full fusion of the active-front build into the temperature fill: the device
+  // fill already visits every site and has T in a register, so it evaluates the
+  // active predicate and ATOMIC-APPENDS active owned sites straight into
+  // d_active_sites (with d_active_count as the append counter) -- eliminating the
+  // separate O(nlocal) compaction scan entirely (the scan is a multi-pass prefix
+  // sum that is the GPU's #2 cost). device_active_list_fresh is set by a fill
+  // that built the list this step (HDF5); when false (Rosenthal/Moser/host
+  // fills), app_update falls back to the full predicate scan. The appended order
+  // is non-deterministic (atomic order), which is fine -- each microstructure
+  // kernel processes its sites independently and temperature is untouched.
+  Kokkos::View<int> d_active_count;
+  bool device_active_list_fresh = false;
 
   // Per-spin nucleation arrays (device-accessible, initialized once)
   Kokkos::View<int*> d_nucleation_flags;     // Can this spin nucleate? (1=yes, 0=no)

@@ -299,14 +299,22 @@ helps the bandwidth-starved CPU more. NB the `space_time_stack` per-kernel view
 under-counts it (3.6% there vs 12.7% wall) — the saved re-read relieves memory
 pressure across the whole loop, not just `BuildActiveList`.
 
-### Backend divergence (important, needs a clean GPU A/B to confirm)
+### The active-front list helps the GPU too (clean A/B; earlier "regression" was noise)
 
-HIP no-fusion (318 s) is **slower than the pre-active-front GPU baseline
-(268 s)** — i.e. the active-front list, a large OpenMP win, looks **GPU-negative**:
-a GPU parses 5 M vs ~15 k sites per kernel nearly for free (massive parallelism),
-so it gains little from "touch fewer sites" but pays for the **extra per-step
-`BuildActiveList` kernel launch + fence** (~44 % of the GPU loop is launch/fence/
-host overhead). GPUs want fewer/bigger kernels; CPUs want less data touched. The
-268 s figure is from an earlier session (not a clean A/B); a pre-active-front-vs-
-current GPU A/B is needed to confirm — and if so the active-front path should be
-gated to host backends and bypassed on HIP.
+A cross-*session* comparison (HIP no-fusion 318 s vs an earlier 268 s pre-active-
+front baseline) suggested the active-front list might be GPU-negative. A clean
+within-session A/B (full-commit checkouts, both pre-precompute/pre-fusion, run
+back-to-back) **refutes that**:
+
+| HIP (full window, same session) | loop |
+|---|---:|
+| pre-active-front (214f8382) | 268.7 s |
+| post-active-front (9c93e951) | **246.8 s** |
+
+The active-front list makes the GPU **~8.2 % faster** (268.7 → 246.8 s), not
+slower — and `preAF` (268.7 s) reproduces the original 268 s baseline, so it is
+the 318 s no-fusion figure that was anomalous (its session ran ~50 s slow).
+**Lesson: cross-session GPU timings on this APU drift ~±20 % (thermal/load); only
+within-session back-to-back A/Bs are trustworthy.** Both optimizations help both
+backends: active-front ~8.2 % (GPU, this A/B) / large (OpenMP); partial fusion
+4.8 % (GPU) / 12.7 % (OpenMP). No backend gating is warranted.

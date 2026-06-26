@@ -118,3 +118,87 @@ np4/np8 per-step drops toward the np1 value** (the sync overhead shrinks).
 GPU-safety: runs are bounded and complete on their own. NEVER `kill -9` a running
 spparks/mpirun — a stuck HIP kernel can peg the GPU and force a reboot. Use one
 GPU job at a time.
+
+---
+
+# CPU characterization: kk OpenMP vs native CPU MPI (ct15 box_000, HDF5)
+
+Cross-branch CPU benchmark answering "how does the GPU-line kk app on the Kokkos
+**OpenMP** backend compare to the native CPU code under **MPI**, on the same
+node?" Run on the **16-core Strix Halo** (AMD Ryzen AI MAX+ 395, ~256 GB/s shared
+LPDDR5X), all jobs **sequential** (no core contention), 2026-06-25.
+
+## Setup
+
+- Input: the real study input `box_000/in.init_box_000` (ct15 10-layer HDF5
+  source, `ct15_0-9layer.hdf5`), **5,027,937 sites**, full window
+  `reset_time 38845.490 → run 38845.644 upto`. Stitch dump stripped; nothing
+  written to the LaCie study dir.
+- **Job A (kk OpenMP):** app `additive/texture/kk`, `sweep color`,
+  `build-openmp` (Kokkos OpenMP backend). `misorientation_target random` dropped
+  (unsupported in the kk app; an orientation-sampling detail, negligible cost).
+- **Job B (native CPU MPI):** app `additive_temperature_texture` (deprecated CPU
+  alias), the SURGE repo `/home/tron/spparks @ SURGE`, plain-MPI build.
+- Fairness: microstructure is non-deterministic and the two apps differ, so the
+  metric is **wall / loop time for the same simulated window**, not output. All
+  configs landed on the **identical final temperature** (sum d6 4.10166e9, max d6
+  1606.78 K) — confirming the same thermal field was simulated.
+
+## Headline: native CPU + MPI is ~2× faster than the kk app on CPU
+
+| config (16 cores)                    | wall (s) | loop (s) | cache (s) | RSS/rank |
+|--------------------------------------|---------:|---------:|----------:|---------:|
+| kk OpenMP, 1 rank × 16 thr           |   292.2  |  272.2   |   2.18    |  4.20 GB |
+| kk OpenMP, 1 rank × 32 thr (SMT)     |   286.9  |  266.9   |   2.02    |  4.23 GB |
+| kk hybrid, 2 ranks × 8 thr           |   319.0  |  306.5   |   1.88    |  2.52 GB |
+| kk hybrid, 4 ranks × 4 thr           |   283.7  |  274.9   |   1.59    |  1.61 GB |
+| kk hybrid, **8 ranks × 2 thr**       |   260.8  | **253.5**|   1.71    |  1.10 GB |
+| kk MPI, 16 ranks × 1 thr             |   262.1  |  255.5   |   1.66    |  0.82 GB |
+| **native CPU, 15 ranks × 1 (SURGE)** | **136.8**| **130.5**|   2.14    |  0.77 GB |
+
+(kk did ~7.12M MC accept events vs CPU ~4.57M — the kk app does ~1.56× more
+microstructure churn; normalized per event the gap is ~1.26× rather than 2×.)
+
+## Findings
+
+1. **The cache build is no longer a bottleneck in any config (~1.6–2.2 s).** Both
+   strategies parallelize it: kk via the OpenMP layer-cache loops (commit
+   "OpenMP-parallelize the per-layer HDF5 site cache..."), MPI implicitly via
+   domain decomposition (each rank builds only its subdomain). See
+   [reference] the layer-cache OpenMP work.
+
+2. **For the kk app, MPI ranks >> OpenMP threads.** Loop time falls monotonically
+   as threads/rank drop: 2×8 (306) → 4×4 (275) → 8×2 (253) ≈ 16×1 (255). Threads
+   share the APU's memory pool and contend; ranks get domain-local working sets.
+   Sweet spot ≈ 1–2 threads/rank.
+
+3. **SMT (32 threads) buys ~2%** over 16 — within noise. The per-step kernels are
+   memory-bandwidth-bound, so extra logical threads add no bandwidth. The only
+   gains were in the latency-bound startup loops (cache/intervals). 16 threads
+   (= physical cores) is the sweet spot.
+
+4. **The real gap is the app, not the knob.** At equal ~16-way MPI, kk 16×1
+   (255 s) is **~2× the native CPU 15×1 (130 s)** — Kokkos/abstraction overhead
+   (kernel launches, color-sweep `app_update`, DualView/atomics) plus more MC
+   events. No thread/rank mix closes it. **On CPU, use the native app + MPI; the
+   kk app earns its keep only on the GPU.**
+
+5. **Memory trade-off (the one thing hybrids buy):** fewer ranks → smaller
+   aggregate footprint (2×8 ≈ 5 GB total vs 16×1 ≈ 13 GB) at a speed cost. The
+   single-rank kk job holds the whole 4.2 GB domain in one process; useful for
+   RAM-constrained / fat single-GPU runs.
+
+## How to re-run
+
+```bash
+# scripts used (scratch): run_bench.sh (A vs B), run_hybrid.sh (rank×thread sweep)
+# kk:   mpirun -np R --map-by ppr:R:node:pe=T --bind-to core \
+#         -x OMP_NUM_THREADS=T build-openmp/spparks < in.kk_full   # additive/texture/kk + sweep color
+# cpu:  mpirun -np 15 --bind-to core /home/tron/spparks/build/spparks < in.cpu  # additive_temperature_texture
+```
+
+Note on cross-machine comparison: this APU is ~256 GB/s shared LPDDR5X. An Apple
+**M-Pro** is the same bandwidth class (~270 GB/s) so it should not change the
+MPI-vs-OpenMP conclusion; an **M-Max** (wider bus, ~1.6–2×) is the chip that
+would actually test the bandwidth hypothesis. Kokkos has no Metal backend, so on
+Mac the kk app is CPU-only.

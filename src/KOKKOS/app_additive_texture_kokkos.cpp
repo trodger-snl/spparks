@@ -1186,9 +1186,10 @@ int AppAdditiveTextureKokkos::melting_kernel(Kokkos::View<int*> d_active_sites, 
    Phase 3.2: Sites transition to solid when undercooling exceeds critical value
 ------------------------------------------------------------------------- */
 
-int AppAdditiveTextureKokkos::nucleation_kernel()
+int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_sites, int n_active)
 {
   // Get device views - simple Views (no double buffering needed for self-only writes)
+  auto d_active_sites_local = d_active_sites;
   auto d_T_local = k_T.view_device();
   auto d_spin_local = d_spin;
   auto d_q0_local = d_q0;
@@ -1200,7 +1201,6 @@ int AppAdditiveTextureKokkos::nucleation_kernel()
 
   // Capture parameters for lambda
   double tl_local = this->tl;
-  int nlocal_local = this->nlocal;
   int nspins_local = this->nspins;
   int nrefine_local = this->nrefine;
   auto rand_pool_local = *rand_pool;
@@ -1222,8 +1222,9 @@ int AppAdditiveTextureKokkos::nucleation_kernel()
   // Nucleation kernel: parallel over all local sites with event tracking
   // Race-free: each site only reads/writes itself
   int naccept_local = 0;
-  Kokkos::parallel_reduce("NucleationKernel", nlocal_local,
-    KOKKOS_LAMBDA(int i, int& count, int& zero_G_count, int& nonzero_G_count, double& G_sum, double& V_sum) {
+  Kokkos::parallel_reduce("NucleationKernel", n_active,
+    KOKKOS_LAMBDA(int idx, int& count, int& zero_G_count, int& nonzero_G_count, double& G_sum, double& V_sum) {
+      const int i = d_active_sites_local(idx);
       // Read current state
       double T_i = d_T_local(i);
       int active_flag_i = d_active_flag_local(i);
@@ -2434,7 +2435,13 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   if (n_nucleation_candidates > 0) {
   */
 
-  naccept += nucleation_kernel();
+  // Nucleation ranges over the active-front list, which contains EVERY liquid
+  // (active_flag==2) site, so nucleation still sees all liquid every step -- the
+  // "always launch / never gate on a candidate sub-count" recovery invariant
+  // (see the removed block below) is preserved. n_active==0 means no liquid
+  // anywhere, where nucleation is impossible by its own guard, so ranging over 0
+  // is correct.
+  naccept += nucleation_kernel(d_active_sites, n_active);
 
   t_end = MPI_Wtime();
   t_nucleation += (t_end - t_start);

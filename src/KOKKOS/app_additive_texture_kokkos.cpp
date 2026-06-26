@@ -2345,6 +2345,45 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   // 3. Gradient computation moved to on-demand inside solidification kernel
   // (Removed global compute_gradients_kernel() - gradients now computed only when needed)
 
+  // Build the compact "active-front" list once per step: the union superset of
+  // every owned site any microstructure kernel could touch this step --
+  //   active_flag==2 (liquid: can nucleate/solidify),
+  //   T>=tl (hot: can melt),
+  //   solid_d in (-nrefine-1, 0) (smoothing band),
+  //   active_flag==3 && solid_d==-nrefine-2 (leftover nucleus for particle flip).
+  // The phase kernels below run over this list (size n_active, the thin melt/
+  // solidification shell) instead of nlocal. The list View is cached and
+  // reallocated only when nlocal changes. Capture LOCAL View copies so the
+  // lambda does not capture `this` (device page-fault hazard; see
+  // BuildSmoothingList below). n_active==0 => no liquid, nothing hot, no band
+  // site, no leftover nucleus => nothing for any microstructure kernel to do.
+  int n_active = 0;
+  if ((int)d_active_sites.extent(0) != nlocal)
+    d_active_sites = Kokkos::View<int*>("active_sites", nlocal);
+  {
+    auto d_T_act = k_T.view_device();
+    auto d_active_flag_act = d_active_flag;
+    auto d_solid_d_act = d_solid_d;
+    double tl_act = this->tl;
+    int nrefine_act = this->nrefine;
+    int nlocal_act = this->nlocal;
+    auto d_active_sites_local = d_active_sites;
+    Kokkos::parallel_scan("BuildActiveList", nlocal_act,
+      KOKKOS_LAMBDA(int i, int& offset, bool final) {
+        const int af = d_active_flag_act(i);
+        const double sd = d_solid_d_act(i);
+        const bool active =
+            (af == 2) ||
+            (d_T_act(i) >= tl_act) ||
+            (sd > -nrefine_act - 1 && sd < 0.0) ||
+            (af == 3 && sd == -nrefine_act - 2);
+        if (active) {
+          if (final) d_active_sites_local(offset) = i;
+          offset++;
+        }
+      }, n_active);
+  }
+
   // 4. Phase transition kernels with event tracking
   // Phase 3.1: Melting (with Phase 1 optimization: early temperature scan)
   t_start = MPI_Wtime();

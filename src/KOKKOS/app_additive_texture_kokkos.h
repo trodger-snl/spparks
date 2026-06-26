@@ -172,6 +172,13 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // Cached (sized to nlocal) so it is not reallocated on the GPU every timestep.
   Kokkos::View<int*> d_smoothing_sites;
 
+  // Compact "active-front" list: the union superset of every owned site any
+  // microstructure kernel (melt/nucleate/particle/solidify/smooth) could touch
+  // this step. Rebuilt each step by a parallel_scan; the phase kernels run over
+  // this list (size n_active, the thin melt/solidification shell) instead of
+  // nlocal (up to 5M). Cached (sized to nlocal) so it is not reallocated per step.
+  Kokkos::View<int*> d_active_sites;
+
   // Per-spin nucleation arrays (device-accessible, initialized once)
   Kokkos::View<int*> d_nucleation_flags;     // Can this spin nucleate? (1=yes, 0=no)
   Kokkos::View<double*> d_nucleation_temps;  // Critical undercooling for nucleation (K)

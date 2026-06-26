@@ -229,3 +229,55 @@ Note on cross-machine comparison: this APU is ~256 GB/s shared LPDDR5X. An Apple
 MPI-vs-OpenMP conclusion; an **M-Max** (wider bus, ~1.6–2×) is the chip that
 would actually test the bandwidth hypothesis. Kokkos has no Metal backend, so on
 Mac the kk app is CPU-only.
+
+---
+
+# Hot-loop optimization: active-front list + OpenMP nodal precompute
+
+Profiling (real Kokkos Tools `space_time_stack`) showed the kk per-step loop was
+host-bound and over-scanned the lattice: every microstructure kernel + three
+`Check*Candidates` pre-scans ran over the full `nlocal` (up to 5M) even though
+the active region is a thin melt/solidification shell, and the host
+`precompute_nodal_temperatures` ran serially every step over ~33k mesh nodes.
+
+Two changes (commits "kk active-front list (Steps A–G)" + "Phase 2: OpenMP …
+precompute", branch SURGE-kokkos, 2026-06-25):
+1. **Active-front list** — one `BuildActiveList` parallel_scan builds the union
+   superset of every site any microstructure kernel could touch (liquid OR hot
+   OR smoothing-band OR leftover-nucleus); melt/nucleate/particle/solidify and
+   the smoothing-list build run over that list (size n_active) instead of
+   nlocal; the three `Check*` pre-scans are deleted.
+2. **OpenMP** on the per-step nodal-temperature precompute (independent per-node,
+   bit-identical).
+
+Both keep the temperature field **bit-identical** (validated single-rank,
+1-vs-16 threads, np1==np2 multi-rank, and CPU-app regression). Microstructure is
+unchanged statistically; the nucleation always-launch recovery invariant was
+validated with a 2-pass re-melt input.
+
+## Results (kk OpenMP, 16 threads, full box_000 window, same APU)
+
+`space_time_stack` profile (38845.51 window, ~2290 steps):
+
+| metric                         | before  | after   |
+|--------------------------------|--------:|--------:|
+| avg per step                   | 7.13 ms | **2.96 ms (2.4×)** |
+| SolidificationKernel           | 2.81 s  | 0.14 s (**20×**) |
+| `Check*Candidates` ×3          | 0.44 s  | gone |
+| BuildSmoothingList/Nucl/Melt/Particle | ~2.0 s | negligible |
+| BuildActiveList (new, 1 scan replaces ~6 passes) | — | 2.65 s |
+| host precompute (per call)     | 2.17 ms | 0.24 ms (**9×**) |
+| HDF5Fill (temperature; untouched) | 4.69 s | 4.95 s |
+
+End-to-end full-window run (5,027,937 sites), kk OpenMP 16 threads:
+
+| | before | after |
+|---|---:|---:|
+| **Loop time** | 272.2 s | **171.2 s (1.59×)** |
+| Wall | 292.2 s | 191.7 s |
+| final temp sum/max (validity) | 4.10166e9 / 1606.78 | 4.10166e9 / 1606.78 (identical) |
+
+This narrows the gap to native CPU 15-rank MPI (130.5 s) from ~2.1× to **~1.3×**.
+Remaining per-step costs are the legitimate temperature device fill (HDF5Fill)
+and the single O(nlocal) `BuildActiveList` scan (now the 2nd-largest kernel — a
+future incremental-active-set scheme could shrink it further).

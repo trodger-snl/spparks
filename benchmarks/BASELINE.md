@@ -146,7 +146,7 @@ LPDDR5X), all jobs **sequential** (no core contention), 2026-06-25.
 
 ## Headline: native CPU + MPI is ~2× faster than the kk app on CPU
 
-| config (16 cores)                    | wall (s) | loop (s) | cache (s) | RSS/rank |
+| config                               | wall (s) | loop (s) | cache (s) | RSS/rank |
 |--------------------------------------|---------:|---------:|----------:|---------:|
 | kk OpenMP, 1 rank × 16 thr           |   292.2  |  272.2   |   2.18    |  4.20 GB |
 | kk OpenMP, 1 rank × 32 thr (SMT)     |   286.9  |  266.9   |   2.02    |  4.23 GB |
@@ -154,7 +154,12 @@ LPDDR5X), all jobs **sequential** (no core contention), 2026-06-25.
 | kk hybrid, 4 ranks × 4 thr           |   283.7  |  274.9   |   1.59    |  1.61 GB |
 | kk hybrid, **8 ranks × 2 thr**       |   260.8  | **253.5**|   1.71    |  1.10 GB |
 | kk MPI, 16 ranks × 1 thr             |   262.1  |  255.5   |   1.66    |  0.82 GB |
+| **kk HIP GPU, 1 rank + 16 host thr** |   296.5  |  268.1   |   4.90    |  3.97 GB |
 | **native CPU, 15 ranks × 1 (SURGE)** | **136.8**| **130.5**|   2.14    |  0.77 GB |
+
+The **GPU row** is the kk HIP build (Radeon 8060S APU): per-step physics on the
+GPU, the per-layer site cache built on **16 host OpenMP threads** (the
+"gpu/openmp caching" path). It runs 1 MPI rank bound to the single GPU.
 
 (kk did ~7.12M MC accept events vs CPU ~4.57M — the kk app does ~1.56× more
 microstructure churn; normalized per event the gap is ~1.26× rather than 2×.)
@@ -188,14 +193,36 @@ microstructure churn; normalized per event the gap is ~1.26× rather than 2×.)
    single-rank kk job holds the whole 4.2 GB domain in one process; useful for
    RAM-constrained / fat single-GPU runs.
 
+6. **The integrated GPU ties the CPU OpenMP run, and stays ~2× behind CPU MPI.**
+   kk HIP GPU loop 268 s ≈ kk OpenMP 16-thr 272 s, and ~2× the native CPU 15-rank
+   (130 s). No GPU win here because this is an **integrated APU** — the GPU shares
+   the same ~256 GB/s LPDDR5X pool as the CPU, so for this bandwidth-bound +
+   microstructure-heavy workload it has no bandwidth edge, only raw FLOPs (which
+   this workload doesn't lean on). This is the pessimistic GPU case and
+   **understates a discrete GPU**: an H100/MI300X has dedicated HBM (~3 TB/s,
+   >10×) and would pull ahead decisively. Treat 268 s as an APU floor, not the
+   GPU's ceiling.
+
+7. **The host-OpenMP cache path works in the GPU build** — the whole point of the
+   "gpu/openmp caching" change. Cache build = 4.9 s on the 1-rank GPU job (vs
+   ~24 s serial), so single-rank GPU startup is no longer cache-dominated. It is
+   ~2× the pure-OpenMP build's 2.2 s, likely because the HSA/GPU-driver threads
+   contend with the host OpenMP pool; still a ~5× win over serial.
+
 ## How to re-run
 
 ```bash
 # scripts used (scratch): run_bench.sh (A vs B), run_hybrid.sh (rank×thread sweep)
 # kk:   mpirun -np R --map-by ppr:R:node:pe=T --bind-to core \
 #         -x OMP_NUM_THREADS=T build-openmp/spparks < in.kk_full   # additive/texture/kk + sweep color
+# gpu:  mpirun -np 1 --bind-to none -x OMP_NUM_THREADS=16 \
+#         build-verify/spparks < in.kk_full        # HIP; host OpenMP builds the cache
 # cpu:  mpirun -np 15 --bind-to core /home/tron/spparks/build/spparks < in.cpu  # additive_temperature_texture
 ```
+
+GPU-safety: the GPU run is bounded (`run ... upto`) and completes on its own;
+NEVER kill/timeout/SIGTERM it mid-kernel (SDMA-queue wedge -> reboot). One GPU
+job at a time; the daily-driver machine must be free of other GPU use.
 
 Note on cross-machine comparison: this APU is ~256 GB/s shared LPDDR5X. An Apple
 **M-Pro** is the same bandwidth class (~270 GB/s) so it should not change the

@@ -96,7 +96,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
 
   // Phase 3: Phase transition kernels
   void initialize_nucleation_parameters();
-  int melting_kernel();
+  int melting_kernel(Kokkos::View<int*> d_active_sites, int n_active);
   int nucleation_kernel();
   int particle_flipper_kernel();
   int solidification_kernel(Kokkos::View<int*> d_active_sites, int n_active);

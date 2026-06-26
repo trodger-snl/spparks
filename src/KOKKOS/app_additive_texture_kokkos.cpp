@@ -1102,9 +1102,10 @@ void AppAdditiveTextureKokkos::initialize_nucleation_parameters()
    Phase 3.1: Simplest phase transition kernel (no neighbor interactions)
 ------------------------------------------------------------------------- */
 
-int AppAdditiveTextureKokkos::melting_kernel()
+int AppAdditiveTextureKokkos::melting_kernel(Kokkos::View<int*> d_active_sites, int n_active)
 {
   // Get device views - simple Views (no double buffering needed for self-only writes)
+  auto d_active_sites_local = d_active_sites;
   auto d_T_local = k_T.view_device();
   auto d_spin_local = d_spin;
   auto d_q0_local = d_q0;
@@ -1119,14 +1120,14 @@ int AppAdditiveTextureKokkos::melting_kernel()
   // Capture parameters for lambda
   double tl_local = this->tl;
   int nspins_local = this->nspins;
-  int nlocal_local = this->nlocal;
   auto rand_pool_local = *rand_pool;
 
-  // Melting kernel: parallel over all local sites with event tracking
+  // Melting kernel: parallel over the active-front list with event tracking
   // Race-free: each site only reads/writes itself
   int naccept_local = 0;
-  Kokkos::parallel_reduce("MeltingKernel", nlocal_local,
-    KOKKOS_LAMBDA(int i, int& count) {
+  Kokkos::parallel_reduce("MeltingKernel", n_active,
+    KOKKOS_LAMBDA(int idx, int& count) {
+      const int i = d_active_sites_local(idx);
       // Read current state
       double T_i = d_T_local(i);
       int active_flag_i = d_active_flag_local(i);
@@ -2389,29 +2390,15 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   // Phase 3.1: Melting (with Phase 1 optimization: early temperature scan)
   t_start = MPI_Wtime();
 
-  // OPTIMIZATION 1A: Quick pre-scan to check if ANY sites might melt
-  // This avoids launching the expensive kernel when no melting occurs (~80% of timesteps)
-  int n_melt_candidates = 0;
-  {
-    auto d_T_check = k_T.view_device();
-    auto d_active_flag_check = d_active_flag;
-    double tl_check = this->tl;
-    int nlocal_check = this->nlocal;
-
-    Kokkos::parallel_reduce("CheckMeltingCandidates", nlocal_check,
-      KOKKOS_LAMBDA(int i, int& count) {
-        if (d_T_check(i) >= tl_check && d_active_flag_check(i) != 2) {
-          count++;
-        }
-      }, n_melt_candidates);
-  }
-
-  // Only launch melting kernel if there are candidates
-  bool melting_occurred = false;
-  if (n_melt_candidates > 0) {
-    naccept += melting_kernel();
-    melting_occurred = true;
-  }
+  // Melt over the active-front list. Melt candidates (T>=tl && active_flag!=2)
+  // are a subset of the active list (hot clause), so the old CheckMeltingCandidates
+  // pre-scan over nlocal is gone -- the kernel's own naccept is the candidate
+  // count (melting is deterministic given T>=tl: it always melts a candidate,
+  // RNG only randomizes the destroyed grain/orientation). So naccept>0 iff there
+  // were candidates, preserving the powder-activation trigger (melting_occurred).
+  int nmelt = melting_kernel(d_active_sites, n_active);
+  naccept += nmelt;
+  bool melting_occurred = (nmelt > 0);
 
   t_end = MPI_Wtime();
   t_melting += (t_end - t_start);

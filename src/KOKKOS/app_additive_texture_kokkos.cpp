@@ -967,16 +967,45 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
   auto nt   = d_hdf5_nodal_temps;
   const double def = plan.default_temp;
 
+  // Partial fusion: evaluate the active-front predicate here (T is in a register;
+  // the fill already visits every site) and write a per-owned-site flag, so the
+  // BuildActiveList scan only compacts this 1-byte array instead of re-reading
+  // T + active_flag + solid_d over nlocal. Owned sites only (i < nlocal); ghosts
+  // just get T. active_flag/solid_d are stable between the fill and the scan (the
+  // microstructure kernels that modify them run after), so this flag exactly
+  // matches the full predicate scan.
+  if ((int) d_active_bool.extent(0) != nlocal)
+    d_active_bool = Kokkos::View<char*>("active_bool", nlocal);
+  auto d_abool = d_active_bool;
+  auto d_af = d_active_flag;
+  auto d_sd = d_solid_d;
+  const double tl_f = this->tl;
+  const int nrefine_f = this->nrefine;
+  const int nlocal_f = this->nlocal;
+
   Kokkos::parallel_for("HDF5Fill", n, KOKKOS_LAMBDA(const int i) {
-    if (!vld(i)) { d_T(i) = def; return; }
-    const int i0 = nidx(i, 0), i1 = nidx(i, 1), i2 = nidx(i, 2), i3 = nidx(i, 3);
-    const double t0 = nt(i0);
-    d_T(i) = t0 + wts(i, 0) * (nt(i1) - t0)
-                + wts(i, 1) * (nt(i2) - t0)
-                + wts(i, 2) * (nt(i3) - t0);
+    double Ti;
+    if (!vld(i)) {
+      Ti = def;
+    } else {
+      const int i0 = nidx(i, 0), i1 = nidx(i, 1), i2 = nidx(i, 2), i3 = nidx(i, 3);
+      const double t0 = nt(i0);
+      Ti = t0 + wts(i, 0) * (nt(i1) - t0)
+              + wts(i, 1) * (nt(i2) - t0)
+              + wts(i, 2) * (nt(i3) - t0);
+    }
+    d_T(i) = Ti;
+    if (i < nlocal_f) {
+      const int af = d_af(i);
+      const double sd = d_sd(i);
+      d_abool(i) = (af == 2 || Ti >= tl_f ||
+                    (sd > -nrefine_f - 1 && sd < 0.0) ||
+                    (af == 3 && sd == -nrefine_f - 2)) ? (char)1 : (char)0;
+    }
   });
   Kokkos::fence();
   k_T.modify_device();
+  device_active_bool_fresh = true;
 }
 
 /* ----------------------------------------------------------------------
@@ -2246,6 +2275,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   refresh_thermal_host();
   t_start = MPI_Wtime();
   bool device_temp = false;
+  device_active_bool_fresh = false;  // set true only by a fill that wrote d_active_bool (HDF5)
   if (thermal->enabled()) {
     RosenthalDevicePlan rplan = thermal->rosenthal_device_plan(time);
     MoserDevicePlan mplan;
@@ -2365,27 +2395,43 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   if ((int)d_active_sites.extent(0) != nlocal)
     d_active_sites = Kokkos::View<int*>("active_sites", nlocal);
   {
-    auto d_T_act = k_T.view_device();
-    auto d_active_flag_act = d_active_flag;
-    auto d_solid_d_act = d_solid_d;
-    double tl_act = this->tl;
-    int nrefine_act = this->nrefine;
-    int nlocal_act = this->nlocal;
     auto d_active_sites_local = d_active_sites;
-    Kokkos::parallel_scan("BuildActiveList", nlocal_act,
-      KOKKOS_LAMBDA(int i, int& offset, bool final) {
-        const int af = d_active_flag_act(i);
-        const double sd = d_solid_d_act(i);
-        const bool active =
-            (af == 2) ||
-            (d_T_act(i) >= tl_act) ||
-            (sd > -nrefine_act - 1 && sd < 0.0) ||
-            (af == 3 && sd == -nrefine_act - 2);
-        if (active) {
-          if (final) d_active_sites_local(offset) = i;
-          offset++;
-        }
-      }, n_active);
+    const int nlocal_act = this->nlocal;
+    if (device_active_bool_fresh) {
+      // Partial fusion: the temperature fill already evaluated the predicate into
+      // d_active_bool, so compact that 1-byte array (5 MB) -- no re-read of
+      // T + active_flag + solid_d (~100 MB). Identical result to the full scan
+      // (same predicate, same inputs; flags are stable between fill and here).
+      auto d_abool = d_active_bool;
+      Kokkos::parallel_scan("BuildActiveListThin", nlocal_act,
+        KOKKOS_LAMBDA(int i, int& offset, bool final) {
+          if (d_abool(i)) {
+            if (final) d_active_sites_local(offset) = i;
+            offset++;
+          }
+        }, n_active);
+    } else {
+      // Full predicate scan (Rosenthal/Moser/host fills that don't write the flag).
+      auto d_T_act = k_T.view_device();
+      auto d_active_flag_act = d_active_flag;
+      auto d_solid_d_act = d_solid_d;
+      const double tl_act = this->tl;
+      const int nrefine_act = this->nrefine;
+      Kokkos::parallel_scan("BuildActiveList", nlocal_act,
+        KOKKOS_LAMBDA(int i, int& offset, bool final) {
+          const int af = d_active_flag_act(i);
+          const double sd = d_solid_d_act(i);
+          const bool active =
+              (af == 2) ||
+              (d_T_act(i) >= tl_act) ||
+              (sd > -nrefine_act - 1 && sd < 0.0) ||
+              (af == 3 && sd == -nrefine_act - 2);
+          if (active) {
+            if (final) d_active_sites_local(offset) = i;
+            offset++;
+          }
+        }, n_active);
+    }
   }
 
   // 4. Phase transition kernels with event tracking

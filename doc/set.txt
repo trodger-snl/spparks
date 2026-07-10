@@ -30,7 +30,7 @@ style = {value} or {range} or {unique} or {displace} or {stitch} or {bfile} :l
   {bfile} args = bfilename 
      bfilename = name of binary file :pre
 zero or more keyword/value pairs may be appended :l
-keyword = {fraction} or {region} or {loop} or {if} :l
+keyword = {fraction} or {region} or {loop} or {if} or {skip_novalue} :l
   {fraction} value = frac
     frac = number > 0 and <= 1.0
   {region} args = region-ID
@@ -41,7 +41,8 @@ keyword = {fraction} or {region} or {loop} or {if} :l
   {if} args = label2 op nvalue2
     label2 = {id} or {site} or {iN} or {dN} or {x} or {y} or {z}
     op = "<" or "<=" or ">" or "<=" or "=" or "!="
-    nvalue2 = value to compare site value to :pre
+    nvalue2 = value to compare site value to
+  {skip_novalue} args = none :pre
 :ule
 
 [Examples:]
@@ -54,7 +55,10 @@ set site stitch equiaxed.st first
 set site stitch equiaxed.st last
 set site stitch equiaxed.st 1.0
 set i1 stitch equiaxed.st 1.0
-set d1 stitch equiaxed.st 1.0 :pre
+set d1 stitch equiaxed.st 1.0
+set site stitch left.st last region left_half
+set site stitch left.st last skip_novalue
+set site stitch right.st last skip_novalue :pre
 
 [Description:]
 
@@ -102,8 +106,17 @@ Styles {stitch} and {bfile} can only be used for simple regular
 lattices.  This means lattice = line (line/2n) for 1d models, square
 (sq/4n or sq/8n) for 2d, or simple cubic (sc/6n or sc/26n) for 3d.
 See the "create_sites"_create_sites.html command for more details.
-The {fraction}, {loop}, {region} and {if} keywords are ignored for
-these styles; these styles set values for all sites in the system.
+
+For style {bfile}, the {fraction}, {loop}, {region} and {if} keywords
+are ignored; this style sets values for all sites in the system.
+
+For style {stitch}, the {fraction}, {loop}, {region}, {if}, and
+{skip_novalue} keywords select which sites are overwritten, exactly as
+they do for the {value} and {range} styles.  Only the selected subset of
+sites is overwritten; all other sites retain their current values.  This
+makes it possible, for example, to initialize a domain from two {stitch}
+files that each cover a portion of the domain by issuing two {set stitch}
+commands with complementary {region} (or {skip_novalue}) selections.
 
 For style {stitch}, a {stitch} file is read to extract values
 associated with a specified {label}.  The {stitch} file can be created
@@ -172,6 +185,19 @@ The keyword {if} sets a condition that must be met in order for the
 per-site quantity to be reset.  The per-site quantity specified by
 {label2} is compared to the numeric {nvalue2} and if the condition is
 not met, then the site is skipped.
+
+The keyword {skip_novalue} is only valid for the {stitch} style.  A
+{stitch} file stores a "no value present" sentinel for each field (-1
+for integer fields, 0.0 for floating-point fields by default) that is
+returned for any site the file has no data for.  When {skip_novalue} is
+specified, sites whose value read from the file equals this sentinel are
+left unchanged rather than overwritten.  This makes it possible to
+composite partial-domain {stitch} files without defining regions: read
+each file over the full domain with {skip_novalue}, and each read only
+touches the sites it actually holds data for.  Note that for
+floating-point fields the default sentinel is 0.0, which can collide with
+legitimate data equal to 0.0; the keyword is therefore opt-in and off by
+default.
 
 :line
 

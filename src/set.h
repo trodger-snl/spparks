@@ -46,6 +46,7 @@ class Set : protected Pointers {
   int ivalue,ivaluelo,ivaluehi;
   double dvalue,dvaluelo,dvaluehi;
   int loopflag,regionflag,iregion;
+  int skip_novalue;
   double fraction;
   char *filename,*tstamp;
 

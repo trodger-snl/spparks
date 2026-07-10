@@ -165,6 +165,7 @@ void Set::command(int narg, char **arg) {
   fraction = 1.0;
   regionflag = 0;
   loopflag = 1;
+  skip_novalue = 0;
   ncondition = 0;
   cond = NULL;
 
@@ -266,6 +267,12 @@ void Set::command(int narg, char **arg) {
 
       ncondition++;
       iarg += 4;
+
+    } else if (strcmp(arg[iarg], "skip_novalue") == 0) {
+      if (rhs != STITCH)
+        error->all(FLERR, "Set skip_novalue keyword only valid with stitch style");
+      skip_novalue = 1;
+      iarg += 1;
 
     } else
       error->all(FLERR, "Illegal set command");
@@ -922,6 +929,11 @@ void Set::set_stitch(int lhs, int rhs) {
 #endif
 
   // get field id
+  // capture the field's "no value present" sentinel for optional
+  //   skip_novalue masking; defaults match the create-branch literals
+
+  int32_t novalue_i32 = -1;
+  double novalue_f64 = 0.0;
 
   int64_t field_id;
   bool init = false;
@@ -943,6 +955,13 @@ void Set::set_stitch(int lhs, int rhs) {
                         "must be 'site', i1,i2,..., or d1,d2,d3,....");
     }
     err = stitch_query_field(fid, label, &field_id, &type, &flen, &nvp);
+    if (STITCH_FIELD_NOT_FOUND_ID != field_id) {
+      // field exists: record its true "no value present" sentinel
+      if (SITE == lhs || IARRAY == lhs)
+        novalue_i32 = nvp.i32;
+      else if (DARRAY == lhs)
+        novalue_f64 = nvp.f64;
+    }
     if (STITCH_FIELD_NOT_FOUND_ID == field_id) {
       // then create field
       if (SITE == lhs || IARRAY == lhs) {
@@ -980,34 +999,44 @@ void Set::set_stitch(int lhs, int rhs) {
     }
   }
 
+  // stitch_query_field only returns a valid "no value present" sentinel on the
+  //   root rank; broadcast it so skip_novalue masking is correct on all procs.
+  //   (For a newly-created field every rank already holds the default literal,
+  //   so the broadcast is a harmless no-op in that case.)
+  MPI_Bcast(&novalue_i32, 1, MPI_INT, 0, world);
+  MPI_Bcast(&novalue_f64, 1, MPI_DOUBLE, 0, world);
+
+  // read the stitch block into a temp buffer, then selectively copy into the
+  //   live per-site array so the fraction/loop/region/if/skip_novalue keywords
+  //   are honored (as for the value/range styles).  At defaults
+  //   (fraction 1.0, loop all, no region, no if-tests, skip_novalue off) every
+  //   owned site is copied -- byte-identical to reading straight into the array.
+
+  int nlocal = app->nlocal;
+
+  int32_t *itmp = NULL;
+  double *dtmp = NULL;
+  if (lhs == SITE || lhs == IARRAY)
+    memory->create(itmp, nlocal, "set:itmp");
+  else
+    memory->create(dtmp, nlocal, "set:dtmp");
+
   {
     int err;
 
-    // get field data
+    // get field data into temp buffer
+    // For read:
+    //  is_new_time == True when time does not exist in the file,
+    //    but data may be returned based on older times
+    //  is_new_time == False when time exists in the database. The actual data
+    //    returned will vary based on what is selected. It could be nothing.
     int32_t is_new_time = -1;
-    if (lhs == SITE) {
-      int32_t *idata = app->iarray[0];
-      err = stitch_read_block_int32(fid, field_id, &time, block, idata,
-                                    &is_new_time);
-      // TODO: process err
-    } else if (lhs == IARRAY) {
-      int32_t *idata = app->iarray[siteindex];
-      // For read:
-      //  read_flag == True when time does not exist in the file,
-      //    but data may be returned based on older times
-      //  read_flag == False when exists in the database. The actual data
-      //  returned
-      //    will vary based on what is selected. It could be nothing.
-      //  int stitch_read_block_int32 (const StitchFile * file, int64_t
-      //  field_id,
-      //    double * time, int32_t * bb, int32_t * buffer, int32_t *
-      //    is_new_time);
-      err = stitch_read_block_int32(fid, field_id, &time, block, idata,
+    if (lhs == SITE || lhs == IARRAY) {
+      err = stitch_read_block_int32(fid, field_id, &time, block, itmp,
                                     &is_new_time);
       // TODO: process err
     } else if (lhs == DARRAY) {
-      double *real_data = app->darray[siteindex];
-      err = stitch_read_block_float64(fid, field_id, &time, block, real_data,
+      err = stitch_read_block_float64(fid, field_id, &time, block, dtmp,
                                       &is_new_time);
       // TODO: process err
     }
@@ -1023,7 +1052,113 @@ void Set::set_stitch(int lhs, int rhs) {
     // TODO: process err
   }
 
-  count = app->nlocal;
+  // selectively copy temp buffer into the live array
+  //   mirrors Set::set_single's loop/region/fraction/if handling so that
+  //   fraction+loop all draws one RNG per global site ID -> proc-count
+  //   independent site selection
+
+  tagint *id = app->id;
+  double **xyz = app->xyz;
+  int **iarray = app->iarray;
+  double **darray = app->darray;
+  tagint minID = app->min_site_ID();
+  tagint maxID = app->max_site_ID();
+
+  // RNG is only needed when fraction < 1.0.  Only instantiate it in that case
+  //   so a full-domain read (the default) does not require a 'seed' command,
+  //   preserving the original stitch behavior.
+  // if loopflag == 1, same RNG on every proc
+  // if loopflag == 0, different RNG on every proc
+
+  RandomPark *random = NULL;
+  if (fraction < 1.0) {
+    random = new RandomPark(ranmaster->uniform());
+    if (loopflag == 0) {
+      double seed = ranmaster->uniform();
+      random->reset(seed, domain->me, 100);
+    }
+  }
+
+  // keep(i): true if local site i passes region + if-test + skip_novalue filters
+  auto keep = [&](int i) -> bool {
+    if (regionflag &&
+        !domain->regions[iregion]->match(xyz[i][0], xyz[i][1], xyz[i][2]))
+      return false;
+    if (ncondition && condition(i))
+      return false;
+    if (skip_novalue) {
+      if (lhs == DARRAY) {
+        if (dtmp[i] == novalue_f64)
+          return false;
+      } else {
+        if (itmp[i] == novalue_i32)
+          return false;
+      }
+    }
+    return true;
+  };
+
+  // store(i): copy the temp value into the live array for local site i
+  auto store = [&](int i) {
+    if (lhs == DARRAY)
+      darray[siteindex][i] = dtmp[i];
+    else
+      iarray[siteindex][i] = itmp[i];
+  };
+
+  count = 0;
+
+  if (loopflag) {
+    MyHash hash;
+    MyIterator loc;
+    for (int i = 0; i < nlocal; i++)
+      hash.insert(std::pair<tagint, int>(id[i], i));
+
+    if (fraction == 1.0) {
+      for (int i = 0; i < nlocal; i++) {
+        if (!keep(i))
+          continue;
+        store(i);
+        count++;
+      }
+    } else {
+      for (tagint iglobal = minID; iglobal <= maxID; iglobal++) {
+        if (random->uniform() >= fraction)
+          continue;
+        loc = hash.find(iglobal);
+        if (loc == hash.end())
+          continue;
+        int i = loc->second;
+        if (!keep(i))
+          continue;
+        store(i);
+        count++;
+      }
+    }
+
+  } else {
+    if (fraction == 1.0) {
+      for (int i = 0; i < nlocal; i++) {
+        if (!keep(i))
+          continue;
+        store(i);
+        count++;
+      }
+    } else {
+      for (int i = 0; i < nlocal; i++) {
+        if (random->uniform() >= fraction)
+          continue;
+        if (!keep(i))
+          continue;
+        store(i);
+        count++;
+      }
+    }
+  }
+
+  delete random;
+  memory->destroy(itmp);
+  memory->destroy(dtmp);
 
 #ifdef LOG_STITCH
   /**

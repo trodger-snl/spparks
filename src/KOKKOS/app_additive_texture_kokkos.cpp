@@ -32,6 +32,7 @@
 #include "math_const.h"
 #include "temperature_source_rosenthal.h"
 #include "temperature_source_hdf5_unstructured.h"
+#include "am_temp_precision.h"
 #include <cstring>
 #include <limits>
 #include <random>
@@ -559,15 +560,16 @@ void AppAdditiveTextureKokkos::ensure_device_xyz()
 // Device reproduction of RosenthalTemperatureSource::rosenthal_kernel:
 // Q_eff / (2 pi k R) * exp(-v (xi + R) / (2 alpha)), with the 1/R singularity
 // clamped at r_min. (The image-source factor of 2 is applied by the caller.)
+template<typename Real>
 KOKKOS_INLINE_FUNCTION
-static double rosenthal_device_kernel(double Qeff, double v, double xi, double R,
-                                      double r_min, double k_cond, double alpha,
-                                      double two_pi)
+static Real rosenthal_device_kernel(Real Qeff, Real v, Real xi, Real R,
+                                    Real r_min, Real k_cond, Real alpha,
+                                    Real two_pi)
 {
-  double Rk = (R < r_min) ? r_min : R;
-  if (Rk <= 0.0) return 0.0;
+  Real Rk = (R < r_min) ? r_min : R;
+  if (Rk <= (Real)0) return (Real)0;
   return (Qeff / (two_pi * k_cond * Rk)) *
-         Kokkos::exp(-v * (xi + Rk) / (2.0 * alpha));
+         Kokkos::exp(-v * (xi + Rk) / ((Real)2 * alpha));
 }
 
 void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
@@ -614,7 +616,9 @@ void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
   const double two_pi = 2.0 * 3.14159265358979323846;
 
   Kokkos::parallel_for("RosenthalFill", nall, KOKKOS_LAMBDA(const int i) {
-    // Site physical coordinates (meters).
+    // Site physical coordinates (meters). The site-minus-laser differences are
+    // computed in double: (site - laser) is cancellation-prone (both operands
+    // are ~domain-scale) and cheap, so it stays FP64 regardless of AMReal.
     const double x = d_xyz_local(i,0) * dx_l;
     const double y = d_xyz_local(i,1) * dx_l;
     const double z = d_xyz_local(i,2) * dx_l;
@@ -622,40 +626,49 @@ void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
     // Pool-local frame: project (site - laser) onto scan / transverse axes.
     const double rsx0 = x - px;
     const double rsx1 = y - py;
-    const double z_rel = z - layer_z;
-    const double xi = ux*rsx0 + uy*rsx1;            // along scan direction
-    const double tsx0 = rsx0 - xi*ux;
-    const double tsx1 = rsx1 - xi*uy;
-    const double y_rel = -uy*tsx0 + ux*tsx1;        // transverse
+    const double z_rel_d = z - layer_z;
+    const double xi_d = ux*rsx0 + uy*rsx1;          // along scan direction
+    const double tsx0 = rsx0 - xi_d*ux;
+    const double tsx1 = rsx1 - xi_d*uy;
+    const double y_rel_d = -uy*tsx0 + ux*tsx1;      // transverse
 
     double Tval = T0;
     // Free-surface cutoff: vacuum above the laser plane. Inactive path -> T0.
-    if (scan_active && z_rel <= 0.0) {
+    if (scan_active && z_rel_d <= 0.0) {
+      // Cast the (small, pool-local) coordinates and material params to AMReal.
+      // The transcendental kernel math below runs in AMReal -- FP32 when built
+      // -DSPK_AM_TEMP_FP32, otherwise identical FP64 to the original path.
+      const AMReal xi = (AMReal)xi_d;
+      const AMReal y_rel = (AMReal)y_rel_d;
+      const AMReal z_rel = (AMReal)z_rel_d;
+      const AMReal rv = (AMReal)v, rr_min = (AMReal)r_min;
+      const AMReal rk_cond = (AMReal)k_cond, ralpha = (AMReal)alpha;
+      const AMReal rtwo_pi = (AMReal)two_pi;
       if (mode == 2) {
         // KEYHOLE: image-doubled surface point source + buried line source
         // integrated over the Gauss-Legendre nodes (image-doubled per node).
-        const double R = Kokkos::sqrt(xi*xi + y_rel*y_rel + z_rel*z_rel);
-        double T_rise = 2.0 * rosenthal_device_kernel(lambda_pQ, v, xi, R,
-                                                       r_min, k_cond, alpha, two_pi);
+        const AMReal R = Kokkos::sqrt(xi*xi + y_rel*y_rel + z_rel*z_rel);
+        AMReal T_rise = (AMReal)2 * rosenthal_device_kernel<AMReal>(
+                            (AMReal)lambda_pQ, rv, xi, R, rr_min, rk_cond, ralpha, rtwo_pi);
         for (int q = 0; q < n_quad; q++) {
-          const double zarg = qnodes(q) + z_rel;
-          const double Rp = Kokkos::sqrt(xi*xi + y_rel*y_rel + zarg*zarg);
-          T_rise += 2.0 * qweights(q) *
-                    rosenthal_device_kernel(lambda_lQ, v, xi, Rp,
-                                            r_min, k_cond, alpha, two_pi);
+          const AMReal zarg = (AMReal)qnodes(q) + z_rel;
+          const AMReal Rp = Kokkos::sqrt(xi*xi + y_rel*y_rel + zarg*zarg);
+          T_rise += (AMReal)2 * (AMReal)qweights(q) *
+                    rosenthal_device_kernel<AMReal>(
+                        (AMReal)lambda_lQ, rv, xi, Rp, rr_min, rk_cond, ralpha, rtwo_pi);
         }
-        Tval = T0 + T_rise;
+        Tval = T0 + (double)T_rise;
       } else {
-        double R;
+        AMReal R;
         if (mode == 1) {                            // ANISOTROPIC
-          const double yy = eta_y * y_rel;
-          const double zz = eta_z * z_rel;
+          const AMReal yy = (AMReal)eta_y * y_rel;
+          const AMReal zz = (AMReal)eta_z * z_rel;
           R = Kokkos::sqrt(xi*xi + yy*yy + zz*zz);
         } else {                                    // STANDARD
           R = Kokkos::sqrt(xi*xi + y_rel*y_rel + z_rel*z_rel);
         }
-        Tval = T0 + 2.0 * rosenthal_device_kernel(lambdaQ, v, xi, R,
-                                                   r_min, k_cond, alpha, two_pi);
+        Tval = T0 + 2.0 * (double)rosenthal_device_kernel<AMReal>(
+                              (AMReal)lambdaQ, rv, xi, R, rr_min, rk_cond, ralpha, rtwo_pi);
       }
     }
     d_T(i) = Tval;

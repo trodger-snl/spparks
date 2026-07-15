@@ -173,6 +173,15 @@ else()
     add_compile_definitions(SPPARKS_SMALLBIG)
 endif()
 
+# Additive/texture device temperature-eval precision. Default OFF => FP64
+# (double), the HPC production precision and bit-for-bit CPU-validation
+# reference. ON => FP32 (float) for the Rosenthal/Moser device kernels, a large
+# speedup on RDNA/consumer GPUs (gfx1151) at the cost of bit-exact validation.
+option(SPPARKS_AM_TEMP_FP32 "Use FP32 for additive/texture device temperature kernels" OFF)
+if(SPPARKS_AM_TEMP_FP32)
+    add_compile_definitions(SPK_AM_TEMP_FP32)
+endif()
+
 # Configure features
 if(SPPARKS_ENABLE_GZIP)
     add_compile_definitions(SPPARKS_GZIP)

@@ -155,6 +155,18 @@ set_property(CACHE SPPARKS_KOKKOS_BACKEND PROPERTY STRINGS OPENMP CUDA HIP SYCL 
 #           AMPERE80 (A100) or ADA89 (RTX 40xx) for CUDA.
 set(SPPARKS_KOKKOS_ARCH "" CACHE STRING "Kokkos GPU architecture token (e.g. AMD_GFX1151, AMPERE80)")
 
+# Enable OpenMP as the Kokkos HOST execution space alongside a GPU DEVICE backend
+# (HIP/CUDA/SYCL). With this ON, Kokkos::DefaultExecutionSpace stays the GPU while
+# Kokkos::DefaultHostExecutionSpace becomes OpenMP instead of Serial -- so
+# host-side Kokkos parallel_for loops run multithreaded. (The non-Kokkos
+# #pragma omp host loops in the HDF5 source are already threaded via the
+# find_package(OpenMP) link below regardless of this option; this option adds
+# threading for the Kokkos host space itself.) Ignored for the OPENMP/SERIAL
+# backends. Intended for multi-GPU HPC nodes with many host cores per GPU
+# (e.g. 4xH100 + 112 cores: 1 rank/GPU x N host threads) and usable on this APU
+# (HIP + OpenMP) for the same host-threading benefit.
+option(SPPARKS_KOKKOS_HOST_OPENMP "Use OpenMP (not Serial) as the Kokkos host space for GPU backends" OFF)
+
 # Performance options
 option(SPPARKS_AGGRESSIVE_OPTIMIZATION "Enable aggressive optimizations (may increase compile time)" ON)
 option(SPPARKS_NATIVE_OPTIMIZATION "Enable native CPU optimizations (-march=native)" ON)
@@ -386,8 +398,18 @@ if(SPPARKS_PACKAGE_KOKKOS)
         message(FATAL_ERROR "Unknown Kokkos backend: ${SPPARKS_KOKKOS_BACKEND}")
     endif()
 
-    # Disable backends we don't want
-    if(NOT SPPARKS_KOKKOS_BACKEND STREQUAL "OPENMP")
+    # Disable backends we don't want.
+    # OpenMP is special: besides being a standalone device backend, it can serve
+    # as the HOST execution space for a GPU device backend. Keep it enabled when
+    # SPPARKS_KOKKOS_HOST_OPENMP is requested (Serial stays enabled too, but
+    # Kokkos picks OpenMP as DefaultHostExecutionSpace -- OpenMP outranks Serial).
+    if(SPPARKS_KOKKOS_BACKEND STREQUAL "OPENMP")
+        # OpenMP is the device backend; leave it enabled.
+    elseif(SPPARKS_KOKKOS_HOST_OPENMP)
+        set(Kokkos_ENABLE_OPENMP ON CACHE BOOL "OpenMP as Kokkos host space" FORCE)
+        message(STATUS "Kokkos: OpenMP host execution space enabled alongside "
+                       "${SPPARKS_KOKKOS_BACKEND} device (DefaultHostExecutionSpace=OpenMP)")
+    else()
         set(Kokkos_ENABLE_OPENMP OFF CACHE BOOL "Disable OpenMP backend" FORCE)
     endif()
     if(NOT SPPARKS_KOKKOS_BACKEND STREQUAL "CUDA")

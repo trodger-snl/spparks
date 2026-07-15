@@ -447,3 +447,35 @@ outruns the host adaptive integrator — but ~50 % slower on Rosenthal (4.17 vs
 2.77 s) due to that same per-step Kokkos loop overhead on a cheap kernel. So the
 Kokkos-CPU number is not leaving Moser performance on the table; if anything the
 refactor helped the expensive path on CPU too.
+
+### HDF5 source: host precompute threading is decisive (gfx1151, kk app)
+
+Unlike the analytic sources, the **HDF5 unstructured source has heavy HOST work
+per layer** — the per-site element cache build and the site-level thermal-
+interval computation (`build_site_element_cache` /
+`compute_site_thermal_intervals`, both `#pragma omp parallel for`). This is where
+the otherwise-idle CPU cores earn their keep on a GPU run. HIP device (temperature
+fills on GPU) + host OpenMP for the precompute, np1, 2.99M-site box, 1 GB
+unstructured file (`fixed_reduced_thermal_output.hdf5`), OMP thread sweep:
+
+| threads | element cache | thermal intervals | total precompute | device loop |
+|---------|--------------:|------------------:|-----------------:|------------:|
+|   1     |   20.43 s     |     2.49 s        |   22.92 s        |   2.68 s    |
+|   4     |    5.32 s     |     0.68 s        |    6.00 s (3.8×)  |   2.71 s    |
+|  16     |    1.77 s     |     0.23 s        |  **2.00 s (11.5×)** |   2.63 s    |
+
+Serial, the host precompute (22.9 s) is **~90 % of wall-clock** and the GPU sits
+idle waiting for it. At 16 threads it drops to 2.0 s — now balanced against the
+2.6 s device loop, an **11.5× precompute speedup** (72 % parallel efficiency;
+memory-bandwidth-bound falloff from the 96 % seen at 4 threads). The device loop
+is flat across thread counts (all on GPU), confirming the win is entirely
+host-side. This threading is via the raw `#pragma omp` loops, live in any HIP
+build with the `find_package(OpenMP)` exe link (`-fopenmp`);
+`SPPARKS_KOKKOS_HOST_OPENMP` adds Kokkos-host-space threading on top but is
+orthogonal to this precompute.
+
+**HPC implication (4×H100 + 112 cores):** with 1 rank/GPU × 28 host threads,
+this precompute scales the same way — the "idle cores" concern is answered *for
+the HDF5 source*: they cut the host bottleneck ~11–15×, keeping the H100s fed.
+For the analytic sources there is no host precompute to thread (they stay
+GPU-bound; cores idle, which is fine).

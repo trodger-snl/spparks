@@ -413,3 +413,37 @@ Rosenthal is closer to memory-bound (one exp per site) — consistent with the
 OpenMP-vs-HIP characterization above. FP32 breaks the bit-exact CPU match, so on
 this hardware it is an opt-in speed knob; FP64 stays the default for HPC/CDNA and
 validation.
+
+### FP32 GPU vs the CPU code (within-session, same 5M-site box)
+
+Three CPU/GPU paths run back-to-back this session. "Native MPI" is the
+non-Kokkos `additive/texture` app (host Green's-function integrator, pure MPI,
+np16 = 16 cores; np32/SMT gives ~nothing on this compute-bound kernel).
+"OpenMP" is the same Kokkos source on the OpenMP backend, 16 threads, FP64
+(`mpirun --bind-to none` — WITHOUT it, `-np 1` chokes all threads onto one core
+and Moser inflates to ~466 s). All temperature fields agree to the diagnostic's
+6 s.f. (native and OpenMP are FP64; GPU FP32 differs by ≤1 ULP, see above).
+
+Full loop time (temp-update kernel where separable):
+
+| source    | native MPI np16 | kk OpenMP 16t (FP64) | GPU HIP FP64 | GPU HIP FP32 |
+|-----------|----------------:|---------------------:|-------------:|-------------:|
+| Moser     | 51.12 s         | 42.01 s (temp 40.34) | 29.53 (27.35)| **8.98 (6.91)** |
+| Rosenthal |  **2.77 s**     |  4.17 s (temp 2.07)  |  4.58 (1.37) |  3.78 (0.76) |
+
+Two distinct regimes:
+
+- **Moser (compute-bound): the GPU + FP32 is decisive.** FP32 HIP is **5.7× faster
+  than the native CPU MPI app** (51.1 → 8.98 s) and 4.7× faster than kk OpenMP.
+  This is the case that justifies the GPU on this APU.
+- **Rosenthal (memory-bound, cheap kernel): the CPU wins.** The native MPI app
+  (2.77 s) beats even FP32 HIP (3.78 s) — the Kokkos per-step launch/overhead
+  dominates this ~1-exp-per-site kernel, and minimal-overhead MPI decomposition
+  is simply the better fit. GPU offload (FP32 or not) is not worth it here.
+
+Incidental finding: the **Kokkos OpenMP backend is ~20 % faster than the native
+app on Moser** (42.0 vs 51.1 s) — the flattened fixed-order device quadrature
+outruns the host adaptive integrator — but ~50 % slower on Rosenthal (4.17 vs
+2.77 s) due to that same per-step Kokkos loop overhead on a cheap kernel. So the
+Kokkos-CPU number is not leaving Moser performance on the table; if anything the
+refactor helped the expensive path on CPU too.

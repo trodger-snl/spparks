@@ -1,12 +1,17 @@
-# SPPARKS Kokkos version test - gradient validation
-# Based on in.init_box_0 but uses Kokkos app
-
+# SPPARKS Kokkos additive/texture example - HDF5 unstructured temperature source
+# Updated 2026-07 for the current API (see README.md in this directory):
+#   - style renamed additive_temperature_texture/kk -> additive/texture/kk
+#   - the Kokkos app requires `sweep color` (not `sweep random`)
+#   - texture_parameters/misorientation_function now take 2 args (c1 fixed at 1.0)
+#   - temperature I/O is a modular source: `setup_temperature_source hdf5_unstructured ...`
+#
+# The unstructured thermal HDF5 file is ~1 GB and is NOT shipped in-repo. Point
+# THERMAL_H5 at your copy (or override on the command line:
+#   mpirun -np 1 spparks -var THERMAL_H5 /path/to/file.hdf5 < in.init_box_0_kokkos ).
 variable DX equal 5e-6
+variable THERMAL_H5 index fixed_reduced_thermal_output.hdf5
 
-# Use Kokkos version of app
-app_style additive_temperature_texture/kk 1000000 5e-06 3e-6 2
-
-shell mkdir -p DumpFiles_kokkos
+app_style additive/texture/kk 1000000 5e-06 3e-6 2
 
 seed		 1760655727
 
@@ -26,13 +31,14 @@ create_sites box
  set          d9 value 0
 
 sector		 yes
-sweep		 random mask no
+sweep		 color
 
 ########Setup temperature reading
-setup_temperature_source hdf5_unstructured /Users/Tron/spparks/examples/ReducedTempAM/unstructured/FixedInput/fixed_reduced_thermal_output.hdf5 5e-06 1563.0 300.0
+setup_temperature_source hdf5_unstructured ${THERMAL_H5} 5e-06 1563.0 300.0
 
-############# Outputs the total temperature sum as a stat
-diag_style       array d6 sum d6 max d8 sum d8 max
+############# Outputs the total temperature sum/max as a stat (deterministic;
+############# use this to validate the temperature field vs the CPU app).
+diag_style       array d6 sum d6 max
 #############
 
 ############# Potts Monte Carlo temperature
@@ -48,22 +54,19 @@ critical_undercooling   5
 undercooling_deviation  3
 mean_nuclei_volume      8.4375e-16
 nuclei_volume_deviation 1.5625e-17
-texture_parameters 0.1 0.9 2.5
-misorientation_function 10 5
+texture_parameters      2.990000e+00 2
+misorientation_function 1.883553e+01 2
 fast_forward_search_window 0.001
-
-##############
-shell cd DumpFiles_kokkos/
 
 stats            2e-4
 
-############# Stitch Dump - output gradients for comparison
-dump      dump.id.1 stitch 0.002 am_data_kokkos.st i1 i2 d1 d2 d3 d4 d6 d8 d9
-dump_modify dump.id.1 delay 0.002
+############# Stitch dump (optional): requires the STITCH package to be built.
+############# Uncomment to output the microstructure for gradient comparison.
+#dump      dump.id.1 stitch 0.002 am_data_kokkos.st i1 i2 d1 d2 d3 d4 d6 d8 d9
+#dump_modify dump.id.1 delay 0.002
 
 #Start simulation at new time
 reset_time 0.0001
 
-# Short run for gradient validation (just 2ms instead of full 17.4ms)
+# Short run for gradient/temperature validation (2 ms)
 run   0.002 upto
-shell cd ../

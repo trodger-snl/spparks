@@ -368,3 +368,32 @@ the 318 s no-fusion figure that was anomalous (its session ran ~50 s slow).
 within-session back-to-back A/Bs are trustworthy.** Both optimizations help both
 backends: active-front ~8.2 % (GPU, this A/B) / large (OpenMP); partial fusion
 4.8 % (GPU) / 12.7 % (OpenMP). No backend gating is warranted.
+
+## FP32 vs FP64 device temperature eval (gfx1151, np1, within-session A/B)
+
+The device temperature kernels carry their per-site transcendental math in a
+compile-time `AMReal` type (`src/KOKKOS/am_temp_precision.h`). Default is FP64
+(`double`) — HPC production precision and the bit-for-bit CPU-validation
+reference. `-DSPPARKS_AM_TEMP_FP32=ON` switches the eval math to `float`. FP32 is
+scoped to the transcendental work only: `k_T` and the plan PODs stay double, and
+the cancellation-prone site−laser / time-delta differences (and Moser's
+quadrature order selection) stay double, so both precisions run the identical
+quadrature structure — isolating the knob to the summand.
+
+Same box (5M sites, `region box 0 310 0 316 0 50`), `build-verify` (HIP), the two
+`benchmarks/in.{rosenthal,moser}_mpi_bench` inputs run back-to-back:
+
+| source    | temp-update FP64 | temp-update FP32 | kernel speedup | loop FP64 | loop FP32 |
+|-----------|-----------------:|-----------------:|:--------------:|----------:|----------:|
+| Rosenthal |   1.370 s (500 st) |   0.743 s |  **1.84×** |  4.58 s |  3.74 s |
+| Moser     |  27.347 s (300 st) |   6.205 s |  **4.41×** | 29.53 s |  8.26 s |
+
+**Accuracy: `sum(d6)` and `max(d6)` are identical to the diagnostic's 6 s.f.** at
+every stats output for both sources (any deviation is below the 6th digit).
+
+The Moser win (4.4×) dwarfs Rosenthal's (1.84×) because Moser is 99.5 %
+compute-bound in its Green's-function quadrature (many exp/sqrt per site), while
+Rosenthal is closer to memory-bound (one exp per site) — consistent with the
+OpenMP-vs-HIP characterization above. FP32 breaks the bit-exact CPU match, so on
+this hardware it is an opt-in speed knob; FP64 stays the default for HPC/CDNA and
+validation.

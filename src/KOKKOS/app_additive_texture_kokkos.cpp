@@ -890,16 +890,26 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
             // Fluctuation modulation of (sx,sy), sz, power at this emission time.
             double fW = 1.0, fD = 1.0, fP = 1.0;
             if (fn > 0) moser_fluct_get_at(ftv, fwv, fdv, fpv, foff, fn, s, fW, fD, fP);
-            const double sxu = sx*fW, syu = sy*fW, szu = sz*fD, pu = p_i*fP;
-            const double st = 4.0*alpha*(tt - s);
+            // Cancellation-prone time deltas / geometry differences stay double.
+            const double st_d = 4.0*alpha*(tt - s);
             const double cx = x - xl_i, cy = y - yl_i;
             const double xt = cx*nx_i + cy*ny_i;
             const double yt = -cx*ny_i + cy*nx_i;
             const double zt = z - zl;
-            const double vx = 1.0/(sxu*sxu+st), vy = 1.0/(syu*syu+st), vz = 1.0/(szu*szu+st);
-            const double xeff = xt - sp_i*(s - t0_i);
-            const double e = Kokkos::exp(-xeff*xeff*vx - yt*yt*vy - zt*zt*vz);
-            sum += (2.0*pu/c*invPi3_2 * e * Kokkos::sqrt(vx*vy*vz)) * w;
+            const double xeff_d = xt - sp_i*(s - t0_i);
+            // Per-node Gaussian in AMReal (float exp/sqrt/reciprocals when built
+            // -DSPK_AM_TEMP_FP32; identical FP64 to the original otherwise). The
+            // differenced coordinates above are already small, so the cast is safe.
+            const AMReal sxu = (AMReal)sx*(AMReal)fW, syu = (AMReal)sy*(AMReal)fW;
+            const AMReal szu = (AMReal)sz*(AMReal)fD, pu = (AMReal)p_i*(AMReal)fP;
+            const AMReal st = (AMReal)st_d;
+            const AMReal xeff = (AMReal)xeff_d, ytr = (AMReal)yt, ztr = (AMReal)zt;
+            const AMReal vx = (AMReal)1/(sxu*sxu+st), vy = (AMReal)1/(syu*syu+st),
+                         vz = (AMReal)1/(szu*szu+st);
+            const AMReal e = Kokkos::exp(-xeff*xeff*vx - ytr*ytr*vy - ztr*ztr*vz);
+            const AMReal term = ((AMReal)2*pu/(AMReal)c*(AMReal)invPi3_2 * e *
+                                 Kokkos::sqrt(vx*vy*vz)) * (AMReal)w;
+            sum += (double)term;
           }
           // GL needs the *pmid scale; the midpoint rule already used (bb-a) as w.
           res += (order == 1) ? sum : (pmid * sum);

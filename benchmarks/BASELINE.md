@@ -391,6 +391,22 @@ Same box (5M sites, `region box 0 310 0 316 0 50`), `build-verify` (HIP), the tw
 **Accuracy: `sum(d6)` and `max(d6)` are identical to the diagnostic's 6 s.f.** at
 every stats output for both sources (any deviation is below the 6th digit).
 
+Full-precision per-site check (Moser, all 4,898,000 sites dumped `id d6` at
+`%.17g`, FP32 vs FP64 final frame, field range 573–4906 K):
+
+| metric | value |
+|---|---|
+| max relative error | **1.64e-7** (≈ 1 float32 ULP; eps = 1.19e-7) |
+| max absolute error | 3.5e-4 K (at a 2578 K site) |
+| RMSE | 1.19e-5 K |
+| exact bit matches | 34.8 % of sites |
+
+The worst-case error sits right at 1 FP32 ULP — i.e. the "keep differences in
+double" split successfully avoids cancellation amplification; FP32 is at its
+precision floor, not degraded by the algorithm. Practical impact on the melt
+decision is nil: with liquidus 1573 K, a decision only flips for a site whose
+FP64 temperature is within ~3.5e-4 K of exactly 1573 K (a measure-zero set).
+
 The Moser win (4.4×) dwarfs Rosenthal's (1.84×) because Moser is 99.5 %
 compute-bound in its Green's-function quadrature (many exp/sqrt per site), while
 Rosenthal is closer to memory-bound (one exp per site) — consistent with the

@@ -33,13 +33,14 @@
       "name": "mi300a",
       "inherits": "_kokkos-hip",
       "displayName": "AMD MI300A APU (HPE Cray EX)",
-      "description": "MI300A APU nodes behind a Cray programming environment (El Capitan, Tuolumne, El Dorado, RZAdams, ...). Load rocmcc/<ver>-magic + cray-mpich + cray-hdf5-parallel first. AMD_GFX942_APU (not AMD_GFX942) is required: it is what defines KOKKOS_IMPL_HIP_UNIFIED_MEMORY, so HIPSpace uses the APU's unified HBM. Needs HSA_XNACK=1 at RUNTIME.",
+      "description": "MI300A APU nodes behind a Cray programming environment (El Capitan, Tuolumne, El Dorado, RZAdams, ...). Load rocmcc/<ver>-magic + cray-mpich + cray-hdf5-parallel first. AMD_GFX942_APU (not AMD_GFX942) is required: it is what defines KOKKOS_IMPL_HIP_UNIFIED_MEMORY, so HIPSpace uses the APU's unified HBM. Needs HSA_XNACK=1 at RUNTIME. -march=native assumes you configure on a node matching the run node, which is the intended workflow; set SPPARKS_NATIVE_OPTIMIZATION=OFF if you ever configure on a login node instead.",
       "cacheVariables": {
         "CMAKE_CXX_COMPILER": "amdclang++",
         "MPI_CXX_COMPILER": "mpiamdclang++",
         "SPPARKS_KOKKOS_ARCH": "AMD_GFX942_APU",
         "SPPARKS_KOKKOS_HOST_OPENMP": "ON",
-        "SPPARKS_NATIVE_OPTIMIZATION": "OFF"
+        "SPPARKS_NATIVE_OPTIMIZATION": "ON",
+        "SPPARKS_AGGRESSIVE_OPTIMIZATION": "ON"
       }
     },
 

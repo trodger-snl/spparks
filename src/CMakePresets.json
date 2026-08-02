@@ -1,0 +1,76 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+
+  "configurePresets": [
+    {
+      "name": "_base",
+      "hidden": true,
+      "description": "Common SPPARKS options: Release, MPI, HighFive/HDF5, image output.",
+      "binaryDir": "${sourceDir}/../build-${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "SPPARKS_ENABLE_MPI": "ON",
+        "SPPARKS_ENABLE_HIGHFIVE": "ON",
+        "SPPARKS_ENABLE_JPEG": "ON",
+        "SPPARKS_ENABLE_PNG": "ON",
+        "SPPARKS_ENABLE_GZIP": "ON"
+      }
+    },
+
+    {
+      "name": "_kokkos-hip",
+      "hidden": true,
+      "inherits": "_base",
+      "description": "Kokkos HIP backend. Concrete presets must set SPPARKS_KOKKOS_ARCH.",
+      "cacheVariables": {
+        "SPPARKS_PACKAGE_KOKKOS": "ON",
+        "SPPARKS_KOKKOS_BACKEND": "HIP"
+      }
+    },
+
+    {
+      "name": "mi300a",
+      "inherits": "_kokkos-hip",
+      "displayName": "AMD MI300A APU (HPE Cray EX)",
+      "description": "MI300A APU nodes behind a Cray programming environment (El Capitan, Tuolumne, El Dorado, RZAdams, ...). Load rocmcc/<ver>-magic + cray-mpich + cray-hdf5-parallel first. AMD_GFX942_APU (not AMD_GFX942) is required: it is what defines KOKKOS_IMPL_HIP_UNIFIED_MEMORY, so HIPSpace uses the APU's unified HBM. Needs HSA_XNACK=1 at RUNTIME.",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "amdclang++",
+        "MPI_CXX_COMPILER": "mpiamdclang++",
+        "SPPARKS_KOKKOS_ARCH": "AMD_GFX942_APU",
+        "SPPARKS_KOKKOS_HOST_OPENMP": "ON",
+        "SPPARKS_NATIVE_OPTIMIZATION": "OFF"
+      }
+    },
+
+    {
+      "name": "strix-halo",
+      "inherits": "_kokkos-hip",
+      "displayName": "AMD Strix Halo / RDNA 3.5 (gfx1150, gfx1151)",
+      "description": "Local development APU (Radeon 8050S/8060S). Physically an APU, but Kokkos classifies gfx1151 as UNABLE to access system allocations (Kokkos_HIP_IsXnack.hpp) and gives it ordinary discrete HIPSpace -- so this preset does NOT exercise the unified-memory path the mi300a preset takes. Kokkos < 5.x needs patches/kokkos-gfx1151.patch, applied automatically at configure time.",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "hipcc",
+        "SPPARKS_KOKKOS_ARCH": "AMD_GFX1151",
+        "SPPARKS_NATIVE_OPTIMIZATION": "ON",
+        "SPPARKS_AGGRESSIVE_OPTIMIZATION": "ON"
+      }
+    },
+
+    {
+      "name": "openmp",
+      "inherits": "_base",
+      "displayName": "Kokkos OpenMP host backend (CPU)",
+      "description": "CPU reference/validation build. Safe to interrupt, unlike a HIP job. Note that OpenMP's static scheduling structurally hides GPU races -- a green result here does not clear the device path.",
+      "cacheVariables": {
+        "SPPARKS_PACKAGE_KOKKOS": "ON",
+        "SPPARKS_KOKKOS_BACKEND": "OPENMP"
+      }
+    }
+  ],
+
+  "buildPresets": [
+    { "name": "mi300a",     "configurePreset": "mi300a" },
+    { "name": "strix-halo", "configurePreset": "strix-halo" },
+    { "name": "openmp",     "configurePreset": "openmp" }
+  ]
+}

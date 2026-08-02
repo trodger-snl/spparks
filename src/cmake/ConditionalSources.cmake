@@ -100,9 +100,18 @@ function(configure_conditional_sources)
     set(SPPARKS_SKIPPED_STYLES "${_skipped_styles}" PARENT_SCOPE)
 endfunction()
 
-# Function to check if a header should be included based on features
+# Function to check if a header should be included based on features.
+#
+# should_include_header(<header> <result_var> [<reason_var>])
+#
+# The optional third argument receives a human-readable reason when the header is
+# skipped. Callers print it, so that a build log copied off a remote machine says
+# WHICH feature was missing -- a bare "missing dependencies" leaves the reader
+# unable to tell a misconfigured build from a broken one, and the symptom shows up
+# much later as "style not recognized" at runtime.
 function(should_include_header HEADER_NAME RESULT_VAR)
     set(INCLUDE_IT TRUE)
+    set(SKIP_REASON "")
 
     # Load feature status. When invoked from a cmake -P script (e.g.
     # regenerate_single_style.cmake), CMAKE_CURRENT_BINARY_DIR points at the working
@@ -121,6 +130,8 @@ function(should_include_header HEADER_NAME RESULT_VAR)
     if(HEADER_NAME MATCHES "dump_image\\.h|image\\.h")
         if(NOT (SPPARKS_HAS_JPEG OR SPPARKS_HAS_PNG))
             set(INCLUDE_IT FALSE)
+            set(SKIP_REASON "needs JPEG or PNG; found JPEG=${SPPARKS_HAS_JPEG} PNG=${SPPARKS_HAS_PNG} "
+                            "-- enable with -DSPPARKS_ENABLE_JPEG=ON and install libjpeg headers")
         endif()
     endif()
     
@@ -131,6 +142,9 @@ function(should_include_header HEADER_NAME RESULT_VAR)
     if(HEADER_NAME MATCHES "app_additive_texture(_kokkos)?\\.h")
         if(NOT (SPPARKS_HAS_HIGHFIVE AND SPPARKS_HAS_MPI))
             set(INCLUDE_IT FALSE)
+            set(SKIP_REASON "needs HighFive AND MPI; found HighFive=${SPPARKS_HAS_HIGHFIVE} "
+                            "MPI=${SPPARKS_HAS_MPI} HDF5=${SPPARKS_HAS_HDF5_FOUND} "
+                            "-- enable with -DSPPARKS_ENABLE_HIGHFIVE=ON -DSPPARKS_ENABLE_MPI=ON")
         endif()
     endif()
 
@@ -138,8 +152,15 @@ function(should_include_header HEADER_NAME RESULT_VAR)
     if(HEADER_NAME MATCHES "dump_stitch\\.h")
         if(NOT (SPPARKS_HAS_STITCH AND SPPARKS_HAS_STITCH_FOUND))
             set(INCLUDE_IT FALSE)
+            set(SKIP_REASON "needs the STITCH package AND its library; package=${SPPARKS_HAS_STITCH} "
+                            "library_found=${SPPARKS_HAS_STITCH_FOUND} "
+                            "-- enable with -DSPPARKS_PACKAGE_STITCH=ON and build lib/stitch")
         endif()
     endif()
 
     set(${RESULT_VAR} ${INCLUDE_IT} PARENT_SCOPE)
+    if(ARGC GREATER 2)
+        string(REPLACE ";" "" SKIP_REASON "${SKIP_REASON}")
+        set(${ARGV2} "${SKIP_REASON}" PARENT_SCOPE)
+    endif()
 endfunction()

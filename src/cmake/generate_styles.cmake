@@ -75,17 +75,14 @@ function(generate_single_style_header CLASS_PATTERN FILE_PREFIX STYLE_NAME DEPEN
             
             # Use conditional source checking
             include(cmake/ConditionalSources.cmake)
-            should_include_header("${HEADER_NAME}" INCLUDE_HEADER)
-            if(NOT INCLUDE_HEADER)
-                message(STATUS "Skipping ${HEADER_NAME} (missing dependencies)")
-            endif()
-            
+            should_include_header("${HEADER_NAME}" INCLUDE_HEADER SKIP_WHY)
+
             if(INCLUDE_HEADER)
                 list(APPEND VALID_HEADERS "${HEADER}")
                 message(STATUS "Style generation for ${STYLE_NAME}: Including ${HEADER_NAME}")
             else()
                 list(APPEND SKIPPED_HEADERS "${HEADER_NAME}")
-                message(STATUS "Style generation for ${STYLE_NAME}: Skipping ${HEADER_NAME} (missing dependencies)")
+                message(STATUS "Style generation for ${STYLE_NAME}: Skipping ${HEADER_NAME} -- ${SKIP_WHY}")
             endif()
         endif()
     endforeach()

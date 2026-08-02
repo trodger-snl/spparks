@@ -58,12 +58,12 @@ foreach(HEADER ${MATCHING_HEADERS})
         set(INCLUDE_HEADER TRUE)
         
         # Check if header should be included based on features
-        should_include_header("${HEADER_NAME}" INCLUDE_HEADER)
-        
+        should_include_header("${HEADER_NAME}" INCLUDE_HEADER SKIP_WHY)
+
         if(INCLUDE_HEADER)
             list(APPEND VALID_HEADERS "${HEADER_NAME}")
         else()
-            message(STATUS "Style generation for ${STYLE_TYPE}: Skipping ${HEADER_NAME} (missing dependencies)")
+            message(STATUS "Style generation for ${STYLE_TYPE}: Skipping ${HEADER_NAME} -- ${SKIP_WHY}")
         endif()
     endif()
 endforeach()

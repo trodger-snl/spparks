@@ -39,6 +39,15 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
+# Performance options. These MUST be declared before the Release block below,
+# which reads them. Declared after it, a fresh configure evaluated them as empty
+# (option() had not run yet) and silently produced -O2 with no -march=native and
+# no LTO, while re-configuring the same directory picked the values up from the
+# cache and produced -O3 -march=native -flto. The optimization level therefore
+# depended on whether the build directory was new.
+option(SPPARKS_AGGRESSIVE_OPTIMIZATION "Enable aggressive optimizations (may increase compile time)" ON)
+option(SPPARKS_NATIVE_OPTIMIZATION "Enable native CPU optimizations (-march=native)" ON)
+
 # Enhanced optimization flags for different build types
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     # Start with base optimization level
@@ -167,9 +176,8 @@ set(SPPARKS_KOKKOS_ARCH "" CACHE STRING "Kokkos GPU architecture token (e.g. AMD
 # (HIP + OpenMP) for the same host-threading benefit.
 option(SPPARKS_KOKKOS_HOST_OPENMP "Use OpenMP (not Serial) as the Kokkos host space for GPU backends" OFF)
 
-# Performance options
-option(SPPARKS_AGGRESSIVE_OPTIMIZATION "Enable aggressive optimizations (may increase compile time)" ON)
-option(SPPARKS_NATIVE_OPTIMIZATION "Enable native CPU optimizations (-march=native)" ON)
+# Performance options are declared near the top of this file, before the
+# Release flag block that reads them.
 
 # Integer size options
 option(SPPARKS_SMALLSMALL "Use 32-bit for all integers" OFF)

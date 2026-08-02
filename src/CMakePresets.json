@@ -44,6 +44,16 @@
     },
 
     {
+      "name": "mi300a-discrete",
+      "inherits": "mi300a",
+      "displayName": "AMD MI300A APU, unified memory DISABLED (A/B control)",
+      "description": "Same hardware and same --offload-arch=gfx942 as the mi300a preset, but the non-APU arch token leaves KOKKOS_IMPL_HIP_UNIFIED_MEMORY undefined. HIPSpace then reports accessible=false to HostSpace and uses a host-inaccessible SharedAllocationRecord, so DualView keeps a distinct host mirror and deep_copy does real work -- the same code path strix-halo takes. The allocator is hipMalloc either way, so this isolates the cost of the explicit copy machinery with hardware held constant. Run WITHOUT HSA_XNACK=1 to match. Keep this in its own build dir: Kokkos_ARCH_* is cached with FORCE, so two arch tokens in one directory both stay ON and Kokkos errors out.",
+      "cacheVariables": {
+        "SPPARKS_KOKKOS_ARCH": "AMD_GFX942"
+      }
+    },
+
+    {
       "name": "strix-halo",
       "inherits": "_kokkos-hip",
       "displayName": "AMD Strix Halo / RDNA 3.5 (gfx1150, gfx1151)",
@@ -69,7 +79,8 @@
   ],
 
   "buildPresets": [
-    { "name": "mi300a",     "configurePreset": "mi300a" },
+    { "name": "mi300a",          "configurePreset": "mi300a" },
+    { "name": "mi300a-discrete", "configurePreset": "mi300a-discrete" },
     { "name": "strix-halo", "configurePreset": "strix-halo" },
     { "name": "openmp",     "configurePreset": "openmp" }
   ]

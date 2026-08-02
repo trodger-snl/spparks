@@ -274,7 +274,23 @@ if(SPPARKS_ENABLE_HDF5)
             message(STATUS "Found parallel HDF5 (MPI-enabled)")
             add_compile_definitions(H5_HAVE_PARALLEL)
         elseif(SPPARKS_ENABLE_MPI AND NOT HDF5_IS_PARALLEL)
-            message(WARNING "MPI is enabled but HDF5 is not parallel. Consider using parallel HDF5 for better performance.")
+            # Not a performance note. The HDF5 temperature sources call
+            # HighFive::MPIOFileAccess(...) unconditionally, so serial HDF5 with
+            # HighFive+MPI is a compile failure in
+            # temperature_source_hdf5_unstructured.cpp, not a slow build.
+            if(SPPARKS_ENABLE_HIGHFIVE)
+                message(FATAL_ERROR
+                    "MPI is enabled but the HDF5 found at ${HDF5_INCLUDE_DIRS} is serial.\n"
+                    "The additive/texture temperature sources call HighFive::MPIOFileAccess() "
+                    "unconditionally, so this will fail to compile rather than run slowly.\n"
+                    "Load a parallel HDF5 (on a Cray system: module load cray-hdf5-parallel) "
+                    "and point at it with -DHDF5_ROOT=<prefix>, or configure with "
+                    "-DSPPARKS_ENABLE_HIGHFIVE=OFF to drop the additive/texture styles.")
+            else()
+                message(WARNING
+                    "MPI is enabled but the HDF5 found at ${HDF5_INCLUDE_DIRS} is serial. "
+                    "Parallel I/O will be unavailable.")
+            endif()
         endif()
     else()
         message(FATAL_ERROR "HDF5 was requested but not found")
@@ -298,7 +314,23 @@ if(SPPARKS_ENABLE_HIGHFIVE)
                 message(STATUS "Found parallel HDF5 (MPI-enabled)")
                 add_compile_definitions(H5_HAVE_PARALLEL)
             elseif(SPPARKS_ENABLE_MPI AND NOT HDF5_IS_PARALLEL)
-                message(WARNING "MPI is enabled but HDF5 is not parallel. Consider using parallel HDF5 for better performance.")
+                # Not a performance note. The HDF5 temperature sources call
+            # HighFive::MPIOFileAccess(...) unconditionally, so serial HDF5 with
+            # HighFive+MPI is a compile failure in
+            # temperature_source_hdf5_unstructured.cpp, not a slow build.
+            if(SPPARKS_ENABLE_HIGHFIVE)
+                message(FATAL_ERROR
+                    "MPI is enabled but the HDF5 found at ${HDF5_INCLUDE_DIRS} is serial.\n"
+                    "The additive/texture temperature sources call HighFive::MPIOFileAccess() "
+                    "unconditionally, so this will fail to compile rather than run slowly.\n"
+                    "Load a parallel HDF5 (on a Cray system: module load cray-hdf5-parallel) "
+                    "and point at it with -DHDF5_ROOT=<prefix>, or configure with "
+                    "-DSPPARKS_ENABLE_HIGHFIVE=OFF to drop the additive/texture styles.")
+            else()
+                message(WARNING
+                    "MPI is enabled but the HDF5 found at ${HDF5_INCLUDE_DIRS} is serial. "
+                    "Parallel I/O will be unavailable.")
+            endif()
             endif()
         else()
             message(FATAL_ERROR "HDF5 was requested but not found")
@@ -391,7 +423,14 @@ if(SPPARKS_PACKAGE_KOKKOS)
         set(Kokkos_ENABLE_SERIAL ON CACHE BOOL "Enable Serial for host execution" FORCE)
         # AMD GPUs are NOT auto-detected; the gfx target must be set explicitly.
         if(NOT SPPARKS_KOKKOS_ARCH)
-            message(FATAL_ERROR "HIP backend requires SPPARKS_KOKKOS_ARCH (e.g. AMD_GFX1151)")
+            message(FATAL_ERROR
+                "HIP backend requires SPPARKS_KOKKOS_ARCH.\n"
+                "  AMD_GFX942_APU  MI300A APU (El Capitan and similar; unified memory)\n"
+                "  AMD_GFX942      MI300X, or MI300A with unified memory disabled\n"
+                "  AMD_GFX90A      MI200 series\n"
+                "  AMD_GFX1151     Strix Halo / RDNA 3.5 APU\n"
+                "Set it with -DSPPARKS_KOKKOS_ARCH=<token>, or use a preset from "
+                "src/CMakePresets.json (cmake --list-presets).")
         endif()
         set(Kokkos_ARCH_${SPPARKS_KOKKOS_ARCH} ON CACHE BOOL "Kokkos GPU arch" FORCE)
         message(STATUS "Kokkos: HIP backend enabled (AMD GPUs), arch ${SPPARKS_KOKKOS_ARCH}")
@@ -449,6 +488,27 @@ if(SPPARKS_PACKAGE_KOKKOS)
             "  git submodule update --init --recursive\n")
     endif()
 
+    # Validate the arch token against the bundled Kokkos before handing off. We set
+    # Kokkos_ARCH_${SPPARKS_KOKKOS_ARCH} unconditionally above, so a typo produces a
+    # cache entry Kokkos simply never reads: the configure succeeds, no arch is
+    # selected, and the failure surfaces as an unrelated compile or link error much
+    # later. Catch it here, where we can name the valid tokens.
+    if(SPPARKS_KOKKOS_ARCH)
+        file(READ "${KOKKOS_DIR}/cmake/kokkos_arch.cmake" _kokkos_arch_list)
+        if(NOT _kokkos_arch_list MATCHES "[ \t(]${SPPARKS_KOKKOS_ARCH}[ \t)\n]")
+            string(REGEX MATCHALL "SUPPORTED_AMD_ARCHS ([A-Z0-9_ ]+)" _amd_arch_lines "${_kokkos_arch_list}")
+            string(REGEX REPLACE "SUPPORTED_AMD_ARCHS " "" _amd_tokens "${_amd_arch_lines}")
+            string(REPLACE ";" " " _amd_tokens "${_amd_tokens}")
+            string(REGEX REPLACE " +" " " _amd_tokens "${_amd_tokens}")
+            message(FATAL_ERROR
+                "SPPARKS_KOKKOS_ARCH='${SPPARKS_KOKKOS_ARCH}' is not a token known to the "
+                "bundled Kokkos at ${KOKKOS_DIR}.\n"
+                "This would otherwise configure cleanly and fail later with an unrelated error.\n"
+                "AMD tokens this Kokkos accepts:\n  ${_amd_tokens}\n"
+                "Run 'cmake --list-presets' in src/ for the configurations already defined here.")
+        endif()
+    endif()
+
     # Kokkos 4.7.01 does not recognize RDNA 3.5 (gfx1150/gfx1151, e.g. AMD Strix
     # Halo / Radeon 8050S-8060S APUs). Apply a small bundled patch that registers
     # those archs and sets the correct 32-wide wavefront size. Idempotent: skipped
@@ -487,17 +547,28 @@ endif()
 include(cmake/MachineConfigs.cmake)
 include(cmake/PackageManager.cmake)
 
-# Apply machine configuration if specified
+# Apply machine configuration if specified.
+#
+# setup_machine_presets() declares SPPARKS_MACHINE and applies it when set, so the
+# apply_machine_config() call below runs only for a machine chosen by
+# auto_detect_machine(). Calling it unconditionally duplicated every message the
+# config emits, which is pure noise in a build log someone is trying to read.
 setup_machine_presets()
 setup_hpc_configs()  # Enable HPC system configurations
-auto_detect_machine()
 
-if(SPPARKS_MACHINE)
-    apply_machine_config("${SPPARKS_MACHINE}")
+if(NOT SPPARKS_MACHINE)
+    auto_detect_machine()
+    if(SPPARKS_MACHINE)
+        apply_machine_config("${SPPARKS_MACHINE}")
+    endif()
 endif()
 
-# Command line options should override machine config
-# (This happens automatically since CMake cache variables take precedence)
+# NOTE: the comment this replaces claimed "command line options override machine
+# config ... automatically since CMake cache variables take precedence". That is
+# backwards. apply_machine_config() sets normal variables, which SHADOW the cache
+# for the rest of the configure, so the machine config wins and CMakeCache.txt is
+# left disagreeing with the build. _spk_machine_set_mpi() now warns when that
+# happens; see cmake/MachineConfigs.cmake.
 
 # Configure MPI after machine configuration
 # Note: This ordering is intentional - machine configs can set SPPARKS_ENABLE_MPI,
@@ -937,9 +1008,31 @@ if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
     message(STATUS "HDF5 is parallel: ${HDF5_IS_PARALLEL}")
 endif()
 message(STATUS "HighFive support: ${SPPARKS_ENABLE_HIGHFIVE}")
+if(SPPARKS_ENABLE_HIGHFIVE)
+    if(SPPARKS_USE_EXTERNAL_HIGHFIVE)
+        message(STATUS "  HighFive source: external (${HighFive_DIR})")
+    else()
+        message(STATUS "  HighFive source: FetchContent from github.com (needs network at configure time)")
+    endif()
+endif()
 message(STATUS "Kokkos support: ${SPPARKS_PACKAGE_KOKKOS}")
 if(SPPARKS_PACKAGE_KOKKOS)
     message(STATUS "  Kokkos backend: ${SPPARKS_KOKKOS_BACKEND}")
+    if(SPPARKS_KOKKOS_ARCH)
+        message(STATUS "  Kokkos arch: ${SPPARKS_KOKKOS_ARCH}")
+    endif()
+    if(SPPARKS_KOKKOS_HOST_OPENMP)
+        message(STATUS "  Kokkos host space: OpenMP")
+    endif()
+    # Unified memory is the single behavioural difference between the MI300A APU
+    # token and the plain gfx942 token, and it changes whether DualView keeps a
+    # distinct host mirror. State it explicitly: it is otherwise invisible in the
+    # log, and it decides whether HSA_XNACK=1 is needed at runtime.
+    if(SPPARKS_KOKKOS_ARCH STREQUAL "AMD_GFX942_APU")
+        message(STATUS "  Unified memory: ON (KOKKOS_IMPL_HIP_UNIFIED_MEMORY) -- export HSA_XNACK=1 to run")
+    elseif(SPPARKS_KOKKOS_BACKEND STREQUAL "HIP")
+        message(STATUS "  Unified memory: OFF -- HIPSpace is host-inaccessible, deep_copy does real work")
+    endif()
 endif()
 if(SPPARKS_SMALLSMALL)
     message(STATUS "Integer types: 32-bit (SMALLSMALL)")
@@ -948,4 +1041,51 @@ elseif(SPPARKS_BIGBIG)
 else()
     message(STATUS "Integer types: 64-bit bigint (SMALLBIG)")
 endif()
+
+# Optional styles that were NOT registered, with the flag that would enable each.
+# SPPARKS_SKIPPED_STYLES is built in configure_conditional_sources(). A style that
+# is silently absent here surfaces much later as "style not recognized" at runtime,
+# with nothing in the C++ to explain it, so it is worth stating at configure time.
+if(SPPARKS_SKIPPED_STYLES)
+    message(STATUS "")
+    message(STATUS "Styles NOT built (each needs the feature shown):")
+    foreach(_skipped IN LISTS SPPARKS_SKIPPED_STYLES)
+        message(STATUS "  ${_skipped}")
+    endforeach()
+endif()
+
+# Environment block. This exists so that a build log copied off a remote machine
+# carries everything needed to diagnose it without an interactive session.
+message(STATUS "")
+message(STATUS "--- Environment (include this when reporting a build problem) ---")
+message(STATUS "CMake: ${CMAKE_VERSION} (${CMAKE_GENERATOR})")
+message(STATUS "System: ${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_VERSION} ${CMAKE_SYSTEM_PROCESSOR}")
+message(STATUS "CXX: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
+message(STATUS "CXX path: ${CMAKE_CXX_COMPILER}")
+message(STATUS "CXX standard: ${CMAKE_CXX_STANDARD}")
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    message(STATUS "Release flags: ${OPT_FLAGS}")
+endif()
+if(SPPARKS_ENABLE_MPI)
+    if(MPI_CXX_FOUND)
+        # MPI_CXX_LIBRARY_VERSION_STRING is only populated when FindMPI could run a
+        # probe binary, which does not happen on machines that forbid launching MPI
+        # from a login node. Fall back to the standard version so the line is never
+        # blank in a log someone pastes back.
+        if(MPI_CXX_LIBRARY_VERSION_STRING)
+            string(REGEX REPLACE "\n.*" "" _mpi_impl "${MPI_CXX_LIBRARY_VERSION_STRING}")
+            message(STATUS "MPI: ${_mpi_impl}")
+        else()
+            message(STATUS "MPI: implementation string unavailable (MPI standard ${MPI_CXX_VERSION})")
+        endif()
+        message(STATUS "MPI compiler: ${MPI_CXX_COMPILER}")
+    else()
+        message(STATUS "MPI: requested but MPI_CXX_FOUND is false")
+    endif()
+endif()
+if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
+    message(STATUS "HDF5 include: ${HDF5_INCLUDE_DIRS}")
+endif()
+message(STATUS "Source dir: ${CMAKE_CURRENT_SOURCE_DIR}")
+message(STATUS "Binary dir: ${CMAKE_CURRENT_BINARY_DIR}")
 message(STATUS "=====================================")

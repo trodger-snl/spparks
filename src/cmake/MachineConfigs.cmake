@@ -1,6 +1,25 @@
 # Machine-specific configurations for SPPARKS
 # Equivalent to the MAKE/Makefile.* files
 
+# Set SPPARKS_ENABLE_MPI from a machine config, warning loudly if that contradicts
+# what the user asked for on the command line.
+#
+# The override is invisible otherwise, and actively misleading: the machine config
+# sets a normal variable that shadows the cache, so CMakeCache.txt keeps reporting
+# the user's value while the build uses the machine config's. Anyone diagnosing
+# "I passed -DSPPARKS_ENABLE_MPI=ON and got a serial binary" from a pasted log
+# needs this stated.
+macro(_spk_machine_set_mpi _value _machine)
+    if(DEFINED CACHE{SPPARKS_ENABLE_MPI} AND NOT "$CACHE{SPPARKS_ENABLE_MPI}" STREQUAL "${_value}")
+        message(WARNING
+            "Machine config '${_machine}' is overriding SPPARKS_ENABLE_MPI: "
+            "requested $CACHE{SPPARKS_ENABLE_MPI}, machine config forces ${_value}.\n"
+            "CMakeCache.txt will still show $CACHE{SPPARKS_ENABLE_MPI}; the build uses ${_value}.\n"
+            "Pass -DSPPARKS_MACHINE=mpi (or another preset whose MPI setting matches) to avoid this.")
+    endif()
+    set(SPPARKS_ENABLE_MPI ${_value} PARENT_SCOPE)
+endmacro()
+
 # Function to apply machine-specific settings
 function(apply_machine_config MACHINE_NAME)
     message(STATUS "Applying machine configuration: ${MACHINE_NAME}")
@@ -21,21 +40,21 @@ function(apply_machine_config MACHINE_NAME)
     
     if(MACHINE_NAME STREQUAL "mac")
         # macOS configuration (no MPI)
-        set(SPPARKS_ENABLE_MPI OFF PARENT_SCOPE)
+        _spk_machine_set_mpi(OFF "${MACHINE_NAME}")
         set(CMAKE_CXX_COMPILER "c++" PARENT_SCOPE)
         set(CMAKE_C_COMPILER "cc" PARENT_SCOPE)
         add_compile_definitions(SPPARKS_GZIP)
         
     elseif(MACHINE_NAME STREQUAL "mac_mpi")
         # macOS with MPI
-        set(SPPARKS_ENABLE_MPI ON PARENT_SCOPE)
+        _spk_machine_set_mpi(ON "${MACHINE_NAME}")
         set(CMAKE_CXX_COMPILER "mpicxx" PARENT_SCOPE)
         set(CMAKE_C_COMPILER "mpicc" PARENT_SCOPE)
         add_compile_definitions(SPPARKS_GZIP)
         
     elseif(MACHINE_NAME STREQUAL "mac_arm")
         # Apple Silicon Mac with MPI (matches Makefile.mac_arm)
-        set(SPPARKS_ENABLE_MPI ON PARENT_SCOPE)
+        _spk_machine_set_mpi(ON "${MACHINE_NAME}")
         
         # Force enable HDF5 and JPEG for mac_arm unless explicitly overridden by command line
         if(NOT DEFINED CACHE{SPPARKS_ENABLE_HDF5} OR NOT CMAKE_ARGV MATCHES "SPPARKS_ENABLE_HDF5")
@@ -58,21 +77,21 @@ function(apply_machine_config MACHINE_NAME)
         
     elseif(MACHINE_NAME STREQUAL "linux")
         # Generic Linux
-        set(SPPARKS_ENABLE_MPI OFF PARENT_SCOPE)
+        _spk_machine_set_mpi(OFF "${MACHINE_NAME}")
         set(CMAKE_CXX_COMPILER "g++" PARENT_SCOPE)
         set(CMAKE_C_COMPILER "gcc" PARENT_SCOPE)
         add_compile_definitions(SPPARKS_GZIP)
         
     elseif(MACHINE_NAME STREQUAL "mpi")
         # Generic MPI
-        set(SPPARKS_ENABLE_MPI ON PARENT_SCOPE)
+        _spk_machine_set_mpi(ON "${MACHINE_NAME}")
         set(CMAKE_CXX_COMPILER "mpicxx" PARENT_SCOPE)
         set(CMAKE_C_COMPILER "mpicc" PARENT_SCOPE)
         add_compile_definitions(SPPARKS_GZIP SPPARKS_UNORDERED_MAP)
         
     elseif(MACHINE_NAME STREQUAL "serial")
         # Serial build
-        set(SPPARKS_ENABLE_MPI OFF PARENT_SCOPE)
+        _spk_machine_set_mpi(OFF "${MACHINE_NAME}")
         set(CMAKE_CXX_COMPILER "g++" PARENT_SCOPE)
         set(CMAKE_C_COMPILER "gcc" PARENT_SCOPE)
         add_compile_definitions(SPPARKS_GZIP)
@@ -87,7 +106,7 @@ function(apply_machine_config MACHINE_NAME)
     elseif(MACHINE_NAME STREQUAL "mpi_debug")
         # MPI Debug build
         set(CMAKE_BUILD_TYPE "Debug" PARENT_SCOPE)
-        set(SPPARKS_ENABLE_MPI ON PARENT_SCOPE)
+        _spk_machine_set_mpi(ON "${MACHINE_NAME}")
         set(CMAKE_CXX_COMPILER "mpicxx" PARENT_SCOPE)
         set(CMAKE_C_COMPILER "mpicc" PARENT_SCOPE)
         add_compile_definitions(SPPARKS_GZIP)
@@ -146,8 +165,16 @@ function(auto_detect_machine)
                 message(STATUS "Auto-detected: Intel Mac")
             endif()
         elseif(UNIX)
-            set(SPPARKS_MACHINE "linux" PARENT_SCOPE)
-            message(STATUS "Auto-detected: Linux")
+            # Deliberately do NOT select the "linux" config here. It forces
+            # SPPARKS_ENABLE_MPI=OFF, which silently discarded an explicit
+            # -DSPPARKS_ENABLE_MPI=ON on every non-GPU Linux build: the cache kept
+            # reporting ON while the build was serial, and additive/texture then
+            # vanished from the style headers with no message naming the cause.
+            # Its other settings are inert (CMAKE_CXX_COMPILER is fixed by project()
+            # long before this runs) or redundant (SPPARKS_GZIP is handled in
+            # CMakeLists.txt), so skipping it costs nothing.
+            message(STATUS "Auto-detected: Linux (no machine config applied; "
+                           "pass -DSPPARKS_MACHINE=<preset> to force one)")
         else()
             message(STATUS "Could not auto-detect machine type")
         endif()

@@ -13,8 +13,24 @@ with AMD MI300A. Keyed by hardware, not by site.
 module load rocmcc/6.4.3-magic    # check `module avail rocmcc` for the current -magic
 module load cray-mpich            # load AFTER the compiler; it resolves against it
 module load cray-hdf5-parallel
-module load cmake
+module load cmake                 # prefer a newer one if offered; see below
 ```
+
+**CMake version.** The tree needs **>= 3.22** (`src/CMakeLists.txt:1`, and
+bundled Kokkos requires the same). `src/CMakePresets.json` is schema version 3,
+needing **>= 3.21**, so the presets can never be the binding constraint on a
+machine that can build this at all.
+
+An LC default of 3.24.2 works. If a newer module is available (e.g. 3.29.2),
+prefer it — later CMake has better HIP-language and Cray-wrapper handling — but
+it is not required. If you ever see
+
+```
+CMake Error: Could not read presets from <dir>: Unrecognized "version" field
+```
+
+that is a presets *schema* version above what your CMake understands (3.24
+tops out at schema 5, 3.25 at 6), not a problem with your environment.
 
 Use the `-magic` variants. For `cray-mpich/8.1.30+` they auto-link `-lxpmem` and
 the GTL library (`-lmpi_gtl_hsa`), which LLNL has recommended for all

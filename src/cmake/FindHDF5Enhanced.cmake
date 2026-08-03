@@ -11,6 +11,23 @@ if(SPPARKS_ENABLE_MPI AND NOT DEFINED HDF5_PREFER_PARALLEL)
     set(HDF5_PREFER_PARALLEL ON)
 endif()
 
+# HDF5_ROOT is an installation PREFIX, not an include directory. Passing the
+# include dir (an easy mistake, since that is the path the configure summary
+# prints) makes CMake search <root>/include/include and <root>/include/lib, so
+# headers may still resolve while libraries do not -- surfacing as the very
+# unhelpful "Could NOT find HDF5Enhanced (missing: HDF5_LIBRARIES) (found
+# version ...)". No real prefix is named "include", so correct it and say so.
+if(HDF5_ROOT)
+    get_filename_component(_h5_root_leaf "${HDF5_ROOT}" NAME)
+    if(_h5_root_leaf STREQUAL "include")
+        get_filename_component(HDF5_ROOT "${HDF5_ROOT}" DIRECTORY)
+        message(STATUS
+            "HDF5: HDF5_ROOT pointed at an include directory; using the prefix "
+            "'${HDF5_ROOT}' instead (HDF5_ROOT must be the installation prefix).")
+    endif()
+    unset(_h5_root_leaf)
+endif()
+
 # Use the standard FindHDF5 module first
 find_package(HDF5 QUIET COMPONENTS C)
 

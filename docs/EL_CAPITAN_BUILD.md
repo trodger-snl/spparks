@@ -48,6 +48,53 @@ gated on HighFive **and** MPI (`src/cmake/ConditionalSources.cmake`). If it
 resolves to nothing the styles are silently dropped and you find out at runtime
 as "style not recognized".
 
+### Parallel HDF5 on a magic-module environment
+
+`cray-hdf5-parallel` lives in the Cray PE **Lmod hierarchy** and only becomes
+visible once a `PrgEnv-*` is loaded. LLNL's `-magic` modules deliberately sit
+outside that hierarchy, so with `rocmcc/<ver>-magic` you will see only the serial
+`cray-hdf5` and **no parallel module at all**. That is expected, not a broken
+environment — point at the install directly (LLNL's "Explicit-Paths" model):
+
+```bash
+ls /opt/cray/pe/hdf5-parallel/            # versions
+ls /opt/cray/pe/hdf5-parallel/1.14.3.5/   # compiler families: amd, crayclang, gnu, ...
+```
+
+Take the family matching your compiler (`amd` for rocmcc/amdclang++). Verified
+working on El Capitan: `/opt/cray/pe/hdf5-parallel/1.14.3.5/amd/6.0`.
+
+```bash
+cmake --preset mi300a -DHDF5_ROOT=/opt/cray/pe/hdf5-parallel/1.14.3.5/amd/6.0
+```
+
+**`HDF5_ROOT` is the installation prefix — do NOT append `/include`.** With the
+include directory CMake searches `<root>/include/include` and `<root>/include/lib`;
+headers can still resolve while libraries do not, and it fails with the
+thoroughly unhelpful `Could NOT find HDF5Enhanced (missing: HDF5_LIBRARIES)
+(found version "1.14.3")`. The finder now detects and corrects this, but the
+prefix form is what to pass.
+
+Do **not** use the `openmpi` / `oneapi` / `gcc` / `clang` HDF5 modules. Those are
+non-Cray builds tied to a different MPI; OpenMPI and MPICH are not ABI
+compatible, and cray-mpich is MPICH-derived. Everything under
+`/opt/cray/pe/hdf5-parallel/` is built against cray-mpich, which is the part that
+must match.
+
+Confirm before building:
+
+```bash
+grep H5_HAVE_PARALLEL <prefix>/include/H5pubconf.h    # what our finder greps for
+```
+
+and check the configure summary says `HDF5 is parallel: ON`. Since MPI implies a
+parallel requirement here (the temperature sources call
+`HighFive::MPIOFileAccess()` unconditionally), the finder sets
+`HDF5_PREFER_PARALLEL` for you — otherwise CMake probes the serial `h5cc`
+wrapper first and a wrapper on `PATH` outranks `HDF5_ROOT`.
+
+### HighFive
+
 By default CMake fetches HighFive from GitHub at configure time. If the machine
 can reach GitHub, nothing to do. If not, install it (header-only) and configure
 with:

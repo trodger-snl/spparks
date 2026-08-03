@@ -14,6 +14,44 @@ endif()
 # Use the standard FindHDF5 module first
 find_package(HDF5 QUIET COMPONENTS C)
 
+# Recover a library path when FindHDF5 resolved headers but not libraries.
+#
+# Two ways that happens in practice, both on Cray:
+#   * FindHDF5 learned the include dir and version from the h5pcc wrapper but
+#     could not turn the wrapper's link line into a file path, leaving
+#     HDF5_LIBRARIES empty while HDF5_C_LIBRARIES is set (or neither is).
+#   * cray-hdf5-parallel installs libhdf5_parallel.so, NOT libhdf5.so, so a
+#     plain search for "hdf5" finds nothing under an otherwise correct
+#     HDF5_ROOT.
+#
+# Symptom before this: "Could NOT find HDF5Enhanced (missing: HDF5_LIBRARIES)
+# (found version 1.14.3)" -- a found-but-unusable HDF5.
+if(HDF5_FOUND AND NOT HDF5_LIBRARIES)
+    if(HDF5_C_LIBRARIES)
+        set(HDF5_LIBRARIES ${HDF5_C_LIBRARIES})
+        message(STATUS "HDF5: using HDF5_C_LIBRARIES for HDF5_LIBRARIES")
+    else()
+        # Derive candidate prefixes from whatever we do know.
+        set(_h5_hints "${HDF5_ROOT}" "$ENV{HDF5_ROOT}" "$ENV{HDF5_DIR}")
+        foreach(_inc IN LISTS HDF5_INCLUDE_DIRS)
+            get_filename_component(_h5_prefix "${_inc}" DIRECTORY)
+            list(APPEND _h5_hints "${_h5_prefix}")
+        endforeach()
+
+        find_library(HDF5_RECOVERED_LIBRARY
+            NAMES hdf5_parallel hdf5      # Cray parallel name first
+            HINTS ${_h5_hints}
+            PATH_SUFFIXES lib lib64
+        )
+        if(HDF5_RECOVERED_LIBRARY)
+            set(HDF5_LIBRARIES ${HDF5_RECOVERED_LIBRARY})
+            set(HDF5_C_LIBRARIES ${HDF5_RECOVERED_LIBRARY})
+            message(STATUS "HDF5: recovered library ${HDF5_RECOVERED_LIBRARY}")
+        endif()
+        unset(_h5_hints)
+    endif()
+endif()
+
 if(HDF5_FOUND)
     # Enhanced parallel detection
     if(NOT DEFINED HDF5_IS_PARALLEL)

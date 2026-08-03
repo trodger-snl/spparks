@@ -215,22 +215,68 @@ if(HDF5_FOUND)
         endforeach()
     endif()
     
-    # Validate that we can compile a simple HDF5 program
-    include(CheckCSourceCompiles)
-    set(CMAKE_REQUIRED_INCLUDES ${HDF5_INCLUDE_DIRS})
-    set(CMAKE_REQUIRED_LIBRARIES ${HDF5_LIBRARIES})
-    check_c_source_compiles("
-        #include <hdf5.h>
-        int main() {
-            hid_t file_id = H5Fcreate(\"test.h5\", H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
-            H5Fclose(file_id);
-            return 0;
-        }"
-        HDF5_COMPILES)
-    
-    if(NOT HDF5_COMPILES)
-        message(WARNING "HDF5 found but test compilation failed. Check library compatibility.")
+    # Validate that we can compile a simple HDF5 program.
+    #
+    # A PARALLEL hdf5.h includes <mpi.h> (H5public.h), so this test needs the MPI
+    # include path too. find_package(MPI) runs much later in CMakeLists.txt (the
+    # HDF5 search is at ~269, MPI at ~579), so MPI_C_INCLUDE_DIRS does not exist
+    # yet -- look it up here. Without this the test fails on any toolchain whose
+    # plain C compiler does not carry mpi.h by default, which is most of them; it
+    # only passed on the dev machine because a spack view happened to put mpi.h
+    # on the default include path.
+    set(_h5_test_includes ${HDF5_INCLUDE_DIRS})
+    set(_h5_can_test TRUE)
+    if(HDF5_IS_PARALLEL)
+        find_package(MPI QUIET COMPONENTS C)
+        if(MPI_C_INCLUDE_DIRS)
+            list(APPEND _h5_test_includes ${MPI_C_INCLUDE_DIRS})
+        elseif(MPI_C_INCLUDE_PATH)
+            list(APPEND _h5_test_includes ${MPI_C_INCLUDE_PATH})
+        else()
+            # Parallel HDF5 but no MPI include path to give the probe. The probe
+            # would fail for want of mpi.h and say nothing about HDF5, so skip it
+            # -- the real build compiles through the MPI wrapper and is fine.
+            set(_h5_can_test FALSE)
+            message(STATUS
+                "HDF5: parallel build and MPI includes not yet located; skipping "
+                "the compile probe (the build itself uses the MPI compiler wrapper)")
+        endif()
     endif()
+
+    if(_h5_can_test)
+        include(CheckCSourceCompiles)
+        set(CMAKE_REQUIRED_INCLUDES ${_h5_test_includes})
+        set(CMAKE_REQUIRED_LIBRARIES ${HDF5_LIBRARIES})
+        check_c_source_compiles("
+            #include <hdf5.h>
+            int main() {
+                hid_t file_id = H5Fcreate(\"test.h5\", H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+                H5Fclose(file_id);
+                return 0;
+            }"
+            HDF5_COMPILES)
+        unset(CMAKE_REQUIRED_INCLUDES)
+        unset(CMAKE_REQUIRED_LIBRARIES)
+
+        if(NOT HDF5_COMPILES)
+            # Advisory only. This probe uses the plain C compiler, while SPPARKS
+            # compiles these sources with the MPI C++ wrapper, so a failure here
+            # is frequently a probe artifact rather than a broken HDF5.
+            message(WARNING
+                "HDF5 compile probe failed.\n"
+                "  include dirs: ${_h5_test_includes}\n"
+                "  libraries:    ${HDF5_LIBRARIES}\n"
+                "  parallel:     ${HDF5_IS_PARALLEL}\n"
+                "This probe uses the plain C compiler (${CMAKE_C_COMPILER}), not the "
+                "MPI wrapper the build actually uses, so it can fail on a perfectly "
+                "good parallel HDF5 that simply needs mpi.h from the wrapper. "
+                "Configure continues; if the build then fails on a missing mpi.h or "
+                "hdf5.h, this was real -- see CMakeFiles/CMakeError.log for the "
+                "compiler output.")
+        endif()
+    endif()
+    unset(_h5_test_includes)
+    unset(_h5_can_test)
 endif()
 
 # Standard CMake FindPackage handling

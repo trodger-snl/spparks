@@ -387,6 +387,43 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
     domain->subxlo * dx - pad, domain->subylo * dx - pad, domain->subzlo * dx - pad,
     domain->subxhi * dx + pad, domain->subyhi * dx + pad, domain->subzhi * dx + pad
   };
+
+  // Diagnostic: on any axis that is actually decomposed, a pad wider than the
+  // subdomain itself erases that axis from chunk selection -- every rank's
+  // selection box then spans the whole domain on that axis and they all load
+  // the same chunks, paying N-fold I/O and memory for no locality.
+  //
+  // Measured on the ct15 box deck (311x317x51 sites, dx=5e-6, so a 0.255 mm
+  // z-extent against a 0.5 mm pad): forcing `processors 1 1 4` made all four
+  // ranks load a byte-identical 93/291 chunks, versus 66/69/62/62 for the
+  // default 2x2x1. Same temperatures, 39% more wall time, 25% more memory.
+  //
+  // This is NOT a reason to shrink the pad -- it is load-bearing for boundary
+  // element interpolation, for ghost sites (the cache covers nall), and for the
+  // nodal_smooth halo, which already warns that it only has ~one tet hop. It is
+  // a reason to not decompose that axis. Warned once per run, from rank 0.
+  if (!pad_vs_subdomain_warned && universe->me == 0 && screen) {
+    const char *axis_name[3] = {"x","y","z"};
+    const double sublo[3] = {domain->subxlo, domain->subylo, domain->subzlo};
+    const double subhi[3] = {domain->subxhi, domain->subyhi, domain->subzhi};
+    for (int ax = 0; ax < 3; ax++) {
+      if (domain->procgrid[ax] <= 1) continue;      // axis not decomposed
+      const double extent = (subhi[ax] - sublo[ax]) * dx;
+      if (pad >= extent) {
+        fprintf(screen,
+          "WARNING: chunk-load pad (%.3g m = %g*dx) >= this rank's %s-extent "
+          "(%.3g m) while %s is split over %d procs. Chunk selection ignores "
+          "the %s decomposition, so every rank loads nearly the same chunks: "
+          "expect ~%dx redundant thermal I/O and memory on this axis with no "
+          "locality gained. Decompose %s less (or not at all), or raise the "
+          "site count per rank along %s.\n",
+          pad, grid_cell_size_multiplier, axis_name[ax], extent,
+          axis_name[ax], domain->procgrid[ax], axis_name[ax],
+          domain->procgrid[ax], axis_name[ax], axis_name[ax]);
+        pad_vs_subdomain_warned = true;
+      }
+    }
+  }
   
   // Find overlapping chunks - first pass for chunks that directly overlap SPPARKS domain
   std::vector<unsigned> overlappingChunks;

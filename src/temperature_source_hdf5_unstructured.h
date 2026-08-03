@@ -282,6 +282,9 @@ private:
   bool device_time_interp_ = false;  // skip host precompute; device interps in time
   int bounds_check_mode;  // 0 = exact, 1 = subvolume
   double grid_cell_size_multiplier;  // Spatial grid cell size = dx * multiplier (default 50)
+  // Latches the "pad wider than the decomposed subdomain" warning in
+  // load_layer() so it is emitted once per run rather than once per layer.
+  mutable bool pad_vs_subdomain_warned = false;
 
   // Optimization control flags
   bool use_spatial_grid;   // Use spatial grid for element lookup (default: true)

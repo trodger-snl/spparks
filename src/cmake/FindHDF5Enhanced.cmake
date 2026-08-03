@@ -227,11 +227,18 @@ if(HDF5_FOUND)
     set(_h5_test_includes ${HDF5_INCLUDE_DIRS})
     set(_h5_can_test TRUE)
     if(HDF5_IS_PARALLEL)
-        find_package(MPI QUIET COMPONENTS C)
+        # Ask for both languages but require neither: on some Cray setups the C
+        # component fails to validate while CXX is fine, and either language's
+        # include dir is enough to find mpi.h for this probe.
+        find_package(MPI QUIET COMPONENTS C CXX)
         if(MPI_C_INCLUDE_DIRS)
             list(APPEND _h5_test_includes ${MPI_C_INCLUDE_DIRS})
+        elseif(MPI_CXX_INCLUDE_DIRS)
+            list(APPEND _h5_test_includes ${MPI_CXX_INCLUDE_DIRS})
         elseif(MPI_C_INCLUDE_PATH)
             list(APPEND _h5_test_includes ${MPI_C_INCLUDE_PATH})
+        elseif(MPI_CXX_INCLUDE_PATH)
+            list(APPEND _h5_test_includes ${MPI_CXX_INCLUDE_PATH})
         else()
             # Parallel HDF5 but no MPI include path to give the probe. The probe
             # would fail for want of mpi.h and say nothing about HDF5, so skip it

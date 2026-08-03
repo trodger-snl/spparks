@@ -576,7 +576,20 @@ endif()
 # This allows machine presets to control MPI enablement while keeping the
 # MPI detection logic centralized.
 if(SPPARKS_ENABLE_MPI)
-    find_package(MPI REQUIRED)
+    # COMPONENTS CXX, not a bare find_package(MPI REQUIRED).
+    #
+    # project() above declares LANGUAGES CXX C, and a bare find_package(MPI)
+    # requires EVERY enabled language, so it demanded a working MPI C as well.
+    # SPPARKS has no C sources (src/ contains zero .c files) and links only
+    # MPI::MPI_CXX, so MPI C was never used -- it was purely an extra way to
+    # fail. On a Cray machine whose C wrapper FindMPI cannot exercise, that
+    # showed up as
+    #
+    #   Could NOT find MPI_C (missing: MPI_C_WORKS)
+    #   Could NOT find MPI (missing: MPI_C_FOUND) (found version "4.0")
+    #
+    # -- note MPI CXX had been found fine; only the unused C component failed.
+    find_package(MPI REQUIRED COMPONENTS CXX)
     if(MPI_CXX_FOUND)
         add_compile_definitions(SPPARKS_MPI)
     endif()

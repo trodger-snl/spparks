@@ -145,7 +145,11 @@ void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vect
   // Data validation
   if (universe->me == 0) {
     if (layerTimes.empty()) {
-      error->all(FLERR, "layerTimes array is empty");
+      // error->one, NOT error->all: this is inside `if (universe->me == 0)`, and
+      // Error::all opens with MPI_Barrier(world), so firing it on rank 0 alone
+      // blocks rank 0 in the barrier while every other rank runs on -- a hang
+      // instead of a diagnostic.
+      error->one(FLERR, "layerTimes array is empty");
     }
 
     // Check for monotonically increasing values
@@ -449,11 +453,17 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
     unsigned totalNodes = nodePtr.back();
     unsigned loadedNodes = nodeOffsets.back();
 
-    fprintf(screen, "  Rank %d: Loaded %zu/%zu chunks (%.1f%%), %u/%u elements (%.1f%%), %u/%u nodes (%.1f%%)\n",
-            universe->me,
-            overlappingChunks.size(), bboxes.size(), 100.0 * overlappingChunks.size() / bboxes.size(),
-            loadedElements, totalElements, 100.0 * loadedElements / totalElements,
-            loadedNodes, totalNodes, 100.0 * loadedNodes / totalNodes);
+    // Deliberately per-rank (not gated on rank 0) -- the point is the per-rank
+    // chunk split. But `screen` is NULL on every non-root rank whenever ANY
+    // -screen flag is given (spparks.cpp:136-140 sets uscreen = stdout only when
+    // screenflag == 0), and NULL on rank 0 too under `-screen none`. Unguarded,
+    // this fprintf segfaults there.
+    if (screen)
+      fprintf(screen, "  Rank %d: Loaded %zu/%zu chunks (%.1f%%), %u/%u elements (%.1f%%), %u/%u nodes (%.1f%%)\n",
+              universe->me,
+              overlappingChunks.size(), bboxes.size(), 100.0 * overlappingChunks.size() / bboxes.size(),
+              loadedElements, totalElements, 100.0 * loadedElements / totalElements,
+              loadedNodes, totalNodes, 100.0 * loadedNodes / totalNodes);
   }
   node_offsets = nodeOffsets;
   elem_offsets = elemOffsets;

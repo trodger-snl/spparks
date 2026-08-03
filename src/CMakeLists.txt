@@ -392,6 +392,39 @@ if(SPPARKS_ENABLE_HIGHFIVE)
         set(HIGHFIVE_USE_OPENCV OFF CACHE BOOL "Enable OpenCV support in HighFive")
 
         # Make HighFive available
+        # HighFive requires a FULL MPI when HDF5 is parallel, including the C
+        # component we deliberately do not require ourselves. Its
+        # CMake/HighFiveTargetDeps.cmake:111-112 does
+        #
+        #   if(HIGHFIVE_PARALLEL_HDF5 OR HDF5_IS_PARALLEL)
+        #     find_package(MPI REQUIRED)        # all enabled languages
+        #
+        # and then uses only MPI_CXX_*. So on a machine where FindMPI cannot
+        # validate the C wrapper, configure dies inside third-party code with
+        # "Could NOT find MPI_C (missing: MPI_C_WORKS)" and a trace into
+        # HighFiveTargetDeps.cmake, which reads like a HighFive problem and is
+        # not. The same file is included by the installed HighFiveConfig.cmake,
+        # so SPPARKS_USE_EXTERNAL_HIGHFIVE does not avoid it either.
+        #
+        # Say so before it happens, with the fix.
+        if(SPPARKS_ENABLE_MPI AND HDF5_IS_PARALLEL)
+            find_package(MPI QUIET COMPONENTS C)
+            if(NOT MPI_C_FOUND)
+                message(WARNING
+                    "Parallel HDF5 is in use and MPI's C component was not usable "
+                    "(MPI_C_FOUND is false). SPPARKS itself does not need MPI C -- "
+                    "it has no C sources -- but HighFive requires it unconditionally "
+                    "in CMake/HighFiveTargetDeps.cmake, so configure is likely to "
+                    "fail there next with 'Could NOT find MPI_C (missing: "
+                    "MPI_C_WORKS)'.\n"
+                    "Fix by pointing FindMPI at a working MPI C wrapper, e.g.\n"
+                    "  -DMPI_C_COMPILER=cc              (Cray PE C wrapper)\n"
+                    "  -DMPI_C_COMPILER=mpiamdclang     (LLNL magic-module wrapper)\n"
+                    "  -DMPI_C_COMPILER=mpicc\n"
+                    "Pick whichever exists in your environment: `which cc mpiamdclang mpicc`.")
+            endif()
+        endif()
+
         FetchContent_MakeAvailable(HighFive)
     endif()
 

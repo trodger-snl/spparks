@@ -1,6 +1,16 @@
 # Enhanced HDF5 finder with better parallel detection
 # This provides more robust HDF5 detection for SPPARKS
 
+# When MPI is on we require a parallel HDF5, so tell FindHDF5 that before it
+# searches. Without this it probes the serial `h5cc` wrapper first, and a wrapper
+# it finds on PATH wins over HDF5_ROOT -- so on a Cray machine with a serial
+# cray-hdf5 module loaded, -DHDF5_ROOT=<parallel prefix> appears to be ignored
+# and configure fails on "the HDF5 found ... is serial" while pointing at the
+# serial tree. HDF5_PREFER_PARALLEL makes it look for h5pcc first.
+if(SPPARKS_ENABLE_MPI AND NOT DEFINED HDF5_PREFER_PARALLEL)
+    set(HDF5_PREFER_PARALLEL ON)
+endif()
+
 # Use the standard FindHDF5 module first
 find_package(HDF5 QUIET COMPONENTS C)
 

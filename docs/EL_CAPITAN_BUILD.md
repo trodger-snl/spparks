@@ -12,8 +12,9 @@ with AMD MI300A. Keyed by hardware, not by site.
 ```bash
 module load rocmcc/6.4.3-magic    # check `module avail rocmcc` for the current -magic
 module load cray-mpich            # load AFTER the compiler; it resolves against it
-module load cray-hdf5-parallel
 module load cmake                 # prefer a newer one if offered; see below
+# NOTE: there is deliberately no `module load cray-hdf5-parallel` here -- under
+# -magic modules that module is not visible. See section 2.
 ```
 
 **CMake version.** The tree needs **>= 3.22** (`src/CMakeLists.txt:1`, and
@@ -105,7 +106,31 @@ with:
 
 The configure summary prints which path was taken.
 
-## 3. Configure and build
+## 3. Getting the source there (and the Kokkos submodule)
+
+If you transfer by **archive download + copy** rather than `git clone`, note that
+a forge's ZIP/tar.gz export contains only the repository's own tree. `lib/kokkos`
+is a separate repository referenced by a commit pointer, so it arrives **empty**,
+and `git submodule update --init --recursive` cannot fix it — the copied tree has
+no `.git` directory for the command to act on. Configure then fails with
+"Kokkos not found at .../lib/kokkos".
+
+Clone it directly instead. The build only requires the directory to exist with a
+CMakeLists.txt; a registered submodule is not needed:
+
+```bash
+rm -rf lib/kokkos
+git clone --depth 1 --branch 5.1.1 https://github.com/kokkos/kokkos.git lib/kokkos
+```
+
+Tag `5.1.1` is the pinned commit (`267ebc25fc5c8b96bb321f34d78f97b1c30f8830`).
+Nothing further is needed for gfx942 — the bundled gfx1151 Kokkos patch is gated
+on `SPPARKS_KOKKOS_ARCH MATCHES "^AMD_GFX115"` and is skipped.
+
+**Then leave it alone.** Every later archive copy will again lack `lib/kokkos`,
+so refresh `src/`, `docs/` and `examples/` but do not delete the Kokkos tree.
+
+## 4. Configure and build
 
 ```bash
 cd src
@@ -139,7 +164,7 @@ copy for every `DualView`.
 A wrong token is now caught at configure time with the valid list
 (`src/CMakeLists.txt`, the check just after the Kokkos submodule test).
 
-## 4. Runtime environment
+## 5. Runtime environment
 
 ```bash
 export HSA_XNACK=1                    # required by the APU build
@@ -154,7 +179,7 @@ Jobs run under **Flux**, not Slurm. Four MI300A per node, so one rank per APU is
 the natural mapping. `src/main.cpp` handles GPU-to-rank binding itself and
 defers to the scheduler when `flux run --gpus-per-task=1` has already bound.
 
-## 5. First runs, cheapest decisive test first
+## 6. First runs, cheapest decisive test first
 
 1. **Configure only.** Read the summary for `Unified memory: ON`, the integer
    width, and the "Styles NOT built" block. If `additive/texture/kk` is listed
@@ -174,7 +199,7 @@ defers to the scheduler when `flux run --gpus-per-task=1` has already bound.
 If step 2 fails, rebuild with `-DSPPARKS_AGGRESSIVE_OPTIMIZATION=OFF` and rerun
 before debugging anything else — see below.
 
-## 6. Things that will bite
+## 7. Things that will bite
 
 **`-ffast-math` versus bit-for-bit validation.** Release adds `-ffast-math
 -funroll-loops -flto` unconditionally for Clang (`src/CMakeLists.txt`). The
@@ -210,7 +235,7 @@ is wide enough to erase a decomposed axis. The two are coupled through
 without fixing the early return first**, or you trade a performance problem for a
 silent correctness one.
 
-## 7. A/B-ing the unified-memory path
+## 8. A/B-ing the unified-memory path
 
 `cmake --preset mi300a-discrete` builds the same source on the same hardware with
 `AMD_GFX942` instead, leaving unified memory off. Same ISA, same allocations —
@@ -223,7 +248,7 @@ Run it **without** `HSA_XNACK=1` to match. Keep it in its own build directory �
 `Kokkos_ARCH_*` is cached with `FORCE`, so two arch tokens in one directory both
 stay `ON` and Kokkos errors out.
 
-## 8. Reference
+## 9. Reference
 
 - [Compilers and User Environment](https://hpc.llnl.gov/documentation/user-guides/using-el-capitan-systems/using-el-capitan-systems-compilers-and-user)
 - [C++ Code Examples](https://hpc.llnl.gov/documentation/user-guides/using-el-capitan-systems/introduction-and-quickstart/c)

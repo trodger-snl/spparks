@@ -516,9 +516,22 @@ if(SPPARKS_PACKAGE_KOKKOS)
     set(KOKKOS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../lib/kokkos")
     if(NOT EXISTS "${KOKKOS_DIR}/CMakeLists.txt")
         message(FATAL_ERROR
-            "Kokkos submodule not found at ${KOKKOS_DIR}\n"
-            "Please initialize the submodule:\n"
-            "  git submodule update --init --recursive\n")
+            "Kokkos not found at ${KOKKOS_DIR}\n"
+            "\n"
+            "Normally:\n"
+            "  git submodule update --init --recursive\n"
+            "\n"
+            "If that fails -- no submodule metadata (source copied rather than\n"
+            "cloned), or the submodule fetch is blocked -- clone it directly. This\n"
+            "check only requires the directory to exist with a CMakeLists.txt; a\n"
+            "registered submodule is not needed:\n"
+            "  rm -rf ${KOKKOS_DIR}\n"
+            "  git clone --depth 1 --branch 5.1.1 \\\n"
+            "      https://github.com/kokkos/kokkos.git ${KOKKOS_DIR}\n"
+            "\n"
+            "Tag 5.1.1 is the pinned commit\n"
+            "(267ebc25fc5c8b96bb321f34d78f97b1c30f8830). If the machine has no\n"
+            "outbound network, clone elsewhere and copy the tree in.\n")
     endif()
 
     # Validate the arch token against the bundled Kokkos before handing off. We set

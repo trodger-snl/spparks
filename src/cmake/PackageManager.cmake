@@ -269,8 +269,21 @@ function(install_stitch_package)
         endif()
 
         # Use CMAKE_MAKE_PROGRAM for portability (instead of hardcoded make)
+        # Pass CC/CXX as make COMMAND-LINE variables, not environment variables.
+        # lib/stitch's Makefile assigns CC=`which mpicc` internally, and a
+        # makefile assignment beats the environment -- so the previous
+        # `cmake -E env CC=... make` form was silently ignored and stitch was
+        # always built with whatever `which mpicc` found, which need not be the
+        # toolchain the rest of the build uses (and need not exist at all).
+        # Command-line assignments do override makefile assignments.
+        #
+        # -fPIC is required: SPPARKS links as a PIE, and a non-PIC libstitch.a
+        # fails at link with
+        #   ld.lld: error: relocation R_X86_64_32 cannot be used against local
+        #   symbol; recompile with -fPIC   (sqlite3.o, stitch.o)
+        # The Makefile has no CFLAGS hook, so fold the flag into CC/CXX.
         execute_process(
-            COMMAND ${CMAKE_COMMAND} -E env CC=${STITCH_CC} CXX=${STITCH_CXX} ${CMAKE_MAKE_PROGRAM} stitch.lib
+            COMMAND ${CMAKE_MAKE_PROGRAM} "CC=${STITCH_CC} -fPIC" "CXX=${STITCH_CXX} -fPIC" stitch.lib
             WORKING_DIRECTORY "${STITCH_BUILD_DIR}"
             RESULT_VARIABLE BUILD_RESULT
             OUTPUT_VARIABLE BUILD_OUTPUT

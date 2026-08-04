@@ -11,6 +11,7 @@
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "SPPARKS_ENABLE_MPI": "ON",
+        "SPPARKS_PACKAGE_STITCH": "ON",
         "SPPARKS_ENABLE_HIGHFIVE": "ON",
         "SPPARKS_ENABLE_JPEG": "ON",
         "SPPARKS_ENABLE_PNG": "ON",

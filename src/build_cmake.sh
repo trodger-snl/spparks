@@ -19,6 +19,8 @@ ENABLE_HIGHFIVE="AUTO"
 ENABLE_JPEG="AUTO"
 ENABLE_KOKKOS="OFF"
 KOKKOS_BACKEND="OPENMP"
+KOKKOS_ARCH=""
+EXTRA_CMAKE_ARGS=()
 CLEAN=false
 VERBOSE=false
 DEV_MODE=false
@@ -49,6 +51,11 @@ Options:
     --kokkos                    Enable Kokkos for GPU acceleration
     --no-kokkos                 Disable Kokkos
     --kokkos-backend BACKEND    Kokkos backend (OPENMP, CUDA, HIP, SYCL, SERIAL)
+    --kokkos-arch ARCH          Kokkos GPU arch token; REQUIRED by the HIP and CUDA
+                                  backends (e.g. AMD_GFX942_APU for MI300A,
+                                  AMD_GFX1151 for Strix Halo, AMPERE80)
+    -DVAR=VALUE                 Passed straight through to cmake (e.g.
+                                  -DHDF5_ROOT=..., -DMPI_C_COMPILER=...)
     --shared                    Build shared libraries
     --lib                       Build as library only
     --package PKG               Enable package (can be used multiple times)
@@ -175,6 +182,10 @@ while [[ $# -gt 0 ]]; do
             KOKKOS_BACKEND="$2"
             shift 2
             ;;
+        --kokkos-arch)
+            KOKKOS_ARCH="$2"
+            shift 2
+            ;;
         --shared)
             SHARED_LIBS="ON"
             shift
@@ -222,6 +233,14 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             show_usage
             exit 0
+            ;;
+        -D*)
+            # Forward raw -DVAR=VALUE straight to cmake. Needed for anything the
+            # script has no flag for -- HDF5_ROOT, MPI_C_COMPILER, CMAKE_C_COMPILER
+            # and so on -- which previously made this script unusable on machines
+            # that need them.
+            EXTRA_CMAKE_ARGS+=("$1")
+            shift
             ;;
         *)
             echo "Unknown option: $1"
@@ -284,7 +303,15 @@ fi
 # Add Kokkos settings
 if [ "$ENABLE_KOKKOS" = "ON" ]; then
     CMAKE_ARGS+=("-DSPPARKS_PACKAGE_KOKKOS=ON")
+    # Normalise case: CMakeLists.txt compares the backend with STREQUAL "HIP"
+    # etc., so the lowercase form this script's own --help examples use ("hip")
+    # was rejected with "Unknown Kokkos backend: hip". Same for the arch token.
+    KOKKOS_BACKEND=$(echo "$KOKKOS_BACKEND" | tr '[:lower:]' '[:upper:]')
     CMAKE_ARGS+=("-DSPPARKS_KOKKOS_BACKEND=$KOKKOS_BACKEND")
+    if [ -n "$KOKKOS_ARCH" ]; then
+        KOKKOS_ARCH=$(echo "$KOKKOS_ARCH" | tr '[:lower:]' '[:upper:]')
+        CMAKE_ARGS+=("-DSPPARKS_KOKKOS_ARCH=$KOKKOS_ARCH")
+    fi
 fi
 
 # Add optimization settings
@@ -312,10 +339,11 @@ fi
 echo ""
 echo "Running CMake configuration..."
 if [ "$VERBOSE" = true ]; then
-    echo "CMake command: cmake ${CMAKE_ARGS[@]} $SOURCE_DIR"
+    echo "CMake command: cmake ${CMAKE_ARGS[@]} ${EXTRA_CMAKE_ARGS[@]} $SOURCE_DIR"
 fi
 
-cmake "${CMAKE_ARGS[@]}" "$SOURCE_DIR"
+# EXTRA_CMAKE_ARGS last so a raw -D overrides anything the flags produced.
+cmake "${CMAKE_ARGS[@]}" ${EXTRA_CMAKE_ARGS[@]+"${EXTRA_CMAKE_ARGS[@]}"} "$SOURCE_DIR"
 
 # Build
 echo ""

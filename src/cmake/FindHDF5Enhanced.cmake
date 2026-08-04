@@ -28,6 +28,50 @@ if(HDF5_ROOT)
     unset(_h5_root_leaf)
 endif()
 
+# Re-glob a version-pinned HDF5_ROOT that the site has moved past.
+#
+# The mi300a preset pins HDF5_ROOT, because LC's MI300A systems ship no hdf5
+# module at all -- the Cray parallel install is reachable only by absolute path.
+# That pin necessarily names one Cray PE version, and it goes stale the first
+# time the site upgrades. Treat the version/compiler/ABI components as a hint:
+# wildcard them, take the highest match, and say which one was used. A stale pin
+# should cost a message, not a failed configure on a path nobody typed.
+#
+# A non-Cray HDF5_ROOT leaves the pattern unchanged, matches nothing, and simply
+# falls through to FindHDF5's ordinary search below.
+if(HDF5_ROOT AND NOT IS_DIRECTORY "${HDF5_ROOT}")
+    string(REGEX REPLACE "^(.*/hdf5-parallel)/.*$" "\\1/*/*/*" _h5_glob "${HDF5_ROOT}")
+    file(GLOB _h5_candidates LIST_DIRECTORIES true "${_h5_glob}")
+
+    set(_h5_usable "")
+    foreach(_cand IN LISTS _h5_candidates)
+        if(IS_DIRECTORY "${_cand}/lib" OR IS_DIRECTORY "${_cand}/lib64")
+            list(APPEND _h5_usable "${_cand}")
+        endif()
+    endforeach()
+
+    if(_h5_usable)
+        list(SORT _h5_usable COMPARE NATURAL)
+        list(GET _h5_usable -1 _h5_newest)
+        message(STATUS
+            "HDF5: pinned HDF5_ROOT '${HDF5_ROOT}' does not exist; using "
+            "'${_h5_newest}' found under the same tree. Update the pin in "
+            "CMakePresets.json, or pass -DHDF5_ROOT=<prefix> explicitly.")
+        set(HDF5_ROOT "${_h5_newest}")
+    else()
+        message(STATUS
+            "HDF5: HDF5_ROOT '${HDF5_ROOT}' does not exist and nothing matched "
+            "'${_h5_glob}'; ignoring it and searching the default paths.")
+        set(HDF5_ROOT "")
+    endif()
+
+    unset(_h5_glob)
+    unset(_h5_candidates)
+    unset(_h5_usable)
+    unset(_h5_newest)
+    unset(_cand)
+endif()
+
 # Use the standard FindHDF5 module first
 find_package(HDF5 QUIET COMPONENTS C)
 

@@ -203,6 +203,10 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // is non-deterministic (atomic order), which is fine -- each microstructure
   // kernel processes its sites independently and temperature is untouched.
   Kokkos::View<int> d_active_count;
+  // Persistent host mirror for the count readback. app_update reads this every
+  // step; a per-step create_mirror_view would allocate (and on HIP register) a
+  // fresh host buffer each time for a single int.
+  Kokkos::View<int, Kokkos::HostSpace> h_active_count{"h_active_count"};
   bool device_active_list_fresh = false;
 
   // Per-spin nucleation arrays (device-accessible, initialized once)

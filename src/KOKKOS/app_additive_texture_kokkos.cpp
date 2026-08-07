@@ -41,6 +41,20 @@ using namespace SPPARKS_NS;
 using namespace MathConst;
 
 /* ----------------------------------------------------------------------
+   Unmanaged host Views wrapping SPPARKS' raw iarray/darray pointers, so a
+   deep_copy moves a whole array in one DMA straight to/from the memory the
+   comm and dump layers already read -- no per-call mirror allocation and no
+   scalar element loop. Element types match the device Views exactly
+   (int*<->int*, double*<->double*), so every copy here is a pure memcpy and
+   is bit-exact by construction.
+------------------------------------------------------------------------- */
+
+using HostUnmanagedInt =
+    Kokkos::View<int*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>;
+using HostUnmanagedDouble =
+    Kokkos::View<double*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>;
+
+/* ----------------------------------------------------------------------
    Helper to construct parent class args from user input
 ------------------------------------------------------------------------- */
 
@@ -290,20 +304,15 @@ void AppAdditiveTextureKokkos::sync_app_data_to_device()
 
   int nall = nlocal + nghost;
 
-  // Sync AM-specific arrays to device
-  auto h_active_flag = Kokkos::create_mirror_view(d_active_flag);
-  auto h_mobility_out = Kokkos::create_mirror_view(d_mobility_out);
-  auto h_solid_d = Kokkos::create_mirror_view(d_solid_d);
-
-  for (int i = 0; i < nall; i++) {
-    h_active_flag(i) = active_flag[i];
-    h_mobility_out(i) = mobility_out[i];
-    h_solid_d(i) = solid_d[i];
-  }
-
-  Kokkos::deep_copy(d_active_flag, h_active_flag);
-  Kokkos::deep_copy(d_mobility_out, h_mobility_out);
-  Kokkos::deep_copy(d_solid_d, h_solid_d);
+  // Sync AM-specific arrays to device over the full owned+ghost range, copying
+  // straight out of the raw host arrays (see HostUnmanaged* above).
+  const auto all = Kokkos::make_pair(0, nall);
+  Kokkos::deep_copy(Kokkos::subview(d_active_flag, all),
+                    Kokkos::subview(HostUnmanagedInt(active_flag, nall), all));
+  Kokkos::deep_copy(Kokkos::subview(d_mobility_out, all),
+                    Kokkos::subview(HostUnmanagedDouble(mobility_out, nall), all));
+  Kokkos::deep_copy(Kokkos::subview(d_solid_d, all),
+                    Kokkos::subview(HostUnmanagedDouble(solid_d, nall), all));
 
   // Note: Temperature k_T is synced separately in sync_temperature_to_device()
   // Gradients d_G and d_V are device-computed, synced to host only when needed for output
@@ -320,31 +329,23 @@ void AppAdditiveTextureKokkos::sync_app_data_to_host()
 
   int nall = nlocal + nghost;
 
-  // Sync AM-specific arrays from device
-  auto h_active_flag = Kokkos::create_mirror_view(d_active_flag);
-  auto h_mobility_out = Kokkos::create_mirror_view(d_mobility_out);
-  auto h_solid_d = Kokkos::create_mirror_view(d_solid_d);
-
-  Kokkos::deep_copy(h_active_flag, d_active_flag);
-  Kokkos::deep_copy(h_mobility_out, d_mobility_out);
-  Kokkos::deep_copy(h_solid_d, d_solid_d);
-
-  for (int i = 0; i < nlocal; i++) {
-    active_flag[i] = h_active_flag(i);
-    mobility_out[i] = h_mobility_out(i);
-    solid_d[i] = h_solid_d(i);
-  }
+  // Sync AM-specific arrays from device. Only the OWNED slice is brought back
+  // (host ghost entries are refreshed by the ghost exchange, not here) --
+  // preserving exactly the range the previous element loop covered.
+  const auto owned = Kokkos::make_pair(0, nlocal);
+  Kokkos::deep_copy(Kokkos::subview(HostUnmanagedInt(active_flag, nall), owned),
+                    Kokkos::subview(d_active_flag, owned));
+  Kokkos::deep_copy(Kokkos::subview(HostUnmanagedDouble(mobility_out, nall), owned),
+                    Kokkos::subview(d_mobility_out, owned));
+  Kokkos::deep_copy(Kokkos::subview(HostUnmanagedDouble(solid_d, nall), owned),
+                    Kokkos::subview(d_solid_d, owned));
 
   // Sync gradient and velocity arrays for output/visualization
   // These are device-only views that must be copied to host for STITCH dumps
-  auto h_G = Kokkos::create_mirror_view(d_G);
-  auto h_V = Kokkos::create_mirror_view(d_V);
-  Kokkos::deep_copy(h_G, d_G);
-  Kokkos::deep_copy(h_V, d_V);
-  for (int i = 0; i < nlocal; i++) {
-    G[i] = h_G(i);
-    V[i] = h_V(i);
-  }
+  Kokkos::deep_copy(Kokkos::subview(HostUnmanagedDouble(G, nall), owned),
+                    Kokkos::subview(d_G, owned));
+  Kokkos::deep_copy(Kokkos::subview(HostUnmanagedDouble(V, nall), owned),
+                    Kokkos::subview(d_V, owned));
 }
 
 /* ----------------------------------------------------------------------
@@ -408,11 +409,10 @@ void AppAdditiveTextureKokkos::sync_temperature_to_device()
 {
   int nall = nlocal + nghost;
 
-  // Copy host temperature array to DualView host mirror
-  auto h_T = k_T.view_host();
-  for (int i = 0; i < nall; i++) {
-    h_T(i) = T[i];
-  }
+  // Copy host temperature array to DualView host mirror (one memcpy)
+  const auto all = Kokkos::make_pair(0, nall);
+  Kokkos::deep_copy(Kokkos::subview(k_T.view_host(), all),
+                    Kokkos::subview(HostUnmanagedDouble(T, nall), all));
 
   // Mark host as modified and sync to device
   k_T.modify_host();
@@ -431,10 +431,9 @@ void AppAdditiveTextureKokkos::sync_temperature_to_host()
 {
   int nall = nlocal + nghost;
   k_T.sync_host();
-  auto h_T = k_T.view_host();
-  for (int i = 0; i < nall; i++) {
-    T[i] = h_T(i);
-  }
+  const auto all = Kokkos::make_pair(0, nall);
+  Kokkos::deep_copy(Kokkos::subview(HostUnmanagedDouble(T, nall), all),
+                    Kokkos::subview(k_T.view_host(), all));
   host_T_stale = false;
 }
 
@@ -457,8 +456,8 @@ void AppAdditiveTextureKokkos::sync_temperature_to_host()
 void AppAdditiveTextureKokkos::sync_ghost_to_host()
 {
   if (nlocal == 0) return;
-  using HUi = Kokkos::View<int*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>;
-  using HUd = Kokkos::View<double*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>;
+  using HUi = HostUnmanagedInt;
+  using HUd = HostUnmanagedDouble;
   const int nall = nlocal + nghost;
   const auto owned = Kokkos::make_pair(0, nlocal);
   Kokkos::deep_copy(Kokkos::subview(HUi(spin, nall), owned),
@@ -474,8 +473,8 @@ void AppAdditiveTextureKokkos::sync_ghost_to_host()
 void AppAdditiveTextureKokkos::sync_ghost_to_device()
 {
   if (nghost == 0) return;
-  using HUi = Kokkos::View<int*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>;
-  using HUd = Kokkos::View<double*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>;
+  using HUi = HostUnmanagedInt;
+  using HUd = HostUnmanagedDouble;
   const int nall = nlocal + nghost;
   const auto ghost = Kokkos::make_pair(nlocal, nall);
   Kokkos::deep_copy(Kokkos::subview(d_spin, ghost),
@@ -2497,9 +2496,10 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   if (device_active_list_fresh) {
     // Full fusion: the temperature fill already atomic-appended the active owned
     // sites into d_active_sites and counted them -- just read the count back.
-    auto h_count = Kokkos::create_mirror_view(d_active_count);
-    Kokkos::deep_copy(h_count, d_active_count);
-    n_active = h_count();
+    // h_active_count is a cached member, not a per-step create_mirror_view: this
+    // runs every single step and the mirror is a single int.
+    Kokkos::deep_copy(h_active_count, d_active_count);
+    n_active = h_active_count();
   } else {
     // Full predicate scan (Rosenthal/Moser/host fills that didn't build the list).
     if ((int)d_active_sites.extent(0) != nlocal)

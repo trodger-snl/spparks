@@ -303,6 +303,11 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
     MISORI_TARGET_RANDOM = 1,
     MISORI_TARGET_RANDOM_ROTATION = 2
   };
+  // INTENTIONALLY diverges from AppAdditiveTexture, which defaults to
+  // MISORI_TARGET_GRADIENT (app_additive_texture.cpp:153). Kept as RANDOM by
+  // deliberate choice -- do not "align" it with the CPU app. The other two
+  // misorientation defaults (max_misorient, mis_thresh) ARE matched to the CPU
+  // app; this one is the exception.
   int misorientation_target_mode = MISORI_TARGET_RANDOM;
 
   // Nucleation data

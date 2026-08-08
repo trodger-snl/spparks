@@ -128,9 +128,16 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
   c1 = 0.1;
   c2 = 0.9;
   c3 = 2.5;
-  max_misorient = 10.0;  // degrees
+  // Match AppAdditiveTexture's defaults (app_additive_texture.cpp:150-152).
+  max_misorient = 0;     // degrees; 0 => misorientation disabled, as on the CPU
   t_cool_max = 100.0;    // K
-  mis_thresh = 5.0;      // degrees
+  // RADIANS. `misorientation_function` stores atof(arg[1]) * MY_PI/180 into
+  // this, and the new-grain test compares it against an angle in radians, so a
+  // bare degree literal here was unreachable: the previous default of 5.0 was
+  // ~286 deg, above the pi upper bound of that angle, so the test could never
+  // fire and a deck relying on the default silently never created new grains
+  // through the misorientation path.
+  mis_thresh = 10.0 * MY_PI / 180.0;
   misorient_alpha = 5.0;
 
   // Solidification velocity polynomial (default: V = -1.0302e-7*dT^3 + 1.0533e-4*dT^2 + 2.2196e-3*dT)

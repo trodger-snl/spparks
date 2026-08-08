@@ -66,7 +66,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   void sync_ghost_to_host();
   void sync_ghost_to_device();
   double ghost_mc_checksum();        // device ghost-slice MC checksum (verify)
-  double device_global_max_temperature();  // parallel_reduce max over k_T + Allreduce
+  double global_max_temperature_from_fill();  // Allreduce of the fill-fused owned max
   void compute_gradients_kernel();
 
   // Ensure the cached device copy of site coordinates (d_xyz) is built for the
@@ -117,6 +117,17 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // consumer reads it -- powder activation, or the d6 diagnostic at an output
   // step. See app_update().
   bool host_T_stale = false;
+
+  // Peak temperature of the LAST device fill over OWNED sites. The Max
+  // reduction is FUSED into the fill kernels themselves (RosenthalFill /
+  // MoserFill / HDF5Fill fold it in while writing k_T), replacing the
+  // separate per-step "Tmax" parallel_reduce over nlocal + its stream sync
+  // (~9% of box runtime on gfx1151). Consumed by
+  // global_max_temperature_from_fill() for the fast-forward and Moser
+  // pause/reset decisions; only valid immediately after a fill.
+  double fill_maxT_local = 0.0;
+  double t_ff_allreduce = 0.0;  // 1-double MPI_Allreduce feeding fast-forward
+  long   n_ff_checks = 0;
 
   // Cached device copy of site coordinates (lattice units). The lattice is
   // static for the run, so this is uploaded once and reused by the device

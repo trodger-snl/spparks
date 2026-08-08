@@ -537,20 +537,21 @@ double AppAdditiveTextureKokkos::ghost_mc_checksum()
 }
 
 /* ----------------------------------------------------------------------
-   Global peak temperature over owned sites, reduced on the device (no host T
-   needed) and then across ranks. Used by the device fast-forward decision.
+   Global peak temperature of the last device temperature fill. Used by the
+   device fast-forward decision (Rosenthal/HDF5) and the Moser pause/reset
+   pass firing. Valid only immediately after a fill_temperature_*_device().
 ------------------------------------------------------------------------- */
 
-double AppAdditiveTextureKokkos::device_global_max_temperature()
+double AppAdditiveTextureKokkos::global_max_temperature_from_fill()
 {
-  auto d_T = k_T.view_device();
-  const int n = nlocal;
-  double local_max = 0.0;
-  Kokkos::parallel_reduce("Tmax", n,
-    KOKKOS_LAMBDA(const int i, double &m) { if (d_T(i) > m) m = d_T(i); },
-    Kokkos::Max<double>(local_max));
-  double global_max = local_max;
-  MPI_Allreduce(&local_max, &global_max, 1, MPI_DOUBLE, MPI_MAX, world);
+  // The owned-range Max is computed INSIDE the fill kernels (fused with the
+  // k_T write -- no separate device pass, no extra stream sync); this only
+  // reduces the per-rank value across ranks.
+  double global_max = fill_maxT_local;
+  const double t0 = MPI_Wtime();
+  MPI_Allreduce(&fill_maxT_local, &global_max, 1, MPI_DOUBLE, MPI_MAX, world);
+  t_ff_allreduce += MPI_Wtime() - t0;
+  n_ff_checks++;
   return global_max;
 }
 
@@ -640,8 +641,12 @@ void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
   const int mode = plan.mode;
   const bool scan_active = plan.scan_active;
   const double two_pi = 2.0 * 3.14159265358979323846;
+  const int nlocal_l = this->nlocal;
 
-  Kokkos::parallel_for("RosenthalFill", nall, KOKKOS_LAMBDA(const int i) {
+  // Fused owned-range Max: the fast-forward decision needs the peak owned
+  // temperature every step, and this kernel already has each T in a register.
+  double local_max = 0.0;
+  Kokkos::parallel_reduce("RosenthalFill", nall, KOKKOS_LAMBDA(const int i, double &m) {
     // Site physical coordinates (meters). The site-minus-laser differences are
     // computed in double: (site - laser) is cancellation-prone (both operands
     // are ~domain-scale) and cheap, so it stays FP64 regardless of AMReal.
@@ -698,7 +703,9 @@ void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
       }
     }
     d_T(i) = Tval;
-  });
+    if (i < nlocal_l && Tval > m) m = Tval;
+  }, Kokkos::Max<double>(local_max));
+  fill_maxT_local = (nlocal > 0) ? local_max : 0.0;
   Kokkos::fence();
   k_T.modify_device();
 }
@@ -843,14 +850,22 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
   const int maxN = MOSER_GL_MAX_ORDER;
   const double eps = 2.220446049250313e-16;
   const double invPi3_2 = 1.0 / (M_PI * 1.7724538509055160273); // 1/(pi*sqrt(pi))
+  const int nlocal_l = this->nlocal;
 
-  Kokkos::parallel_for("MoserFill", nall, KOKKOS_LAMBDA(const int site) {
+  // Fused owned-range Max: feeds the fast-forward AND the Moser pause/reset
+  // firing decisions, so every exit path must contribute its written T.
+  double local_max = 0.0;
+  Kokkos::parallel_reduce("MoserFill", nall, KOKKOS_LAMBDA(const int site, double &m) {
     const double x = d_xyz_local(site,0) * dx_l;
     const double y = d_xyz_local(site,1) * dx_l;
     const double z = d_xyz_local(site,2) * dx_l;
 
     // Vacuum above the real free surface; integral is empty before t=0.
-    if (z > surface_z || tt <= 0.0 || nseg <= 0) { d_T(site) = T0; return; }
+    if (z > surface_z || tt <= 0.0 || nseg <= 0) {
+      d_T(site) = T0;
+      if (site < nlocal_l && T0 > m) m = T0;
+      return;
+    }
 
     // binary_search(bounds, tt, nseg): largest i with bounds(i) <= tt.
     int end_idx = -1;
@@ -860,7 +875,11 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
           if (m + 1 == nseg || bounds(m+1) >= tt) { end_idx = m; break; }
           L = m + 1;
         } else R = m - 1; } }
-    if (end_idx < 0) { d_T(site) = T0; return; }
+    if (end_idx < 0) {
+      d_T(site) = T0;
+      if (site < nlocal_l && T0 > m) m = T0;
+      return;
+    }
     if (Kokkos::fabs(tt - bounds(end_idx)) <= 4.0 * eps) end_idx--;
 
     const double sxa[2] = {sx0, sx1}, sya[2] = {sy0, sy1};
@@ -942,8 +961,11 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
         }
       }
     }
-    d_T(site) = T0 + res;
-  });
+    const double Tval = T0 + res;
+    d_T(site) = Tval;
+    if (site < nlocal_l && Tval > m) m = Tval;
+  }, Kokkos::Max<double>(local_max));
+  fill_maxT_local = (nlocal > 0) ? local_max : 0.0;
   Kokkos::fence();
   k_T.modify_device();
 }
@@ -1147,7 +1169,10 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
   const int nrefine_f = this->nrefine;
   const int nlocal_f = this->nlocal;
 
-  Kokkos::parallel_for("HDF5Fill", n, KOKKOS_LAMBDA(const int i) {
+  // Fused owned-range Max for the fast-forward decision (T is in a register
+  // here; this replaced a separate per-step Tmax pass over nlocal).
+  double local_max = 0.0;
+  Kokkos::parallel_reduce("HDF5Fill", n, KOKKOS_LAMBDA(const int i, double &m) {
     // The gather-and-blend runs in HDF5Real. Under FP64 this is the identical
     // expression (and the identical operation order) the host fast path is
     // validated against; under FP32 the four nodal reads and three weights are
@@ -1165,6 +1190,7 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
     }
     d_T(i) = Ti;
     if (i < nlocal_f) {
+      if ((double) Ti > m) m = (double) Ti;
       const int af = d_af(i);
       const double sd = d_sd(i);
       if (af == 2 || Ti >= tl_f ||
@@ -1174,7 +1200,8 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
         d_asites(slot) = i;
       }
     }
-  });
+  }, Kokkos::Max<double>(local_max));
+  fill_maxT_local = (nlocal > 0) ? local_max : 0.0;
   Kokkos::fence();
   k_T.modify_device();
   device_active_list_fresh = true;
@@ -2584,7 +2611,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       device_temp = true;
       fill_temperature_rosenthal_device(rplan);
       host_T_stale = true;
-      double global_max = device_global_max_temperature();
+      double global_max = global_max_temperature_from_fill();
       ThermalManager::ThermalStep s =
         thermal->rosenthal_fast_forward(time, stoptime, global_max);
       if (s.end_run) { time = s.new_time; sync_temperature_to_host(); return; }
@@ -2609,7 +2636,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       thermal->set_moser_device_filler([this](double t) -> double {
         fill_temperature_moser_device(thermal->moser_device_plan(t));
         host_T_stale = true;
-        return device_global_max_temperature();
+        return global_max_temperature_from_fill();
       });
       ThermalManager::ThermalStep s = thermal->moser_advance_device(time, stoptime);
       if (s.end_run) { time = s.new_time; sync_temperature_to_host(); return; }
@@ -2638,7 +2665,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       thermal->set_hdf5_device_filler([this](double t) -> double {
         fill_temperature_hdf5_device(thermal->hdf5_device_plan(t));
         host_T_stale = true;
-        return device_global_max_temperature();
+        return global_max_temperature_from_fill();
       });
       ThermalManager::ThermalStep s = thermal->hdf5_advance_device(time, stoptime);
       if (s.end_run) { time = s.new_time; sync_temperature_to_host(); return; }
@@ -2942,6 +2969,8 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
                         t_nucleation + t_particle + t_solidification + t_smoothing + t_sync_host;
     fprintf(screen, "\n=== Kokkos Timing Summary (after %d steps, %.4f total sec) ===\n", step_count, total_time);
     fprintf(screen, "  Temperature update:   %8.3f s (%5.1f%%)\n", t_temp_update, 100.0*t_temp_update/total_time);
+    fprintf(screen, "    - FF Allreduce:     %8.3f s  [%ld checks; Tmax fused into fill; included above]\n",
+            t_ff_allreduce, n_ff_checks);
     fprintf(screen, "  Temp sync to device:  %8.3f s (%5.1f%%)\n", t_temp_sync, 100.0*t_temp_sync/total_time);
     fprintf(screen, "  Melting kernel:       %8.3f s (%5.1f%%) [selective launch]\n", t_melting, 100.0*t_melting/total_time);
     fprintf(screen, "  Nucleation kernel:    %8.3f s (%5.1f%%) [selective launch]\n", t_nucleation, 100.0*t_nucleation/total_time);

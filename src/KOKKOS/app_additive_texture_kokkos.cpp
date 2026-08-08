@@ -265,15 +265,32 @@ void AppAdditiveTextureKokkos::init_app()
   // Parent also initializes rand_pool with seed from MPI rank
   AppPottsQuaternionKokkos::init_app();
 
-  // Initialize temperature field to room temperature
-  for (int i = 0; i < nlocal + nghost; i++) {
-    T[i] = t_room;
-    G[i] = 0.0;
-    V[i] = 0.0;
-    active_flag[i] = 0;  // Inactive
-    mobility_out[i] = 0.0;
-    solid_d[i] = 0.0;
-  }
+  // Do NOT initialize T / G / V / active_flag / mobility_out / solid_d here.
+  //
+  // These are per-site arrays the INPUT DECK owns. init_app() runs from
+  // AppLattice::init() (app_lattice.cpp:331), i.e. at `run` time -- AFTER every
+  // `set` command has executed. A stitch-continuation deck does
+  //
+  //     set i1 stitch <file> last
+  //     set i2 stitch <file> last      # i2 IS active_flag (iarray[1])
+  //     set d1..d4 stitch <file> last
+  //
+  // to reload the previously built microstructure, so zeroing active_flag here
+  // destroyed exactly the state that had just been read: every already-solid
+  // site (i2 == 3) became 0, which is the Void phase. Multi-box builds
+  // therefore never accumulated -- each box re-solidified its own layer and
+  // lost every earlier one (measured: solid fraction flat at ~0.28 across 10
+  // boxes where the CPU app climbs to 0.75), and the output carried a ~9.5%
+  // i2 == 0 population the CPU app never produces.
+  //
+  // The CPU app (AppAdditiveTexture::init_app) initializes NONE of these and
+  // instead READS active_flag -- `if (active_flag[i] != 3)` -- to decide which
+  // sites keep their loaded orientation. Sites the deck never sets are already
+  // zeroed at creation (app_lattice.cpp:1299-1300), which is what the CPU path
+  // relies on, so matching it needs no replacement initialization.
+  //
+  // This was invisible to the temperature validation: d6 is refilled from the
+  // temperature source every step and does not depend on active_flag.
 
   // Set timestep for framework (matches CPU version behavior)
   dt_sweep = dt;
@@ -1530,6 +1547,18 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
   int nrefine_local = nrefine;
   double dx_local = dx;
 
+  // Terminal solid_d for a nucleus and for the neighbours it claims. `off`
+  // (default) keeps -nrefine-3, which sits OUTSIDE the smoothing window
+  // (solid_d < 0 && solid_d > -nrefine-1) so nuclei are never smoothed; `on`
+  // uses -1, INSIDE that window, so they take the ordinary smoothing pass --
+  // matching AppAdditiveTexture's `nuclei_smooth_enabled ? -1 : -nrefine-3`.
+  // The -nrefine-2 marker the nucleation kernel writes is deliberately NOT
+  // switched: unlike the CPU app (which grows the nucleus inline inside
+  // execute_nucleation_event), this port splits nucleation and flipping into
+  // two kernels, and the flipper re-identifies its work by that exact value.
+  const double nucleus_done_d =
+      nuclei_smooth_enabled ? -1.0 : (double)(-nrefine_local - 3);
+
   // Parallel over the active-front list - each nucleus flips its neighbors with
   // event tracking. Race-safe: uses atomic CAS to claim neighbors.
   int naccept_local = 0;
@@ -1561,7 +1590,7 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
       // Nucleus itself counts as 1 site
       if (target_sites <= 1) {
         // No neighbors to flip - just update solid_d to ready state
-        d_solid_d_local(i) = -nrefine_local - 3;  // Ready for smoothing
+        d_solid_d_local(i) = nucleus_done_d;  // terminal, or -1 under nuclei_smooth
         count++;  // Track nucleation event
         return;
       }
@@ -1617,7 +1646,7 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
           d_qy_local(nbr) = q_i[2];
           d_qz_local(nbr) = q_i[3];
           // active_flag already set to SOLID by CAS above
-          d_solid_d_local(nbr) = -nrefine_local - 3;  // Ready for smoothing
+          d_solid_d_local(nbr) = nucleus_done_d;  // terminal, or -1 under nuclei_smooth
 
           // Copy thermal properties from nucleus
           d_G_local(nbr) = G_i;
@@ -1632,7 +1661,7 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
       rand_pool_local.free_state(generator);
 
       // Update nucleus solid_d to ready state
-      d_solid_d_local(i) = -nrefine_local - 3;  // Ready for smoothing
+      d_solid_d_local(i) = nucleus_done_d;  // terminal, or -1 under nuclei_smooth
 
       // Track nucleus growth event
       count++;
@@ -3037,6 +3066,16 @@ void AppAdditiveTextureKokkos::input_app(char *command, int narg, char **arg)
     if (domain->me == 0 && screen)
       fprintf(screen, "smooth_greedy_multiproposal %s\n",
               smooth_greedy_multiproposal_enabled ? "enabled" : "disabled");
+
+  } else if (strcmp(command, "nuclei_smooth") == 0) {
+    // Usage: nuclei_smooth on|off  (mirrors the CPU app)
+    if (narg != 1) error->all(FLERR, "Illegal nuclei_smooth command");
+    if (strcmp(arg[0], "on") == 0) nuclei_smooth_enabled = true;
+    else if (strcmp(arg[0], "off") == 0) nuclei_smooth_enabled = false;
+    else error->all(FLERR, "nuclei_smooth: argument must be on or off");
+    if (domain->me == 0 && screen)
+      fprintf(screen, "nuclei_smooth %s\n",
+              nuclei_smooth_enabled ? "enabled" : "disabled");
 
   } else if (strcmp(command, "misorientation_function") == 0) {
     if (narg != 2 && narg != 3) error->all(FLERR, "Illegal misorientation_function command");

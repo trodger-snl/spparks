@@ -278,6 +278,14 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // random single proposal. Matches AppAdditiveTexture::smooth_site.
   bool smooth_greedy_multiproposal_enabled = false;
 
+  // `nuclei_smooth on|off` (mirrors the CPU app). OFF (default): a nucleated
+  // site and the neighbours its particle flipper claims land on a TERMINAL
+  // solid_d, outside the smoothing window (solid_d < 0 && solid_d > -nrefine-1),
+  // so nuclei are never smoothed. ON: they land on solid_d = -1, i.e. INSIDE
+  // that window, so they get the ordinary smoothing pass like epitaxially
+  // solidified sites.
+  bool nuclei_smooth_enabled = false;
+
   // Texture model parameters
   double c1, c2, c3;
   double max_misorient;

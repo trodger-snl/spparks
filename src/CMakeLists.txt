@@ -195,9 +195,18 @@ endif()
 
 # Additive/texture device temperature-eval precision. Default OFF => FP64
 # (double), the HPC production precision and bit-for-bit CPU-validation
-# reference. ON => FP32 (float) for the Rosenthal/Moser device kernels, a large
-# speedup on RDNA/consumer GPUs (gfx1151) at the cost of bit-exact validation.
-option(SPPARKS_AM_TEMP_FP32 "Use FP32 for additive/texture device temperature kernels" OFF)
+# reference. ON => FP32 (float) for the additive/texture device temperature
+# work, at the cost of bit-exact validation. Two distinct wins, per source:
+#   * Rosenthal/Moser (AMReal): compute-bound transcendental kernels, where
+#     RDNA/consumer GPUs (gfx1151) run FP64 at heavily reduced rate.
+#   * HDF5 unstructured (HDF5Real): a gather-and-blend fill that is MEMORY-bound,
+#     so the win is halved traffic on the per-node temperature slice, the
+#     barycentric weights and the raw sample temperatures. Measured on the ct15
+#     10-layer decks, that fill is ~33% of per-box wall and is provably not
+#     host-threading-bound (flat across OMP_NUM_THREADS 1/4/16).
+# Absolute simulation times and the k_T field stay FP64 in both cases --
+# see src/KOKKOS/am_temp_precision.h for why narrowing them is not safe.
+option(SPPARKS_AM_TEMP_FP32 "Use FP32 for additive/texture device temperature kernels (Rosenthal/Moser + HDF5)" OFF)
 if(SPPARKS_AM_TEMP_FP32)
     add_compile_definitions(SPK_AM_TEMP_FP32)
 endif()

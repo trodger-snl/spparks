@@ -939,6 +939,34 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
    and no host round-trip -- the field is fully device-resident. See hdf5_device.h.
 ------------------------------------------------------------------------- */
 
+/* ----------------------------------------------------------------------
+   Upload a host double time-series/temperature vector into a device View whose
+   element type is HDF5Real. Overloaded rather than `if constexpr` because both
+   branches of the latter must still typecheck in a non-template function, and
+   deep_copy(View<float*>, View<const double*>) does not.
+
+   The double overload keeps the original ZERO-COPY unmanaged path, so the
+   default FP64 build does exactly what it did before this knob existed. The
+   float overload pays one host cast pass -- once per layer, not per step.
+------------------------------------------------------------------------- */
+static void upload_hdf5_reals(Kokkos::View<double*> dst,
+                              const double *src, size_t n)
+{
+  Kokkos::View<const double*, Kokkos::HostSpace,
+               Kokkos::MemoryTraits<Kokkos::Unmanaged>> h(src, n);
+  Kokkos::deep_copy(dst, h);
+}
+
+static void upload_hdf5_reals(Kokkos::View<float*> dst,
+                              const double *src, size_t n)
+{
+  auto h = Kokkos::create_mirror_view(dst);
+  for (size_t k = 0; k < n; k++) h(k) = (float) src[k];
+  Kokkos::deep_copy(dst, h);
+}
+
+/* ---------------------------------------------------------------------- */
+
 void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
     const HDF5DevicePlan &plan)
 {
@@ -954,7 +982,7 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
     thermal->hdf5_copy_cache(node_idx, weights, valid);
 
     d_hdf5_node_idx = Kokkos::View<int*[4]>("hdf5_node_idx", n);
-    d_hdf5_weights  = Kokkos::View<double*[3]>("hdf5_weights", n);
+    d_hdf5_weights  = Kokkos::View<HDF5Real*[3]>("hdf5_weights", n);
     d_hdf5_valid    = Kokkos::View<int*>("hdf5_valid", n);
     auto h_idx = Kokkos::create_mirror_view(d_hdf5_node_idx);
     auto h_w   = Kokkos::create_mirror_view(d_hdf5_weights);
@@ -963,7 +991,9 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
       h_v(i) = valid[i];
       const size_t i4 = (size_t)i * 4, i3 = (size_t)i * 3;  // avoid int overflow
       for (int j = 0; j < 4; j++) h_idx(i, j) = node_idx[i4 + j];
-      for (int j = 0; j < 3; j++) h_w(i, j) = weights[i3 + j];
+      // Narrowed to HDF5Real under FP32 (weights are barycentric, in [0,1]);
+      // a no-op cast in the default FP64 build.
+      for (int j = 0; j < 3; j++) h_w(i, j) = (HDF5Real) weights[i3 + j];
     }
     Kokkos::deep_copy(d_hdf5_node_idx, h_idx);
     Kokkos::deep_copy(d_hdf5_weights, h_w);
@@ -981,7 +1011,7 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
   // smoothing); upload it per step as before.
   const bool dti = thermal->hdf5_device_time_interp_active();
   if ((int) d_hdf5_nodal_temps.extent(0) != nnodes)
-    d_hdf5_nodal_temps = Kokkos::View<double*>("hdf5_nodal_temps", nnodes);
+    d_hdf5_nodal_temps = Kokkos::View<HDF5Real*>("hdf5_nodal_temps", nnodes);
 
   if (dti) {
     // (Re)upload the per-node raw time-series CSR + active-node list ONCE per
@@ -997,14 +1027,14 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
       const int n_off = (int) ts_o.size();   // == n_nodes + 1
       if (n_samp > 0 && n_off > 1) {
         d_ts_times   = Kokkos::View<double*>("ts_times", n_samp);
-        d_ts_temps   = Kokkos::View<double*>("ts_temps", n_samp);
+        d_ts_temps   = Kokkos::View<HDF5Real*>("ts_temps", n_samp);
         d_ts_offsets = Kokkos::View<int*>("ts_offsets", n_off);
+        // Times ALWAYS stay FP64 (absolute sim times ~3.9e4 s on a 3e-6 s step)
+        // -- see am_temp_precision.h. Only the temperatures are narrowable.
         Kokkos::View<const double*, Kokkos::HostSpace,
                      Kokkos::MemoryTraits<Kokkos::Unmanaged>> h_t(ts_t.data(), n_samp);
-        Kokkos::View<const double*, Kokkos::HostSpace,
-                     Kokkos::MemoryTraits<Kokkos::Unmanaged>> h_T(ts_T.data(), n_samp);
         Kokkos::deep_copy(d_ts_times, h_t);
-        Kokkos::deep_copy(d_ts_temps, h_T);
+        upload_hdf5_reals(d_ts_temps, ts_T.data(), n_samp);
         auto h_o = Kokkos::create_mirror_view(d_ts_offsets);
         for (int k = 0; k < n_off; k++) h_o(k) = (int) ts_o[k];
         Kokkos::deep_copy(d_ts_offsets, h_o);
@@ -1043,15 +1073,19 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
       const int start = tso(nd);
       const int count = tso(nd + 1) - start;
       const double tfirst = tst(start), tlast = tst(start + count - 1);
-      if (simtn < tfirst || simtn > tlast) { nt_out(nd) = defn; return; }
+      if (simtn < tfirst || simtn > tlast) { nt_out(nd) = (HDF5Real) defn; return; }
       int lo = 0, hi = count;                  // first idx with tst >= simtn
       while (lo < hi) {
         const int mid = (lo + hi) >> 1;
         if (tst(start + mid) < simtn) lo = mid + 1; else hi = mid;
       }
       int idx = lo; if (idx == 0) idx = 1;
+      // Bracket + the (simtn - ti0) / (ti1 - ti0) ratio stay FP64: only the
+      // temperature endpoints narrow. Under FP64 this is the identical
+      // expression to before; under FP32 the time math is still exact and only
+      // the interpolated result is stored narrowed.
       const double ti0 = tst(start + idx - 1), ti1 = tst(start + idx);
-      const double te0 = tsT(start + idx - 1), te1 = tsT(start + idx);
+      const HDF5Real te0 = tsT(start + idx - 1), te1 = tsT(start + idx);
       nt_out(nd) = te0 + (te1 - te0) / (ti1 - ti0) * (simtn - ti0);
     });
     }
@@ -1059,7 +1093,7 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
     // Fallback: the host precompute filled the slice; upload it per step.
     const std::vector<double> &nt = thermal->hdf5_nodal_temps();
     auto h_nt = Kokkos::create_mirror_view(d_hdf5_nodal_temps);
-    for (int k = 0; k < nnodes; k++) h_nt(k) = nt[k];
+    for (int k = 0; k < nnodes; k++) h_nt(k) = (HDF5Real) nt[k];
     Kokkos::deep_copy(d_hdf5_nodal_temps, h_nt);
   }
 
@@ -1087,12 +1121,17 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
   const int nlocal_f = this->nlocal;
 
   Kokkos::parallel_for("HDF5Fill", n, KOKKOS_LAMBDA(const int i) {
-    double Ti;
+    // The gather-and-blend runs in HDF5Real. Under FP64 this is the identical
+    // expression (and the identical operation order) the host fast path is
+    // validated against; under FP32 the four nodal reads and three weights are
+    // half-width, which is the whole point -- this kernel streams them over
+    // nall sites every step. The RESULT is always stored to the FP64 k_T field.
+    HDF5Real Ti;
     if (!vld(i)) {
-      Ti = def;
+      Ti = (HDF5Real) def;
     } else {
       const int i0 = nidx(i, 0), i1 = nidx(i, 1), i2 = nidx(i, 2), i3 = nidx(i, 3);
-      const double t0 = nt(i0);
+      const HDF5Real t0 = nt(i0);
       Ti = t0 + wts(i, 0) * (nt(i1) - t0)
               + wts(i, 1) * (nt(i2) - t0)
               + wts(i, 2) * (nt(i3) - t0);

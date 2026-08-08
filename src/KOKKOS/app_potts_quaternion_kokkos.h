@@ -349,6 +349,17 @@ private:
   void normalize_quaternion_arrays(double* q0_out, double* qx_out, double* qy_out, double* qz_out,
                                    const double* q0_in, const double* qx_in,
                                    const double* qy_in, const double* qz_in, int n);
+
+  // Persistent host mirrors for the sync paths, sized to nall. Allocated only
+  // when nall changes rather than per call: sync_app_data_to_host runs at every
+  // output step, and on a discrete-memory backend create_mirror_view allocates
+  // a fresh nall-sized host buffer for each of the four quaternion arrays. On a
+  // host-space backend these alias the device Views, so this costs nothing.
+  // decltype of the actual mirror, not View<...>::HostMirror -- the latter was
+  // removed in Kokkos 5.
+  decltype(Kokkos::create_mirror_view(d_q0)) h_q0_m, h_qx_m, h_qy_m, h_qz_m;
+  int sync_mirror_n = -1;
+  void ensure_sync_mirrors();
 };
 
 }

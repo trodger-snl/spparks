@@ -185,43 +185,62 @@ void AppPottsQuaternionKokkos::init_app()
    sync spin and quaternion data to device
 ------------------------------------------------------------------------- */
 
+/* ----------------------------------------------------------------------
+   (Re)allocate the persistent host mirrors used by both sync paths.
+------------------------------------------------------------------------- */
+
+void AppPottsQuaternionKokkos::ensure_sync_mirrors()
+{
+  const int nall = nlocal + nghost;
+  if (sync_mirror_n == nall) return;
+  h_q0_m = Kokkos::create_mirror_view(d_q0);
+  h_qx_m = Kokkos::create_mirror_view(d_qx);
+  h_qy_m = Kokkos::create_mirror_view(d_qy);
+  h_qz_m = Kokkos::create_mirror_view(d_qz);
+  sync_mirror_n = nall;
+}
+
 void AppPottsQuaternionKokkos::sync_app_data_to_device()
 {
   int nall = nlocal + nghost;
+  ensure_sync_mirrors();
 
-  // Sync spin
-  auto h_spin = Kokkos::create_mirror_view(d_spin);
-  for (int i = 0; i < nall; i++) {
-    h_spin(i) = spin[i];
-  }
-  Kokkos::deep_copy(d_spin, h_spin);
+  // Sync spin: a straight copy with no arithmetic, so move it as one contiguous
+  // block out of the raw host array rather than element by element.
+  Kokkos::deep_copy(
+      d_spin,
+      Kokkos::View<int*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>(spin, nall));
 
-  // Sync quaternions with normalization
-  auto h_q0 = Kokkos::create_mirror_view(d_q0);
-  auto h_qx = Kokkos::create_mirror_view(d_qx);
-  auto h_qy = Kokkos::create_mirror_view(d_qy);
-  auto h_qz = Kokkos::create_mirror_view(d_qz);
-
+  // Sync quaternions with normalization.
+  //
+  // Threaded, NOT vectorised into a bulk copy: the normalisation is real
+  // arithmetic, and its low bits are load-bearing. Renormalising an already-unit
+  // quaternion still perturbs the last ulp, and a past bug had two sync paths
+  // disagreeing there, which made the trajectory depend on rank count. Each
+  // iteration reads only element i and writes only element i, with no reduction
+  // and no reassociation, so threading is bit-identical to the serial loop --
+  // every site's four values are combined in exactly the same order as before.
+  #pragma omp parallel for schedule(static)
   for (int i = 0; i < nall; i++) {
     double norm = sqrt(q0[i]*q0[i] + qx[i]*qx[i] + qy[i]*qy[i] + qz[i]*qz[i]);
     if (norm > 1.0e-15) {
       double inv_norm = 1.0 / norm;
-      h_q0(i) = q0[i] * inv_norm;
-      h_qx(i) = qx[i] * inv_norm;
-      h_qy(i) = qy[i] * inv_norm;
-      h_qz(i) = qz[i] * inv_norm;
+      h_q0_m(i) = q0[i] * inv_norm;
+      h_qx_m(i) = qx[i] * inv_norm;
+      h_qy_m(i) = qy[i] * inv_norm;
+      h_qz_m(i) = qz[i] * inv_norm;
     } else {
-      h_q0(i) = q0[i];
-      h_qx(i) = qx[i];
-      h_qy(i) = qy[i];
-      h_qz(i) = qz[i];
+      h_q0_m(i) = q0[i];
+      h_qx_m(i) = qx[i];
+      h_qy_m(i) = qy[i];
+      h_qz_m(i) = qz[i];
     }
   }
 
-  Kokkos::deep_copy(d_q0, h_q0);
-  Kokkos::deep_copy(d_qx, h_qx);
-  Kokkos::deep_copy(d_qy, h_qy);
-  Kokkos::deep_copy(d_qz, h_qz);
+  Kokkos::deep_copy(d_q0, h_q0_m);
+  Kokkos::deep_copy(d_qx, h_qx_m);
+  Kokkos::deep_copy(d_qy, h_qy_m);
+  Kokkos::deep_copy(d_qz, h_qz_m);
 }
 
 /* ----------------------------------------------------------------------
@@ -230,37 +249,43 @@ void AppPottsQuaternionKokkos::sync_app_data_to_device()
 
 void AppPottsQuaternionKokkos::sync_app_data_to_host()
 {
-  // Sync spin
-  auto h_spin = Kokkos::create_mirror_view(d_spin);
-  Kokkos::deep_copy(h_spin, d_spin);
-  for (int i = 0; i < nlocal; i++) {
-    spin[i] = h_spin(i);
-  }
+  const int nall = nlocal + nghost;
+  ensure_sync_mirrors();
+
+  // Sync spin: straight copy of the OWNED slice, in one block. The range
+  // matches the previous element loop exactly (nlocal, not nall -- host ghost
+  // entries come from the ghost exchange, not from here).
+  const auto owned = Kokkos::make_pair(0, nlocal);
+  Kokkos::deep_copy(
+      Kokkos::subview(
+          Kokkos::View<int*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>(spin, nall), owned),
+      Kokkos::subview(d_spin, owned));
 
   // Sync quaternions with normalization
-  auto h_q0 = Kokkos::create_mirror_view(d_q0);
-  auto h_qx = Kokkos::create_mirror_view(d_qx);
-  auto h_qy = Kokkos::create_mirror_view(d_qy);
-  auto h_qz = Kokkos::create_mirror_view(d_qz);
+  Kokkos::deep_copy(h_q0_m, d_q0);
+  Kokkos::deep_copy(h_qx_m, d_qx);
+  Kokkos::deep_copy(h_qy_m, d_qy);
+  Kokkos::deep_copy(h_qz_m, d_qz);
 
-  Kokkos::deep_copy(h_q0, d_q0);
-  Kokkos::deep_copy(h_qx, d_qx);
-  Kokkos::deep_copy(h_qy, d_qy);
-  Kokkos::deep_copy(h_qz, d_qz);
-
+  // Threaded, but otherwise byte-for-byte the previous loop -- see the note in
+  // sync_app_data_to_device on why the normalisation arithmetic is left exactly
+  // as it was. Per-element independent, no reduction, so threading cannot
+  // change a single result bit.
+  #pragma omp parallel for schedule(static)
   for (int i = 0; i < nlocal; i++) {
-    double norm = sqrt(h_q0(i)*h_q0(i) + h_qx(i)*h_qx(i) + h_qy(i)*h_qy(i) + h_qz(i)*h_qz(i));
+    double norm = sqrt(h_q0_m(i)*h_q0_m(i) + h_qx_m(i)*h_qx_m(i) +
+                       h_qy_m(i)*h_qy_m(i) + h_qz_m(i)*h_qz_m(i));
     if (norm > 1.0e-15) {
       double inv_norm = 1.0 / norm;
-      q0[i] = h_q0(i) * inv_norm;
-      qx[i] = h_qx(i) * inv_norm;
-      qy[i] = h_qy(i) * inv_norm;
-      qz[i] = h_qz(i) * inv_norm;
+      q0[i] = h_q0_m(i) * inv_norm;
+      qx[i] = h_qx_m(i) * inv_norm;
+      qy[i] = h_qy_m(i) * inv_norm;
+      qz[i] = h_qz_m(i) * inv_norm;
     } else {
-      q0[i] = h_q0(i);
-      qx[i] = h_qx(i);
-      qy[i] = h_qy(i);
-      qz[i] = h_qz(i);
+      q0[i] = h_q0_m(i);
+      qx[i] = h_qx_m(i);
+      qy[i] = h_qy_m(i);
+      qz[i] = h_qz_m(i);
     }
   }
 }

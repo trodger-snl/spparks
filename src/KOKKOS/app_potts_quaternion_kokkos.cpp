@@ -162,14 +162,13 @@ void AppPottsQuaternionKokkos::init_app()
   // count -- which is what makes an np=1 vs np=N regression test possible.
   // Derived from ranmaster's stored seed rather than ranmaster->uniform() so
   // that no other stream shifts.
-  RandomPark ranquat(ranmaster->initial_seed());
-  const double qseed = ranquat.uniform();
+  const uint64_t qseed = (uint64_t) ranmaster->initial_seed();
 
   for (int i = 0; i < nlocal; i++) {
     double norm = sqrt(q0[i]*q0[i] + qx[i]*qx[i] + qy[i]*qy[i] + qz[i]*qz[i]);
     if (norm < 1.0e-6) {
-      ranquat.tagreset(qseed, id[i], 100);
-      std::vector<double> quat = quaternion::generate_unit_quaternion(ranquat);
+      quaternion::SiteOrientationRNG rng(qseed, (uint64_t) id[i]);
+      std::vector<double> quat = quaternion::generate_unit_quaternion(rng);
       q0[i] = quat[0];
       qx[i] = quat[1];
       qy[i] = quat[2];

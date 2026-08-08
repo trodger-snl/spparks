@@ -824,8 +824,7 @@ void AppAdditiveTexture::init_app()
 
   // Per-site orientation stream keyed to the deck seed only (not drawn from
   // ranmaster, which would shift every stream seeded after it).
-  RandomPark ranquat(ranmaster->initial_seed());
-  const double qseed = ranquat.uniform();
+  const uint64_t qseed = (uint64_t) ranmaster->initial_seed();
 
   int flag = 0;
 	int flagall;
@@ -842,8 +841,8 @@ void AppAdditiveTexture::init_app()
         // wall-clock generator -- a site re-melts many times and would need a
         // per-site event counter to stay keyed, and this app is non-reproducible
         // anyway once nucleation/solidification start sharing an RNG.
-        ranquat.tagreset(qseed, id[i], 100);
-        vector<double> uq = quaternion::generate_unit_quaternion(ranquat);
+        quaternion::SiteOrientationRNG rng(qseed, (uint64_t) id[i]);
+        vector<double> uq = quaternion::generate_unit_quaternion(rng);
         q0[i] = uq[0];
         qx[i] = uq[1];
         qy[i] = uq[2];

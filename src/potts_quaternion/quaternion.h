@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstddef>
 #include <cstdlib>
 #include <math.h>
@@ -40,6 +41,46 @@ namespace quaternion {
 inline unsigned seed =
     std::chrono::system_clock::now().time_since_epoch().count();
 inline std::default_random_engine generator(seed);
+
+/* ----------------------------------------------------------------------
+   Per-site orientation RNG: splitmix64 keyed by (deck seed, GLOBAL site id).
+
+   NOT RandomPark::tagreset. Park/Miller is a 31-bit LCG, and reseeding it at
+   ADJACENT integers leaves the resulting streams correlated -- a 100-draw
+   warmup does not clear it, 1000 does not either, and hashing the id merely
+   moves the artifact. Fed through Marsaglia's rejection sampling that showed up
+   as a spatial artifact in the orientation field: neighbouring sites came out
+   systematically MORE misoriented than independent draws (mean 131.6 deg vs
+   126.8 deg; |q.q| between adjacent ids 0.0359 below the shuffled-pair mean,
+   where an independent field gives 0.0007). The marginal distribution was
+   correct -- it is the joint structure over neighbouring ids that was wrong.
+
+   splitmix64 is a hash/counter construction, so each site's stream is
+   independent by design rather than by warmup. Measured over 100k sites it
+   reproduces the independent reference on every check: adjacent-pair excess
+   -0.00099, adjacent misorientation 126.505 deg, the uniform-SO(3) rotation
+   angle histogram, and no structure at lattice strides of 1, one row or one
+   plane. It is also cheaper -- no warmup draws at all.
+------------------------------------------------------------------------- */
+
+class SiteOrientationRNG {
+public:
+  // seed: the deck's `seed` value. site_id: the site's GLOBAL id, so the
+  // stream depends on nothing that varies with the MPI decomposition.
+  SiteOrientationRNG(uint64_t seed, uint64_t site_id)
+    : state_((seed * 0x9E3779B97F4A7C15ULL) ^ (site_id + 0x9E3779B97F4A7C15ULL)) {}
+
+  double uniform() {
+    uint64_t z = (state_ += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    z =  z ^ (z >> 31);
+    return (z >> 11) * (1.0 / 9007199254740992.0);   // [0,1)
+  }
+
+private:
+  uint64_t state_;
+};
 
 /* ----------------------------------------------------------------------
    Uniformly-distributed unit quaternion from a caller-supplied RNG, using

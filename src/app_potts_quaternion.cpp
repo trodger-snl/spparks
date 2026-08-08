@@ -102,14 +102,13 @@ void AppPottsQuaternion::init_app() {
   // only on the deck's `seed` and the site id, so the field is repeatable run
   // to run AND identical at any rank count. Derived from ranmaster's stored
   // seed rather than ranmaster->uniform() so that no other stream shifts.
-  RandomPark ranquat(ranmaster->initial_seed());
-  const double qseed = ranquat.uniform();
+  const uint64_t qseed = (uint64_t) ranmaster->initial_seed();
 
   int flag = 0;
   for (int i = 0; i < nlocal; i++) {
     // Create random orientation as each site
-    ranquat.tagreset(qseed, id[i], 100);
-    vector<double> uq = quaternion::generate_unit_quaternion(ranquat);
+    quaternion::SiteOrientationRNG rng(qseed, (uint64_t) id[i]);
+    vector<double> uq = quaternion::generate_unit_quaternion(rng);
     q0[i] = uq[0];
     qx[i] = uq[1];
     qy[i] = uq[2];

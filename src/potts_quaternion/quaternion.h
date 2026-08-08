@@ -32,9 +32,42 @@ namespace SPPARKS_NS {
 
 namespace quaternion {
 
+// NOTE: this generator is wall-clock seeded, so generate_random_unit_quaternions
+// is NOT reproducible run to run. Prefer generate_unit_quaternion(rng) below,
+// which draws from a caller-supplied stream; keying that stream to a site's
+// GLOBAL id (RandomPark::tagreset) makes the orientation field both repeatable
+// and independent of the MPI decomposition.
 inline unsigned seed =
     std::chrono::system_clock::now().time_since_epoch().count();
 inline std::default_random_engine generator(seed);
+
+/* ----------------------------------------------------------------------
+   Uniformly-distributed unit quaternion from a caller-supplied RNG, using
+   Marsaglia's method -- the same construction (and the same operation order)
+   as the device kernel in app_additive_texture_kokkos.cpp, so a host-generated
+   orientation is drawn from the identical distribution as a device-generated
+   one. Templated on the RNG so this header keeps no dependency on RandomPark;
+   any type with a `double uniform()` works.
+------------------------------------------------------------------------- */
+
+template <class RNG>
+inline vector<double> generate_unit_quaternion(RNG &rng) {
+  double x0, x1, x2, x3, r1, r2;
+  do {
+    x0 = 2.0 * rng.uniform() - 1.0;
+    x1 = 2.0 * rng.uniform() - 1.0;
+    r1 = x0 * x0 + x1 * x1;
+  } while (r1 >= 1.0);
+
+  do {
+    x2 = 2.0 * rng.uniform() - 1.0;
+    x3 = 2.0 * rng.uniform() - 1.0;
+    r2 = x2 * x2 + x3 * x3;
+  } while (r2 >= 1.0);
+
+  const double s = std::sqrt((1.0 - r1) / r2);
+  return vector<double>{x0, x1, x2 * s, x3 * s};
+}
 
 inline double norm(const vector<double> &q) {
   // if (q.size() != 4)

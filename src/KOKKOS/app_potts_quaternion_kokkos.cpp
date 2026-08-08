@@ -20,6 +20,7 @@
 #include "stdlib.h"
 #include "app_potts_quaternion_kokkos.h"
 #include "random_park.h"
+#include "random_mars.h"
 #include "error.h"
 #include "memory.h"
 #include "crystalline_orientations/cubic_symmetries.h"
@@ -153,12 +154,21 @@ void AppPottsQuaternionKokkos::init_app()
   MPI_Allreduce(&flag, &flagall, 1, MPI_INT, MPI_SUM, world);
   if (flagall) error->all(FLERR,"One or more sites have invalid values");
 
-  // Initialize random quaternions for sites that don't have one
+  // Initialize random quaternions for sites that don't have one, keyed to each
+  // site's GLOBAL id. Same idiom as the color/strict per-site seeds in
+  // AppLattice::init(): the stream depends only on the deck's `seed` and the
+  // site id, so the field is repeatable run to run AND identical at any rank
+  // count -- which is what makes an np=1 vs np=N regression test possible.
+  // Derived from ranmaster's stored seed rather than ranmaster->uniform() so
+  // that no other stream shifts.
+  RandomPark ranquat(ranmaster->initial_seed());
+  const double qseed = ranquat.uniform();
+
   for (int i = 0; i < nlocal; i++) {
     double norm = sqrt(q0[i]*q0[i] + qx[i]*qx[i] + qy[i]*qy[i] + qz[i]*qz[i]);
     if (norm < 1.0e-6) {
-      // Generate random quaternion using host-side library
-      std::vector<double> quat = quaternion::generate_random_unit_quaternions(1);
+      ranquat.tagreset(qseed, id[i], 100);
+      std::vector<double> quat = quaternion::generate_unit_quaternion(ranquat);
       q0[i] = quat[0];
       qx[i] = quat[1];
       qy[i] = quat[2];

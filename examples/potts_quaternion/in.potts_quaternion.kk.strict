@@ -1,0 +1,19 @@
+# potts/quaternion/kk under sweep color/strict: strict keys each site's RNG
+# stream to its global id, so the trajectory is decomposition-invariant and
+# np=1 must equal np=2 bitwise. This is the case that caught the historical
+# indexed-vs-full quaternion sync bug (normalization low bits).
+variable Q equal 100
+seed             56789
+app_style        potts/quaternion/kk ${Q} cubic
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 40 0 40 0 40
+create_box       box
+create_sites     box
+set              site range 1 ${Q}
+sweep            color/strict
+sector           no
+diag_style       energy
+temperature      0.25
+stats            1.0
+run              20.0

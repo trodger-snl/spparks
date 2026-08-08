@@ -37,6 +37,7 @@
 #include "lattice.h"
 #include "timer.h"
 #include "random_park.h"
+#include "random_mars.h"
 #include "error.h"
 #include "domain.h"
 #include "potts_quaternion/cubic_symmetries.h"
@@ -821,6 +822,11 @@ void AppAdditiveTexture::init_app()
   nucleation_temps = new double[nspins];
 	nucleation_sizes = new double[nspins];
 
+  // Per-site orientation stream keyed to the deck seed only (not drawn from
+  // ranmaster, which would shift every stream seeded after it).
+  RandomPark ranquat(ranmaster->initial_seed());
+  const double qseed = ranquat.uniform();
+
   int flag = 0;
 	int flagall;
     for (int i = 0; i < nlocal; i++) {
@@ -828,10 +834,16 @@ void AppAdditiveTexture::init_app()
 				flag = 1;
         fprintf(screen,"Bad spin %i\n",spin[i]);
 			}
-      if (active_flag[i] != 3) { 
-        // Create random orientation at each site that wasn't read as solid from input file
-        vector<double> uq = quaternion::generate_random_unit_quaternions(1);
-        // std::cout << "Generating new quaternions" << std::endl;
+      if (active_flag[i] != 3) {
+        // Create random orientation at each site that wasn't read as solid from
+        // input file. Keyed to the site's GLOBAL id (see ranquat above), so the
+        // starting field is repeatable and decomposition-independent. NOTE the
+        // per-melt redraw in app_update() is deliberately left on the
+        // wall-clock generator -- a site re-melts many times and would need a
+        // per-site event counter to stay keyed, and this app is non-reproducible
+        // anyway once nucleation/solidification start sharing an RNG.
+        ranquat.tagreset(qseed, id[i], 100);
+        vector<double> uq = quaternion::generate_unit_quaternion(ranquat);
         q0[i] = uq[0];
         qx[i] = uq[1];
         qy[i] = uq[2];

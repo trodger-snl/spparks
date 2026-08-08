@@ -29,8 +29,14 @@ class RanMars : protected Pointers {
   void init(int);
   double uniform();
 
+  // The value given to the `seed` command. Exposed so a caller can derive its
+  // own deterministic stream WITHOUT drawing from the master generator --
+  // consuming a uniform here would shift every stream seeded after it.
+  int initial_seed() const { return seed_value; }
+
  private:
   int initflag;
+  int seed_value;
   int i97,j97;
   double c,cd,cm;
   double *u;

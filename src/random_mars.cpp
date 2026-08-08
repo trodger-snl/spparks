@@ -28,6 +28,7 @@ using namespace SPPARKS_NS;
 RanMars::RanMars(SPPARKS *spk) : Pointers(spk)
 {
   initflag = 0;
+  seed_value = 0;
   u = NULL;
 }
 
@@ -46,6 +47,7 @@ void RanMars::init(int seed)
   double s,t;
 
   initflag = 1;
+  seed_value = seed;
 
   // assume input seed is positive value > 0
   // insure seed is from 1 to 900,000,000 inclusive

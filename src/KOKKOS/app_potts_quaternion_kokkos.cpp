@@ -21,6 +21,7 @@
 #include "app_potts_quaternion_kokkos.h"
 #include "random_park.h"
 #include "random_mars.h"
+#include "random_park_kokkos.h"
 #include "error.h"
 #include "memory.h"
 #include "crystalline_orientations/cubic_symmetries.h"
@@ -516,6 +517,10 @@ struct AppPottsQuaternionKokkos::ColorSweepFunctor {
   pool_type rand_pool;
   double temperature;
   double t_inverse;
+  // `sweep color/strict`: per-site Park/Miller streams instead of the thread-
+  // keyed pool, keyed like `spin`. Empty and unused when strict == 0.
+  Kokkos::View<int*> siteseeds;
+  int strict;
 
   KOKKOS_INLINE_FUNCTION
   double compute_energy(int i, const double* qi) const {
@@ -542,11 +547,14 @@ struct AppPottsQuaternionKokkos::ColorSweepFunctor {
     return 0.5 * eng;
   }
 
+  // The site update, written once and templated over which RNG supplies the
+  // draws (Kokkos pool generator or RandomParkDevice -- both expose drand()).
+  // The draw SEQUENCE mirrors AppPottsQuaternion::site_event_rejection exactly:
+  // one draw for iran (only once nevent > 0), and a second only when
+  // efinal > einitial && temperature > 0.
+  template <class Gen>
   KOKKOS_INLINE_FUNCTION
-  void operator()(const int idx, int& accepted) const {
-    int i = color_sites(color_start + idx);
-    auto rand_gen = rand_pool.get_state();
-
+  void update_site(int i, Gen& rand_gen, int& accepted) const {
     int oldstate = spin(i);
     double q_old[4] = {q0(i), qx(i), qy(i), qz(i)};
 
@@ -577,10 +585,9 @@ struct AppPottsQuaternionKokkos::ColorSweepFunctor {
     }
 
     // No unique neighbors - nothing to do
-    if (nevent == 0) {
-      rand_pool.free_state(rand_gen);
-      return;
-    }
+    // No unique neighbors - nothing to do. Returns before drawing, as the CPU
+    // does, so such a site consumes no numbers from its stream.
+    if (nevent == 0) return;
 
     // Pick random unique neighbor
     int iran = static_cast<int>(nevent * rand_gen.drand());
@@ -611,8 +618,24 @@ struct AppPottsQuaternionKokkos::ColorSweepFunctor {
       qz(i) = q_new[3];
       accepted++;
     }
+  }
 
-    rand_pool.free_state(rand_gen);
+  KOKKOS_INLINE_FUNCTION
+  void operator()(const int idx, int& accepted) const {
+    int i = color_sites(color_start + idx);
+
+    if (strict) {
+      // Load this site's own stream, advance it, store it back -- the device
+      // equivalent of AppLattice::sweep_nomask_strict's siteseeds[] handling.
+      // No pool, so no lock race and no thread-dependent stream assignment.
+      RandomParkDevice rp(siteseeds(i));
+      update_site(i, rp, accepted);
+      siteseeds(i) = rp.seed;
+    } else {
+      auto rand_gen = rand_pool.get_state();
+      update_site(i, rand_gen, accepted);
+      rand_pool.free_state(rand_gen);
+    }
   }
 };
 
@@ -634,7 +657,9 @@ void AppPottsQuaternionKokkos::sweep_color_kokkos(int color, int start, int coun
     theta_cut,
     *rand_pool,
     temperature,
-    t_inverse
+    t_inverse,
+    d_siteseeds,
+    strict_rng
   };
 
   int naccept_color = 0;

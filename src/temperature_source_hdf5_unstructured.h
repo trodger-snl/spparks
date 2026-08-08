@@ -353,6 +353,12 @@ private:
   // Helper methods from reference implementation
   void load_layer(unsigned layerIdx);
 
+  // Drop every piece of state that belongs to the currently loaded layer:
+  // mesh, per-node time series, spatial grid, nodal adjacency and the derived
+  // node sets. Used when a layer turns out to have no chunks overlapping this
+  // rank's subdomain, so the previous layer's field cannot leak into it.
+  void clear_layer_data();
+
   // Anonymous namespace functions (now as private methods)
   std::array<double, 3> get_parametric_coordinates_of_point(
     const std::vector<std::vector<double>>& tet_coords,

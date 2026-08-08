@@ -441,7 +441,32 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   }
   
   if (chunksToLoad.empty()) {
-    // No data for this domain 
+    // This rank's padded subdomain overlaps no chunk of this layer, so there is
+    // genuinely no thermal data here -- normal when thin boxes are tiled across
+    // a part and stitched back together, since a box can sit far from the layer
+    // currently being deposited.
+    //
+    // Drop the PREVIOUS layer's mesh and time series rather than returning with
+    // them still resident. Leaving them loaded made every site keep
+    // interpolating the old layer's field: silently harmless while each layer's
+    // series happens to end where the next begins (the reader then falls back to
+    // default_temp on the time-bounds check), but silently WRONG the moment a
+    // layer carries a cooldown tail into the next layer's window, which nothing
+    // in the format forbids.
+    //
+    // With the state cleared, build_site_element_cache finds no mesh, every
+    // cache entry comes back invalid, and every site reads default_temp -- the
+    // correct answer for "no data" -- while the empty interval list lets
+    // get_next_time_with_temperature fast-forward to the next layer.
+    clear_layer_data();
+    if (layerIdx >= layer_thermal_intervals.size())
+      layer_thermal_intervals.resize(layerIdx + 1);
+    layer_thermal_intervals[layerIdx].clear();
+    if (screen)
+      fprintf(screen, "  Rank %d: layer %u has no chunks overlapping this "
+              "subdomain; no thermal data here, sites read default_temp "
+              "(%.1f K) until a later layer covers them\n",
+              universe->me, layerIdx, default_temp);
     return;
   }
   
@@ -600,6 +625,42 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
     fprintf(screen, "  Layer load time: %.3f s (avg: %.3f s over %d loads)\n",
             load_time, total_layer_load_time / layer_load_count, layer_load_count);
   }
+}
+
+/* ---------------------------------------------------------------------- */
+
+void HDF5UnstructuredTemperatureSource::clear_layer_data()
+{
+  // Mesh + connectivity
+  elemNode = Array2D<unsigned>();
+  nodeCoords = Array2D<double>();
+  chunk_bboxes.clear();
+  selected_chunks.clear();
+  node_offsets.clear();
+  elem_offsets.clear();
+  elem_bboxes.clear();
+  spatial_grid = SpatialGrid();          // resets valid = false and frees the CSR
+
+  // Per-node time series. dataCounts must go too: num_loaded_nodes() is derived
+  // from it and sizes the device nodal-temperature slice, so leaving it behind
+  // would advertise nodes whose series no longer exists.
+  dataCounts.clear();
+  times = CompressedArray2D<double>();
+  temperatures = CompressedArray2D<double>();
+
+  // Nodal-smoothing adjacency and its derived sets
+  nbr_offsets.clear();
+  nbr_indices.clear();
+  nbr_weights.clear();
+  nodal_smooth_buffer.clear();
+  nodal_adjacency_valid = false;
+
+  // Derived per-step caches
+  cached_nodal_temps.clear();
+  nodal_cache_valid = false;
+  active_node_indices.clear();
+  smooth_interp_indices.clear();
+  smooth_update_indices.clear();
 }
 
 /* ---------------------------------------------------------------------- */

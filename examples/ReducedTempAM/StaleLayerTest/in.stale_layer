@@ -1,0 +1,56 @@
+# Regression deck for the stale-layer bug (zero overlapping chunks in load_layer).
+# Uses stale_layer_test.hdf5 from make_stale_layer_fixture.py: layer 1's mesh sits
+# 0.05 m away, so this box selects ZERO chunks for that layer.
+#
+# Correct behaviour: d6 == 300 (default_temp) at every step in layer 1's window
+# (t in (1e-3, 2e-3]), hot again in layer 2.
+#
+# fast-forward threshold is set BELOW default_temp (250 < 300) on purpose, so the
+# run does not skip over the empty layer and we can watch every step of it.
+
+variable DX equal 5e-6
+
+app_style additive/texture/kk 1000000 5e-06 3e-6 1
+
+seed             20307504
+
+dimension        3
+lattice          sc/26n 1.0
+region box block 0 40 0 40 0 10
+
+boundary         n n n
+
+create_box       box
+create_sites     box
+set              site range 1 1000000
+set              i2 value 1
+set              d6 value 300
+set              d7 value 0
+set              d8 value 0
+set              d9 value 0
+
+sector           yes
+sweep            color
+
+setup_temperature_source hdf5_csr "stale_layer_test.hdf5" 5e-06 250.0 300.0
+
+diag_style       array d6 sum d6 max
+
+temperature      0.0
+
+liquidus                1.623000e+03
+solidus                 1563
+solid_front_vel         4 -1.0302e-7 1.0533e-4 2.2196e-3 0
+nucleation_density      1.228638e+14
+critical_undercooling   5
+undercooling_deviation  2
+mean_nuclei_volume      1.685280e-15
+nuclei_volume_deviation 1.5625e-17
+texture_parameters 1.990000e+00 2.180000e+00
+misorientation_function 3.372846e+01 2
+fast_forward_search_window 0.001
+
+stats            1e-4
+
+reset_time 0
+run   0.003 upto

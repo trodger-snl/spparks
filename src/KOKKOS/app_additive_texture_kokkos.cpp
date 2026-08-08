@@ -1017,12 +1017,23 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
         Kokkos::deep_copy(d_active_nodes, h_an);
 
         d_ts_version = plan.version;
+      } else {
+        // This layer has no thermal data on this rank (load_layer found no
+        // overlapping chunks and cleared the layer state). Drop the previous
+        // layer's active-node list: it indexes a time series that is gone, and
+        // d_hdf5_nodal_temps has just been resized to n_nodes == 0, so leaving
+        // the count set would run ComputeNodalTemps off the end of both.
+        d_n_active_nodes = 0;
+        d_ts_version = plan.version;
       }
     }
 
     // Device per-node time interpolation -> d_hdf5_nodal_temps, active nodes only
     // (~n_active searches, NOT 4*nall). Bit-matches the host precompute
     // (lower_bound bracket + linear interp); inactive entries are never read.
+    // Skipped entirely for an empty layer -- HDF5Fill below then sees valid==0
+    // at every site and writes default_temp, which is the right answer.
+    if (d_n_active_nodes > 0) {
     auto nt_out = d_hdf5_nodal_temps;
     auto d_act_nodes = d_active_nodes;
     auto tst = d_ts_times; auto tsT = d_ts_temps; auto tso = d_ts_offsets;
@@ -1043,6 +1054,7 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
       const double te0 = tsT(start + idx - 1), te1 = tsT(start + idx);
       nt_out(nd) = te0 + (te1 - te0) / (ti1 - ti0) * (simtn - ti0);
     });
+    }
   } else if (nnodes > 0) {
     // Fallback: the host precompute filled the slice; upload it per step.
     const std::vector<double> &nt = thermal->hdf5_nodal_temps();

@@ -151,6 +151,9 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
     mis_thresh = 10.0 * MY_PI / 180.0; // Default 10 degrees converted to radians
     misorient_alpha = 5.0; // Default exponential steepness parameter
     misorientation_target_mode = MISORI_TARGET_GRADIENT;
+    nucleation_misorient_target_mode = MISORI_TARGET_GRADIENT;
+    // Steepness cap default: 2 degrees of orientation change per 30 microns.
+    mis_cap_rate = (2.0 * MY_PI / 180.0) / 30.0e-6;
     nucleation_mode = NUCLEATION_THRESHOLD;
 
     // Void generation defaults
@@ -386,6 +389,36 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
        misorientation_target_mode = MISORI_TARGET_RANDOM_ROTATION;
      } else {
        error->all(FLERR,"Illegal misorientation_target value: use gradient, random, or random_rotation");
+     }
+  }
+  else if (strcmp(command,"nucleation_misorientation_target") == 0) {
+     if (narg != 1) error->all(FLERR,"Illegal nucleation_misorientation_target command");
+     if (strcmp(arg[0],"gradient") == 0) {
+       nucleation_misorient_target_mode = MISORI_TARGET_GRADIENT;
+     } else if (strcmp(arg[0],"random") == 0) {
+       nucleation_misorient_target_mode = MISORI_TARGET_RANDOM;
+     } else if (strcmp(arg[0],"random_rotation") == 0) {
+       nucleation_misorient_target_mode = MISORI_TARGET_RANDOM_ROTATION;
+     } else if (strcmp(arg[0],"none") == 0) {
+       nucleation_misorient_target_mode = MISORI_TARGET_NONE;
+     } else {
+       error->all(FLERR,"Illegal nucleation_misorientation_target value: "
+                  "use gradient, random, random_rotation, or none");
+     }
+  }
+  else if (strcmp(command,"misorientation_cap") == 0) {
+     // misorientation_cap <degrees> <distance_m>: clamp every rotation event
+     // to (degrees over distance) * hop_distance. degrees <= 0 disables the
+     // cap (and with it the nucleation-shell rotation, which is cap-driven).
+     if (narg != 2) error->all(FLERR,"Illegal misorientation_cap command");
+     double cap_deg = atof(arg[0]);
+     double cap_dist = atof(arg[1]);
+     if (cap_deg <= 0) {
+       mis_cap_rate = 0.0;
+     } else {
+       if (cap_dist <= 0)
+         error->all(FLERR,"Illegal misorientation_cap distance: must be greater than 0");
+       mis_cap_rate = cap_deg * MY_PI / 180.0 / cap_dist;
      }
   }
   else if (strcmp(command,"nucleation_mode") == 0) {
@@ -1196,7 +1229,7 @@ void AppAdditiveTexture::site_event_solidification(int i, double Tcool, RandomPa
             naccept++;
 
             // Apply misorientation based on temperature gradient
-            apply_misorientation(i, Tcool, ranapp);
+            apply_misorientation(i, neighran, Tcool, ranapp);
             return;
         }
     }
@@ -1205,13 +1238,39 @@ void AppAdditiveTexture::site_event_solidification(int i, double Tcool, RandomPa
 /* ----------------------------------------------------------------------
     Apply misorientation based on temperature gradient and cooling rate
 ------------------------------------------------------------------------- */
-void AppAdditiveTexture::apply_misorientation(int i, double Tcool, RandomPark *ranapp) {
+void AppAdditiveTexture::apply_misorientation(int i, int parent, double Tcool, RandomPark *ranapp) {
     if(max_misorient <= 0) return;
-    
+
     // Exponential function: grows slowly initially, then rapidly in last ~10%
     double normalized_temp = Tcool / t_cool_max;
     double mis_angle = max_misorient * (exp(misorient_alpha * normalized_temp) - 1.0) / (exp(misorient_alpha) - 1.0) * MY_PI/180;
 
+    // Orientation-gradient steepness cap: the rotation relative to the parent
+    // the orientation was inherited from cannot exceed mis_cap_rate times the
+    // physical hop distance. Coordinate differences are in lattice units; the
+    // sqrt(3) clamp guards against a periodic-wrap neighbor pair reading as a
+    // box-length hop (the true SC_26N stencil distance is at most sqrt(3)).
+    if (mis_cap_rate > 0.0) {
+        double ddx = xyz[i][0] - xyz[parent][0];
+        double ddy = xyz[i][1] - xyz[parent][1];
+        double ddz = xyz[i][2] - xyz[parent][2];
+        double hop_lat = sqrt(ddx*ddx + ddy*ddy + ddz*ddz);
+        if (hop_lat > 1.7320508076) hop_lat = 1.7320508076;
+        double cap = mis_cap_rate * hop_lat * dx;
+        if (mis_angle > cap) mis_angle = cap;
+    }
+
+    rotate_toward_target(i, mis_angle, misorientation_target_mode, ranapp, nullptr);
+}
+
+/* ----------------------------------------------------------------------
+    Rotate site i's orientation by mis_angle per the given target mode, then
+    apply the mis_thresh new-grain check. Shared by the solidification path
+    and the nucleation particle flipper. grad_dir supplies a precomputed
+    gradient direction for MISORI_TARGET_GRADIENT (nullptr => compute at i).
+------------------------------------------------------------------------- */
+void AppAdditiveTexture::rotate_toward_target(int i, double mis_angle, int target_mode,
+                                              RandomPark *ranapp, const double *grad_dir) {
     // Create quaternion vector from site's orientation
     vector<double> q_site = {q0[i], qx[i], qy[i], qz[i]};
 
@@ -1225,7 +1284,7 @@ void AppAdditiveTexture::apply_misorientation(int i, double Tcool, RandomPark *r
     }
 
     vector<double> q_new;
-    if (misorientation_target_mode == MISORI_TARGET_RANDOM_ROTATION) {
+    if (target_mode == MISORI_TARGET_RANDOM_ROTATION) {
         // Apply a rotation by mis_angle about a uniformly-random axis,
         // composed with the existing site quaternion. No <100>-toward-target
         // alignment step.
@@ -1241,15 +1300,26 @@ void AppAdditiveTexture::apply_misorientation(int i, double Tcool, RandomPark *r
         }
     } else {
         vector<double> target_dir;
-        if (misorientation_target_mode == MISORI_TARGET_GRADIENT) {
-            // Calculate the unit-vector surface norm (use voxel counting)
-            vector<double> grad_full = normal_finder(i);  // Returns [norm_x, norm_y, norm_z, magnitude]
-            target_dir = {grad_full[0], grad_full[1], grad_full[2]};
-        } else if (misorientation_target_mode == MISORI_TARGET_RANDOM) {
+        if (target_mode == MISORI_TARGET_GRADIENT) {
+            if (grad_dir) {
+                target_dir = {grad_dir[0], grad_dir[1], grad_dir[2]};
+            } else {
+                // Calculate the unit-vector surface norm (use voxel counting)
+                vector<double> grad_full = normal_finder(i);  // Returns [norm_x, norm_y, norm_z, magnitude]
+                target_dir = {grad_full[0], grad_full[1], grad_full[2]};
+            }
+        } else if (target_mode == MISORI_TARGET_RANDOM) {
             target_dir = sample_random_unit_vector(ranapp);
         } else {
             error->all(FLERR,"Unknown misorientation target mode");
         }
+        // A degenerate target (zero gradient in a thermally flat neighborhood)
+        // means no preferred direction: keep the orientation unchanged. The
+        // device QuaternionOps::rotate_q_towards_u does the same; the host
+        // quaternion library throws instead, so guard here.
+        double t_mag = sqrt(target_dir[0]*target_dir[0] + target_dir[1]*target_dir[1]
+                          + target_dir[2]*target_dir[2]);
+        if (t_mag < 1e-15) return;
         q_new = quaternion::rotate_q_towards_u(q_site, target_dir, mis_angle);
     }
 
@@ -1293,7 +1363,35 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
     int possible_neigh[26];
     SiteState s_in(spin[i],{q0[i], qx[i], qy[i], qz[i]});
 
-    
+    // Nucleated-shell misorientation: every site a nucleus claims (other than
+    // the seed voxel) rotates from the inherited orientation toward the
+    // nucleation target by the steepness-cap rate times its hop distance from
+    // the current growth center, so the nucleus develops the maximum-allowed
+    // internal orientation fan (2 deg / 30 um by default). The recursion below
+    // re-reads the (already rotated) center orientation, so the rotation
+    // accumulates outward naturally.
+    bool nucl_rotate = (max_misorient > 0 && mis_cap_rate > 0.0 &&
+                        nucleation_misorient_target_mode != MISORI_TARGET_NONE);
+    double center_grad[3] = {0.0, 0.0, 0.0};
+    bool have_center_grad = false;
+    if (nucl_rotate && nucleation_misorient_target_mode == MISORI_TARGET_GRADIENT) {
+        std::vector<double> nf = normal_finder(i);
+        center_grad[0] = nf[0]; center_grad[1] = nf[1]; center_grad[2] = nf[2];
+        have_center_grad = true;
+    }
+    auto rotate_flipped = [&](int i_chosen) {
+        if (!nucl_rotate) return;
+        double ddx = xyz[i_chosen][0] - xyz[i][0];
+        double ddy = xyz[i_chosen][1] - xyz[i][1];
+        double ddz = xyz[i_chosen][2] - xyz[i][2];
+        double hop_lat = sqrt(ddx*ddx + ddy*ddy + ddz*ddz);
+        // Periodic-wrap guard: the true stencil hop is at most sqrt(3).
+        if (hop_lat > 1.7320508076) hop_lat = 1.7320508076;
+        rotate_toward_target(i_chosen, mis_cap_rate * hop_lat * dx,
+                             nucleation_misorient_target_mode, random,
+                             have_center_grad ? center_grad : nullptr);
+    };
+
 
     //Its hard to go through shells iteravely if the number of neighbors isn't the full 26.
     //Check if this is the case and just loop through the neihgbor list if so
@@ -1305,6 +1403,7 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
                 int i_chosen = neighbor[i][j];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
+                rotate_flipped(i_chosen);
                 if (i_chosen < nlocal) {
                     solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
                     G[i_chosen] = G[i];
@@ -1356,6 +1455,7 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
                 int i_chosen = neighbor[i][nearest_neigh[idx]];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
+                rotate_flipped(i_chosen);
                 if (i_chosen < nlocal) {
                     solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
                     G[i_chosen] = G[i];
@@ -1375,6 +1475,7 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
                 int i_chosen = neighbor[i][second_nearest[idx]];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
+                rotate_flipped(i_chosen);
                 if (i_chosen < nlocal) {
                     solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
                     G[i_chosen] = G[i];
@@ -1394,6 +1495,7 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
                 int i_chosen = neighbor[i][third_nearest[idx]];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
+                rotate_flipped(i_chosen);
                 if (i_chosen < nlocal) {
                     solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
                     G[i_chosen] = G[i];

@@ -40,7 +40,10 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   enum MisorientationTargetMode {
     MISORI_TARGET_GRADIENT = 0,
     MISORI_TARGET_RANDOM = 1,
-    MISORI_TARGET_RANDOM_ROTATION = 2
+    MISORI_TARGET_RANDOM_ROTATION = 2,
+    // Valid only for the nucleation target: shell sites copy the seed
+    // orientation verbatim (the pre-existing uniform-nucleus behavior).
+    MISORI_TARGET_NONE = 3
   };
 
   enum NucleationMode {
@@ -64,7 +67,13 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   void execute_nucleation_event(int, double);
   std::vector<double> normal_finder(int);
 	double melt_misorientation(int, double, double, double);
-  void apply_misorientation(int, double, class RandomPark *);
+  void apply_misorientation(int, int, double, class RandomPark *);
+  // Shared rotate-toward-target + new-grain-threshold step used by both the
+  // solidification path (apply_misorientation) and the nucleation flipper.
+  // grad_dir: precomputed gradient direction for MISORI_TARGET_GRADIENT, or
+  // nullptr to compute it at the site via normal_finder().
+  void rotate_toward_target(int, double, int, class RandomPark *,
+                            const double *grad_dir);
   std::vector<double> get_average_neighbor_quaternion(int site, int target_spin);
   void smooth_site(int site);
   double site_energy_smooth(int site);
@@ -129,6 +138,19 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   double mis_thresh;
   double misorient_alpha;
   int misorientation_target_mode;
+  // Target mode for the rotation applied to nucleated shell sites (all sites
+  // of a nucleus other than the seed voxel). Set by the input command
+  // `nucleation_misorientation_target`; MISORI_TARGET_NONE restores the
+  // historical uniform-orientation nucleus.
+  int nucleation_misorient_target_mode;
+  // Orientation-gradient steepness cap in rad/m (`misorientation_cap`
+  // command, degrees per meters). Every rotation event (epitaxial and
+  // nucleation) is clamped to mis_cap_rate * hop_distance, so the sustained
+  // orientation gradient cannot exceed the cap. <= 0 disables the clamp.
+  // The nucleation-path rotation magnitude is cap-driven, so it requires a
+  // positive cap. Active only while max_misorient > 0, like the rest of the
+  // misorientation model.
+  double mis_cap_rate;
 
  	// Monte Carlo nucleation model parameters
 	int *nucleation_flags;

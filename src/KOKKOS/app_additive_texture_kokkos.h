@@ -301,7 +301,10 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   enum MisoriTargetMode {
     MISORI_TARGET_GRADIENT = 0,
     MISORI_TARGET_RANDOM = 1,
-    MISORI_TARGET_RANDOM_ROTATION = 2
+    MISORI_TARGET_RANDOM_ROTATION = 2,
+    // Valid only for the nucleation target: claimed shell sites copy the seed
+    // orientation verbatim (the pre-existing uniform-nucleus behavior).
+    MISORI_TARGET_NONE = 3
   };
   // INTENTIONALLY diverges from AppAdditiveTexture, which defaults to
   // MISORI_TARGET_GRADIENT (app_additive_texture.cpp:153). Kept as RANDOM by
@@ -309,6 +312,21 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // misorientation defaults (max_misorient, mis_thresh) ARE matched to the CPU
   // app; this one is the exception.
   int misorientation_target_mode = MISORI_TARGET_RANDOM;
+
+  // Target mode for the rotation applied to nucleated shell sites (sites a
+  // nucleus claims in particle_flipper_kernel, i.e. everything but the seed
+  // voxel). Set by `nucleation_misorientation_target`; matches the CPU app's
+  // default of GRADIENT -- here the target is the seed's stored gradient
+  // direction (d_grad_x/y/z), which the nucleation kernel already computes.
+  int nucleation_misorient_target_mode = MISORI_TARGET_GRADIENT;
+
+  // Orientation-gradient steepness cap in rad/m (`misorientation_cap`
+  // command, degrees per meters). Every rotation event (epitaxial and
+  // nucleation) is clamped to mis_cap_rate * hop_distance. <= 0 disables the
+  // clamp; the nucleation-shell rotation magnitude is cap-driven, so it also
+  // requires a positive cap. Active only while max_misorient > 0. Default set
+  // in the constructor alongside the other misorientation defaults.
+  double mis_cap_rate;
 
   // Nucleation data
   int *nucleation_flags;

@@ -1267,15 +1267,23 @@ void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
   // Collect unique node indices from valid cached elements (owned + ghost) so
   // precompute_nodal_temperatures fills every node the device fill will read --
   // including ghost sites' tet nodes.
-  std::set<unsigned> unique_nodes;
+  // A mark-and-compact over a byte array per loaded node, NOT a std::set: the
+  // set took 4*nall (~20M here) red-black-tree inserts to end up with at most
+  // n_nodes (~233k) distinct entries. Marking is O(1) per touch and the
+  // compaction walks node indices in ascending order, which is exactly the
+  // order std::set iteration produced -- so active_node_indices is identical.
+  const size_t n_nodes = dataCounts.size();
+  std::vector<unsigned char> node_used(n_nodes, 0);
   for (int i = 0; i < nall; i++) {
-    if (site_element_cache[i].valid) {
-      for (int j = 0; j < 4; j++) {
-        unique_nodes.insert(site_element_cache[i].nodeIndices[j]);
-      }
+    if (!site_element_cache[i].valid) continue;
+    for (int j = 0; j < 4; j++) {
+      const unsigned nd = site_element_cache[i].nodeIndices[j];
+      if (nd < n_nodes) node_used[nd] = 1;
     }
   }
-  active_node_indices.assign(unique_nodes.begin(), unique_nodes.end());
+  active_node_indices.clear();
+  for (size_t nd = 0; nd < n_nodes; nd++)
+    if (node_used[nd]) active_node_indices.push_back(static_cast<unsigned>(nd));
 
   // Build BFS-expanded node sets used to keep the per-step interpolation
   // and smoothing tight. Requires adjacency; safe to skip otherwise.

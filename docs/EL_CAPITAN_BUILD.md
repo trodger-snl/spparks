@@ -225,15 +225,30 @@ hardcoded `MPI_INT`, and `src/lattice.cpp:365-366,372-373` computes
 `idsite/(nx*ny)` with `nx*ny` as `int*int`, which silently corrupts the
 checkerboard coloring rather than erroring. Both need fixing first.
 
-**Multi-node HDF5 is unproven.** `load_layer()` returns early when a rank's
-padded subdomain overlaps no chunks of the current layer, without clearing the
-previous layer's mesh — so those sites get interpolated from stale thermal
-history. The wide chunk-load pad currently keeps this latent (no rank has been
-observed reaching the zero-chunk path), and there is now a warning when that pad
-is wide enough to erase a decomposed axis. The two are coupled through
-`grid_cell_size_multiplier`: **do not lower it to reduce I/O amplification
-without fixing the early return first**, or you trade a performance problem for a
-silent correctness one.
+**Multi-node HDF5 is still unproven, but the stale-layer trap is fixed.**
+`load_layer()` used to return early when a rank's padded subdomain overlapped no
+chunks of the current layer *without clearing the previous layer's mesh*, so
+those sites interpolated stale thermal history. It now calls `clear_layer_data()`
+on that path: every site reads `default_temp`, the rank says so on stdout, and
+the empty interval list lets the run fast-forward to the next layer. The
+Kokkos fill has a matching `d_n_active_nodes > 0` guard, without which the
+cleared state would send `ComputeNodalTemps` past the end of a zero-extent view.
+
+Regression test: `examples/ReducedTempAM/StaleLayerTest` (generates its own
+three-layer file — the production file cannot reach the path).
+
+This **decouples the correctness risk from `grid_cell_size_multiplier`**. Lowering
+it to cut I/O amplification is now a performance-only tradeoff: the pad is still
+load-bearing for boundary-straddling elements, for ghost sites (the site cache
+covers `nall`), and for the `nodal_smooth` halo, and measured mean element extent
+in the ct15 dataset is 41·dx — so 100·dx is only ~2.5 element hops of margin.
+Shrink it and you will break interpolation at subdomain boundaries, but you will
+no longer silently read the wrong layer.
+
+Note that at np=4 the pad costs nothing anyway: the default decomposition is
+2×2×1, the warning stays silent, and per-rank chunk loads genuinely differ
+(66/69/62/62 on the ct15 box). The amplification only appears if a deck forces a
+split along the thin axis.
 
 ## 8. A/B-ing the unified-memory path
 

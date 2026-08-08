@@ -54,6 +54,16 @@ public:
   Kokkos::View<int*> d_color_sites;
   bool color_lists_initialized;
 
+  // === Per-site RNG streams for `sweep color/strict` (see random_park_kokkos.h)
+  // Set iff sweepflag == COLOR_STRICT. Holds each site's Park/Miller seed,
+  // carried across sweeps exactly as AppLattice::sweep_nomask_strict carries
+  // siteseeds[] on the host, so the stream a site draws from depends on nothing
+  // but the site itself -- no thread ids, no pool lock order. Indexed by site
+  // index, the same `i` the sweep uses for spin. Empty when not strict.
+  Kokkos::View<int*> d_siteseeds;
+  int strict_rng;                        // 1 iff sweepflag == COLOR_STRICT
+  void setup_siteseeds_kokkos();         // upload siteseeds[] after color lists
+
   // === Shared methods ===
   virtual void init_app() override;
   virtual void grow_app() override;

@@ -20,6 +20,7 @@
 #include "stdlib.h"
 #include "app_potts_kokkos.h"
 #include "random_park.h"
+#include "random_park_kokkos.h"
 #include "error.h"
 #include "memory.h"
 
@@ -250,12 +251,17 @@ struct AppPottsKokkos::ColorSweepFunctor {
   double temperature;
   double t_inverse;
   int nspins;
+  Kokkos::View<int*> siteseeds;   // per-site streams; empty unless strict
+  int strict;                     // 1 iff sweep color/strict
 
+  // The site update, written once and templated over which RNG supplies the
+  // draws (Kokkos pool generator or RandomParkDevice -- both expose drand()).
+  // The draw SEQUENCE mirrors AppPotts::site_event_rejection exactly: one draw
+  // for iran, and a second only when efinal > einitial && temperature > 0.
+  // That is what lets the strict path reproduce the CPU sweep bit-for-bit.
+  template <class Gen>
   KOKKOS_INLINE_FUNCTION
-  void operator()(const int idx, int& accepted) const {
-    int i = color_sites(color_start + idx);
-    auto rand_gen = rand_pool.get_state();
-
+  void update_site(int i, Gen& gen, int& accepted) const {
     int oldstate = spin(i);
 
     // Compute initial energy (count unlike neighbors)
@@ -265,14 +271,12 @@ struct AppPottsKokkos::ColorSweepFunctor {
     }
 
     // Pick random new spin
-    int iran = static_cast<int>(rand_gen.drand() * nspins) + 1;
+    int iran = static_cast<int>(gen.drand() * nspins) + 1;
     if (iran > nspins) iran = nspins;
 
-    // If same as old, nothing to do
-    if (iran == oldstate) {
-      rand_pool.free_state(rand_gen);
-      return;
-    }
+    // If same as old, nothing to do (CPU: efinal == einitial, so it likewise
+    // accepts a no-op without taking a second draw)
+    if (iran == oldstate) return;
 
     // Compute final energy
     int efinal = 0;
@@ -286,15 +290,31 @@ struct AppPottsKokkos::ColorSweepFunctor {
       accept = true;
     } else if (temperature > 0.0) {
       double prob = Kokkos::exp((einitial - efinal) * t_inverse);
-      if (rand_gen.drand() < prob) accept = true;
+      if (gen.drand() < prob) accept = true;
     }
 
     if (accept) {
       spin(i) = iran;  // Safe - no same-color neighbors!
       accepted++;
     }
+  }
 
-    rand_pool.free_state(rand_gen);
+  KOKKOS_INLINE_FUNCTION
+  void operator()(const int idx, int& accepted) const {
+    int i = color_sites(color_start + idx);
+
+    if (strict) {
+      // Load this site's own stream, advance it, store it back -- the device
+      // equivalent of AppLattice::sweep_nomask_strict's siteseeds[] handling.
+      // No pool, so no lock race and no thread-dependent stream assignment.
+      RandomParkDevice rp(siteseeds(i));
+      update_site(i, rp, accepted);
+      siteseeds(i) = rp.seed;
+    } else {
+      auto rand_gen = rand_pool.get_state();
+      update_site(i, rand_gen, accepted);
+      rand_pool.free_state(rand_gen);
+    }
   }
 };
 
@@ -313,7 +333,9 @@ void AppPottsKokkos::sweep_color_kokkos(int color, int start, int count)
     *rand_pool,
     temperature,
     t_inverse,
-    nspins
+    nspins,
+    d_siteseeds,
+    strict_rng
   };
 
   int naccept_color = 0;

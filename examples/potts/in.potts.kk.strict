@@ -1,0 +1,15 @@
+variable Q equal 100
+seed             56789
+app_style        potts/kk ${Q}
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 40 0 40 0 40
+create_box       box
+create_sites     box
+set              site range 1 ${Q}
+sweep            color/strict
+sector           no
+diag_style       energy
+temperature      0.25
+stats            2.0
+run              10.0

@@ -30,7 +30,8 @@ enum{NOSWEEP,RANDOM,RASTER,COLOR,COLOR_STRICT};
 
 AppLatticeKokkos::AppLatticeKokkos(SPPARKS *spk, int narg, char **arg) :
   AppLattice(spk, narg, arg), rand_pool(nullptr),
-  kokkos_ncolors(0), kokkos_nsectors(0), color_lists_initialized(false)
+  kokkos_ncolors(0), kokkos_nsectors(0), color_lists_initialized(false),
+  strict_rng(0)
 {
   // Initialize RNG pool with a seed using world rank
   int me;
@@ -83,6 +84,36 @@ void AppLatticeKokkos::init_app()
 
   // Setup color lists for GPU
   setup_color_lists_kokkos();
+
+  // Per-site RNG streams, after the color lists.
+  setup_siteseeds_kokkos();
+}
+
+/* ----------------------------------------------------------------------
+   Upload AppLattice's per-site Park/Miller seeds for `sweep color/strict`.
+
+   AppLattice::init() has already built siteseeds[nlocal], each seeded from the
+   site's GLOBAL id (tagreset(seed,id[i],100) -- the 100-draw warmup matters,
+   Park/Miller streams from adjacent seeds are correlated at the start). It runs
+   before init_app(), so the array is populated by the time we get here. All we
+   do is move it to the device so the kernel can carry each site's stream the
+   way sweep_nomask_strict does on the host.
+------------------------------------------------------------------------- */
+
+void AppLatticeKokkos::setup_siteseeds_kokkos()
+{
+  strict_rng = (sweepflag == COLOR_STRICT) ? 1 : 0;
+  if (!strict_rng) { d_siteseeds = Kokkos::View<int*>(); return; }
+
+  if (siteseeds == NULL)
+    error->all(FLERR,"sweep color/strict requested but per-site seeds were "
+                     "not initialized");
+
+  // Only owned sites are swept, so only they carry a stream; ghosts never draw.
+  d_siteseeds = Kokkos::View<int*>("siteseeds", nlocal > 0 ? nlocal : 1);
+  auto h_seeds = Kokkos::create_mirror_view(d_siteseeds);
+  for (int i = 0; i < nlocal; i++) h_seeds(i) = siteseeds[i];
+  Kokkos::deep_copy(d_siteseeds, h_seeds);
 }
 
 /* ----------------------------------------------------------------------

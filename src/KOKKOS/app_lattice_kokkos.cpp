@@ -105,8 +105,14 @@ void AppLatticeKokkos::setup_siteseeds_kokkos()
   strict_rng = (sweepflag == COLOR_STRICT) ? 1 : 0;
   if (!strict_rng) { d_siteseeds = Kokkos::View<int*>(); return; }
 
-  if (siteseeds == NULL)
-    error->all(FLERR,"sweep color/strict requested but per-site seeds were "
+  // A rank may legitimately own ZERO sites (a subdomain that misses the
+  // geometry), and Memory::smalloc returns NULL for a zero-length array
+  // (memory.cpp:38) -- so NULL is only an error when this rank actually has
+  // sites. Report with error->one(), NOT error->all(): the condition is
+  // rank-local, and error->all() BARRIERS, so a zero-site rank would sit in
+  // that barrier while the others ran on into AppLattice::setup's Allreduce.
+  if (nlocal > 0 && siteseeds == NULL)
+    error->one(FLERR,"sweep color/strict requested but per-site seeds were "
                      "not initialized");
 
   // Only owned sites are swept, so only they carry a stream; ghosts never draw.
@@ -303,6 +309,37 @@ void AppLatticeKokkos::iterate_rejection(double stoptime)
 
       // === CORE: Process each color sequentially ===
       for (int icolor = 0; icolor < kokkos_ncolors; icolor++) {
+
+        // Colors WITHOUT sectors need a ghost refresh BETWEEN colors at np > 1:
+        // color c-1 writes owned sites that are color c's neighbors on another
+        // rank, and those updates have to cross before c is swept. With one
+        // exchange per sweep the ghosts went stale between colors, which is
+        // silently decomposition-dependent rather than a crash -- and it defeats
+        // the entire point of `sweep color/strict`, whose guarantee is that the
+        // answer does not depend on the decomposition. This mirrors what
+        // AppLattice does for the same combination (nset == ncolors, one
+        // comm->all() per set, app_lattice.cpp:660-667).
+        //
+        // icolor == 0 is already covered by the exchange above. Skipped entirely
+        // at np == 1 (no ghosts) and when sectoring (one exchange per sector is
+        // sufficient there) -- so neither of those paths changes at all. The
+        // np == 1 skip is load-bearing, not just an optimization:
+        // sync_app_data_to_device() would copy the stale host arrays back over
+        // the previous color's device results.
+        if (nprocs > 1 && !sectorflag && icolor > 0) {
+          timer->stamp();
+          sync_app_data_to_host();
+          timer->stamp(TIME_SOLVE);
+
+          timer->stamp();
+          comm->all();
+          timer->stamp(TIME_COMM);
+
+          timer->stamp();
+          sync_app_data_to_device();
+          timer->stamp(TIME_SOLVE);
+        }
+
         int color_start = h_offsets(icolor);
         int color_count = h_offsets(icolor + 1) - color_start;
 

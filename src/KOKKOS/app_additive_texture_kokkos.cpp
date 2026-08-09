@@ -576,6 +576,17 @@ double AppAdditiveTextureKokkos::global_max_temperature_from_fill_stale()
 {
   if (nprocs == 1) return global_max_temperature_from_fill();
 
+  // Benchmark switch: SPK_FF_BLOCKING=1 forces the old blocking Allreduce so
+  // the two schemes can be A/B'd at any rank count from one binary. Read once
+  // (function-static init is thread-safe and happens on first use). Verify it
+  // took effect via the timing summary: the blocking form prints
+  // "FF Allreduce", the stale form "FF Iallreduce wait".
+  static const bool force_blocking = [](){
+    const char *e = getenv("SPK_FF_BLOCKING");
+    return e && atoi(e) != 0;
+  }();
+  if (force_blocking) return global_max_temperature_from_fill();
+
   const double t0 = MPI_Wtime();
   if (ff_ia_active) {
     MPI_Wait(&ff_ia_req, MPI_STATUS_IGNORE);

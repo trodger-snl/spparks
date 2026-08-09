@@ -1917,6 +1917,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
   double misorient_alpha_local = this->misorient_alpha;
   const int misori_mode_local = this->misorientation_target_mode;
   double mis_cap_rate_local = this->mis_cap_rate;
+  const int mis_cap_mode_local = this->mis_cap_mode;
   int nspins_local = this->nspins;
 
   // Solid-front reach threshold: a neighbor becomes eligible once the front
@@ -2059,20 +2060,52 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
                                (Kokkos::exp(misorient_alpha_local * normalized_temp) - 1.0) /
                                (Kokkos::exp(misorient_alpha_local) - 1.0) * MY_PI / 180.0;
 
-            // Orientation-gradient steepness cap: the rotation relative to
-            // the neighbor the orientation is inherited from cannot exceed
-            // mis_cap_rate times the physical hop distance. Coordinates are
-            // in lattice units; the sqrt(3) clamp guards against a periodic-
-            // wrap pair reading as a box-length hop (the true SC_26N stencil
-            // distance is at most sqrt(3)). Matches apply_misorientation in
-            // the CPU app.
-            if (mis_cap_rate_local > 0.0) {
+            // Orientation-gradient steepness cap (matches apply_misorientation
+            // in the CPU app). Coordinates are in lattice units; the sqrt(3)
+            // clamp guards against a periodic-wrap pair reading as a box-
+            // length hop (the true SC_26N stencil distance is at most sqrt(3)).
+            if (mis_cap_rate_local > 0.0 && mis_cap_mode_local == 0) { // CAP_PARENT
+              // Bound the rotation relative to the neighbor the orientation
+              // is inherited from.
               double hdx = k_xyz_d(i, 0) - k_xyz_d(selected_nbr, 0);
               double hdy = k_xyz_d(i, 1) - k_xyz_d(selected_nbr, 1);
               double hdz = k_xyz_d(i, 2) - k_xyz_d(selected_nbr, 2);
               double hop_lat = Kokkos::sqrt(hdx * hdx + hdy * hdy + hdz * hdz);
               hop_lat = Kokkos::fmin(hop_lat, solid_reach);
               mis_angle = Kokkos::fmin(mis_angle, mis_cap_rate_local * hop_lat * dx_local);
+            } else if (mis_cap_rate_local > 0.0) {                    // CAP_NEIGHBORS
+              // Budget rule against every solidified same-spin neighbour:
+              // theta <= cap_j - d_j keeps each satisfied i-j pair within its
+              // cap (triangle inequality) and never worsens a pre-existing
+              // violation (negative budget -> zero rotation). The inheritance
+              // parent has d = 0, so its term reproduces CAP_PARENT exactly.
+              // d_j is the direct quaternion angle (kernel convention, same
+              // as the mis_thresh check below). Neighbour quaternions are
+              // read the same way the mobility weights above read them; the
+              // AM kernels are documented order-dependent, so a concurrently
+              // solidifying neighbour is benign here.
+              for (int jj = 0; jj < nn && jj < 26; jj++) {
+                const int j = k_neighbor_d(i, jj);
+                const int af_j = d_active_flag_local(j);
+                if (af_j != 1 && af_j != 3) continue;
+                if (d_spin_local(j) != new_spin) continue;
+                double hdx = k_xyz_d(i, 0) - k_xyz_d(j, 0);
+                double hdy = k_xyz_d(i, 1) - k_xyz_d(j, 1);
+                double hdz = k_xyz_d(i, 2) - k_xyz_d(j, 2);
+                double hop_lat = Kokkos::sqrt(hdx * hdx + hdy * hdy + hdz * hdz);
+                hop_lat = Kokkos::fmin(hop_lat, solid_reach);
+                const double cap_j = mis_cap_rate_local * hop_lat * dx_local;
+                double dot = q_nbr_inherited[0] * d_q0_local(j) +
+                             q_nbr_inherited[1] * d_qx_local(j) +
+                             q_nbr_inherited[2] * d_qy_local(j) +
+                             q_nbr_inherited[3] * d_qz_local(j);
+                dot = Kokkos::fmin(1.0, Kokkos::fabs(dot));
+                const double d_j = 2.0 * Kokkos::acos(dot);
+                mis_angle = Kokkos::fmin(mis_angle, cap_j - d_j);
+              }
+              // A negative angle would still rotate by |angle| downstream
+              // (rotate_q_towards_u takes fabs) -- clamp to a true no-op.
+              mis_angle = Kokkos::fmax(mis_angle, 0.0);
             }
 
             // Use gradient direction from on-demand computation above
@@ -3347,11 +3380,13 @@ void AppAdditiveTextureKokkos::input_app(char *command, int narg, char **arg)
       fprintf(screen, "nucleation_misorientation_target = %s\n", arg[0]);
 
   } else if (strcmp(command, "misorientation_cap") == 0) {
-    // misorientation_cap <degrees> <distance_m>: clamp every rotation event
-    // to (degrees over distance) * hop_distance. degrees <= 0 disables the
-    // cap (and with it the nucleation-shell rotation, which is cap-driven).
-    // Matches AppAdditiveTexture::input_app.
-    if (narg != 2) error->all(FLERR, "Illegal misorientation_cap command");
+    // misorientation_cap <degrees> <distance_m> [parent|neighbors]: clamp
+    // every rotation event to (degrees over distance) * hop_distance.
+    // degrees <= 0 disables the cap (and with it the nucleation-shell
+    // rotation, which is cap-driven). The optional mode selects what the
+    // clamp is enforced against (see MisCapMode in the header). Matches
+    // AppAdditiveTexture::input_app.
+    if (narg != 2 && narg != 3) error->all(FLERR, "Illegal misorientation_cap command");
     double cap_deg = atof(arg[0]);
     double cap_dist = atof(arg[1]);
     if (cap_deg <= 0) {
@@ -3361,8 +3396,14 @@ void AppAdditiveTextureKokkos::input_app(char *command, int narg, char **arg)
         error->all(FLERR, "Illegal misorientation_cap distance: must be greater than 0");
       mis_cap_rate = cap_deg * MY_PI / 180.0 / cap_dist;
     }
+    if (narg == 3) {
+      if (strcmp(arg[2], "parent") == 0) mis_cap_mode = CAP_PARENT;
+      else if (strcmp(arg[2], "neighbors") == 0) mis_cap_mode = CAP_NEIGHBORS;
+      else error->all(FLERR, "Illegal misorientation_cap mode: use parent or neighbors");
+    }
     if (domain->me == 0 && screen)
-      fprintf(screen, "misorientation_cap = %g deg per %g m\n", cap_deg, cap_dist);
+      fprintf(screen, "misorientation_cap = %g deg per %g m (%s)\n", cap_deg, cap_dist,
+              mis_cap_mode == CAP_NEIGHBORS ? "neighbors" : "parent");
 
   } else {
     // Pass to parent class

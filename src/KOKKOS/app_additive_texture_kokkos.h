@@ -364,6 +364,20 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // in the constructor alongside the other misorientation defaults.
   double mis_cap_rate;
 
+  // What the cap is enforced against (optional 3rd misorientation_cap arg;
+  // mirrors AppAdditiveTexture::MisCapMode). CAP_PARENT (default): the hop to
+  // the inheritance parent only. CAP_NEIGHBORS: budget rule against every
+  // solidified same-spin neighbour, theta <= min_j (cap_j - d_j) clamped at
+  // 0 -- the triangle inequality guarantees no satisfied pair is pushed over
+  // its cap and pre-existing violations are never worsened. d_j here is the
+  // DIRECT quaternion angle (this app's kernel convention, same as the
+  // mis_thresh check), not the symmetry-reduced disorientation the CPU app
+  // uses. Solidification kernel only; the nucleation flipper keeps the
+  // seed-distance rule (its shells are claimed concurrently via CAS, so
+  // reading sibling shells' quaternions mid-kernel would race).
+  enum MisCapMode { CAP_PARENT = 0, CAP_NEIGHBORS = 1 };
+  int mis_cap_mode = CAP_PARENT;
+
   // Nucleation data
   int *nucleation_flags;
   double *nucleation_temps;

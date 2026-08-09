@@ -154,6 +154,7 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
     nucleation_misorient_target_mode = MISORI_TARGET_GRADIENT;
     // Steepness cap default: 2 degrees of orientation change per 30 microns.
     mis_cap_rate = (2.0 * MY_PI / 180.0) / 30.0e-6;
+    mis_cap_mode = CAP_PARENT;
     nucleation_mode = NUCLEATION_THRESHOLD;
 
     // Void generation defaults
@@ -407,10 +408,13 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
      }
   }
   else if (strcmp(command,"misorientation_cap") == 0) {
-     // misorientation_cap <degrees> <distance_m>: clamp every rotation event
-     // to (degrees over distance) * hop_distance. degrees <= 0 disables the
-     // cap (and with it the nucleation-shell rotation, which is cap-driven).
-     if (narg != 2) error->all(FLERR,"Illegal misorientation_cap command");
+     // misorientation_cap <degrees> <distance_m> [parent|neighbors]:
+     // clamp every rotation event to (degrees over distance) * hop_distance.
+     // degrees <= 0 disables the cap (and with it the nucleation-shell
+     // rotation, which is cap-driven). The optional mode selects what the
+     // clamp is enforced against: the inheritance parent only (default), or
+     // every solidified same-spin neighbour (see MisCapMode in the header).
+     if (narg != 2 && narg != 3) error->all(FLERR,"Illegal misorientation_cap command");
      double cap_deg = atof(arg[0]);
      double cap_dist = atof(arg[1]);
      if (cap_deg <= 0) {
@@ -419,6 +423,11 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
        if (cap_dist <= 0)
          error->all(FLERR,"Illegal misorientation_cap distance: must be greater than 0");
        mis_cap_rate = cap_deg * MY_PI / 180.0 / cap_dist;
+     }
+     if (narg == 3) {
+       if (strcmp(arg[2],"parent") == 0) mis_cap_mode = CAP_PARENT;
+       else if (strcmp(arg[2],"neighbors") == 0) mis_cap_mode = CAP_NEIGHBORS;
+       else error->all(FLERR,"Illegal misorientation_cap mode: use parent or neighbors");
      }
   }
   else if (strcmp(command,"nucleation_mode") == 0) {
@@ -1245,12 +1254,13 @@ void AppAdditiveTexture::apply_misorientation(int i, int parent, double Tcool, R
     double normalized_temp = Tcool / t_cool_max;
     double mis_angle = max_misorient * (exp(misorient_alpha * normalized_temp) - 1.0) / (exp(misorient_alpha) - 1.0) * MY_PI/180;
 
-    // Orientation-gradient steepness cap: the rotation relative to the parent
-    // the orientation was inherited from cannot exceed mis_cap_rate times the
-    // physical hop distance. Coordinate differences are in lattice units; the
-    // sqrt(3) clamp guards against a periodic-wrap neighbor pair reading as a
-    // box-length hop (the true SC_26N stencil distance is at most sqrt(3)).
-    if (mis_cap_rate > 0.0) {
+    // Orientation-gradient steepness cap. Coordinate differences are in
+    // lattice units; the sqrt(3) clamp guards against a periodic-wrap
+    // neighbor pair reading as a box-length hop (the true SC_26N stencil
+    // distance is at most sqrt(3)).
+    if (mis_cap_rate > 0.0 && mis_cap_mode == CAP_PARENT) {
+        // Parent mode: bound the rotation relative to the site the
+        // orientation was inherited from.
         double ddx = xyz[i][0] - xyz[parent][0];
         double ddy = xyz[i][1] - xyz[parent][1];
         double ddz = xyz[i][2] - xyz[parent][2];
@@ -1258,6 +1268,41 @@ void AppAdditiveTexture::apply_misorientation(int i, int parent, double Tcool, R
         if (hop_lat > 1.7320508076) hop_lat = 1.7320508076;
         double cap = mis_cap_rate * hop_lat * dx;
         if (mis_angle > cap) mis_angle = cap;
+    } else if (mis_cap_rate > 0.0 && mis_cap_mode == CAP_NEIGHBORS) {
+        // Neighbors mode: budget rule against every solidified same-spin
+        // neighbour. Rotating by theta changes the disorientation to any
+        // fixed neighbour by at most theta (triangle inequality on the
+        // disorientation metric), so theta <= cap_j - d_j guarantees the
+        // i-j pair stays within its cap; a pre-existing violation gives a
+        // negative budget and the rotation collapses to zero rather than
+        // making it worse. The parent contributes cap * hop (d = 0),
+        // reproducing CAP_PARENT for that neighbour exactly. spin[i] and
+        // q0..qz[i] already hold the inherited values here (flip_site ran).
+        vector<double> qi = {q0[i], qx[i], qy[i], qz[i]};
+        for (int jj = 0; jj < numneigh[i]; jj++) {
+            int j = neighbor[i][jj];
+            if (active_flag[j] != 3 && active_flag[j] != 1) continue;
+            if (spin[j] != spin[i]) continue;
+            double ddx = xyz[i][0] - xyz[j][0];
+            double ddy = xyz[i][1] - xyz[j][1];
+            double ddz = xyz[i][2] - xyz[j][2];
+            double hop_lat = sqrt(ddx*ddx + ddy*ddy + ddz*ddz);
+            if (hop_lat > 1.7320508076) hop_lat = 1.7320508076;
+            double cap_j = mis_cap_rate * hop_lat * dx;
+
+            double d_j;
+            if (symmetries.empty()) {
+                double dot = qi[0]*q0[j] + qi[1]*qx[j] + qi[2]*qy[j] + qi[3]*qz[j];
+                d_j = 2.0 * acos(std::min(1.0, std::abs(dot)));
+            } else {
+                vector<double> qj = {q0[j], qx[j], qy[j], qz[j]};
+                d_j = disorientation::compute_disorientation(symmetries, qi, qj)
+                      * MY_PI / 180.0;
+            }
+            double budget = cap_j - d_j;
+            if (budget < mis_angle) mis_angle = budget;
+        }
+        if (mis_angle <= 0.0) return;
     }
 
     rotate_toward_target(i, mis_angle, misorientation_target_mode, ranapp, nullptr);

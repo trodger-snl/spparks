@@ -152,6 +152,22 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   // misorientation model.
   double mis_cap_rate;
 
+  // What the cap is enforced against (optional 3rd misorientation_cap arg):
+  //   CAP_PARENT (default): only the hop to the parent the orientation was
+  //     inherited from. Bounds the increment along the solidification path;
+  //     non-parent same-grain neighbour pairs (cousins from different growth
+  //     paths) can still exceed the nominal spatial gradient.
+  //   CAP_NEIGHBORS: budget rule against EVERY solidified same-spin
+  //     neighbour j: theta <= min_j (cap_rate*dist_j - disorientation_j),
+  //     clamped at 0. By the triangle inequality on the disorientation
+  //     metric this guarantees no satisfied i-j pair is pushed over its cap,
+  //     and a pre-existing violation is never worsened (theta -> 0). The
+  //     parent term (disorientation 0) reproduces CAP_PARENT exactly, so
+  //     this mode is strictly tighter. Solidification path only; nucleation
+  //     shells keep the seed-distance rule.
+  enum MisCapMode { CAP_PARENT = 0, CAP_NEIGHBORS = 1 };
+  int mis_cap_mode;
+
  	// Monte Carlo nucleation model parameters
 	int *nucleation_flags;
 	double *nucleation_temps;

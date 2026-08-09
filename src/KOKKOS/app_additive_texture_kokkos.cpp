@@ -195,6 +195,8 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
 
 AppAdditiveTextureKokkos::~AppAdditiveTextureKokkos()
 {
+  // Every posted non-blocking request must complete before MPI_Finalize.
+  ff_finish_pending();
   delete[] solid_front_coeffs;
   delete[] nucleation_flags;
   delete[] nucleation_temps;
@@ -553,6 +555,61 @@ double AppAdditiveTextureKokkos::global_max_temperature_from_fill()
   t_ff_allreduce += MPI_Wtime() - t0;
   n_ff_checks++;
   return global_max;
+}
+
+/* ----------------------------------------------------------------------
+   One-step-stale peak temperature (HDF5 path, nprocs>1).
+
+   Posts a non-blocking Iallreduce for the CURRENT fill and returns the
+   PREVIOUS fill's completed value, so the collective overlaps this step's
+   microstructure kernels rather than blocking on the slowest rank inline.
+
+   At nprocs==1 this degenerates to the exact blocking path -- no staleness,
+   no MPI -- so single-rank runs keep byte-for-byte the behaviour every GPU
+   result to date was validated against.
+
+   Before the first result has landed the reported value is +infinity
+   ("assume hot"), which suppresses a fast-forward rather than inventing one.
+------------------------------------------------------------------------- */
+
+double AppAdditiveTextureKokkos::global_max_temperature_from_fill_stale()
+{
+  if (nprocs == 1) return global_max_temperature_from_fill();
+
+  const double t0 = MPI_Wtime();
+  if (ff_ia_active) {
+    MPI_Wait(&ff_ia_req, MPI_STATUS_IGNORE);
+    ff_ia_active = false;
+    ff_gmax_prev = ff_ia_recv;
+    ff_gmax_primed = true;
+  }
+  t_ff_iwait += MPI_Wtime() - t0;
+
+  // Post this fill's reduction; it is harvested on the next call.
+  ff_ia_send = fill_maxT_local;
+  MPI_Iallreduce(&ff_ia_send, &ff_ia_recv, 1, MPI_DOUBLE, MPI_MAX, world,
+                 &ff_ia_req);
+  ff_ia_active = true;
+  n_ff_checks++;
+  n_ff_stale++;
+
+  return ff_gmax_primed ? ff_gmax_prev
+                        : std::numeric_limits<double>::infinity();
+}
+
+/* ----------------------------------------------------------------------
+   Complete any outstanding fast-forward Iallreduce. MPI requires every
+   posted non-blocking request to be completed before MPI_Finalize; leaving
+   one in flight past the end of a run also leaks the request handle.
+------------------------------------------------------------------------- */
+
+void AppAdditiveTextureKokkos::ff_finish_pending()
+{
+  if (!ff_ia_active) return;
+  MPI_Wait(&ff_ia_req, MPI_STATUS_IGNORE);
+  ff_ia_active = false;
+  ff_gmax_prev = ff_ia_recv;
+  ff_gmax_primed = true;
 }
 
 /* ----------------------------------------------------------------------
@@ -2665,7 +2722,9 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       thermal->set_hdf5_device_filler([this](double t) -> double {
         fill_temperature_hdf5_device(thermal->hdf5_device_plan(t));
         host_T_stale = true;
-        return global_max_temperature_from_fill();
+        // One-step-stale at nprocs>1 (overlaps the collective with this
+        // step's kernels); exactly the old blocking path at nprocs==1.
+        return global_max_temperature_from_fill_stale();
       });
       ThermalManager::ThermalStep s = thermal->hdf5_advance_device(time, stoptime);
       if (s.end_run) { time = s.new_time; sync_temperature_to_host(); return; }
@@ -2969,8 +3028,12 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
                         t_nucleation + t_particle + t_solidification + t_smoothing + t_sync_host;
     fprintf(screen, "\n=== Kokkos Timing Summary (after %d steps, %.4f total sec) ===\n", step_count, total_time);
     fprintf(screen, "  Temperature update:   %8.3f s (%5.1f%%)\n", t_temp_update, 100.0*t_temp_update/total_time);
-    fprintf(screen, "    - FF Allreduce:     %8.3f s  [%ld checks; Tmax fused into fill; included above]\n",
-            t_ff_allreduce, n_ff_checks);
+    if (n_ff_stale > 0)
+      fprintf(screen, "    - FF Iallreduce wait:%7.3f s  [%ld checks, one-step-stale; Tmax fused into fill]\n",
+              t_ff_iwait, n_ff_checks);
+    else
+      fprintf(screen, "    - FF Allreduce:     %8.3f s  [%ld checks; Tmax fused into fill; included above]\n",
+              t_ff_allreduce, n_ff_checks);
     fprintf(screen, "  Temp sync to device:  %8.3f s (%5.1f%%)\n", t_temp_sync, 100.0*t_temp_sync/total_time);
     fprintf(screen, "  Melting kernel:       %8.3f s (%5.1f%%) [selective launch]\n", t_melting, 100.0*t_melting/total_time);
     fprintf(screen, "  Nucleation kernel:    %8.3f s (%5.1f%%) [selective launch]\n", t_nucleation, 100.0*t_nucleation/total_time);

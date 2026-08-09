@@ -66,7 +66,13 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   void sync_ghost_to_host();
   void sync_ghost_to_device();
   double ghost_mc_checksum();        // device ghost-slice MC checksum (verify)
-  double global_max_temperature_from_fill();  // Allreduce of the fill-fused owned max
+  double global_max_temperature_from_fill();  // blocking Allreduce of the fill-fused owned max
+  // One-step-stale variant for the HDF5 path at nprocs>1: posts a
+  // non-blocking Iallreduce for THIS fill and returns the PREVIOUS fill's
+  // completed value, so the collective overlaps the microstructure kernels
+  // instead of blocking on the slowest rank every step. See the impl.
+  double global_max_temperature_from_fill_stale();
+  void   ff_finish_pending();   // complete any outstanding Iallreduce
   void compute_gradients_kernel();
 
   // Ensure the cached device copy of site coordinates (d_xyz) is built for the
@@ -128,6 +134,25 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   double fill_maxT_local = 0.0;
   double t_ff_allreduce = 0.0;  // 1-double MPI_Allreduce feeding fast-forward
   long   n_ff_checks = 0;
+
+  // One-step-stale fast-forward state (HDF5 path, nprocs>1 only). The peak-T
+  // Allreduce is a per-step collective whose cost is almost entirely waiting
+  // for the slowest rank: measured at 18.6% of the loop at np=8 vs 0.0% at
+  // np=1. Posting it non-blocking and consuming the PREVIOUS step's result
+  // removes that sync point. Safe here because hdf5_advance_device uses the
+  // value only as the boolean (gmax <= threshold): a stale-cold reading can
+  // at worst delay a fast-forward one step, and a stale-hot reading is caught
+  // by the source's own get_next_time_with_temperature() query, which returns
+  // a target <= current time and so skips nothing. NOT applied to the Moser
+  // path, where this value also drives pause/reset pass firing.
+  double      ff_gmax_prev = 0.0;   // last COMPLETED global max
+  double      ff_ia_send = 0.0;     // Iallreduce buffers (must outlive the call)
+  double      ff_ia_recv = 0.0;
+  MPI_Request ff_ia_req = MPI_REQUEST_NULL;
+  bool        ff_ia_active = false;
+  bool        ff_gmax_primed = false;  // false until the first result lands
+  double      t_ff_iwait = 0.0;        // time actually spent waiting on it
+  long        n_ff_stale = 0;
 
   // Cached device copy of site coordinates (lattice units). The lattice is
   // static for the run, so this is uploaded once and reused by the device

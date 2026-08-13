@@ -1,0 +1,25 @@
+# Stage 3: a window overlapping BOTH earlier stages.
+#
+# The overlap is read back with "set site hdf5"; sites beyond what stage 1
+# wrote come back as the fill value, which skip_novalue leaves at 7 (fresh
+# material).  The dump grows the datasets from x=100 out to x=180.
+
+seed            333
+
+app_style       potts 100
+dimension       3
+lattice         sc/26n 1.0
+region          box block 40 140 0 40 0 6
+create_box      box
+create_sites    box
+set             site value 7
+set             site hdf5 hdf5_staged.h5 skip_novalue
+reset_time      hdf5 hdf5_staged.h5
+
+sweep           random
+sector          yes
+temperature     0.5
+
+stats           1.0
+dump            d1 hdf5 1.0 hdf5_staged.h5 site
+run             2.0

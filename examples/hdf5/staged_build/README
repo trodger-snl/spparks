@@ -1,0 +1,57 @@
+Staged build through 'dump hdf5'
+================================
+
+Three SPPARKS invocations build one microstructure across overlapping
+windows, each seeding itself from the previous stage's file:
+
+  stage 1   x = [0, 100)     seeds itself, creates the file
+  stage 2   x = [80, 180)    overlaps stage 1; grows the datasets to x=180
+  stage 3   x = [40, 140)    overlaps both
+
+This is the pattern real AM decks use (compare examples/stitch/am_demo,
+which does the same thing through 'dump stitch').  The point of the
+example is that the whole staged workflow -- read back, continue the
+clock, extend the domain -- works with a format that keeps only the
+latest value per site.
+
+Each later stage does:
+
+  set        site value 7                              # fresh material
+  set        site hdf5 hdf5_staged.h5 skip_novalue     # previously built
+  reset_time hdf5 hdf5_staged.h5                       # continue the clock
+
+'skip_novalue' is what keeps the two apart.  Sites the file has never
+covered come back as the dataset fill value (-1 for integer fields), and
+skip_novalue leaves those at whatever the preceding 'set' put there --
+here the value 7, standing in for unmelted powder.  Sites the file does
+cover overwrite it.  This is the same contract 'set stitch
+... skip_novalue' provides.
+
+Note there is no 'first'/'last' argument: an hdf5 dump holds one state,
+not a history, so there is nothing to select between.
+
+Running
+-------
+
+Requires a build configured with --highfive.  The comparison half of
+run.sh additionally needs --package stitch.
+
+  ./run.sh                 # or: NP=8 SPPARKS=/path/to/spk ./run.sh
+  python3 compare.py       # needs h5py
+
+run.sh performs the same three stages twice, once through 'dump hdf5'
+and once through 'dump stitch', and compare.py checks that the two agree
+site for site.  They should match exactly: both backends copy the same
+bytes out of the same per-site arrays.
+
+What to expect
+--------------
+
+compare.py reports the two files' sizes.  The hdf5 file is several times
+smaller here, and the gap widens with the number of dumps: stitch appends
+every dump to the file, while the hdf5 datasets are overwritten in place,
+so their size is set by the domain alone.
+
+Use 'dump stitch' instead when the time history matters -- movie frames,
+'set stitch <file> first', or reading an intermediate time.  None of
+those are recoverable from an hdf5 dump.

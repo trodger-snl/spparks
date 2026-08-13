@@ -1538,14 +1538,24 @@ static int stitch_write_block (const StitchFile * file, int64_t field_id, double
     //printf ("write_block: %3.1g, %lld, %d\n", real_time, timestamp, new_time == true);
 
     // we don't want the last value for each one which is why we don't do + 1
+    // NOTE: this is the number of SITES in this rank's own block; it is turned
+    // into a byte count further down, once the field descriptor is known.
     int32_t state_size = ((x2 - x1) * (y2 - y1) * (z2 - z1));
+    // {type, length} for this field.  Only rank 0 queries the 'fields' table;
+    // the descriptor is then handed down the write serialization ring so every
+    // rank can size its OWN blob.  Passing a byte count along the ring instead
+    // would give every non-root rank rank 0's block size, which is wrong under
+    // any non-uniform decomposition.
+    int32_t field_desc [2];
+    field_desc [0] = STITCH_NO_TYPE;
+    field_desc [1] = 1;
 #if defined(STITCH_PARALLEL)
     MPI_Status status;
     if (file->rank != 0)
     {
-        MPI_Recv (&state_size, 1, MPI_INT, file->rank - 1, STITCH_MPI_TAG_WRITE_BLOCK, file->comm, &status);
+        MPI_Recv (field_desc, 2, MPI_INT, file->rank - 1, STITCH_MPI_TAG_WRITE_BLOCK, file->comm, &status);
     }
-    else // get the size of the field and that is what we send as our value in the serialization
+    else // look up the field descriptor; that is what we pass along the ring
     {
 #endif
         do
@@ -1580,35 +1590,34 @@ static int stitch_write_block (const StitchFile * file, int64_t field_id, double
             goto cleanup;
         }
 
-        uint32_t field_type = STITCH_NO_TYPE;
-        uint32_t field_length = 1;
-
-        field_type = sqlite3_column_int (stmt_index, 0);
-        field_length = sqlite3_column_int (stmt_index, 1);
+        field_desc [0] = sqlite3_column_int (stmt_index, 0);
+        field_desc [1] = sqlite3_column_int (stmt_index, 1);
 
         sqlite3_finalize (stmt_index);
-
-        switch (field_type)
-        {
-            case STITCH_INT32:
-                state_size *= 4;
-                break;
-
-            case STITCH_INT64:
-            case STITCH_FLOAT64:
-                state_size *= 8;
-                break;
-
-            case STITCH_NO_TYPE:
-                fprintf (stderr, "Line: %d field_id: %" PRId64 " invalid field type found: %d\n", __LINE__, field_id, field_type);
-                break;
-        }
-        assert (field_length >= 0);
-        state_size *= field_length; // this accounts for all of the bytes in the type and the number of entries in the tensor
-        //printf ("write field_id: %" PRId64 " type: %d field_length: %d state_size: %d\n", field_id, field_type, field_length, state_size);
 #if defined(STITCH_PARALLEL)
     }
 #endif
+
+    // every rank sizes its blob from its OWN block extent combined with the
+    // shared field descriptor
+    switch (field_desc [0])
+    {
+        case STITCH_INT32:
+            state_size *= 4;
+            break;
+
+        case STITCH_INT64:
+        case STITCH_FLOAT64:
+            state_size *= 8;
+            break;
+
+        case STITCH_NO_TYPE:
+            fprintf (stderr, "Line: %d field_id: %" PRId64 " invalid field type found: %d\n", __LINE__, field_id, field_desc [0]);
+            break;
+    }
+    assert (field_desc [1] >= 0);
+    state_size *= field_desc [1]; // this accounts for all of the bytes in the type and the number of entries in the tensor
+    //printf ("write field_id: %" PRId64 " type: %d field_length: %d state_size: %d\n", field_id, field_desc [0], field_desc [1], state_size);
 
     do
     {
@@ -1653,7 +1662,7 @@ static int stitch_write_block (const StitchFile * file, int64_t field_id, double
 #if defined(STITCH_PARALLEL)
     if (file->rank < file->size - 1)
     {
-        MPI_Send (&state_size, 1, MPI_INT, file->rank + 1, STITCH_MPI_TAG_WRITE_BLOCK, file->comm);
+        MPI_Send (field_desc, 2, MPI_INT, file->rank + 1, STITCH_MPI_TAG_WRITE_BLOCK, file->comm);
     }
 #endif
 

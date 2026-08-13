@@ -13,7 +13,7 @@ set command :h3
 set label style args keyword values ... :pre
 
 label = {site} or {iN} or {dN} or {x} or {y} or {z} or {xyz} :ulb,l
-style = {value} or {range} or {unique} or {displace} or {stitch} or {bfile} :l
+style = {value} or {range} or {unique} or {displace} or {stitch} or {hdf5} or {bfile} :l
   {value} arg = nvalue
     nvalue = value to set sites to
   {range} args = lo hi
@@ -26,7 +26,10 @@ style = {value} or {range} or {unique} or {displace} or {stitch} or {bfile} :l
      tstamp = first or last or a floating point value
      if first: then site values from first timestamp in stitch file are read in
      if last: then site values from last timestamp in stitch file are read in
-     if floating point value: site values for this timestamp are read in :pre
+     if floating point value: site values for this timestamp are read in
+  {hdf5} args = hdf5file
+     hdf5file = name of a file written by "dump hdf5"_dump.html
+     no timestamp argument: an hdf5 dump stores one state per site :pre
   {bfile} args = bfilename 
      bfilename = name of binary file :pre
 zero or more keyword/value pairs may be appended :l

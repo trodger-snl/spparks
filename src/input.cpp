@@ -38,6 +38,11 @@
 #include "stitch.h"
 #endif
 
+#ifdef SPPARKS_HIGHFIVE
+#include "highfive/highfive.hpp"
+#include <stdexcept>
+#endif
+
 using namespace SPPARKS_NS;
 
 #define MAXLINE 2048
@@ -830,6 +835,31 @@ void Input::reset_time()
     if (tflag == 0) time = first_time;
     else if (tflag == 1) time = last_time;
 
+#endif
+
+  // open an hdf5 dump file, retrieve its time
+  // no first/last: an hdf5 dump stores one state, and one time with it
+
+  } else if (strcmp(arg[0],"hdf5") == 0) {
+
+#ifdef SPPARKS_HIGHFIVE
+
+    if (narg != 2)
+      error->all(FLERR,"Illegal reset_time command; "
+                       "'reset_time hdf5 <file>' takes no first/last argument");
+    try {
+      HighFive::File f(arg[1],HighFive::File::ReadOnly);
+      if (!f.hasAttribute("time"))
+        error->all(FLERR,"reset_time hdf5: file has no 'time' attribute");
+      f.getAttribute("time").read(time);
+    } catch (const std::exception &e) {
+      char msg[512];
+      snprintf(msg,sizeof(msg),"reset_time hdf5 failed on %s: %s",arg[1],e.what());
+      error->all(FLERR,msg);
+    }
+
+#else
+    error->all(FLERR,"reset_time hdf5 requires SPPARKS built with HighFive");
 #endif
 
   // numeric time

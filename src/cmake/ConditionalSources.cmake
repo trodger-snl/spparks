@@ -33,6 +33,14 @@ function(configure_conditional_sources)
         message(STATUS "Added HighFive+MPI temperature source files (additive/texture)")
     endif()
     
+    # Add the HDF5 dump style. Unlike the temperature sources above this one has
+    # a serial fallback (it only reaches for HighFive::MPIOFileAccess under
+    # H5_HAVE_PARALLEL), so it is gated on HighFive alone rather than HighFive+MPI.
+    if(SPPARKS_ENABLE_HIGHFIVE)
+        list(APPEND SPPARKS_SOURCES dump_hdf5.cpp)
+        message(STATUS "Added HighFive dump style (dump hdf5)")
+    endif()
+
     # Add image-dependent sources
     if((SPPARKS_ENABLE_JPEG AND JPEG_FOUND) OR (SPPARKS_ENABLE_PNG AND PNG_FOUND))
         list(APPEND SPPARKS_SOURCES dump_image.cpp image.cpp)
@@ -77,6 +85,9 @@ function(configure_conditional_sources)
     if(NOT (SPPARKS_PACKAGE_STITCH AND STITCH_LIBRARY))
         list(APPEND _skipped_styles "stitch (dump)             needs STITCH pkg → add --package stitch")
     endif()
+    if(NOT SPPARKS_ENABLE_HIGHFIVE)
+        list(APPEND _skipped_styles "hdf5 (dump)               needs HighFive   → add --highfive")
+    endif()
     set(SPPARKS_SKIPPED_STYLES "${_skipped_styles}" PARENT_SCOPE)
 endfunction()
 
@@ -110,6 +121,14 @@ function(should_include_header HEADER_NAME RESULT_VAR)
     # configure_conditional_sources() above. (HighFive implies HDF5.)
     if(HEADER_NAME MATCHES "app_additive_texture\\.h")
         if(NOT (SPPARKS_HAS_HIGHFIVE AND SPPARKS_HAS_MPI))
+            set(INCLUDE_IT FALSE)
+        endif()
+    endif()
+
+    # The HDF5 dump style needs only HighFive (it has a serial fallback), so it
+    # is gated more loosely than app_additive_texture above.
+    if(HEADER_NAME MATCHES "dump_hdf5\\.h")
+        if(NOT SPPARKS_HAS_HIGHFIVE)
             set(INCLUDE_IT FALSE)
         endif()
     endif()

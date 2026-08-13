@@ -288,6 +288,13 @@ void Output::add_dump(int narg, char **arg)
     error->all(FLERR,"dump style stitch requires SPPARKS built with the STITCH "
                      "package; reconfigure with --package stitch and rebuild");
 #endif
+#ifndef SPPARKS_HIGHFIVE
+  // dump hdf5 is gated on SPPARKS_HIGHFIVE (see dump_hdf5.h); hint at HighFive
+  // when it is requested in a build without it.
+  else if (strcmp(arg[1],"hdf5") == 0)
+    error->all(FLERR,"dump style hdf5 requires SPPARKS built with HighFive; "
+                     "reconfigure with --highfive and rebuild");
+#endif
 
   else error->all(FLERR,"Invalid dump style");
 

@@ -14,13 +14,14 @@ dump command :h3
 dump dump-ID style delta filename field1 field2 ... :pre
 
 dump-ID = user-assigned name for the dump :ulb,l
-style = {text} or {sites} or {vtk} or {stitch} or {image} :l
+style = {text} or {sites} or {vtk} or {stitch} or {hdf5} or {image} :l
 delta = time increment between dumps (seconds) :l
 filename = name of file to dump snapshots to :l
 fields = list of arguments for a particular style :l
   {text} or {sites} or {stitch} or {vtk} fields =
      {id} or {site} or {x} or {y} or {z} or
      {energy} or {propensity} or {iN} or {dN}
+  {hdf5} fields = {site} or {iN} or {dN}
   {image} fields = discussed on "dump image"_dump_image.html doc page :pre
 :ule
 
@@ -59,6 +60,40 @@ The {stitch} style dump file is in an SQLite format which can be read
 by the "set stitch"_set.html command or auxiliary tools provided with
 the Stitch library in lib/stitch.  See the examples/stitch dir for
 examples of SPPARKS scripts that read and write {stitch} files.
+
+The {hdf5} style writes one chunked HDF5 dataset per field, named {site},
+{iN} or {dN} to match the {stitch} field names.  Datasets are indexed
+[z][y][x], so x varies fastest.  Unlike {stitch}, it stores only the
+latest value per lattice site: each dump overwrites in place rather than
+appending a timestep, so the file size is set by the domain rather than
+by the number of dumps.  That makes it a good fit for long AM builds
+where only the current state is wanted, and a poor fit when the time
+history matters -- there are no per-timestep frames to recover, so use
+{stitch} or {image} for that.
+
+Sites never written keep the dataset fill value, {-1} for integer fields
+and {0.0} for double fields.  These are the same "no value present"
+sentinels {stitch} uses, so "set hdf5"_set.html with the {skip_novalue}
+keyword behaves the same way as its {stitch} counterpart.
+
+The lattice index of dataset element [0][0][0] is stored in the root
+{origin} attribute, since AM windows are usually offset far from the
+coordinate origin.  Other root attributes record the current extent
+({dims}), the index order ({dim_order}), the simulation time ({time}),
+and the box geometry.  A later SPPARKS run that dumps to an existing
+file reuses its origin and grows the datasets as needed; a run whose
+domain starts {below} the stored origin is an error, because HDF5
+indices cannot be extended downward.  Use {dump_modify origin} to
+pre-declare a larger volume when that would otherwise happen.
+
+Compression is intentionally not supported.  Measured payloads from AM
+runs compress only about 1.4x overall -- the double-precision fields
+dominate the volume and are nearly incompressible -- which does not pay
+for the parallel-write complexity that filtered chunks introduce.  Use
+{h5repack} after the fact if a smaller file is needed.
+
+Like {stitch}, the {hdf5} style requires a simple square or cubic
+lattice and does not support the '*' or '%' filename wildcards.
 
 As described below, the filename determines the kind of output (text
 or binary or gzipped, one big file or one per timestep, one big file

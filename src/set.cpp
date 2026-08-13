@@ -30,6 +30,7 @@
 #include "stdlib.h"
 #include "string.h"
 #include "unistd.h"
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
@@ -43,11 +44,16 @@
 #include "stitch.h"
 #endif
 
+#ifdef SPPARKS_HIGHFIVE
+#include "highfive/highfive.hpp"
+#include <stdexcept>
+#endif
+
 using std::string;
 using namespace SPPARKS_NS;
 
 enum { SITE, IARRAY, DARRAY, X, Y, Z, XYZ, ID };
-enum { VALUE, RANGE, UNIQUE, DISPLACE, STITCH, BFILE };
+enum { VALUE, RANGE, UNIQUE, DISPLACE, STITCH, BFILE, HDF5 };
 enum { LT, LE, GT, GE, EQ, NEQ };
 enum { INT, DOUBLE, TAGINT };
 
@@ -147,6 +153,24 @@ void Set::command(int narg, char **arg) {
     tstamp = new char[n];
     strcpy(tstamp, arg[3]);
     iarg = 4;
+#endif
+
+#ifdef SPPARKS_HIGHFIVE
+  } else if (strcmp(arg[1], "hdf5") == 0) {
+    // No time argument: an hdf5 dump stores one state per site, so there is no
+    // history for 'first'/'last' to select between.  Reject a stray time
+    // argument rather than silently ignoring it.
+    if (narg < 3)
+      error->all(FLERR, "Illegal set command");
+    if (narg > 3 && (strcmp(arg[3], "first") == 0 ||
+                     strcmp(arg[3], "last") == 0 || isdigit(arg[3][0])))
+      error->all(FLERR, "Set hdf5 takes no time argument; an hdf5 dump stores "
+                        "only the latest state per site");
+    rhs = HDF5;
+    int n = strlen(arg[2]) + 1;
+    filename = new char[n];
+    strcpy(filename, arg[2]);
+    iarg = 3;
 #endif
 
   } else if (strcmp(arg[1], "bfile") == 0) {
@@ -269,8 +293,9 @@ void Set::command(int narg, char **arg) {
       iarg += 4;
 
     } else if (strcmp(arg[iarg], "skip_novalue") == 0) {
-      if (rhs != STITCH)
-        error->all(FLERR, "Set skip_novalue keyword only valid with stitch style");
+      if (rhs != STITCH && rhs != HDF5)
+        error->all(FLERR,
+                   "Set skip_novalue keyword only valid with stitch or hdf5 style");
       skip_novalue = 1;
       iarg += 1;
 
@@ -291,6 +316,8 @@ void Set::command(int narg, char **arg) {
     set_displace(lhs, rhs);
   else if (rhs == STITCH)
     set_stitch(lhs, rhs);
+  else if (rhs == HDF5)
+    set_hdf5(lhs, rhs);
   else if (rhs == BFILE)
     set_binary_file(lhs, rhs);
 
@@ -1052,11 +1079,56 @@ void Set::set_stitch(int lhs, int rhs) {
     // TODO: process err
   }
 
-  // selectively copy temp buffer into the live array
-  //   mirrors Set::set_single's loop/region/fraction/if handling so that
-  //   fraction+loop all draws one RNG per global site ID -> proc-count
-  //   independent site selection
+  apply_temp_buffer(lhs, itmp, dtmp, novalue_i32, novalue_f64);
 
+  memory->destroy(itmp);
+  memory->destroy(dtmp);
+
+#ifdef LOG_STITCH
+  /**
+   * STITCH PERFORMANCE: stitch query time;
+   */
+  auto t2 = std::chrono::high_resolution_clock::now();
+  auto duration =
+      std::chrono::duration_cast<std::chrono::seconds>(t2 - t1).count();
+  int my_rank;
+  MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+  if (0 == my_rank) {
+    const string filename = "stitch_query.dat";
+    FILE *fp = std::fopen(filename.c_str(), "a");
+    if (!fp) {
+      error->all(FLERR, "set.cpp; in function 'set_stitch' file opening failed.");
+    }
+    const char *fmt = "%10.4f %8ld\n";
+    fprintf(fp, fmt, time, duration);
+    std::fclose(fp);
+  }
+  /**
+   * END STITCH PERFORMANCE: stitch query time;
+   */
+#endif
+
+#else
+  error->all(FLERR, "Set stitch requires SPPARKS built with the STITCH package");
+#endif // SPK_STITCH
+}
+
+/* ----------------------------------------------------------------------
+   copy a per-site temp buffer into the live array, honoring the
+   loop/region/fraction/if/skip_novalue keywords.
+
+   Shared by 'set ... stitch' and 'set ... hdf5' so the two backends cannot
+   drift apart in how they select sites.  At defaults (fraction 1.0, loop all,
+   no region, no if-tests, skip_novalue off) every owned site is copied, which
+   is byte-identical to reading straight into the array.
+
+   Mirrors Set::set_single's handling so that fraction+loop all draws one RNG
+   per global site ID -> proc-count independent site selection.
+------------------------------------------------------------------------- */
+
+void Set::apply_temp_buffer(int lhs, int32_t *itmp, double *dtmp,
+                            int32_t novalue_i32, double novalue_f64) {
+  int nlocal = app->nlocal;
   tagint *id = app->id;
   double **xyz = app->xyz;
   int **iarray = app->iarray;
@@ -1157,34 +1229,152 @@ void Set::set_stitch(int lhs, int rhs) {
   }
 
   delete random;
-  memory->destroy(itmp);
-  memory->destroy(dtmp);
+}
 
-#ifdef LOG_STITCH
-  /**
-   * STITCH PERFORMANCE: stitch query time;
-   */
-  auto t2 = std::chrono::high_resolution_clock::now();
-  auto duration =
-      std::chrono::duration_cast<std::chrono::seconds>(t2 - t1).count();
-  int my_rank;
-  MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
-  if (0 == my_rank) {
-    const string filename = "stitch_query.dat";
-    FILE *fp = std::fopen(filename.c_str(), "a");
-    if (!fp) {
-      error->all(FLERR,
-                 "set.cpp; in function 'set_stitch' file opening failed.");
-    }
-    const char *fmt = "%10.4f %8d\n";
-    fprintf(fp, fmt, time, duration);
-    std::fclose(fp);
-  }
-  /**
-   * END STITCH PERFORMANCE: stitch query time;
-   */
+/* ----------------------------------------------------------------------
+   set sites from an 'dump hdf5' file
+
+   The counterpart of set_stitch, and structurally much simpler: an hdf5 dump
+   holds one state per site, so there is no timestamp set to resolve and no
+   overlay to apply -- just one hyperslab read of this rank's own subdomain.
+   The site-selection tail is shared with set_stitch so the two cannot drift.
+------------------------------------------------------------------------- */
+
+void Set::set_hdf5(int lhs, int rhs) {
+#ifdef SPPARKS_HIGHFIVE
+  if (app->appclass != App::LATTICE)
+    error->all(FLERR, "Set hdf5 only allowed for on-lattice apps");
+
+  applattice = (AppLattice *)app;
+
+  if (!applattice->simple)
+    error->all(FLERR, "Set hdf5 requires simple square or cubic lattice");
+  if (lhs != SITE && lhs != IARRAY && lhs != DARRAY)
+    error->all(FLERR, "Set hdf5 only supports integer or double values");
+
+  char label[16];
+  if (lhs == SITE)
+    snprintf(label, sizeof(label), "site");
+  else if (lhs == IARRAY)
+    snprintf(label, sizeof(label), "i%d", siteindex + 1);
+  else
+    snprintf(label, sizeof(label), "d%d", siteindex + 1);
+
+  int nlocal = app->nlocal;
+  int32_t *itmp = NULL;
+  double *dtmp = NULL;
+  if (lhs == DARRAY)
+    memory->create(dtmp, nlocal, "set:dtmp");
+  else
+    memory->create(itmp, nlocal, "set:itmp");
+
+  // defaults match the fill values dump_hdf5 writes
+  int32_t novalue_i32 = -1;
+  double novalue_f64 = 0.0;
+
+  try {
+#ifdef H5_HAVE_PARALLEL
+    HighFive::FileAccessProps fapl;
+    fapl.add(HighFive::MPIOFileAccess(world, MPI_INFO_NULL));
+    HighFive::File f(filename, HighFive::File::ReadOnly, fapl);
+#else
+    HighFive::File f(filename, HighFive::File::ReadOnly);
 #endif
 
+    if (!f.exist(label)) {
+      char msg[512];
+      snprintf(msg, sizeof(msg), "Set hdf5: field '%s' does not exist in %s",
+               label, filename);
+      error->all(FLERR, msg);
+    }
+
+    std::vector<int64_t> origin(3, 0), dims(3, 0);
+    if (f.hasAttribute("origin"))
+      f.getAttribute("origin").read(origin);
+    if (f.hasAttribute("dims"))
+      f.getAttribute("dims").read(dims);
+
+    HighFive::DataSet dset = f.getDataSet(label);
+    if (dset.hasAttribute("no_value")) {
+      if (lhs == DARRAY)
+        dset.getAttribute("no_value").read(novalue_f64);
+      else
+        dset.getAttribute("no_value").read(novalue_i32);
+    }
+
+    int64_t lo[3] = {applattice->xlo_me_simple, applattice->ylo_me_simple,
+                     applattice->zlo_me_simple};
+    int64_t n[3] = {applattice->xhi_me_simple - applattice->xlo_me_simple + 1,
+                    applattice->yhi_me_simple - applattice->ylo_me_simple + 1,
+                    applattice->zhi_me_simple - applattice->zlo_me_simple + 1};
+
+    // Prefill with the sentinel and read only the part of the subdomain the
+    // file actually covers.  A staged build's window routinely extends past
+    // what earlier stages wrote (fresh powder above the last layer); those
+    // sites must come back as "no value present", exactly as they do from
+    // stitch, not as an error.
+    if (lhs == DARRAY)
+      for (int i = 0; i < nlocal; i++)
+        dtmp[i] = novalue_f64;
+    else
+      for (int i = 0; i < nlocal; i++)
+        itmp[i] = novalue_i32;
+
+    int64_t i1[3], i2[3], cnt[3];
+    bool nonempty = true;
+    for (int k = 0; k < 3; k++) {
+      i1[k] = std::max(lo[k], origin[k]);
+      i2[k] = std::min(lo[k] + n[k], origin[k] + dims[k]);
+      cnt[k] = i2[k] - i1[k];
+      if (cnt[k] <= 0)
+        nonempty = false;
+    }
+
+    if (nonempty) {
+      std::vector<size_t> offset = {(size_t)(i1[2] - origin[2]),
+                                    (size_t)(i1[1] - origin[1]),
+                                    (size_t)(i1[0] - origin[0])};
+      std::vector<size_t> count = {(size_t)cnt[2], (size_t)cnt[1],
+                                   (size_t)cnt[0]};
+      HighFive::HyperSlab slab{HighFive::RegularHyperSlab(offset, count)};
+
+      size_t ncells = (size_t)cnt[0] * cnt[1] * cnt[2];
+      std::vector<int32_t> ibuf;
+      std::vector<double> dbuf;
+      if (lhs == DARRAY) {
+        dbuf.resize(ncells);
+        dset.select(slab).read_raw(dbuf.data());
+      } else {
+        ibuf.resize(ncells);
+        dset.select(slab).read_raw(ibuf.data());
+      }
+
+      // scatter the compact intersection into the full subdomain buffer,
+      // one contiguous x-run at a time
+      for (int64_t z = 0; z < cnt[2]; z++)
+        for (int64_t y = 0; y < cnt[1]; y++) {
+          int64_t dst = ((i1[2] + z - lo[2]) * n[1] + (i1[1] + y - lo[1])) * n[0] +
+                        (i1[0] - lo[0]);
+          int64_t src = (z * cnt[1] + y) * cnt[0];
+          if (lhs == DARRAY)
+            memcpy(&dtmp[dst], &dbuf[src], cnt[0] * sizeof(double));
+          else
+            memcpy(&itmp[dst], &ibuf[src], cnt[0] * sizeof(int32_t));
+        }
+    }
+  } catch (const std::exception &e) {
+    char msg[512];
+    snprintf(msg, sizeof(msg), "Set hdf5 read failed on %s: %s", filename,
+             e.what());
+    error->all(FLERR, msg);
+  }
+
+  apply_temp_buffer(lhs, itmp, dtmp, novalue_i32, novalue_f64);
+
+  memory->destroy(itmp);
+  memory->destroy(dtmp);
+#else
+  error->all(FLERR, "Set hdf5 requires SPPARKS built with HighFive");
 #endif
 }
 

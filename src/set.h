@@ -80,7 +80,13 @@ class Set : protected Pointers {
   void set_range(int, int);
   void set_displace(int, int);
   void set_stitch(int, int);
+  void set_hdf5(int, int);
   void set_binary_file(int, int);
+
+  // shared by set_stitch and set_hdf5: copy a per-site temp buffer into the
+  // live array honoring loop/region/fraction/if/skip_novalue
+  void apply_temp_buffer(int lhs, int32_t *itmp, double *dtmp,
+                         int32_t novalue_i32, double novalue_f64);
 
   int condition(int);
 };

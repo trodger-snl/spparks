@@ -231,6 +231,23 @@ int stitch_open (StitchFile ** file, const char * filename)
             }
 
         }
+
+        // Read queries constrain (field_id, timestamp); the only pre-existing
+        // index leads with x_min and cannot serve that.  This runs for
+        // pre-existing files as well, since the DDL above is new-file-only and
+        // an old .st would otherwise never pick the index up.  Placement is
+        // deliberate: at this point rank 0 is the only process with the file
+        // open -- every other rank is parked in the barrier below and has not
+        // called sqlite3_open_v2 yet -- so there is exactly one writer and no
+        // readers.  Failure is not fatal; an unindexed file is merely slower.
+        rc = sqlite3_exec ((*file)->db, "create index if not exists blocks_field_time on blocks (field_id, timestamp)", callback, 0, &ErrMsg);
+        if (rc != SQLITE_OK)
+        {
+            fprintf (stderr, "Line: %d could not create index blocks_field_time (%d): %s; reads will be slower\n", __LINE__, rc, ErrMsg ? ErrMsg : "");
+            sqlite3_free (ErrMsg);
+            ErrMsg = NULL;
+            rc = SQLITE_OK;
+        }
 #ifdef STITCH_PARALLEL
         MPI_Barrier ((*file)->comm);
     }
@@ -249,6 +266,11 @@ int stitch_open (StitchFile ** file, const char * filename)
         }
     }
 #endif
+
+    // Writes are serialized through a token ring, but concurrent readers (and
+    // analysis processes attached to a live run) still contend for locks.  Wait
+    // rather than spin through the SQLITE_BUSY/SQLITE_LOCKED retry loops.
+    sqlite3_busy_timeout ((*file)->db, 30000);
 
     // this should reduce pressure on /tmp and improve performance. If memory is tight, this might
     // be a problem.
@@ -1755,10 +1777,10 @@ static int stitch_read_block (const StitchFile * file, int64_t field_id, double 
     double timing [max_timing];
     int timing_offset = 0;
 #endif
-    // these 3 vars are used to get which times are wanted to avoid a join
-    int32_t number_of_times = 0;
-    int32_t times_selected = 0;
-    int32_t * times = NULL;
+    // newest-first overlay bookkeeping; see the block loop below
+    int32_t cells_in_request = (x2 - x1) * (y2 - y1) * (z2 - z1);
+    int32_t cells_covered = 0;
+    unsigned char * covered = NULL;
 #ifdef STITCH_PARALLEL
     if (file->rank == 0)
     {
@@ -1883,72 +1905,19 @@ static int stitch_read_block (const StitchFile * file, int64_t field_id, double 
 #ifdef STITCH_TIMING
     gettimeofday (&time_start, NULL);
 #endif
-    do
+    // Coverage mask over the request box.  Blocks are visited newest-first and
+    // a cell is written only the first time it is seen, so the newest value
+    // still wins -- identical to the previous oldest-first overlay.  The point
+    // of the inversion is that a block whose intersection with the request is
+    // already fully covered can be skipped WITHOUT fetching its blob, and once
+    // the whole request is covered the scan stops early.  Blob reads are
+    // megabytes apiece and dominate the cost of a read over a long history.
+    covered = calloc ((size_t) cells_in_request, 1);
+    if (!covered)
     {
-        const char * query = NULL;
-        query = "select count (*) from times";
-        rc = sqlite3_prepare_v2 (file->db, query, -1, &stmt_index, &tail_index);
-        if (rc != SQLITE_OK && rc != SQLITE_BUSY && rc != SQLITE_LOCKED)
-        {
-            fprintf (stderr, "%d Line: %d SQL error (%d): %s\n", file->rank, __LINE__, rc, sqlite3_errmsg (file->db));
-            sqlite3_close (file->db);
-            goto cleanup;
-        }
-    } while (rc == SQLITE_BUSY || rc == SQLITE_LOCKED);
-    do
-    {
-        rc = sqlite3_step (stmt_index);
-        if (rc != SQLITE_OK && rc != SQLITE_BUSY && rc != SQLITE_LOCKED && rc != SQLITE_ROW && rc != SQLITE_DONE)
-        {
-            fprintf (stderr, "%d Line: %d SQL error (%d): %s\n", file->rank, __LINE__, rc, sqlite3_errmsg (file->db));
-            sqlite3_close (file->db);
-            goto cleanup;
-        }
-    } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
-    number_of_times = sqlite3_column_int (stmt_index, 0);
-    rc = sqlite3_finalize (stmt_index);
-    times = malloc (sizeof (int32_t) * number_of_times);
-
-    do
-    {
-        const char * query = NULL;
-        query = "select timestamp from times, globals where times.time < globals.absolute_tolerance + ? order by timestamp";
-        rc = sqlite3_prepare_v2 (file->db, query, -1, &stmt_index, &tail_index);
-        if (rc != SQLITE_OK && rc != SQLITE_BUSY && rc != SQLITE_LOCKED)
-        {
-            fprintf (stderr, "%d Line: %d SQL error (%d): %s\n", file->rank, __LINE__, rc, sqlite3_errmsg (file->db));
-            sqlite3_close (file->db);
-            goto cleanup;
-        }
-    } while (rc == SQLITE_BUSY || rc == SQLITE_LOCKED);
-    rc = sqlite3_bind_double (stmt_index, 1, *time); assert (rc == SQLITE_OK);
-    do
-    {
-        rc = sqlite3_step (stmt_index);
-        if (rc != SQLITE_OK && rc != SQLITE_BUSY && rc != SQLITE_LOCKED && rc != SQLITE_ROW && rc != SQLITE_DONE)
-        {
-            fprintf (stderr, "%d Line: %d SQL error (%d): %s\n", file->rank, __LINE__, rc, sqlite3_errmsg (file->db));
-            sqlite3_close (file->db);
-            goto cleanup;
-        }
-    } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
-    while (rc == SQLITE_ROW)
-    {
-        times [times_selected++] = sqlite3_column_int (stmt_index, 0);
-        do
-        {
-            rc = sqlite3_step (stmt_index);
-            if (rc != SQLITE_OK && rc != SQLITE_BUSY && rc != SQLITE_LOCKED && rc != SQLITE_ROW && rc != SQLITE_DONE)
-            {
-                fprintf (stderr, "%d Line: %d SQL error (%d): %s\n", file->rank, __LINE__, rc, sqlite3_errmsg (file->db));
-                sqlite3_close (file->db);
-                goto cleanup;
-            }
-        } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
+        fprintf (stderr, "%d Line: %d unable to allocate %d byte coverage mask\n", file->rank, __LINE__, cells_in_request);
+        goto cleanup;
     }
-    rc = sqlite3_finalize (stmt_index);
-    // now that we have a list of matching timestamps, we can add them to avoid the join.
-    // Optimization: If the number of items == the total number, we can just eliminate that clause.
 
     do
     {
@@ -1960,17 +1929,27 @@ static int stitch_read_block (const StitchFile * file, int64_t field_id, double 
 #endif
 #define SQLITE_MAX_SQL_LENGTH_CAT 998000
         char query [SQLITE_MAX_SQL_LENGTH] = "";
-        const char * q_txt = 
-                "select timestamp, field_id, x_min, y_min, z_min, x_max, y_max, z_max, state "
-                "from blocks "
+        const char * q_txt =
+                "select blocks.timestamp, blocks.field_id, blocks.x_min, blocks.y_min, blocks.z_min, blocks.x_max, blocks.y_max, blocks.z_max, blocks.state "
+                "from blocks, times, globals "
                 "where "
-                "    x_min <= ? and x_max >= ? "
-                "and y_min <= ? and y_max >= ? "
-                "and z_min <= ? and z_max >= ? "
-                "and field_id = ? ";
+                // Block bounds are half-open [min,max), so sharing a face is
+                // NOT an overlap: '<=/>=' matched every face, edge and corner
+                // neighbour, fetched its (multi-MB) blob, and then rejected
+                // every one of its sites in the POINT_IN_BUFFER loop below.
+                "    blocks.x_min <  ? and blocks.x_max >  ? "
+                "and blocks.y_min <  ? and blocks.y_max >  ? "
+                "and blocks.z_min <  ? and blocks.z_max >  ? "
+                "and blocks.field_id = ? "
+                "and times.timestamp = blocks.timestamp "
+                "and times.time < globals.absolute_tolerance + ? ";
         strncpy (query, q_txt, SQLITE_MAX_SQL_LENGTH_CAT);
-	// moved checking i the timestamp is in the acceptable list manual to avoid a complex join
-        strncat (query, "order by timestamp ", SQLITE_MAX_SQL_LENGTH_CAT);
+        // The time filter is a join now instead of a C-side linear scan over a
+        // materialized timestamp list.  Descending order combined with the
+        // coverage mask yields the same result as the old ascending overlay;
+        // rowid breaks ties so blocks sharing a timestamp resolve the way the
+        // ascending pass resolved them (last row applied == first row seen).
+        strncat (query, "order by blocks.timestamp desc, blocks.rowid desc ", SQLITE_MAX_SQL_LENGTH_CAT);
 
         rc = sqlite3_prepare_v2 (file->db, query, -1, &stmt_index, &tail_index);
         if (rc != SQLITE_OK && rc != SQLITE_BUSY && rc != SQLITE_LOCKED)
@@ -1992,6 +1971,7 @@ static int stitch_read_block (const StitchFile * file, int64_t field_id, double 
     rc = sqlite3_bind_int (stmt_index, 5, z2); assert (rc == SQLITE_OK);
     rc = sqlite3_bind_int (stmt_index, 6, z1); assert (rc == SQLITE_OK);
     rc = sqlite3_bind_int64 (stmt_index, 7, field_id); assert (rc == SQLITE_OK);
+    rc = sqlite3_bind_double (stmt_index, 8, *time); assert (rc == SQLITE_OK);
 //printf ("time: %g bounding box x1: %d y1: %d z1: %d x2: %d y2: %d z2: %d\n", *time, x1, y1, z1, x2, y2, z2);
 //if (file->rank == 0) printf ("1: %d 2: %d 3: %d 4: %d 5: %d 6: %d 7: %lld 8: %f\n", x2, x1, y2, y1, z2, z1, field_id, *time);
 #ifdef STITCH_TIMING
@@ -2038,13 +2018,12 @@ static int stitch_read_block (const StitchFile * file, int64_t field_id, double 
         gettimeofday (&time_start, NULL);
 #endif
         block_time = sqlite3_column_int (stmt_index, 0);
-        // this snippet replaces the sub-query and conditionally retrieves the rest of the data and tries to process it
-        bool use_time = false;
-        for (int i = 0; i < number_of_times && !use_time; i++)
-            if (block_time == times [i])
-                use_time = true;
-        if (use_time)
-        {
+        // The time filter is part of the query now, so every row that arrives
+        // is eligible.  What is still worth avoiding is fetching the blob of a
+        // block whose entire intersection with the request has already been
+        // written by a newer block -- on a file with a long history that is the
+        // bulk of the I/O.
+        (void) block_time;
         field_id = sqlite3_column_int64 (stmt_index, 1);
         new_block_x1 = sqlite3_column_int (stmt_index, 2);
         new_block_y1 = sqlite3_column_int (stmt_index, 3);
@@ -2052,6 +2031,31 @@ static int stitch_read_block (const StitchFile * file, int64_t field_id, double 
         new_block_x2 = sqlite3_column_int (stmt_index, 5);
         new_block_y2 = sqlite3_column_int (stmt_index, 6);
         new_block_z2 = sqlite3_column_int (stmt_index, 7);
+
+        // Intersect this block with the request box and scan the coverage mask
+        // over just that intersection.  If every cell is already written by a
+        // newer block there is nothing this block can contribute, so skip it
+        // without ever touching sqlite3_column_blob.
+        bool any_uncovered = false;
+        {
+            int32_t ix1 = new_block_x1 > x1 ? new_block_x1 : x1;
+            int32_t ix2 = new_block_x2 < x2 ? new_block_x2 : x2;
+            int32_t iy1 = new_block_y1 > y1 ? new_block_y1 : y1;
+            int32_t iy2 = new_block_y2 < y2 ? new_block_y2 : y2;
+            int32_t iz1 = new_block_z1 > z1 ? new_block_z1 : z1;
+            int32_t iz2 = new_block_z2 < z2 ? new_block_z2 : z2;
+            for (int32_t iz = iz1; iz < iz2 && !any_uncovered; iz++)
+                for (int32_t iy = iy1; iy < iy2 && !any_uncovered; iy++)
+                {
+                    int32_t row = (ix1 - x1)
+                                + (iy - y1) * (x2 - x1)
+                                + (iz - z1) * (y2 - y1) * (x2 - x1);
+                    for (int32_t ix = 0; ix < ix2 - ix1; ix++)
+                        if (!covered [row + ix]) { any_uncovered = true; break; }
+                }
+        }
+        if (any_uncovered)
+        {
 #ifdef STITCH_TIMING
         gettimeofday (&time_end, NULL);
         timing [timing_offset++] = (end1.tv_sec - start1.tv_sec) + ((double) end1.tv_usec - start1.tv_usec)/1000000;
@@ -2110,10 +2114,18 @@ printf ("y\n");
 #endif
                         // we don't want the last value for each one
                         // which is why we don't do + 1
-                        buffer_offset = (new_block_x_pos - x1)
+                        uint32_t cell_index = (new_block_x_pos - x1)
                                       + (new_block_y_pos - y1) * (x2 - x1)
                                       + (new_block_z_pos - z1) * (y2 - y1) * (x2 - x1);
-                        buffer_offset *= field_info [1];
+                        buffer_offset = cell_index * field_info [1];
+                        // rows arrive newest-first, so the first writer of a
+                        // cell is the newest one -- same outcome as the old
+                        // oldest-first overlay, without re-reading superseded
+                        // blocks
+                        if (!covered [cell_index])
+                        {
+                        covered [cell_index] = 1;
+                        cells_covered++;
 #if 0
                     if (x1 == 0 && y1 == 86 && z1 == 0 && x2 == 127 && y2 == 344 && z2 == 30)
 printf ("buffer_offset = %d new_block_offset: %d read_val: %d\n", buffer_offset, new_block_offset, new_block [new_block_offset]);
@@ -2137,6 +2149,7 @@ printf ("buffer_offset = %d new_block_offset: %d read_val: %d\n", buffer_offset,
                                     buffer_f64 [buffer_offset + i] = new_block_f64 [new_block_offset + i];
                                 break;
                         }
+                        }
 //min_val = (new_block [new_block_offset] < min_val ? new_block [new_block_offset] : min_val);
 //max_val = (new_block [new_block_offset] > max_val ? new_block [new_block_offset] : max_val);
                     }
@@ -2155,6 +2168,11 @@ printf ("n\n");
         timing [timing_offset++] = (end1.tv_sec - start1.tv_sec) + ((double) end1.tv_usec - start1.tv_usec)/1000000;
 #endif
         }
+
+        // every cell of the request has its newest value; nothing older can
+        // change the answer
+        if (cells_covered >= cells_in_request)
+            break;
 
         do
         {
@@ -2188,7 +2206,7 @@ printf ("in array min: %d max: %d\n", min_val, max_val);
 
 cleanup:
     free (new_block);
-    free (times);
+    free (covered);
 #ifdef STITCH_TIMING
     if (file->rank == 0)
     {

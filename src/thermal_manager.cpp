@@ -108,8 +108,7 @@ void ThermalManager::setup_cmd(int narg, char **arg)
   }
 
   // Pass optimization flags to temperature source before setup
-  HDF5UnstructuredTemperatureSource* hdf5_source =
-    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+  HDF5UnstructuredTemperatureSource* hdf5_source = this->hdf5_source();
   if (hdf5_source) {
     hdf5_source->set_use_spatial_grid(opt_use_spatial_grid);
     hdf5_source->set_use_element_cache(opt_use_element_cache);
@@ -216,7 +215,7 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
   // steady-state moving-point solution, so each pass is already independent
   // of every preceding pass; reject pause at parse time.
   const bool src_is_rosenthal =
-    (dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get()) != nullptr);
+    (rosenthal_source() != nullptr);
   if ((pause_constant > 0.0 || pause_below_T > 0.0) && src_is_rosenthal) {
     error->all(FLERR,
       "laser_path pause/pause_below: not supported for the Rosenthal "
@@ -253,7 +252,7 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
 
   // Size the singularity cutoff to the lattice so the 1/R prefactor at the
   // laser site stays finite. Only meaningful for a Rosenthal source.
-  if (auto* ros = dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get())) {
+  if (auto* ros = rosenthal_source()) {
     ros->set_r_min(0.5 * host_->dx);
   }
 
@@ -264,7 +263,7 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
   const bool dynamic_pass_scheduling =
     (pause_below_T > 0.0) ||
     (pause_constant > 0.0 && reset_temperature_T > 0.0);
-  if (auto* moser = dynamic_cast<MoserTemperatureSource*>(temperature_source.get())) {
+  if (auto* moser = moser_source()) {
     if (dynamic_pass_scheduling) {
       moser->build_scan(host_->time, x0, y0, x1, y1, z0, v, /*repeats*/1, /*pause*/0.0);
       pending_moser_passes = repeats - 1;
@@ -301,7 +300,7 @@ void ThermalManager::laser_fluctuations_cmd(int narg, char **arg)
     error->all(FLERR,"laser_fluctuations: setup_temperature_source must be called first");
   }
   MoserTemperatureSource *moser =
-    dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
+    moser_source();
   if (!moser) {
     error->all(FLERR,"laser_fluctuations: only the Moser unsteady Green's-function source supports fluctuations");
   }
@@ -430,10 +429,7 @@ void ThermalManager::optimization_cmd(int narg, char **arg)
   bool enable = (strcmp(arg[1],"on") == 0 || strcmp(arg[1],"1") == 0 || strcmp(arg[1],"true") == 0);
 
   // Get HDF5 source if available to pass flags
-  HDF5UnstructuredTemperatureSource* hdf5_source = nullptr;
-  if (temperature_source) {
-    hdf5_source = dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-  }
+  HDF5UnstructuredTemperatureSource* hdf5_source = this->hdf5_source();
 
   if (strcmp(arg[0],"spatial_grid") == 0) {
     opt_use_spatial_grid = enable;
@@ -555,11 +551,8 @@ void ThermalManager::update_temperatures(double simulation_time)
   const double dx = host_->dx;
 
   // Cache the dynamic_cast results outside the loop.
-  HDF5UnstructuredTemperatureSource* hdf5_source =
-    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-  RosenthalTemperatureSource* ros_source =
-    hdf5_source ? nullptr
-                : dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
+  HDF5UnstructuredTemperatureSource* hdf5_source = this->hdf5_source();
+  RosenthalTemperatureSource* ros_source = hdf5_source ? nullptr : rosenthal_source();
 
   // -------------------------------------------------------------------
   // HDF5 path: three optimization tiers.
@@ -683,14 +676,10 @@ ThermalManager::ThermalStep ThermalManager::advance(double current_time, double 
   // (or pause_below override).
   double fast_forward_threshold = host_->t_room; // Default to t_room
 
-  HDF5UnstructuredTemperatureSource* hdf5_source =
-    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-  RosenthalTemperatureSource* ros_source =
-    hdf5_source ? nullptr
-                : dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
+  HDF5UnstructuredTemperatureSource* hdf5_source = this->hdf5_source();
+  RosenthalTemperatureSource* ros_source = hdf5_source ? nullptr : rosenthal_source();
   MoserTemperatureSource* moser_source =
-    (hdf5_source || ros_source) ? nullptr
-                : dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
+    (hdf5_source || ros_source) ? nullptr : this->moser_source();
 
   // Moser pause + reset_temperature: time-gated dynamic fire (unconditional
   // on time, not gated on cool-state, so it lives outside the fast-forward
@@ -839,7 +828,7 @@ RosenthalDevicePlan ThermalManager::rosenthal_device_plan(double simulation_time
   RosenthalDevicePlan plan;
 
   RosenthalTemperatureSource* ros =
-    dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
+    rosenthal_source();
   if (!ros || !laser_path_set) return plan;  // plan.valid stays false
 
   // Solidification-band smoothing is applied in update_temperatures(), which the
@@ -878,15 +867,6 @@ RosenthalDevicePlan ThermalManager::rosenthal_device_plan(double simulation_time
   return plan;
 }
 
-void ThermalManager::rosenthal_copy_keyhole_quadrature(
-    std::vector<double> &nodes, std::vector<double> &weights)
-{
-  RosenthalTemperatureSource* ros =
-    dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
-  if (!ros) return;
-  ros->copy_keyhole_quadrature(nodes, weights);
-}
-
 /* ----------------------------------------------------------------------
    Fast-forward decision for the Rosenthal device path. Same logic as the
    Rosenthal branch of advance(), but the active-site test uses the device-
@@ -904,7 +884,7 @@ ThermalManager::rosenthal_fast_forward(double current_time, double stoptime,
   step.end_run = false;
 
   RosenthalTemperatureSource* ros =
-    dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
+    rosenthal_source();
   if (!ros) return step;
 
   // `laser_path ... pause_below <Tk>` overrides the default liquidus threshold.
@@ -955,7 +935,7 @@ MoserDevicePlan ThermalManager::moser_device_plan(double simulation_time)
   MoserDevicePlan plan;
 
   MoserTemperatureSource* moser =
-    dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
+    moser_source();
   if (!moser) return plan;  // plan.valid stays false
 
   // Solidification-band smoothing is applied in update_temperatures(), which the
@@ -966,21 +946,6 @@ MoserDevicePlan ThermalManager::moser_device_plan(double simulation_time)
   if (!moser->fill_device_plan(plan)) { plan.valid = false; return plan; }
   plan.time = simulation_time;
   return plan;
-}
-
-void ThermalManager::moser_copy_device_data(
-    std::vector<double> &bounds, std::vector<double> &xl,
-    std::vector<double> &yl, std::vector<double> &normals_x,
-    std::vector<double> &normals_y, std::vector<double> &speeds,
-    std::vector<double> &powers, std::vector<double> &fluct_t,
-    std::vector<double> &fluct_w, std::vector<double> &fluct_d,
-    std::vector<double> &fluct_p)
-{
-  MoserTemperatureSource* moser =
-    dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
-  if (!moser) return;
-  moser->copy_device_data(bounds, xl, yl, normals_x, normals_y, speeds,
-                          powers, fluct_t, fluct_w, fluct_d, fluct_p);
 }
 
 /* ----------------------------------------------------------------------
@@ -1005,7 +970,7 @@ ThermalManager::moser_advance_device(double current_time, double stoptime)
   step.end_run = false;
 
   MoserTemperatureSource* moser =
-    dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
+    moser_source();
   if (!moser || !moser_device_filler_) return step;
 
   // Fill the device field at current_time and get the global peak temperature.
@@ -1124,7 +1089,7 @@ HDF5DevicePlan ThermalManager::hdf5_device_plan(double simulation_time)
   HDF5DevicePlan plan;
 
   HDF5UnstructuredTemperatureSource* hdf5 =
-    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+    hdf5_source();
   if (!hdf5 || temperature_smooth_enabled) return plan;  // plan.valid stays false
 
   // Per-step host prep: advance source state, load the layer if needed, rebuild
@@ -1143,76 +1108,19 @@ HDF5DevicePlan ThermalManager::hdf5_device_plan(double simulation_time)
   return plan;
 }
 
-void ThermalManager::hdf5_copy_cache(std::vector<int> &node_idx,
-                                     std::vector<double> &weights,
-                                     std::vector<int> &valid)
+RosenthalTemperatureSource *ThermalManager::rosenthal_source() const
 {
-  HDF5UnstructuredTemperatureSource* hdf5 =
-    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-  if (!hdf5) { node_idx.clear(); weights.clear(); valid.clear(); return; }
-  hdf5->copy_device_cache(node_idx, weights, valid);
+  return dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
 }
 
-const std::vector<double> &ThermalManager::hdf5_nodal_temps() const
+MoserTemperatureSource *ThermalManager::moser_source() const
 {
-  static const std::vector<double> empty;
-  HDF5UnstructuredTemperatureSource* hdf5 =
-    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-  if (!hdf5) return empty;
-  return hdf5->nodal_temps();
+  return dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
 }
 
-// Device-side time interpolation: toggle the host precompute off and expose the
-// immutable-per-layer per-node time-series CSR for the device to upload once per
-// layer (times.flat()/temperatures.flat() share row_offsets).
-void ThermalManager::hdf5_set_device_time_interp(bool b)
+HDF5UnstructuredTemperatureSource *ThermalManager::hdf5_source() const
 {
-  HDF5UnstructuredTemperatureSource* hdf5 =
-    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-  if (hdf5) hdf5->set_device_time_interp(b);
-}
-
-bool ThermalManager::hdf5_device_time_interp_active() const
-{
-  HDF5UnstructuredTemperatureSource* hdf5 =
-    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-  return hdf5 && hdf5->device_time_interp_active();
-}
-
-const std::vector<double> &ThermalManager::hdf5_ts_times() const
-{
-  static const std::vector<double> empty;
-  HDF5UnstructuredTemperatureSource* hdf5 =
-    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-  if (!hdf5) return empty;
-  return hdf5->timeseries_times();
-}
-
-const std::vector<double> &ThermalManager::hdf5_ts_temps() const
-{
-  static const std::vector<double> empty;
-  HDF5UnstructuredTemperatureSource* hdf5 =
-    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-  if (!hdf5) return empty;
-  return hdf5->timeseries_temps();
-}
-
-const std::vector<size_t> &ThermalManager::hdf5_ts_offsets() const
-{
-  static const std::vector<size_t> empty;
-  HDF5UnstructuredTemperatureSource* hdf5 =
-    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-  if (!hdf5) return empty;
-  return hdf5->timeseries_offsets();
-}
-
-const std::vector<unsigned> &ThermalManager::hdf5_active_nodes() const
-{
-  static const std::vector<unsigned> empty;
-  HDF5UnstructuredTemperatureSource* hdf5 =
-    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-  if (!hdf5) return empty;
-  return hdf5->timeseries_active_nodes();
+  return dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
 }
 
 /* ----------------------------------------------------------------------
@@ -1234,7 +1142,7 @@ ThermalManager::hdf5_advance_device(double current_time, double stoptime)
   step.end_run = false;
 
   HDF5UnstructuredTemperatureSource* hdf5 =
-    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+    hdf5_source();
   if (!hdf5 || !hdf5_device_filler_) return step;
 
   // Fill the device field at current_time and get the global peak temperature.
@@ -1291,7 +1199,7 @@ double ThermalManager::rosenthal_next_active_time(double current_time, double th
   if (!laser_path_set || !scan_layer_active)
     return std::numeric_limits<double>::max();
 
-  auto* ros = dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
+  auto* ros = rosenthal_source();
   if (!ros) return std::numeric_limits<double>::max();
 
   const int nlocal = host_->nlocal;
@@ -1365,7 +1273,7 @@ double ThermalManager::moser_next_active_time(double current_time, double thresh
 {
   if (!laser_path_set) return std::numeric_limits<double>::max();
 
-  auto* moser = dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
+  auto* moser = moser_source();
   if (!moser || !moser->has_scan()) return std::numeric_limits<double>::max();
 
   const int nlocal = host_->nlocal;

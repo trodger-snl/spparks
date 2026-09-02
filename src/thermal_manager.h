@@ -27,6 +27,10 @@
 
 namespace SPPARKS_NS {
 
+class RosenthalTemperatureSource;
+class MoserTemperatureSource;
+class HDF5UnstructuredTemperatureSource;
+
 /* ----------------------------------------------------------------------
    ThermalManager owns the temperature-I/O orchestration that was formerly
    embedded in AppAdditiveTexture: temperature-source command parsing, the
@@ -96,11 +100,6 @@ class ThermalManager : protected Pointers {
   // NOT also call update_temperatures() (that would double-advance the path).
   RosenthalDevicePlan rosenthal_device_plan(double simulation_time);
 
-  // Copy the Rosenthal keyhole line-integral quadrature (fixed at setup) for
-  // device upload. No-op for a non-Rosenthal or non-keyhole source.
-  void rosenthal_copy_keyhole_quadrature(std::vector<double> &nodes,
-                                         std::vector<double> &weights);
-
   // Fast-forward decision for the Rosenthal device path. Mirrors advance()'s
   // Rosenthal branch but takes the already-computed global max temperature
   // (from a device reduction) instead of scanning host T, and does NOT refill
@@ -118,17 +117,6 @@ class ThermalManager : protected Pointers {
   // temperature smoothing, or an unbuilt/>2-lobe scan -- KEYHOLE, fluctuations,
   // and dynamic inter-pass pause are all handled on the device.
   MoserDevicePlan moser_device_plan(double simulation_time);
-  void moser_copy_device_data(std::vector<double> &bounds,
-                              std::vector<double> &xl, std::vector<double> &yl,
-                              std::vector<double> &normals_x,
-                              std::vector<double> &normals_y,
-                              std::vector<double> &speeds,
-                              std::vector<double> &powers,
-                              std::vector<double> &fluct_t,
-                              std::vector<double> &fluct_w,
-                              std::vector<double> &fluct_d,
-                              std::vector<double> &fluct_p);
-
   // Register the device temperature filler used by moser_advance_device(): given
   // a simulation time, it fills the device temperature field (k_T) at that time
   // and returns the global (MPI-reduced) max temperature. Set once by the app.
@@ -159,25 +147,15 @@ class ThermalManager : protected Pointers {
   //     layer load + cache rebuild at a layer boundary + nodal-temp precompute,
   //     incl. optional nodal mesh smoothing) and returns the scalar POD. This is
   //     exactly the host fast path minus the per-site T loop.
-  //   hdf5_copy_cache()      - flatten the STATIC per-site element cache for
-  //     upload; the caller re-copies only when plan.version changes (layer
-  //     boundary).
-  //   hdf5_nodal_temps()     - the per-step host-computed nodal-temperature slice
-  //     (uploaded every step); returned by const ref to avoid a copy.
+  // The device caller reads the element cache, nodal slice and time-series
+  // CSR straight from hdf5_source().
   bool hdf5_device_eligible() const;
   HDF5DevicePlan hdf5_device_plan(double simulation_time);
-  void hdf5_copy_cache(std::vector<int> &node_idx, std::vector<double> &weights,
-                       std::vector<int> &valid);
-  const std::vector<double> &hdf5_nodal_temps() const;
 
-  // Device-side time interpolation (skip host precompute; device interps the
-  // per-node time series). Toggle + immutable-per-layer time-series CSR refs.
-  void hdf5_set_device_time_interp(bool b);
-  bool hdf5_device_time_interp_active() const;
-  const std::vector<double> &hdf5_ts_times() const;
-  const std::vector<double> &hdf5_ts_temps() const;
-  const std::vector<size_t> &hdf5_ts_offsets() const;
-  const std::vector<unsigned> &hdf5_active_nodes() const;
+  // Typed view of the active source; nullptr when it is another type.
+  RosenthalTemperatureSource *rosenthal_source() const;
+  MoserTemperatureSource *moser_source() const;
+  HDF5UnstructuredTemperatureSource *hdf5_source() const;
 
   // Register the device temperature filler used by hdf5_advance_device(): given a
   // simulation time it fills k_T[0,nlocal) on the device and returns the global

@@ -30,6 +30,7 @@
 #include "timer.h"
 #include "math_const.h"
 #include "temperature_source_rosenthal.h"
+#include "temperature_source_moser.h"
 #include "temperature_source_hdf5_unstructured.h"
 #include "am_temp_precision.h"
 #include <cstring>
@@ -581,7 +582,7 @@ void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
   // KEYHOLE: upload the (fixed) line-integral quadrature once.
   if (plan.mode == 2 && d_ros_nquad != plan.n_quad) {
     std::vector<double> nodes, weights;
-    thermal->rosenthal_copy_keyhole_quadrature(nodes, weights);
+    thermal->rosenthal_source()->copy_keyhole_quadrature(nodes, weights);
     d_ros_qnodes = upload_vec<double>("ros_qnodes", nodes);
     d_ros_qweights = upload_vec<double>("ros_qweights", weights);
     d_ros_nquad = plan.n_quad;
@@ -754,7 +755,7 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
   // tables when the scan generation changes.
   if (d_seg_version != plan.version) {
     std::vector<double> b, xl, yl, nx, ny, sp, pw, ft, fw, fd, fp;
-    thermal->moser_copy_device_data(b, xl, yl, nx, ny, sp, pw, ft, fw, fd, fp);
+    thermal->moser_source()->copy_device_data(b, xl, yl, nx, ny, sp, pw, ft, fw, fd, fp);
     d_seg_bounds = upload_vec<double>("seg_bounds", b);
     d_seg_xl     = upload_vec<double>("seg_xl", xl);
     d_seg_yl     = upload_vec<double>("seg_yl", yl);
@@ -932,7 +933,7 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
   if (d_hdf5_cache_version != plan.version || d_hdf5_nsites != n) {
     std::vector<int> node_idx, valid;
     std::vector<double> weights;
-    thermal->hdf5_copy_cache(node_idx, weights, valid);
+    thermal->hdf5_source()->copy_device_cache(node_idx, weights, valid);
 
     d_hdf5_node_idx = Kokkos::View<int*[4]>("hdf5_node_idx", n);
     d_hdf5_weights  = Kokkos::View<AMReal*[3]>("hdf5_weights", n);
@@ -962,7 +963,8 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
   // is the lever for the host-bound GPU. FALLBACK (nodal_smooth ON): the host
   // precompute already filled the slice (the device doesn't reproduce the mesh
   // smoothing); upload it per step as before.
-  const bool dti = thermal->hdf5_device_time_interp_active();
+  const HDF5UnstructuredTemperatureSource *hdf5 = thermal->hdf5_source();
+  const bool dti = hdf5->device_time_interp_active();
   if ((int) d_hdf5_nodal_temps.extent(0) != nnodes)
     d_hdf5_nodal_temps = Kokkos::View<AMReal*>("hdf5_nodal_temps", nnodes);
 
@@ -973,9 +975,9 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
     // list is the only nodes the blend reads, so the device interpolates ONLY
     // those (~33k), matching the host precompute subset (not all n_nodes).
     if (d_ts_version != plan.version) {
-      const std::vector<double> &ts_t = thermal->hdf5_ts_times();
-      const std::vector<double> &ts_T = thermal->hdf5_ts_temps();
-      const std::vector<size_t> &ts_o = thermal->hdf5_ts_offsets();
+      const std::vector<double> &ts_t = hdf5->timeseries_times();
+      const std::vector<double> &ts_T = hdf5->timeseries_temps();
+      const std::vector<size_t> &ts_o = hdf5->timeseries_offsets();
       const size_t n_samp = ts_t.size();
       const int n_off = (int) ts_o.size();   // == n_nodes + 1
       if (n_samp > 0 && n_off > 1) {
@@ -985,7 +987,7 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
         d_ts_temps   = upload_vec<AMReal>("ts_temps", ts_T);
         d_ts_offsets = upload_vec<int>("ts_offsets", ts_o);
 
-        const std::vector<unsigned> &an = thermal->hdf5_active_nodes();
+        const std::vector<unsigned> &an = hdf5->timeseries_active_nodes();
         d_n_active_nodes = (int) an.size();
         d_active_nodes = upload_vec<int>("active_nodes", an);
 
@@ -1034,7 +1036,7 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
     }
   } else if (nnodes > 0) {
     // Fallback: the host precompute filled the slice; upload it per step.
-    const std::vector<double> &nt = thermal->hdf5_nodal_temps();
+    const std::vector<double> &nt = hdf5->nodal_temps();
     d_hdf5_nodal_temps = upload_vec<AMReal>("hdf5_nodal_temps", nt.data(), nnodes);
   }
 
@@ -2023,7 +2025,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       // fill_temperature_hdf5_device): tell the source to skip the host
       // precompute. Set once; must precede the first hdf5_device_plan() below.
       if (!device_time_interp_set) {
-        thermal->hdf5_set_device_time_interp(true);
+        thermal->hdf5_source()->set_device_time_interp(true);
         device_time_interp_set = true;
       }
       thermal->set_hdf5_device_filler([this](double t) -> double {

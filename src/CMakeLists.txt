@@ -602,7 +602,6 @@ endif()
 
 # Include helper modules
 include(cmake/MachineConfigs.cmake)
-include(cmake/PackageManager.cmake)
 
 # Apply machine configuration if specified.
 #
@@ -681,13 +680,29 @@ else()
     include_directories("${MPI_STUB_DIR}")
 endif()
 
+# STITCH package: libstitch (stitch.c + bundled sqlite3) is a plain static
+# library target; dump_stitch compiles from src/STITCH/. stitch.c includes mpi.h
+# under STITCH_PARALLEL, so it borrows the include path FindMPI found for C++
+# (the C component is deliberately not required -- see the MPI note above).
+if(SPPARKS_PACKAGE_STITCH)
+    set(_stitch_dir "${CMAKE_CURRENT_SOURCE_DIR}/../lib/stitch/src/stitch/libstitch")
+    add_library(stitch STATIC "${_stitch_dir}/stitch.c" "${_stitch_dir}/sqlite3.c")
+    target_include_directories(stitch PUBLIC "${_stitch_dir}")
+    target_compile_definitions(stitch PUBLIC STITCH_PARALLEL SPK_STITCH)
+    set_target_properties(stitch PROPERTIES C_STANDARD 99 C_EXTENSIONS ON
+                                            POSITION_INDEPENDENT_CODE ON)
+    find_package(Threads REQUIRED)
+    target_link_libraries(stitch PUBLIC ${CMAKE_DL_LIBS} Threads::Threads)
+    if(SPPARKS_ENABLE_MPI)
+        target_include_directories(stitch PRIVATE ${MPI_CXX_INCLUDE_DIRS})
+    endif()
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/STITCH)
+endif()
+
 # Include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 if(SPPARKS_PACKAGE_KOKKOS)
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/KOKKOS)
-endif()
-if(SPPARKS_PACKAGE_STITCH)
-    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/STITCH)
 endif()
 
 # Source files (base list - conditional sources added below)
@@ -841,11 +856,8 @@ if(SPPARKS_BUILD_LIB OR NOT SPPARKS_BUILD_EXECUTABLE)
         message(STATUS "Linked Kokkos::kokkoscore to spparks_lib")
     endif()
 
-    # Add STITCH package support
-    if(SPPARKS_PACKAGE_STITCH AND STITCH_LIBRARY)
-        target_link_libraries(spparks_lib PUBLIC ${STITCH_LIBRARY})
-        target_include_directories(spparks_lib PUBLIC ${STITCH_INCLUDE_DIR})
-        target_compile_definitions(spparks_lib PUBLIC STITCH_PARALLEL SPK_STITCH)
+    if(SPPARKS_PACKAGE_STITCH)
+        target_link_libraries(spparks_lib PUBLIC stitch)
     endif()
 
     # Add KOKKOS package support
@@ -948,11 +960,8 @@ if(SPPARKS_BUILD_EXECUTABLE)
             target_link_libraries(spparks Kokkos::kokkoscore)
         endif()
 
-        # Add STITCH package support
-        if(SPPARKS_PACKAGE_STITCH AND STITCH_LIBRARY)
-            target_link_libraries(spparks ${STITCH_LIBRARY})
-            target_include_directories(spparks PRIVATE ${STITCH_INCLUDE_DIR})
-            target_compile_definitions(spparks PRIVATE STITCH_PARALLEL SPK_STITCH)
+        if(SPPARKS_PACKAGE_STITCH)
+            target_link_libraries(spparks stitch)
         endif()
 
         # Add KOKKOS package support

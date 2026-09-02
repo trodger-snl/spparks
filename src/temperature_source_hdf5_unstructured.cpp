@@ -18,6 +18,7 @@
 #include "app.h"
 #include "highfive/highfive.hpp"
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <stdexcept>
 #include <cmath>
@@ -133,57 +134,12 @@ void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vect
       error->one(FLERR, "layerTimes array is empty");
     }
 
-    // Check for monotonically increasing values
-    bool is_monotonic = true;
-    size_t first_violation = 0;
-    for (size_t i = 1; i < layerTimes.size(); i++) {
-      if (layerTimes[i] <= layerTimes[i-1]) {
-        is_monotonic = false;
-        first_violation = i;
-        break;
-      }
-    }
-
-    if (is_monotonic) {
-      fprintf(screen, "LayerTimes validation: PASSED\n");
-    } else {
-      fprintf(screen, "WARNING: Monotonicity check FAILED at index %zu\n", first_violation);
-    }
-
-    // Check for negative values
-    size_t negative_count = 0;
-    for (size_t i = 0; i < layerTimes.size(); i++) {
-      if (layerTimes[i] < 0.0) {
-        negative_count++;
-      }
-    }
-
-    if (negative_count > 0) {
-      fprintf(screen, "WARNING: Found %zu negative values in layerTimes\n", negative_count);
-    }
-
-    // Check for duplicate consecutive values
-    size_t duplicate_count = 0;
-    for (size_t i = 1; i < layerTimes.size(); i++) {
-      if (layerTimes[i] == layerTimes[i-1]) {
-        duplicate_count++;
-      }
-    }
-
-    if (duplicate_count > 0) {
-      fprintf(screen, "WARNING: Found %zu duplicate consecutive values\n", duplicate_count);
-    }
-
-    // Check for zeros in middle of array
-    size_t internal_zeros = 0;
-    for (size_t i = 0; i < layerTimes.size(); i++) {
-      if (layerTimes[i] == 0.0) {
-        internal_zeros++;
-      }
-    }
-
-    if (internal_zeros > 0) {
-      fprintf(screen, "WARNING: Found %zu zero values in layerTimes\n", internal_zeros);
+    // Layer times must be strictly increasing (this also rejects negative,
+    // duplicate and interior-zero entries).
+    if (layerTimes.front() < 0.0 ||
+        std::adjacent_find(layerTimes.begin(), layerTimes.end(),
+                           std::greater_equal<double>()) != layerTimes.end()) {
+      error->one(FLERR, "layerTimes must be non-negative and strictly increasing");
     }
   }
 

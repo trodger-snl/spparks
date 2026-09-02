@@ -237,6 +237,8 @@ class ThermalManager : protected Pointers {
   // Fast-forward predictors (closest-point bound on local bounding box).
   double rosenthal_next_active_time(double current_time, double threshold_temp);
   double moser_next_active_time(double current_time, double threshold_temp);
+  // Physical (meters) bounding box of this rank's owned sites; false if none.
+  bool local_bbox(double lo[3], double hi[3]) const;
 
   // Gaussian smoothing of T[] inside the configured window, and the
   // isotherm-compactness diagnostic.

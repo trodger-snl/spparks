@@ -19,6 +19,7 @@
 #include "highfive/highfive.hpp"
 #include <algorithm>
 #include <functional>
+#include <numeric>
 #include <limits>
 #include <stdexcept>
 #include <cmath>
@@ -410,9 +411,7 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   read_time_temperature_data(*grp, nodeSlices);
 
   // Build element bounding boxes for spatial queries
-  elem_bboxes = build_elem_bounding_boxes(overlappingChunks.size(),
-                                         nodeOffsets, elemOffsets,
-                                         elemNode, nodeCoords);
+  elem_bboxes = build_elem_bounding_boxes();
 
   // Build spatial acceleration grid (optional, controlled by use_spatial_grid flag)
   // Larger cells = less memory but more elements per cell to search
@@ -547,10 +546,9 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
 
   // Build CSR offsets from dataCounts
   size_t nrows = dataCounts.size();
-  std::vector<size_t> offsets(nrows + 1);
-  offsets[0] = 0;
-  for (size_t i = 0; i < nrows; i++)
-    offsets[i + 1] = offsets[i] + dataCounts[i];
+  std::vector<size_t> offsets(nrows + 1, 0);
+  std::inclusive_scan(dataCounts.begin(), dataCounts.end(), offsets.begin() + 1,
+                      std::plus<size_t>(), size_t{0});
 
   size_t totalElements = offsets[nrows];
 
@@ -702,15 +700,13 @@ bool HDF5UnstructuredTemperatureSource::point_in_bbox(
 
 std::pair<std::array<unsigned, 4>, std::array<double, 3>>
 HDF5UnstructuredTemperatureSource::find_element_point_is_in(
-  const std::vector<unsigned>& selectedChunks,
-  const std::vector<std::array<double, 6>>& chunkBboxes,
-  const std::vector<unsigned>& nodeOffsets,
-  const std::vector<unsigned>& elemOffsets,
-  const Array2D<unsigned>& elemNode,
-  const Array2D<double>& nodeCoords,
-  const std::vector<std::array<double, 6>>& elemBboxes,
   const std::array<double, 3>& pt) const
 {
+  const auto& selectedChunks = selected_chunks;
+  const auto& chunkBboxes = chunk_bboxes;
+  const auto& nodeOffsets = node_offsets;
+  const auto& elemOffsets = elem_offsets;
+  const auto& elemBboxes = elem_bboxes;
   std::array<unsigned, 4> nodeIds;
   std::array<double, 3> parCoords;
 
@@ -819,13 +815,11 @@ HDF5UnstructuredTemperatureSource::find_element_point_is_in(
 
 /* ---------------------------------------------------------------------- */
 
-std::vector<std::array<double, 6>> HDF5UnstructuredTemperatureSource::build_elem_bounding_boxes(
-  unsigned nChunks,
-  const std::vector<unsigned>& nodeOffsets,
-  const std::vector<unsigned>& elemOffsets,
-  const Array2D<unsigned>& elemNode,
-  const Array2D<double>& nodeCoords) const
+std::vector<std::array<double, 6>> HDF5UnstructuredTemperatureSource::build_elem_bounding_boxes() const
 {
+  const unsigned nChunks = static_cast<unsigned>(selected_chunks.size());
+  const auto& nodeOffsets = node_offsets;
+  const auto& elemOffsets = elem_offsets;
   constexpr double maxVal = std::numeric_limits<double>::max();
   constexpr double minVal = std::numeric_limits<double>::lowest();
 
@@ -943,11 +937,9 @@ void HDF5UnstructuredTemperatureSource::build_spatial_grid(double target_cell_si
   }
 
   // Build prefix sum to get offsets
-  spatial_grid.cell_offsets.resize(total_cells + 1);
-  spatial_grid.cell_offsets[0] = 0;
-  for (size_t i = 0; i < total_cells; i++) {
-    spatial_grid.cell_offsets[i + 1] = spatial_grid.cell_offsets[i] + cell_counts[i];
-  }
+  spatial_grid.cell_offsets.assign(total_cells + 1, 0);
+  std::partial_sum(cell_counts.begin(), cell_counts.end(),
+                   spatial_grid.cell_offsets.begin() + 1);
 
   // Allocate flat element array
   size_t total_refs = spatial_grid.cell_offsets[total_cells];
@@ -1083,10 +1075,7 @@ void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
     std::array<double, 3> pt{x, y, z};
 
     // Find element containing this point
-    auto result = find_element_point_is_in(selected_chunks, chunk_bboxes,
-                                          node_offsets, elem_offsets,
-                                          elemNode, nodeCoords,
-                                          elem_bboxes, pt);
+    auto result = find_element_point_is_in(pt);
 
     // Store in cache
     site_element_cache[i].nodeIndices = result.first;
@@ -1177,7 +1166,6 @@ void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double tim
 
   const size_t num_nodes = dataCounts.size();
   cached_nodal_temps.resize(num_nodes);
-  constexpr unsigned LINEAR_SEARCH_THRESHOLD = 32;
 
   // Pick the tightest interpolation set that still satisfies downstream reads:
   //   • smoothing on + BFS sets built → (K+1)-hop expansion of active set
@@ -1211,18 +1199,9 @@ void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double tim
       continue;
     }
 
-    // Find time index - use linear search for small arrays, binary for large
-    unsigned idx;
-    if (count <= LINEAR_SEARCH_THRESHOLD) {
-      idx = 1;
-      while (idx < count && timeIter[idx] < time) {
-        ++idx;
-      }
-    } else {
-      auto lower = std::lower_bound(timeIter, timeIter + count, time);
-      idx = std::distance(timeIter, lower);
-      if (idx == 0) idx = 1;
-    }
+    // First sample at or after `time` (bracket [idx-1, idx]).
+    unsigned idx = std::distance(timeIter, std::lower_bound(timeIter, timeIter + count, time));
+    if (idx == 0) idx = 1;
 
     // Linear interpolation in time
     cached_nodal_temps[nodeIdx] = tempIter[idx-1] +

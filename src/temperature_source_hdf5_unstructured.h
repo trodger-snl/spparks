@@ -339,22 +339,12 @@ private:
   bool point_in_bbox(const std::array<double, 3>& pt,
                     const std::array<double, 6>& bbox) const;
 
+  // Locate the tet containing pt in the loaded layer (selected_chunks /
+  // node_offsets / elem_offsets / elemNode / nodeCoords / elem_bboxes).
   std::pair<std::array<unsigned, 4>, std::array<double, 3>>
-  find_element_point_is_in(const std::vector<unsigned>& selectedChunks,
-                          const std::vector<std::array<double, 6>>& chunkBboxes,
-                          const std::vector<unsigned>& nodeOffsets,
-                          const std::vector<unsigned>& elemOffsets,
-                          const Array2D<unsigned>& elemNode,
-                          const Array2D<double>& nodeCoords,
-                          const std::vector<std::array<double, 6>>& elemBboxes,
-                          const std::array<double, 3>& pt) const;
+  find_element_point_is_in(const std::array<double, 3>& pt) const;
 
-  std::vector<std::array<double, 6>> build_elem_bounding_boxes(
-    unsigned nChunks,
-    const std::vector<unsigned>& nodeOffsets,
-    const std::vector<unsigned>& elemOffsets,
-    const Array2D<unsigned>& elemNode,
-    const Array2D<double>& nodeCoords) const;
+  std::vector<std::array<double, 6>> build_elem_bounding_boxes() const;
 
   void build_spatial_grid(double target_cell_size);
 

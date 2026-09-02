@@ -176,6 +176,9 @@ class MoserTemperatureSource : public TemperatureSource {
 
   MoserMode get_mode() const { return mode; }
 
+  // Diagnostic print of one lobe's geometry and fluctuation spec.
+  void print_lobe_info(int idx) const;
+
   // ----- Device (Kokkos) evaluation support -----------------------------
   // Fill the scalar device plan (per-lobe ellipsoid / zl / fluct sizes,
   // material params, segment count). Supports STANDARD (1 lobe) and KEYHOLE
@@ -349,8 +352,6 @@ class MoserTemperatureSource : public TemperatureSource {
   // Idempotent; called from build_scan and append_pass.
   void rebuild_scan_from_pass_list_();
 
-  // Diagnostic print helper for a single lobe.
-  void print_lobe_info(int idx) const;
 };
 
 }

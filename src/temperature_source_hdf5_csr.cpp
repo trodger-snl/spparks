@@ -112,23 +112,14 @@ void HDF5CSRTemperatureSource::read_time_temperature_data(
   // 5. Build local row offsets from dataCounts (already loaded by
   //    load_layer before this method is called).
   // ------------------------------------------------------------------
-  size_t nrows = dataCounts.size();
-  std::vector<size_t> localOffsets(nrows + 1);
-  localOffsets[0] = 0;
-  for (size_t i = 0; i < nrows; i++) {
-    localOffsets[i + 1] = localOffsets[i] + dataCounts[i];
-  }
+  std::vector<size_t> localOffsets(dataCounts.size() + 1, 0);
+  std::inclusive_scan(dataCounts.begin(), dataCounts.end(), localOffsets.begin() + 1,
+                      std::plus<size_t>(), size_t{0});
 
   // ------------------------------------------------------------------
   // 6. Construct CompressedArray2D directly — zero expansion.
   // ------------------------------------------------------------------
+  std::vector<size_t> localOffsets2 = localOffsets;
   times = CompressedArray2D<double>(std::move(timesFlat), std::move(localOffsets));
-
-  // Rebuild localOffsets for temperatures (moved away above)
-  std::vector<size_t> localOffsets2(nrows + 1);
-  localOffsets2[0] = 0;
-  for (size_t i = 0; i < nrows; i++) {
-    localOffsets2[i + 1] = localOffsets2[i] + dataCounts[i];
-  }
   temperatures = CompressedArray2D<double>(std::move(tempsFlat), std::move(localOffsets2));
 }

@@ -394,27 +394,11 @@ void ThermalManager::laser_fluctuations_cmd(int narg, char **arg)
   }
 
   if (domain->me == 0) {
-    const char *sname = "white";
-    if      (spec.shape == MoserTemperatureSource::PsdShape::LORENTZIAN)  sname = "lorentzian";
-    else if (spec.shape == MoserTemperatureSource::PsdShape::PINK)        sname = "pink";
-    else if (spec.shape == MoserTemperatureSource::PsdShape::NARROW_BAND) sname = "narrow_band";
-    const char *wname = "single";
-    if      (which == Selector::TOP)  wname = "top";
-    else if (which == Selector::BOT)  wname = "bot";
-    else if (which == Selector::BOTH) wname = "both";
-    std::cout << "laser_fluctuations psd: lobe=" << wname
-              << " shape=" << sname
-              << " sigma_W=" << spec.sigma_W
-              << " sigma_D=" << spec.sigma_D
-              << " sigma_P=" << spec.sigma_P
-              << " rho="     << spec.rho
-              << " seed="    << spec.seed
-              << " dt="      << spec.dt_psd << " s";
-    if (spec.shape == MoserTemperatureSource::PsdShape::LORENTZIAN)
-      std::cout << " tau=" << spec.tau;
-    if (spec.shape == MoserTemperatureSource::PsdShape::NARROW_BAND)
-      std::cout << " f0=" << spec.f0 << " df=" << spec.df;
-    std::cout << std::endl;
+    std::cout << "laser_fluctuations psd:\n";
+    if (which != Selector::BOT) moser->print_lobe_info(MoserTemperatureSource::LOBE_TOP);
+    if (which == Selector::BOT || which == Selector::BOTH)
+      moser->print_lobe_info(MoserTemperatureSource::LOBE_BOT);
+    std::cout.flush();
   }
 }
 
@@ -1202,23 +1186,8 @@ double ThermalManager::rosenthal_next_active_time(double current_time, double th
   auto* ros = rosenthal_source();
   if (!ros) return std::numeric_limits<double>::max();
 
-  const int nlocal = host_->nlocal;
-  double **xyz = host_->xyz;
-  const double dx = host_->dx;
-
-  // Local domain bounding box in physical (meters) coordinates.
-  if (nlocal == 0) return std::numeric_limits<double>::max();
-  double xmin = xyz[0][0]*dx, xmax = xmin;
-  double ymin = xyz[0][1]*dx, ymax = ymin;
-  double zmin = xyz[0][2]*dx, zmax = zmin;
-  for (int i = 1; i < nlocal; ++i) {
-    const double sx = xyz[i][0]*dx;
-    const double sy = xyz[i][1]*dx;
-    const double sz = xyz[i][2]*dx;
-    if (sx < xmin) xmin = sx; else if (sx > xmax) xmax = sx;
-    if (sy < ymin) ymin = sy; else if (sy > ymax) ymax = sy;
-    if (sz < zmin) zmin = sz; else if (sz > zmax) zmax = sz;
-  }
+  double lo[3], hi[3];
+  if (!local_bbox(lo, hi)) return std::numeric_limits<double>::max();
 
   const double T0 = ros->get_ambient_temperature();
   // Cheap early-out: if even the unmodulated peak at r_min can't reach the
@@ -1242,15 +1211,9 @@ double ThermalManager::rosenthal_next_active_time(double current_time, double th
   while (t < t_stop) {
     // Closest point on the local box to the current laser position.
     const RASTER::Point laser = probe.get_position();
-    const double lx = laser[0];
-    const double ly = laser[1];
-    const double lz = scan_layer_z;
-    const double cx = (lx < xmin) ? xmin : (lx > xmax ? xmax : lx);
-    const double cy = (ly < ymin) ? ymin : (ly > ymax ? ymax : ly);
-    const double cz = (lz < zmin) ? zmin : (lz > zmax ? zmax : lz);
-    const double dxr = cx - lx;
-    const double dyr = cy - ly;
-    const double dzr = cz - lz;
+    const double dxr = std::clamp(laser[0], lo[0], hi[0]) - laser[0];
+    const double dyr = std::clamp(laser[1], lo[1], hi[1]) - laser[1];
+    const double dzr = std::clamp(scan_layer_z, lo[2], hi[2]) - scan_layer_z;
     const double R_min_box = std::sqrt(dxr*dxr + dyr*dyr + dzr*dzr);
 
     const double T_upper = ros->rosenthal_peak_at_distance(R_min_box, T0);
@@ -1276,23 +1239,8 @@ double ThermalManager::moser_next_active_time(double current_time, double thresh
   auto* moser = moser_source();
   if (!moser || !moser->has_scan()) return std::numeric_limits<double>::max();
 
-  const int nlocal = host_->nlocal;
-  double **xyz = host_->xyz;
-  const double dx = host_->dx;
-  if (nlocal == 0) return std::numeric_limits<double>::max();
-
-  // Local domain bounding box in physical (meters) coordinates.
-  double xmin = xyz[0][0]*dx, xmax = xmin;
-  double ymin = xyz[0][1]*dx, ymax = ymin;
-  double zmin = xyz[0][2]*dx, zmax = zmin;
-  for (int i = 1; i < nlocal; ++i) {
-    const double sx = xyz[i][0]*dx;
-    const double sy = xyz[i][1]*dx;
-    const double sz = xyz[i][2]*dx;
-    if (sx < xmin) xmin = sx; else if (sx > xmax) xmax = sx;
-    if (sy < ymin) ymin = sy; else if (sy > ymax) ymax = sy;
-    if (sz < zmin) zmin = sz; else if (sz > zmax) zmax = sz;
-  }
+  double lo[3], hi[3];
+  if (!local_bbox(lo, hi)) return std::numeric_limits<double>::max();
 
   const double t_origin    = moser->get_scan_t_origin();
   const double pass_dur    = moser->get_scan_pass_duration();
@@ -1315,19 +1263,32 @@ double ThermalManager::moser_next_active_time(double current_time, double thresh
     while (t <= t_r_end) {
       // Lerp laser (x,y) along this pass.
       const double s = (t - t_r_start) / pass_dur;
-      const double lx = x0 + s * (x1 - x0);
-      const double ly = y0 + s * (y1 - y0);
-      const double lz = laser_z;
       // Closest point on local box to laser.
-      const double cx = (lx < xmin) ? xmin : (lx > xmax ? xmax : lx);
-      const double cy = (ly < ymin) ? ymin : (ly > ymax ? ymax : ly);
-      const double cz = (lz < zmin) ? zmin : (lz > zmax ? zmax : lz);
+      const double cx = std::clamp(x0 + s * (x1 - x0), lo[0], hi[0]);
+      const double cy = std::clamp(y0 + s * (y1 - y0), lo[1], hi[1]);
+      const double cz = std::clamp(laser_z, lo[2], hi[2]);
       const double T_probe = moser->get_temperature_at_xyz_and_time(cx, cy, cz, t);
       if (T_probe >= threshold_temp) return t;
       t += ddt;
     }
   }
   return std::numeric_limits<double>::max();
+}
+
+bool ThermalManager::local_bbox(double lo[3], double hi[3]) const
+{
+  const int nlocal = host_->nlocal;
+  if (nlocal == 0) return false;
+  double **xyz = host_->xyz;
+  const double dx = host_->dx;
+  for (int d = 0; d < 3; ++d) lo[d] = hi[d] = xyz[0][d] * dx;
+  for (int i = 1; i < nlocal; ++i)
+    for (int d = 0; d < 3; ++d) {
+      const double v = xyz[i][d] * dx;
+      lo[d] = std::min(lo[d], v);
+      hi[d] = std::max(hi[d], v);
+    }
+  return true;
 }
 
 /* ----------------------------------------------------------------------

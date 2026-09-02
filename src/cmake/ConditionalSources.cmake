@@ -42,8 +42,6 @@ function(configure_conditional_sources)
     # Add KOKKOS package sources
     if(SPPARKS_PACKAGE_KOKKOS)
         list(APPEND SPPARKS_SOURCES
-            memory_kokkos.cpp
-            app_kokkos.cpp
             app_lattice_kokkos.cpp
             app_potts_kokkos.cpp
             app_potts_neigh_kokkos.cpp

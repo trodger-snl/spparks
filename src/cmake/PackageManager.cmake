@@ -506,10 +506,8 @@ function(install_kokkos_package)
 
     # Step 3: Add KOKKOS sources to build
     list(APPEND SPPARKS_SOURCES
-        app_kokkos.cpp
         app_lattice_kokkos.cpp
         app_potts_kokkos.cpp
-        memory_kokkos.cpp
     )
     set(SPPARKS_SOURCES "${SPPARKS_SOURCES}" PARENT_SCOPE)
 
@@ -524,8 +522,6 @@ endfunction()
 function(uninstall_kokkos_package)
     # Remove KOKKOS files from source directory
     set(KOKKOS_FILES
-        app_kokkos.cpp
-        app_kokkos.h
         app_lattice_kokkos.cpp
         app_lattice_kokkos.h
         app_potts_kokkos.cpp
@@ -534,8 +530,6 @@ function(uninstall_kokkos_package)
         app_potts_neigh_kokkos.h
         app_potts_neighonly_kokkos.cpp
         app_potts_neighonly_kokkos.h
-        memory_kokkos.cpp
-        memory_kokkos.h
     )
 
     foreach(FILE ${KOKKOS_FILES})

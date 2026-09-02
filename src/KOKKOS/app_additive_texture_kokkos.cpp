@@ -23,7 +23,6 @@
 ------------------------------------------------------------------------- */
 
 #include "app_additive_texture_kokkos.h"
-#include "app_kokkos.h"
 #include "comm_lattice.h"
 #include "domain.h"
 #include "error.h"

@@ -22,27 +22,8 @@
 #include <stdexcept>
 #include <cmath>
 #include <set>
-#include <fstream>
-#include <sstream>
 
 using namespace SPPARKS_NS;
-
-// Helper function to get current memory usage (Linux only)
-static size_t get_memory_usage_kb() {
-#ifdef __linux__
-  std::ifstream status("/proc/self/status");
-  std::string line;
-  while (std::getline(status, line)) {
-    if (line.compare(0, 6, "VmRSS:") == 0) {
-      std::istringstream iss(line.substr(6));
-      size_t kb;
-      iss >> kb;
-      return kb;
-    }
-  }
-#endif
-  return 0;
-}
 
 /* ---------------------------------------------------------------------- */
 
@@ -338,12 +319,10 @@ void HDF5UnstructuredTemperatureSource::print_source_info() const
 void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
 {
   auto load_start = std::chrono::high_resolution_clock::now();
-  size_t mem_start = get_memory_usage_kb();
 
   if (universe->me == 0) {
     fprintf(screen, "Loading layer %u at time %.6e s\n", layerIdx,
             (layerIdx < layerTimes.size()) ? layerTimes[layerIdx] : -1.0);
-    fprintf(screen, "  [MEM] Start: %zu MB (rank 0)\n", mem_start / 1024);
   }
 
   // Try to open the layer group with error handling
@@ -536,62 +515,29 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
     build_hyperslab(elemSlices, {0, NODES_PER_ELEM})).read(elemNodeData);
   elemNode = Array2D<unsigned>(NODES_PER_ELEM, std::move(elemNodeData));
 
-  if (universe->me == 0) {
-    fprintf(screen, "  [MEM] After elemNode (%u elems): %zu MB\n",
-            elemOffsets.back(), get_memory_usage_kb() / 1024);
-  }
-
   // Read node coordinates
   std::vector<double> nodeCoordsData;
   grp->getDataSet("nodeCoords").select(
     build_hyperslab(nodeSlices, {0, DIM})).read(nodeCoordsData);
   nodeCoords = Array2D<double>(DIM, std::move(nodeCoordsData));
 
-  if (universe->me == 0) {
-    fprintf(screen, "  [MEM] After nodeCoords (%u nodes): %zu MB\n",
-            nodeOffsets.back(), get_memory_usage_kb() / 1024);
-  }
-
   // Read data counts
   grp->getDataSet("dataCounts").select(
     build_hyperslab_1d(nodeSlices)).read(dataCounts);
 
-  if (universe->me == 0) {
-    fprintf(screen, "  [MEM] After dataCounts: %zu MB\n", get_memory_usage_kb() / 1024);
-  }
-
   // Read time and temperature data (virtual — overridden by CSR subclass)
   read_time_temperature_data(*grp, nodeSlices);
-
-  if (universe->me == 0) {
-    size_t times_mem = times.total_elements() * sizeof(double) / 1024 / 1024;
-    size_t temps_mem = temperatures.total_elements() * sizeof(double) / 1024 / 1024;
-    fprintf(screen, "  [MEM] After CSR data (times: %zu MB, temps: %zu MB): %zu MB total\n",
-            times_mem, temps_mem, get_memory_usage_kb() / 1024);
-  }
 
   // Build element bounding boxes for spatial queries
   elem_bboxes = build_elem_bounding_boxes(overlappingChunks.size(),
                                          nodeOffsets, elemOffsets,
                                          elemNode, nodeCoords);
 
-  if (universe->me == 0) {
-    size_t bbox_mem = elem_bboxes.size() * sizeof(std::array<double, 6>) / 1024 / 1024;
-    fprintf(screen, "  [MEM] After elem_bboxes (%zu elems, %zu MB array): %zu MB total\n",
-            elem_bboxes.size(), bbox_mem, get_memory_usage_kb() / 1024);
-  }
-
   // Build spatial acceleration grid (optional, controlled by use_spatial_grid flag)
   // Larger cells = less memory but more elements per cell to search
   // Default 50x lattice spacing (~250 microns), user-configurable via grid_cell_mult parameter
   if (use_spatial_grid) {
     build_spatial_grid(dx * grid_cell_size_multiplier);
-
-    if (universe->me == 0) {
-      size_t grid_cells = spatial_grid.dims[0] * spatial_grid.dims[1] * spatial_grid.dims[2];
-      fprintf(screen, "  [MEM] After spatial_grid (%zu cells): %zu MB total\n",
-              grid_cells, get_memory_usage_kb() / 1024);
-    }
   } else {
     spatial_grid.valid = false;
     if (universe->me == 0) {
@@ -619,9 +565,6 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   layer_load_count++;
 
   if (universe->me == 0) {
-    size_t mem_end = get_memory_usage_kb();
-    fprintf(screen, "  [MEM] Final: %zu MB (delta: %+zd MB)\n",
-            mem_end / 1024, (long)(mem_end - mem_start) / 1024);
     fprintf(screen, "  Layer load time: %.3f s (avg: %.3f s over %d loads)\n",
             load_time, total_layer_load_time / layer_load_count, layer_load_count);
   }
@@ -710,8 +653,6 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
   // datasets, stripping padding on the fly into pre-allocated CSR arrays.
   // Peak temporary buffer = max_chunk_rows × readCols × 8 bytes.
 
-  auto t_start = std::chrono::high_resolution_clock::now();
-
   // Determine how many columns to read per row
   auto timesDset = grp.getDataSet("times");
   auto timesDims = timesDset.getDimensions();
@@ -735,14 +676,6 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
   // Pre-allocate flat output arrays to exact CSR size
   std::vector<double> timesFlat(totalElements);
   std::vector<double> tempsFlat(totalElements);
-
-  if (universe->me == 0) {
-    size_t rectMB = nrows * static_cast<size_t>(readCols) * sizeof(double) / (1024 * 1024);
-    fprintf(screen, "  Streaming 2D read: %zu nodes, %u readCols, %zu total elements\n",
-            nrows, readCols, totalElements);
-    fprintf(screen, "  [MEM] Rectangular would need: %zu MB per dataset (%zu MB total)\n",
-            rectMB, rectMB * 2);
-  }
 
   // Reusable chunk buffer — grows to largest chunk, then stays put
   std::vector<double> buf;
@@ -779,13 +712,6 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
                   tempsFlat.data() + offsets[dcPos + r]);
     }
 
-    if (universe->me == 0) {
-      fprintf(screen, "    Chunk %zu/%zu: %zu rows, buf %.1f MB, [MEM] %zu MB\n",
-              s + 1, nodeSlices.size(), chunkRows,
-              chunkRows * static_cast<size_t>(readCols) * sizeof(double) / (1024.0 * 1024.0),
-              get_memory_usage_kb() / 1024);
-    }
-
     dcPos += chunkRows;
   }
 
@@ -793,14 +719,6 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
   auto offsets2 = offsets;  // copy before first move
   times = CompressedArray2D<double>(std::move(timesFlat), std::move(offsets));
   temperatures = CompressedArray2D<double>(std::move(tempsFlat), std::move(offsets2));
-
-  auto t_end = std::chrono::high_resolution_clock::now();
-  double elapsed = std::chrono::duration<double>(t_end - t_start).count();
-
-  if (universe->me == 0) {
-    fprintf(screen, "  [TIMING] Streaming 2D read: %.3f s (%zu elements)\n",
-            elapsed, totalElements);
-  }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1272,7 +1190,6 @@ double HDF5UnstructuredTemperatureSource::get_temperature_at_site(int site_index
 void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
 {
   auto start_time = std::chrono::high_resolution_clock::now();
-  size_t mem_before = get_memory_usage_kb();
 
   // Build the cache over OWNED + GHOST sites (nall), not just owned. The chunk
   // load already pads the subdomain by grid_cell_size_multiplier cells (>> the
@@ -1286,12 +1203,6 @@ void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
   // entries are used only by the device fill.
   int nlocal = app->nlocal;
   int nall = nlocal + app->nghost;
-
-  if (universe->me == 0) {
-    size_t cache_size_mb = (size_t)nall * sizeof(ElementCache) / 1024 / 1024;
-    fprintf(screen, "  [MEM] Building site cache for %d sites (%d owned + %d ghost, %zu MB), current: %zu MB\n",
-            nall, nlocal, app->nghost, cache_size_mb, mem_before / 1024);
-  }
 
   // Resize cache to match owned+ghost site count
   site_element_cache.resize(nall);
@@ -1363,13 +1274,10 @@ void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
   double cache_build_time = std::chrono::duration<double>(end_time - start_time).count();
 
   if (universe->me == 0) {
-    size_t mem_after = get_memory_usage_kb();
     fprintf(screen, "  Built element cache for %d sites (incl ghosts) in %.3f s\n", nall, cache_build_time);
     fprintf(screen, "  Active nodes: %zu / %zu (%.1f%% of loaded nodes)\n",
             active_node_indices.size(), dataCounts.size(),
             100.0 * active_node_indices.size() / dataCounts.size());
-    fprintf(screen, "  [MEM] After site cache: %zu MB (delta: %+zd MB)\n",
-            mem_after / 1024, (long)(mem_after - mem_before) / 1024);
   }
 }
 
@@ -1420,18 +1328,9 @@ void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double tim
     return;
   }
 
-  // Performance diagnostics
-  static int precompute_call_count = 0;
-  static double t_total = 0.0;
-  static size_t total_nodes_processed = 0, total_nodes_interpolated = 0;
-  precompute_call_count++;
-  auto t_start = std::chrono::high_resolution_clock::now();
-
   const size_t num_nodes = dataCounts.size();
   cached_nodal_temps.resize(num_nodes);
   constexpr unsigned LINEAR_SEARCH_THRESHOLD = 32;
-
-  size_t nodes_interpolated = 0;
 
   // Pick the tightest interpolation set that still satisfies downstream reads:
   //   • smoothing on + BFS sets built → (K+1)-hop expansion of active set
@@ -1448,12 +1347,11 @@ void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double tim
   // Each node's time-interpolation is independent: it reads the shared
   // (immutable-per-layer) times/temps CSR and writes its own distinct
   // cached_nodal_temps[nodeIdx] slot, so this loop parallelizes with no
-  // reduction except the informational nodes_interpolated counter -> the result
-  // is bit-identical to serial. This runs every step (~33k nodes here) and was
+  // reduction -> the result is bit-identical to serial. This runs every step (~33k nodes here) and was
   // the dominant host cost in the per-step "Temperature update" timer. Same
   // proven pattern as build_site_element_cache / compute_site_thermal_intervals.
   // (Pragma is a no-op when built without OpenMP.)
-  #pragma omp parallel for schedule(static) reduction(+:nodes_interpolated)
+  #pragma omp parallel for schedule(static)
   for (size_t i = 0; i < num_to_process; i++) {
     const size_t nodeIdx = subset ? (*subset)[i] : i;
     const unsigned count = dataCounts[nodeIdx];
@@ -1465,8 +1363,6 @@ void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double tim
       cached_nodal_temps[nodeIdx] = default_temp;
       continue;
     }
-
-    nodes_interpolated++;
 
     // Find time index - use linear search for small arrays, binary for large
     unsigned idx;
@@ -1486,22 +1382,6 @@ void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double tim
                                   (tempIter[idx] - tempIter[idx-1]) /
                                   (timeIter[idx] - timeIter[idx-1]) *
                                   (time - timeIter[idx-1]);
-  }
-
-  auto t_end = std::chrono::high_resolution_clock::now();
-  double elapsed = std::chrono::duration<double>(t_end - t_start).count();
-  t_total += elapsed;
-  total_nodes_processed += num_to_process;
-  total_nodes_interpolated += nodes_interpolated;
-
-  // Print diagnostics every 100 calls
-  if (precompute_call_count % 100 == 0 && universe->me == 0) {
-    fprintf(screen, "  [PRECOMPUTE] After %d calls: total=%.3f s (%.3f ms/call), "
-            "active: %zu/%zu nodes (%.1f%%), interpolated: %zu (%.1f%%)\n",
-            precompute_call_count, t_total, 1000.0*t_total/precompute_call_count,
-            num_to_process, num_nodes, 100.0*num_to_process/num_nodes,
-            total_nodes_interpolated/precompute_call_count,
-            100.0*total_nodes_interpolated/total_nodes_processed);
   }
 
   // Apply mesh-Laplacian smoothing on the FEA node graph before any

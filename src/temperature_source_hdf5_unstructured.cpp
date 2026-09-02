@@ -202,72 +202,13 @@ void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vect
 /* ---------------------------------------------------------------------- */
 
 double HDF5UnstructuredTemperatureSource::get_temperature_at_xyz_and_time(
-  double x, double y, double z, double time)
+  double, double, double, double)
 {
-  if (!source_initialized) {
-    error->all(FLERR, "Temperature source not initialized");
-  }
-  
-  // Check if we need to load new layer data
-  constexpr double tol = 5.0 * std::numeric_limits<double>::epsilon();
-  if (std::fabs(time - current_time) / (std::fabs(time) + tol) > tol) {
-    auto currentLayer = get_active_layer(time);
-    if (currentLayer != active_layer) {
-      load_layer(currentLayer);
-      active_layer = currentLayer;
-    }
-    current_time = time;
-  }
-  
-  // Check if we have valid data loaded
-  if (selected_chunks.empty() || elem_bboxes.empty()) {
-    return default_temp;
-  }
-  
-  // Find the element containing this point and get interpolation weights
-  std::array<double, 3> pt{x, y, z};
-  auto result = find_element_point_is_in(selected_chunks, chunk_bboxes, 
-                                        node_offsets, elem_offsets, 
-                                        elemNode, nodeCoords, 
-                                        elem_bboxes, pt);
-  
-  const auto& nodeIndices = result.first;
-  const auto& weights = result.second;
-  
-  // Check if point was found in any element
-  if (nodeIndices[0] == std::numeric_limits<unsigned>::max()) {
-    return default_temp;
-  }
-  
-  // Get temperatures at the four tetrahedral nodes
-  std::array<double, NODES_PER_ELEM> nodalVals;
-  for (unsigned n = 0; n < NODES_PER_ELEM; n++) {
-    const unsigned nodeIdx = nodeIndices[n];
-    
-    const auto timeIter = times.row_iterator(nodeIdx);
-    const auto tempIter = temperatures.row_iterator(nodeIdx);
-    
-    // Check time bounds
-    if (time < *timeIter || time > timeIter[dataCounts[nodeIdx] - 1]) {
-      return default_temp;
-    }
-    
-    // Linear interpolation in time
-    auto lower = std::lower_bound(timeIter, timeIter + dataCounts[nodeIdx], time);
-    auto idx = std::distance(timeIter, lower);
-    idx = (idx == 0) ? 1 : idx;
-    
-    nodalVals[n] = tempIter[idx-1] + 
-                   (tempIter[idx] - tempIter[idx-1]) / 
-                   (timeIter[idx] - timeIter[idx-1]) * 
-                   (time - timeIter[idx-1]);
-  }
-  
-  // Tetrahedral interpolation using barycentric coordinates
-  return nodalVals[0] + 
-         weights[0] * (nodalVals[1] - nodalVals[0]) + 
-         weights[1] * (nodalVals[2] - nodalVals[0]) + 
-         weights[2] * (nodalVals[3] - nodalVals[0]);
+  // Every live path goes through the per-site element cache
+  // (prepare_for_timestep + get_temperature_at_site_fast).
+  error->all(FLERR, "HDF5 temperature source: point queries are not supported; "
+                    "use the site element cache (temperature_optimization element_cache on)");
+  return default_temp;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1110,29 +1051,6 @@ void HDF5UnstructuredTemperatureSource::build_spatial_grid(double target_cell_si
 
 /* ---------------------------------------------------------------------- */
 
-bool HDF5UnstructuredTemperatureSource::all_temperatures_below_threshold(double time)
-{
-  if (!app) {
-    error->all(FLERR, "App not available for temperature checking");
-  }
-  
-  // Check temperatures at all local sites
-  for (int i = 0; i < app->nlocal; i++) {
-    // Get site coordinates in physical units
-    double x = app->xyz[i][0] * dx;
-    double y = app->xyz[i][1] * dx; 
-    double z = app->xyz[i][2] * dx;
-    double temp = get_temperature_at_xyz_and_time(x, y, z, time);
-    if (temp >= threshold_temp) {
-      return false;
-    }
-  }
-  
-  return true;
-}
-
-/* ---------------------------------------------------------------------- */
-
 void HDF5UnstructuredTemperatureSource::prepare_for_timestep(double time)
 {
   if (!source_initialized) {
@@ -1305,17 +1223,6 @@ void HDF5UnstructuredTemperatureSource::copy_device_cache(
     for (int j = 0; j < 4; j++) node_idx[4 * i + j] = (int) c.nodeIndices[j];
     for (int j = 0; j < 3; j++) weights[3 * i + j] = c.weights[j];
   }
-}
-
-/* ---------------------------------------------------------------------- */
-
-const HDF5UnstructuredTemperatureSource::ElementCache&
-HDF5UnstructuredTemperatureSource::get_cached_element(int site_index) const
-{
-  if (site_index < 0 || site_index >= static_cast<int>(site_element_cache.size())) {
-    error->all(FLERR, "Invalid site index in get_cached_element");
-  }
-  return site_element_cache[site_index];
 }
 
 /* ---------------------------------------------------------------------- */

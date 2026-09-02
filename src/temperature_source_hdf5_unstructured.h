@@ -142,8 +142,6 @@ public:
   static constexpr unsigned NODES_PER_ELEM = 4;  // Tetrahedral elements
   static constexpr unsigned DIM = 3;             // 3D space
 
-  // Fast-forward capability methods
-  bool all_temperatures_below_threshold(double time);
   double get_fast_forward_threshold() const { return threshold_temp; }
   double get_dx() const { return dx; }
 
@@ -419,9 +417,6 @@ private:
 
   // Build element cache for all sites
   void build_site_element_cache() const;
-
-  // Get cached element for a site
-  const ElementCache& get_cached_element(int site_index) const;
 
   // Nodal temperature cache - precomputed temps at all loaded nodes for current time
   // Eliminates redundant time interpolation (36x reduction in time searches)

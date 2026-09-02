@@ -222,8 +222,6 @@ if(SPPARKS_UNORDERED_MAP)
     add_compile_definitions(SPPARKS_UNORDERED_MAP)
 endif()
 
-# Move MPI configuration after machine config application
-
 if(SPPARKS_ENABLE_JPEG)
     # First try standard CMake FindJPEG
     find_package(JPEG QUIET)
@@ -600,37 +598,6 @@ if(SPPARKS_PACKAGE_KOKKOS)
     message(STATUS "Kokkos configured successfully")
 endif()
 
-# Include helper modules
-include(cmake/MachineConfigs.cmake)
-
-# Apply machine configuration if specified.
-#
-# setup_machine_presets() declares SPPARKS_MACHINE and applies it when set, so the
-# apply_machine_config() call below runs only for a machine chosen by
-# auto_detect_machine(). Calling it unconditionally duplicated every message the
-# config emits, which is pure noise in a build log someone is trying to read.
-setup_machine_presets()
-setup_hpc_configs()  # Enable HPC system configurations
-
-if(NOT SPPARKS_MACHINE)
-    auto_detect_machine()
-    if(SPPARKS_MACHINE)
-        apply_machine_config("${SPPARKS_MACHINE}")
-    endif()
-endif()
-
-# NOTE: the comment this replaces claimed "command line options override machine
-# config ... automatically since CMake cache variables take precedence". That is
-# backwards. apply_machine_config() sets normal variables, which SHADOW the cache
-# for the rest of the configure, so the machine config wins and CMakeCache.txt is
-# left disagreeing with the build. _spk_machine_set_mpi() now warns when that
-# happens; see cmake/MachineConfigs.cmake.
-
-# Configure MPI after machine configuration
-# Note: This ordering is intentional - machine configs can set SPPARKS_ENABLE_MPI,
-# but the actual find_package(MPI) happens here to use the updated settings.
-# This allows machine presets to control MPI enablement while keeping the
-# MPI detection logic centralized.
 if(SPPARKS_ENABLE_MPI)
     # COMPONENTS CXX, not a bare find_package(MPI REQUIRED).
     #

@@ -60,27 +60,15 @@ function(configure_conditional_sources)
     # Update the parent scope
     set(SPPARKS_SOURCES "${SPPARKS_SOURCES}" PARENT_SCOPE)
     
-    # Create a feature status file for style generation
-    set(FEATURE_STATUS_FILE "${CMAKE_CURRENT_BINARY_DIR}/feature_status.cmake")
-
-    # Determine if STITCH library was found
-    if(STITCH_LIBRARY)
-        set(STITCH_LIBRARY_FOUND TRUE)
-    else()
-        set(STITCH_LIBRARY_FOUND FALSE)
-    endif()
-
-    file(WRITE "${FEATURE_STATUS_FILE}"
-        "# Auto-generated feature status for style generation\n"
-        "set(SPPARKS_HAS_HDF5 ${SPPARKS_ENABLE_HDF5})\n"
-        "set(SPPARKS_HAS_HIGHFIVE ${SPPARKS_ENABLE_HIGHFIVE})\n"
-        "set(SPPARKS_HAS_MPI ${SPPARKS_ENABLE_MPI})\n"
-        "set(SPPARKS_HAS_JPEG ${JPEG_FOUND})\n"
-        "set(SPPARKS_HAS_PNG ${PNG_FOUND})\n"
-        "set(SPPARKS_HAS_HDF5_FOUND ${HDF5_FOUND})\n"
-        "set(SPPARKS_HAS_STITCH ${SPPARKS_PACKAGE_STITCH})\n"
-        "set(SPPARKS_HAS_STITCH_FOUND ${STITCH_LIBRARY_FOUND})\n"
-    )
+    # Feature flags for cmake -P regeneration of the style headers (see
+    # generate_styles.cmake); at configure time should_include_header() reads
+    # the same variables straight from this scope.
+    set(_status "# Auto-generated feature status for style generation\n")
+    foreach(_v SPPARKS_ENABLE_HIGHFIVE SPPARKS_ENABLE_MPI JPEG_FOUND PNG_FOUND
+                SPPARKS_PACKAGE_STITCH STITCH_LIBRARY SPPARKS_PACKAGE_KOKKOS)
+        string(APPEND _status "set(${_v} \"${${_v}}\")\n")
+    endforeach()
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/feature_status.cmake" "${_status}")
 
     # Collect optional styles that were NOT built because their feature is off, so the
     # configuration summary can tell the user exactly how to enable each one. This must
@@ -98,67 +86,28 @@ function(configure_conditional_sources)
     set(SPPARKS_SKIPPED_STYLES "${_skipped_styles}" PARENT_SCOPE)
 endfunction()
 
-# Function to check if a header should be included based on features.
+# should_include_header(<header> <result_var> <reason_var>)
 #
-# should_include_header(<header> <result_var> [<reason_var>])
-#
-# The optional third argument receives a human-readable reason when the header is
-# skipped. Callers print it, so that a build log copied off a remote machine says
-# WHICH feature was missing -- a bare "missing dependencies" leaves the reader
-# unable to tell a misconfigured build from a broken one, and the symptom shows up
-# much later as "style not recognized" at runtime.
-function(should_include_header HEADER_NAME RESULT_VAR)
-    set(INCLUDE_IT TRUE)
-    set(SKIP_REASON "")
-
-    # Load feature status. When invoked from a cmake -P script (e.g.
-    # regenerate_single_style.cmake), CMAKE_CURRENT_BINARY_DIR points at the working
-    # directory rather than the real build dir, so prefer SPK_BINARY_DIR when the caller
-    # provides it.
-    if(DEFINED SPK_BINARY_DIR)
-        set(FEATURE_STATUS_FILE "${SPK_BINARY_DIR}/feature_status.cmake")
-    else()
-        set(FEATURE_STATUS_FILE "${CMAKE_CURRENT_BINARY_DIR}/feature_status.cmake")
+# Feature gating for style registration. The reason is printed by the caller so
+# a build log copied off a remote machine says WHICH feature was missing; the
+# symptom otherwise shows up much later as "style not recognized" at runtime.
+# Must stay in sync with the source gating in configure_conditional_sources().
+function(should_include_header HEADER_NAME RESULT_VAR REASON_VAR)
+    set(ok TRUE)
+    set(why "")
+    if(HEADER_NAME MATCHES "dump_image\\.h|image\\.h" AND NOT (JPEG_FOUND OR PNG_FOUND))
+        set(ok FALSE)
+        set(why "needs JPEG or PNG -- -DSPPARKS_ENABLE_JPEG=ON plus libjpeg headers")
+    elseif(HEADER_NAME MATCHES "app_additive_texture(_kokkos)?\\.h"
+           AND NOT (SPPARKS_ENABLE_HIGHFIVE AND SPPARKS_ENABLE_MPI))
+        set(ok FALSE)
+        set(why "needs HighFive AND MPI; found HighFive=${SPPARKS_ENABLE_HIGHFIVE} "
+                "MPI=${SPPARKS_ENABLE_MPI} -- -DSPPARKS_ENABLE_HIGHFIVE=ON -DSPPARKS_ENABLE_MPI=ON")
+    elseif(HEADER_NAME MATCHES "dump_stitch\\.h" AND NOT (SPPARKS_PACKAGE_STITCH AND STITCH_LIBRARY))
+        set(ok FALSE)
+        set(why "needs the STITCH package and its library -- -DSPPARKS_PACKAGE_STITCH=ON")
     endif()
-    if(EXISTS "${FEATURE_STATUS_FILE}")
-        include("${FEATURE_STATUS_FILE}")
-    endif()
-    
-    # Check image-related headers
-    if(HEADER_NAME MATCHES "dump_image\\.h|image\\.h")
-        if(NOT (SPPARKS_HAS_JPEG OR SPPARKS_HAS_PNG))
-            set(INCLUDE_IT FALSE)
-            set(SKIP_REASON "needs JPEG or PNG; found JPEG=${SPPARKS_HAS_JPEG} PNG=${SPPARKS_HAS_PNG} "
-                            "-- enable with -DSPPARKS_ENABLE_JPEG=ON and install libjpeg headers")
-        endif()
-    endif()
-    
-    # Check HighFive-related headers. additive/texture links against the HighFive-based
-    # HDF5 temperature sources and uses parallel (MPIO) reads, so it is only registered
-    # when both HighFive and MPI are enabled -- matching the source gating in
-    # configure_conditional_sources() above. (HighFive implies HDF5.)
-    if(HEADER_NAME MATCHES "app_additive_texture(_kokkos)?\\.h")
-        if(NOT (SPPARKS_HAS_HIGHFIVE AND SPPARKS_HAS_MPI))
-            set(INCLUDE_IT FALSE)
-            set(SKIP_REASON "needs HighFive AND MPI; found HighFive=${SPPARKS_HAS_HIGHFIVE} "
-                            "MPI=${SPPARKS_HAS_MPI} HDF5=${SPPARKS_HAS_HDF5_FOUND} "
-                            "-- enable with -DSPPARKS_ENABLE_HIGHFIVE=ON -DSPPARKS_ENABLE_MPI=ON")
-        endif()
-    endif()
-
-    # Check STITCH-related headers
-    if(HEADER_NAME MATCHES "dump_stitch\\.h")
-        if(NOT (SPPARKS_HAS_STITCH AND SPPARKS_HAS_STITCH_FOUND))
-            set(INCLUDE_IT FALSE)
-            set(SKIP_REASON "needs the STITCH package AND its library; package=${SPPARKS_HAS_STITCH} "
-                            "library_found=${SPPARKS_HAS_STITCH_FOUND} "
-                            "-- enable with -DSPPARKS_PACKAGE_STITCH=ON and build lib/stitch")
-        endif()
-    endif()
-
-    set(${RESULT_VAR} ${INCLUDE_IT} PARENT_SCOPE)
-    if(ARGC GREATER 2)
-        string(REPLACE ";" "" SKIP_REASON "${SKIP_REASON}")
-        set(${ARGV2} "${SKIP_REASON}" PARENT_SCOPE)
-    endif()
+    set(${RESULT_VAR} ${ok} PARENT_SCOPE)
+    string(REPLACE ";" "" why "${why}")
+    set(${REASON_VAR} "${why}" PARENT_SCOPE)
 endfunction()

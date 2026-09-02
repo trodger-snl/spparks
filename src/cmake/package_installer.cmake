@@ -1,5 +1,5 @@
 # Package installer script
-include("${CMAKE_CURRENT_LIST_DIR}/PackageManager.cmake")
+include("/home/tron/spparks-kokkos/src/cmake/PackageManager.cmake")
 
 if(SPPARKS_INSTALL_ALL_PACKAGES)
     install_all_packages()

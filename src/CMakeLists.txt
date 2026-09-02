@@ -784,7 +784,6 @@ endif()
 
 # Generate style headers after all dependencies are resolved
 include(cmake/generate_styles.cmake)
-generate_style_headers()
 
 # Header files for style generation
 file(GLOB SPPARKS_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
@@ -884,9 +883,6 @@ if(SPPARKS_BUILD_LIB OR NOT SPPARKS_BUILD_EXECUTABLE)
     if(TARGET style_headers)
         add_dependencies(spparks_lib style_headers)
     endif()
-    if(TARGET validate_styles)
-        add_dependencies(spparks_lib validate_styles)
-    endif()
     
     # Add alias for easier linking
     add_library(SPPARKS::spparks ALIAS spparks_lib)
@@ -899,9 +895,6 @@ if(SPPARKS_BUILD_EXECUTABLE)
     # Add dependency on style headers and validation  
     if(TARGET style_headers)
         add_dependencies(spparks style_headers)
-    endif()
-    if(TARGET validate_styles)
-        add_dependencies(spparks validate_styles)
     endif()
     
     if(TARGET spparks_lib)

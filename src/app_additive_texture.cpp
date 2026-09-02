@@ -564,12 +564,7 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
  ------------------------------------------------------------------------- */
 void AppAdditiveTexture::app_update(double dt)
 {
-  // CPU Performance Timing Instrumentation
-  static int step_count = 0;
-  static double t_temp_update = 0.0;
-  static double t_melting = 0.0, t_mushy = 0.0, t_smoothing = 0.0;
-  static double t_comm = 0.0;
-  double t_start, t_end;
+  static int step_count = 0;   // cadence for maybe_run_diagnostics
   step_count++;
 
   // Reset per-call single-voxel cleanup counter
@@ -586,11 +581,7 @@ void AppAdditiveTexture::app_update(double dt)
   // powder after a large skip, or end the run early. The app-level effects
   // (sim time, powder activation) stay in the app.
   if (thermal->enabled()) {
-    t_start = MPI_Wtime();
     ThermalManager::ThermalStep s = thermal->advance(time, stoptime);
-    t_end = MPI_Wtime();
-    t_temp_update += (t_end - t_start);
-
     if (s.end_run) { time = s.new_time; return; }
     if (s.new_time > time) {
       time = s.new_time;
@@ -607,12 +598,6 @@ void AppAdditiveTexture::app_update(double dt)
   bool melting_occurred = false;
 
   //iterate through all the sites for phase transitions (applies to both systems)
-  // Time each phase-transition category around the loop, not per-site
-  double t_melt_start = 0, t_melt_accum = 0;
-  double t_mushy_start = 0, t_mushy_accum = 0;
-  double t_smooth_start = 0, t_smooth_accum = 0;
-  bool in_melting = false, in_mushy = false, in_smoothing = false;
-
   for (int i=0; i<nlocal; i++) {
     // Skip void sites - they never change state
     if (active_flag[i] == 5) continue;
@@ -622,7 +607,6 @@ void AppAdditiveTexture::app_update(double dt)
     //to avoid repeated initialization
     if( (T[i] >= tl) && active_flag[i] != 2) {
         melting_occurred = true;
-        if (!in_melting) { t_melt_start = MPI_Wtime(); in_melting = true; }
         active_flag[i] = 2;
         spin[i] = (int) (nspins * ranapp->uniform());
         // Create random orientation as each site
@@ -640,9 +624,6 @@ void AppAdditiveTexture::app_update(double dt)
     }
     //If we're molten, call the mushy_phase function to figure out any phase change
     else if (active_flag[i] == 2 && T[i] <= tl) {
-        // Flush melting timer if switching categories
-        if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
-        if (!in_mushy) { t_mushy_start = MPI_Wtime(); in_mushy = true; }
         mushy_phase(i, ranapp);
         if (nucleation_mode == NUCLEATION_CONTINUOUS && active_flag[i] == 2) {
           T_prev_map[i] = T[i];
@@ -650,10 +631,6 @@ void AppAdditiveTexture::app_update(double dt)
     }
     //Call smoothing
     else if(solid_d[i] < 0 && solid_d[i] > -nrefine -1 && active_flag[i] == 3)    {
-            // Flush prior timers if switching categories
-            if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
-            if (in_mushy) { t_mushy_accum += MPI_Wtime() - t_mushy_start; in_mushy = false; }
-            if (!in_smoothing) { t_smooth_start = MPI_Wtime(); in_smoothing = true; }
             mobility_out[i] = 1;
             smooth_site(i);
             solid_d[i]--;
@@ -667,27 +644,11 @@ void AppAdditiveTexture::app_update(double dt)
              active_flag[i] == 3 &&
              solid_d[i] <= -nrefine - 1 &&
              solid_d[i] >  -nrefine - 3) {
-            if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
-            if (in_mushy) { t_mushy_accum += MPI_Wtime() - t_mushy_start; in_mushy = false; }
-            if (in_smoothing) { t_smooth_accum += MPI_Wtime() - t_smooth_start; in_smoothing = false; }
             if (flip_single_voxel_grain(i)) {
                 solid_d[i] = -nrefine - 3;
             }
     }
-    else {
-        // Non-transition site: flush any open timer
-        if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
-        if (in_mushy) { t_mushy_accum += MPI_Wtime() - t_mushy_start; in_mushy = false; }
-        if (in_smoothing) { t_smooth_accum += MPI_Wtime() - t_smooth_start; in_smoothing = false; }
-    }
   }
-  // Flush any timer still open after the loop
-  if (in_melting) t_melt_accum += MPI_Wtime() - t_melt_start;
-  if (in_mushy) t_mushy_accum += MPI_Wtime() - t_mushy_start;
-  if (in_smoothing) t_smooth_accum += MPI_Wtime() - t_smooth_start;
-  t_melting += t_melt_accum;
-  t_mushy += t_mushy_accum;
-  t_smoothing += t_smooth_accum;
 
   // Activate powder once when melting first occurs
   // CRITICAL: Use MPI_Allreduce to check if ANY rank has melting, so all ranks call activate_powder_sites()
@@ -704,13 +665,10 @@ void AppAdditiveTexture::app_update(double dt)
   }
 
   // Communicate only KMC-relevant ghost arrays via index-based selection
-  t_start = MPI_Wtime();
   timer->stamp();
   comm->all_selective(ghost_iindices, nghost_iarray,
                       ghost_dindices, nghost_darray);
   timer->stamp(TIME_COMM);
-  t_end = MPI_Wtime();
-  t_comm += (t_end - t_start);
 
   // Optional isotherm-compactness diagnostic for tuning smoothing.
   // Ghosts are guaranteed fresh here (just synced above).
@@ -726,45 +684,6 @@ void AppAdditiveTexture::app_update(double dt)
       fprintf(screen,"single_voxel_cleanup: flipped %lld voxels this step\n",
               global_flips);
     }
-  }
-
-  // Print timing summary every 100 steps (on rank 0 only)
-  if (step_count % 100 == 0 && domain->me == 0) {
-    const double g_t_cache_build  = thermal->cache_build_time();
-    const double g_t_temp_prepare = thermal->prepare_time();
-    const double g_t_temp_site_loop = thermal->site_loop_time();
-    double total_time = t_temp_update + t_melting + t_mushy + t_smoothing + t_comm;
-    double t_temp_other = t_temp_update - g_t_temp_prepare - g_t_temp_site_loop - g_t_cache_build;
-    double steady_state_time = total_time - g_t_cache_build;
-
-    fprintf(screen, "\n=== CPU Timing Summary (after %d steps, %.4f total sec) ===\n",
-            step_count, total_time);
-    fprintf(screen, "  Temperature update:   %8.3f s (%5.1f%%)\n",
-            t_temp_update, 100.0*t_temp_update/total_time);
-    if (g_t_cache_build > 0.001) {
-      fprintf(screen, "    - Cache build:      %8.3f s (%5.1f%%)  [One-time per layer]\n",
-              g_t_cache_build, 100.0*g_t_cache_build/total_time);
-    }
-    fprintf(screen, "    - Prepare:          %8.3f s (%5.1f%%)  [Nodal temp precompute]\n",
-            g_t_temp_prepare, 100.0*g_t_temp_prepare/total_time);
-    fprintf(screen, "    - Site loop:        %8.3f s (%5.1f%%)  [Per-site interpolation]\n",
-            g_t_temp_site_loop, 100.0*g_t_temp_site_loop/total_time);
-    if (t_temp_other > 0.001) {
-      fprintf(screen, "    - Other:            %8.3f s (%5.1f%%)  [Layer load, etc.]\n",
-              t_temp_other, 100.0*t_temp_other/total_time);
-    }
-    fprintf(screen, "  Melting:              %8.3f s (%5.1f%%)  [T >= Tl transitions]\n",
-            t_melting, 100.0*t_melting/total_time);
-    fprintf(screen, "  Mushy phase:          %8.3f s (%5.1f%%)  [Nucleation + solidification + gradients]\n",
-            t_mushy, 100.0*t_mushy/total_time);
-    fprintf(screen, "  Smoothing:            %8.3f s (%5.1f%%)  [Grain boundary smoothing]\n",
-            t_smoothing, 100.0*t_smoothing/total_time);
-    fprintf(screen, "  Communication:        %8.3f s (%5.1f%%)  [MPI comm]\n",
-            t_comm, 100.0*t_comm/total_time);
-    fprintf(screen, "  --------------------------------------------------------\n");
-    fprintf(screen, "  Average time/step:    %8.4f s (overall)\n", total_time / step_count);
-    fprintf(screen, "  Steady-state avg:     %8.4f s (excl. cache build)\n", steady_state_time / step_count);
-    fprintf(screen, "=========================================================\n\n");
   }
 
     timer->stamp(TIME_UPDATE);

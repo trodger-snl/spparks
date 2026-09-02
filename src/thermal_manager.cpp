@@ -75,11 +75,6 @@ ThermalManager::ThermalManager(SPPARKS *spk, ThermalHost *host) :
   smooth_alpha = 0.4;
   smooth_passes = 1;
   smooth_diag_interval = 0;
-
-  // Temperature-update timing accumulators
-  g_t_temp_prepare = 0.0;
-  g_t_temp_site_loop = 0.0;
-  g_t_cache_build = 0.0;
 }
 
 /* ----------------------------------------------------------------------
@@ -543,34 +538,19 @@ void ThermalManager::update_temperatures(double simulation_time)
   // -------------------------------------------------------------------
   if (hdf5_source && opt_use_element_cache && opt_use_nodal_precompute) {
     // Path 3: Fast path with nodal precomputation
-    double t0 = MPI_Wtime();
     hdf5_source->prepare_for_timestep(simulation_time);
-    double t1 = MPI_Wtime();
     for (int i = 0; i < nlocal; i++) {
       T[i] = hdf5_source->get_temperature_at_site_fast(i);
     }
-    double t2 = MPI_Wtime();
-
-    double prepare_time = t1 - t0;
-    if (prepare_time > 1.0) {
-      g_t_cache_build += prepare_time;
-    } else {
-      g_t_temp_prepare += prepare_time;
-    }
-    g_t_temp_site_loop += (t2 - t1);
 
   } else if (hdf5_source && opt_use_element_cache) {
     // Path 2: Lazy per-site lookup with element cache (no nodal precomputation)
-    double t0 = MPI_Wtime();
     for (int i = 0; i < nlocal; i++) {
       T[i] = hdf5_source->get_temperature_at_site(i, simulation_time);
     }
-    double t1 = MPI_Wtime();
-    g_t_temp_site_loop += (t1 - t0);
 
   } else if (hdf5_source) {
     // Path 1: XYZ-based lookup (no element cache)
-    double t0 = MPI_Wtime();
     const double src_dx = hdf5_source->get_dx();
     for (int i = 0; i < nlocal; i++) {
       double x_physical = xyz[i][0] * src_dx;
@@ -578,8 +558,6 @@ void ThermalManager::update_temperatures(double simulation_time)
       double z_physical = xyz[i][2] * src_dx;
       T[i] = temperature_source->get_temperature_at_xyz_and_time(x_physical, y_physical, z_physical, simulation_time);
     }
-    double t1 = MPI_Wtime();
-    g_t_temp_site_loop += (t1 - t0);
 
   // -------------------------------------------------------------------
   // Rosenthal path: analytical evaluation in pool-local frame.
@@ -588,8 +566,6 @@ void ThermalManager::update_temperatures(double simulation_time)
     if (!laser_path_set) {
       error->all(FLERR,"Rosenthal source selected but no laser_path defined");
     }
-
-    double t0 = MPI_Wtime();
 
     // Sync the laser pose to simulation_time, advancing in small dt-sized
     // chunks (move(dt) does not carry remainder across path boundaries).
@@ -618,22 +594,17 @@ void ThermalManager::update_temperatures(double simulation_time)
                ? ros_source->rosenthal_pointwise(loc[0], loc[1], loc[2], v_laser, T0)
                : T0;
     }
-    double t1 = MPI_Wtime();
-    g_t_temp_site_loop += (t1 - t0);
 
   // -------------------------------------------------------------------
   // Generic xyz fallback for any other future source type.
   // -------------------------------------------------------------------
   } else {
-    double t0 = MPI_Wtime();
     for (int i = 0; i < nlocal; i++) {
       double x_physical = xyz[i][0] * dx;
       double y_physical = xyz[i][1] * dx;
       double z_physical = xyz[i][2] * dx;
       T[i] = temperature_source->get_temperature_at_xyz_and_time(x_physical, y_physical, z_physical, simulation_time);
     }
-    double t1 = MPI_Wtime();
-    g_t_temp_site_loop += (t1 - t0);
   }
 
   // Optional Gaussian smoothing of the solidification band.

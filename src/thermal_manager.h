@@ -184,11 +184,6 @@ class ThermalManager : protected Pointers {
   // Assumes T ghosts are current (caller syncs before this).
   void maybe_run_diagnostics(int step_count);
 
-  // ---- timing getters for the app's step-100 timing summary ----
-  double cache_build_time() const { return g_t_cache_build; }
-  double prepare_time()     const { return g_t_temp_prepare; }
-  double site_loop_time()   const { return g_t_temp_site_loop; }
-
  private:
   ThermalHost *host_;   // lattice-state snapshot owned by the app
 
@@ -235,12 +230,6 @@ class ThermalManager : protected Pointers {
   int    smooth_passes;     // Gaussian passes per step
   int    smooth_diag_interval;  // diagnostic cadence; 0 disables
   std::vector<double> smooth_buffer;  // scratch for double-buffered pass
-
-  // Temperature-update timing breakdown (were file-scope statics in
-  // app_additive_texture.cpp; exposed to the app via getters above).
-  double g_t_temp_prepare;    // time in prepare_for_timestep()
-  double g_t_temp_site_loop;  // time in the per-site temperature loop
-  double g_t_cache_build;     // one-time cache build time (per layer)
 
   // Fast-forward predictors (closest-point bound on local bounding box).
   double rosenthal_next_active_time(double current_time, double threshold_temp);

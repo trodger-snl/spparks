@@ -209,6 +209,12 @@ if(SPPARKS_ENABLE_PNG)
     endif()
 endif()
 
+# HighFive is a C++ wrapper over HDF5, so it implies HDF5.
+if(SPPARKS_ENABLE_HIGHFIVE AND NOT SPPARKS_ENABLE_HDF5)
+    message(STATUS "HighFive requires HDF5 - enabling HDF5 automatically")
+    set(SPPARKS_ENABLE_HDF5 ON CACHE BOOL "Enable HDF5 support" FORCE)
+endif()
+
 if(SPPARKS_ENABLE_HDF5)
     # Add cmake module path for enhanced HDF5 finder
     list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -245,45 +251,6 @@ if(SPPARKS_ENABLE_HDF5)
 endif()
 
 if(SPPARKS_ENABLE_HIGHFIVE)
-    # Ensure HDF5 is also enabled for HighFive
-    if(NOT SPPARKS_ENABLE_HDF5)
-        message(STATUS "HighFive requires HDF5 - enabling HDF5 automatically")
-        set(SPPARKS_ENABLE_HDF5 ON CACHE BOOL "Enable HDF5 support" FORCE)
-
-        # Add cmake module path for enhanced HDF5 finder
-        list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-
-        find_package(HDF5Enhanced REQUIRED)
-        if(HDF5_FOUND)
-            add_compile_definitions(SPPARKS_HDF)
-            # Check if HDF5 is parallel (MPI-enabled)
-            if(HDF5_IS_PARALLEL AND SPPARKS_ENABLE_MPI)
-                message(STATUS "Found parallel HDF5 (MPI-enabled)")
-                add_compile_definitions(H5_HAVE_PARALLEL)
-            elseif(SPPARKS_ENABLE_MPI AND NOT HDF5_IS_PARALLEL)
-                # Not a performance note. The HDF5 temperature sources call
-            # HighFive::MPIOFileAccess(...) unconditionally, so serial HDF5 with
-            # HighFive+MPI is a compile failure in
-            # temperature_source_hdf5_unstructured.cpp, not a slow build.
-            if(SPPARKS_ENABLE_HIGHFIVE)
-                message(FATAL_ERROR
-                    "MPI is enabled but the HDF5 found at ${HDF5_INCLUDE_DIRS} is serial.\n"
-                    "The additive/texture temperature sources call HighFive::MPIOFileAccess() "
-                    "unconditionally, so this will fail to compile rather than run slowly.\n"
-                    "Load a parallel HDF5 (on a Cray system: module load cray-hdf5-parallel) "
-                    "and point at it with -DHDF5_ROOT=<prefix>, or configure with "
-                    "-DSPPARKS_ENABLE_HIGHFIVE=OFF to drop the additive/texture styles.")
-            else()
-                message(WARNING
-                    "MPI is enabled but the HDF5 found at ${HDF5_INCLUDE_DIRS} is serial. "
-                    "Parallel I/O will be unavailable.")
-            endif()
-            endif()
-        else()
-            message(FATAL_ERROR "HDF5 was requested but not found")
-        endif()
-    endif()
-
     # Use external HighFive or fetch from source
     if(SPPARKS_USE_EXTERNAL_HIGHFIVE)
         # Try to find system-provided HighFive (e.g., from Spack, Homebrew, or system package manager)

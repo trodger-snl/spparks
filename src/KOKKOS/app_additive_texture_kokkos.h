@@ -365,14 +365,6 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // Powder activation tracking
   double last_powder_activation_time;  // Track when we last activated powder sites
 
-  // Debug counters for gradient/velocity analysis
-  int debug_nucleation_count;
-  int debug_solidification_count;
-  int debug_zero_G_count;
-  int debug_nonzero_G_count;
-  double debug_G_sum;
-  double debug_V_sum;
-
   // Device-compatible thermal operations
   //
   // LATTICE TYPE ASSUMPTION: Simple Cubic with 26 Neighbors (sc/26n)

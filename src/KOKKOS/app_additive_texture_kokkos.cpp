@@ -155,14 +155,6 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
   // Initialize powder activation tracking
   last_powder_activation_time = -1.0;  // Force activation at init
 
-  // Initialize debug counters
-  debug_nucleation_count = 0;
-  debug_solidification_count = 0;
-  debug_zero_G_count = 0;
-  debug_nonzero_G_count = 0;
-  debug_G_sum = 0.0;
-  debug_V_sum = 0.0;
-
   // RNG pool is inherited from AppLatticeKokkos - initialized in parent
 }
 
@@ -1369,17 +1361,11 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
   auto d_V_local = this->d_V;
   double dx_local = this->dx;
 
-  // Debug counters for this kernel
-  int debug_zero_G_local = 0;
-  int debug_nonzero_G_local = 0;
-  double debug_G_sum_local = 0.0;
-  double debug_V_sum_local = 0.0;
-
   // Nucleation kernel: parallel over all local sites with event tracking
   // Race-free: each site only reads/writes itself
   int naccept_local = 0;
   Kokkos::parallel_reduce("NucleationKernel", n_active,
-    KOKKOS_LAMBDA(int idx, int& count, int& zero_G_count, int& nonzero_G_count, double& G_sum, double& V_sum) {
+    KOKKOS_LAMBDA(int idx, int& count) {
       const int i = d_active_sites_local(idx);
       // Read current state
       double T_i = d_T_local(i);
@@ -1424,33 +1410,13 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
               Tcool_power *= Tcool;
             }
             d_V_local(i) = V_i;
-
-            // Note: Gradient G is already computed by compute_gradients_kernel()
-
-            // DEBUG: Check G and V values after nucleation
-            double G_val = d_G_local(i);
-            double V_val = d_V_local(i);
-            if (G_val == 0.0) {
-              zero_G_count++;
-            } else {
-              nonzero_G_count++;
-              G_sum += G_val;
-              V_sum += V_val;
-            }
           }
           // No else branch - site keeps current values if not nucleating
         }
         // No else branch - site keeps current values if can't nucleate
       }
       // No else branch - site keeps current values if not liquid/undercooled
-    }, naccept_local, debug_zero_G_local, debug_nonzero_G_local, debug_G_sum_local, debug_V_sum_local);
-
-  // DEBUG: Accumulate kernel results into class members
-  debug_nucleation_count += naccept_local;
-  debug_zero_G_count += debug_zero_G_local;
-  debug_nonzero_G_count += debug_nonzero_G_local;
-  debug_G_sum += debug_G_sum_local;
-  debug_V_sum += debug_V_sum_local;
+    }, naccept_local);
 
   return naccept_local;
 }
@@ -1776,17 +1742,11 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
   // neighbor list) the slot did not correspond to the neighbor's real offset.
   constexpr double solid_reach = 1.7320508075688772;  // sqrt(3), lattice units
 
-  // Debug counters for this kernel
-  int debug_zero_G_local = 0;
-  int debug_nonzero_G_local = 0;
-  double debug_G_sum_local = 0.0;
-  double debug_V_sum_local = 0.0;
-
   // Solidification kernel: parallel over all local sites with event tracking
   // Race-free: each site only reads/writes itself
   int naccept_local = 0;
   Kokkos::parallel_reduce("SolidificationKernel", n_active,
-    KOKKOS_LAMBDA(int idx, int& count, int& zero_G_count, int& nonzero_G_count, double& G_sum, double& V_sum) {
+    KOKKOS_LAMBDA(int idx, int& count) {
       const int i = d_active_sites_local(idx);
       double T_i = d_T_local(i);
       int active_flag_i = d_active_flag_local(i);
@@ -2038,17 +1998,6 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
           // Record solidification parameters
           d_V_local(i) = V_advance;
 
-          // DEBUG: Check G and V values after solidification
-          double G_val = d_G_local(i);
-          double V_val = d_V_local(i);
-          if (G_val == 0.0) {
-            zero_G_count++;
-          } else {
-            nonzero_G_count++;
-            G_sum += G_val;
-            V_sum += V_val;
-          }
-
           // Return RNG state
           rand_pool_local.free_state(generator);
         } else {
@@ -2057,14 +2006,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
         }
       }
       // No else branch - site keeps current values if not liquid/undercooled
-    }, naccept_local, debug_zero_G_local, debug_nonzero_G_local, debug_G_sum_local, debug_V_sum_local);
-
-  // DEBUG: Accumulate kernel results into class members
-  debug_solidification_count += naccept_local;
-  debug_zero_G_count += debug_zero_G_local;
-  debug_nonzero_G_count += debug_nonzero_G_local;
-  debug_G_sum += debug_G_sum_local;
-  debug_V_sum += debug_V_sum_local;
+    }, naccept_local);
 
   return naccept_local;
 }
@@ -2583,27 +2525,6 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   // (which also force the host temperature path, so host T is current here).
   if (host_T_stale) sync_temperature_to_host();
   thermal->maybe_run_diagnostics(step_count);
-
-  // DEBUG: Print gradient/velocity statistics every 10 steps
-  if (step_count % 10 == 0 && domain->me == 0) {
-    int total_events = debug_nucleation_count + debug_solidification_count;
-    double zero_fraction = (total_events > 0) ? (double)debug_zero_G_count / total_events : 0.0;
-    double avg_G = (debug_nonzero_G_count > 0) ? debug_G_sum / debug_nonzero_G_count : 0.0;
-    double avg_V = (debug_nonzero_G_count > 0) ? debug_V_sum / debug_nonzero_G_count : 0.0;
-
-    fprintf(screen, "DEBUG [t=%.6f, step=%d]: Nuc=%d, Solid=%d, ZeroG=%d (%.1f%%), NonZeroG=%d, AvgG=%.2e, AvgV=%.2e\n",
-            time, step_count, debug_nucleation_count, debug_solidification_count,
-            debug_zero_G_count, zero_fraction*100, debug_nonzero_G_count,
-            avg_G, avg_V);
-
-    // Reset counters for next interval
-    debug_nucleation_count = 0;
-    debug_solidification_count = 0;
-    debug_zero_G_count = 0;
-    debug_nonzero_G_count = 0;
-    debug_G_sum = 0.0;
-    debug_V_sum = 0.0;
-  }
 
   // Print timing summary every 100 steps
   if (step_count % 100 == 0 && domain->me == 0) {

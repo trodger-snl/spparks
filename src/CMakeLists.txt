@@ -135,9 +135,9 @@ endif()
 # (double), the HPC production precision and bit-for-bit CPU-validation
 # reference. ON => FP32 (float) for the additive/texture device temperature
 # work, at the cost of bit-exact validation. Two distinct wins, per source:
-#   * Rosenthal/Moser (AMReal): compute-bound transcendental kernels, where
+#   * Rosenthal/Moser: compute-bound transcendental kernels, where
 #     RDNA/consumer GPUs (gfx1151) run FP64 at heavily reduced rate.
-#   * HDF5 unstructured (HDF5Real): a gather-and-blend fill that is MEMORY-bound,
+#   * HDF5 unstructured: a gather-and-blend fill that is MEMORY-bound,
 #     so the win is halved traffic on the per-node temperature slice, the
 #     barycentric weights and the raw sample temperatures. Measured on the ct15
 #     10-layer decks, that fill is ~33% of per-box wall and is provably not

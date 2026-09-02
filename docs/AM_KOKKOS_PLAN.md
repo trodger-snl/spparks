@@ -207,7 +207,7 @@ This document outlines the plan for adding Kokkos GPU acceleration to `app_addit
   - ✅ Temperature field loading and device sync
   - ✅ Thermal gradient computation kernel
   - ✅ Data structures for phase transitions
-  - ⚠️  Known timing issue documented (see `KOKKOS_TIMING_ISSUE.md`)
+  - ✅ Timing issue (double time advance) fixed: `app_update_only` loop owns `time`
 - ✅ **Phase 3.1 Complete:** Melting kernel and RNG infrastructure (Nov 16, 2025)
   - ✅ Kokkos Random_XorShift64_Pool for thread-safe device RNG
   - ✅ Per-spin nucleation parameters on device
@@ -2308,8 +2308,6 @@ dt_fast / dt_slow = 100
 - `src/crystalline_orientations/quaternion.h` - Rotation utilities (CPU)
 
 **Documentation:**
-- `docs/KOKKOS_IMPLEMENTATION_ROADMAP.md` - Overall Kokkos strategy
-- `docs/KOKKOS_IMPLEMENTATION_HISTORY.md` - Completed work chronicle
 - `examples/potts_quaternion/KOKKOS_PHYSICS_VALIDATION.md` - Validation results
 
 ### 16.2 External Resources

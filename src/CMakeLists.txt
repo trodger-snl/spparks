@@ -81,8 +81,6 @@ endif()
 
 # Build options
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
-option(SPPARKS_BUILD_EXECUTABLE "Build spparks executable" ON)
-option(SPPARKS_BUILD_LIB "Build spparks library" OFF)
 option(SPPARKS_ENABLE_MPI "Enable MPI support" ON)
 option(SPPARKS_ENABLE_GZIP "Enable GZIP support" ON)
 option(SPPARKS_ENABLE_JPEG "Enable JPEG support" ON)
@@ -673,265 +671,78 @@ configure_conditional_sources()
 include(cmake/generate_styles.cmake)
 
 
-# Create library targets
-if(SPPARKS_BUILD_LIB OR NOT SPPARKS_BUILD_EXECUTABLE)
-    add_library(spparks_lib ${SPPARKS_SOURCES})
-    set_target_properties(spparks_lib PROPERTIES
-        OUTPUT_NAME "spparks"
-        VERSION ${PROJECT_VERSION}
-        SOVERSION ${PROJECT_VERSION_MAJOR}
-    )
-    
-    # Link dependencies to library
-    if(SPPARKS_ENABLE_MPI AND MPI_CXX_FOUND)
-        target_link_libraries(spparks_lib PUBLIC MPI::MPI_CXX)
-    elseif(NOT SPPARKS_ENABLE_MPI)
-        target_link_libraries(spparks_lib PUBLIC mpi_stubs)
-    endif()
-    
-    if(SPPARKS_ENABLE_JPEG AND JPEG_FOUND)
-        target_link_libraries(spparks_lib PUBLIC ${JPEG_LIBRARIES})
-        target_include_directories(spparks_lib PUBLIC ${JPEG_INCLUDE_DIR})
-    endif()
-    
-    if(SPPARKS_ENABLE_PNG AND PNG_FOUND)
-        target_link_libraries(spparks_lib PUBLIC PNG::PNG)
-    endif()
-    
-    if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
-        target_link_libraries(spparks_lib PUBLIC ${HDF5_LIBRARIES})
-        target_include_directories(spparks_lib PUBLIC ${HDF5_INCLUDE_DIRS})
-        target_compile_definitions(spparks_lib PUBLIC ${HDF5_DEFINITIONS})
-    endif()
-    
-    if(SPPARKS_ENABLE_HIGHFIVE)
-        target_link_libraries(spparks_lib PUBLIC HighFive)
-    endif()
+# One static library holding every source; the executable is main.cpp on top
+# of it. Dependencies are PUBLIC so the executable inherits them.
+add_library(spparks_lib STATIC ${SPPARKS_SOURCES})
+set_target_properties(spparks_lib PROPERTIES OUTPUT_NAME spparks)
+add_dependencies(spparks_lib style_headers)
+target_include_directories(spparks_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-    # Host OpenMP for the non-Kokkos per-site layer-cache loops in the HDF5
-    # temperature source (build_site_element_cache / compute_site_thermal_intervals,
-    # ~40 s/layer serial on a 5M-site box). The OpenMP Kokkos backend already
-    # compiles with -fopenmp; for the HIP/CUDA backends this adds host threading
-    # for those loops while the device still runs the per-step temperature fills.
-    # Harmless (loops just run serially) if OpenMP is unavailable.
-    find_package(OpenMP QUIET)
-    if(OpenMP_CXX_FOUND)
-        target_link_libraries(spparks_lib PUBLIC OpenMP::OpenMP_CXX)
-        message(STATUS "Linked OpenMP::OpenMP_CXX to spparks_lib (host layer-cache threading)")
-    else()
-        message(STATUS "OpenMP not found; HDF5 layer-cache loops will run serially")
-    endif()
-
-    # Add Kokkos package support
-    if(SPPARKS_PACKAGE_KOKKOS)
-        target_link_libraries(spparks_lib PUBLIC Kokkos::kokkoscore)
-        message(STATUS "Linked Kokkos::kokkoscore to spparks_lib")
-    endif()
-
-    if(SPPARKS_PACKAGE_STITCH)
-        target_link_libraries(spparks_lib PUBLIC stitch)
-    endif()
-
-    # Add KOKKOS package support
-    if(SPPARKS_PACKAGE_KOKKOS)
-        if(TARGET Kokkos::kokkos)
-            target_link_libraries(spparks_lib PUBLIC Kokkos::kokkos)
-            target_compile_definitions(spparks_lib PUBLIC SPK_KOKKOS)
-            message(STATUS "Linked Kokkos::kokkos to spparks_lib for KOKKOS package")
-        elseif(TARGET Kokkos::kokkoscore)
-            target_link_libraries(spparks_lib PUBLIC Kokkos::kokkoscore)
-            target_compile_definitions(spparks_lib PUBLIC SPK_KOKKOS)
-            message(STATUS "Linked Kokkos::kokkoscore to spparks_lib for KOKKOS package")
-        else()
-            message(FATAL_ERROR "KOKKOS package enabled but Kokkos library not found")
-        endif()
-    endif()
-
-    # Add GZIP support
-    if(SPPARKS_ENABLE_GZIP)
-        find_package(ZLIB)
-        if(ZLIB_FOUND)
-            target_link_libraries(spparks_lib PUBLIC ZLIB::ZLIB)
-        endif()
-    endif()
-    
-    # Set include directories for library
-    target_include_directories(spparks_lib PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-        $<INSTALL_INTERFACE:include>
-    )
-    
-    # Add dependency on style headers and validation
-    if(TARGET style_headers)
-        add_dependencies(spparks_lib style_headers)
-    endif()
-    
-    # Add alias for easier linking
-    add_library(SPPARKS::spparks ALIAS spparks_lib)
+if(SPPARKS_ENABLE_MPI AND MPI_CXX_FOUND)
+    target_link_libraries(spparks_lib PUBLIC MPI::MPI_CXX)
+elseif(NOT SPPARKS_ENABLE_MPI)
+    target_link_libraries(spparks_lib PUBLIC mpi_stubs)
+endif()
+if(SPPARKS_ENABLE_JPEG AND JPEG_FOUND)
+    target_link_libraries(spparks_lib PUBLIC ${JPEG_LIBRARIES})
+    target_include_directories(spparks_lib PUBLIC ${JPEG_INCLUDE_DIR})
+endif()
+if(SPPARKS_ENABLE_PNG AND PNG_FOUND)
+    target_link_libraries(spparks_lib PUBLIC PNG::PNG)
+endif()
+if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
+    target_link_libraries(spparks_lib PUBLIC ${HDF5_LIBRARIES})
+    target_include_directories(spparks_lib PUBLIC ${HDF5_INCLUDE_DIRS})
+    target_compile_definitions(spparks_lib PUBLIC ${HDF5_DEFINITIONS})
+endif()
+if(SPPARKS_ENABLE_HIGHFIVE)
+    target_link_libraries(spparks_lib PUBLIC HighFive)
 endif()
 
-# Create executable target
-if(SPPARKS_BUILD_EXECUTABLE)
-    add_executable(spparks main.cpp)
-    
-    # Add dependency on style headers and validation  
-    if(TARGET style_headers)
-        add_dependencies(spparks style_headers)
-    endif()
-    
-    if(TARGET spparks_lib)
-        target_link_libraries(spparks spparks_lib)
-    else()
-        # Link sources directly if not building library
-        target_sources(spparks PRIVATE ${SPPARKS_SOURCES})
-        
-        # Link dependencies to executable
-        if(SPPARKS_ENABLE_MPI AND MPI_CXX_FOUND)
-            target_link_libraries(spparks MPI::MPI_CXX)
-        elseif(NOT SPPARKS_ENABLE_MPI)
-            target_link_libraries(spparks mpi_stubs)
-        endif()
-        
-        if(SPPARKS_ENABLE_JPEG AND JPEG_FOUND)
-            target_link_libraries(spparks ${JPEG_LIBRARIES})
-            target_include_directories(spparks PRIVATE ${JPEG_INCLUDE_DIR})
-        endif()
-        
-        if(SPPARKS_ENABLE_PNG AND PNG_FOUND)
-            target_link_libraries(spparks PNG::PNG)
-        endif()
-        
-        if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
-            target_link_libraries(spparks ${HDF5_LIBRARIES})
-            target_include_directories(spparks PRIVATE ${HDF5_INCLUDE_DIRS})
-            target_compile_definitions(spparks PRIVATE ${HDF5_DEFINITIONS})
-        endif()
-        
-        if(SPPARKS_ENABLE_HIGHFIVE)
-            target_link_libraries(spparks HighFive)
-        endif()
+# Host OpenMP for the non-Kokkos per-site layer-cache loops in the HDF5
+# temperature source (build_site_element_cache / compute_site_thermal_intervals,
+# ~40 s/layer serial on a 5M-site box). The OpenMP Kokkos backend already
+# compiles with -fopenmp; for the HIP/CUDA backends this adds host threading for
+# those loops. Harmless (loops just run serially) if OpenMP is unavailable.
+find_package(OpenMP QUIET)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(spparks_lib PUBLIC OpenMP::OpenMP_CXX)
+else()
+    message(STATUS "OpenMP not found; HDF5 layer-cache loops will run serially")
+endif()
 
-        # Host OpenMP for the non-Kokkos per-site layer-cache loops in the HDF5
-        # temperature source (build_site_element_cache /
-        # compute_site_thermal_intervals, ~40 s/layer serial on a 5M-site box).
-        # The OpenMP Kokkos backend already compiles everything with -fopenmp;
-        # for HIP/CUDA this adds host threading for those loops while the device
-        # still runs the per-step temperature fills. Plain (keyword-less)
-        # signature to match the other links on this target. Harmless (loops run
-        # serially) if OpenMP is unavailable.
-        find_package(OpenMP QUIET)
-        if(OpenMP_CXX_FOUND)
-            target_link_libraries(spparks OpenMP::OpenMP_CXX)
-            message(STATUS "Linked OpenMP::OpenMP_CXX to spparks executable (host layer-cache threading)")
-        else()
-            message(STATUS "OpenMP not found; HDF5 layer-cache loops will run serially")
-        endif()
-
-        # Add Kokkos package support
-        if(SPPARKS_PACKAGE_KOKKOS)
-            target_link_libraries(spparks Kokkos::kokkoscore)
-        endif()
-
-        if(SPPARKS_PACKAGE_STITCH)
-            target_link_libraries(spparks stitch)
-        endif()
-
-        # Add KOKKOS package support
-        if(SPPARKS_PACKAGE_KOKKOS)
-            if(TARGET Kokkos::kokkos)
-                target_link_libraries(spparks Kokkos::kokkos)
-                target_compile_definitions(spparks PRIVATE SPK_KOKKOS)
-                message(STATUS "Linked Kokkos::kokkos to spparks executable for KOKKOS package")
-            elseif(TARGET Kokkos::kokkoscore)
-                target_link_libraries(spparks Kokkos::kokkoscore)
-                target_compile_definitions(spparks PRIVATE SPK_KOKKOS)
-                message(STATUS "Linked Kokkos::kokkoscore to spparks executable for KOKKOS package")
-            endif()
-        endif()
-
-        if(SPPARKS_ENABLE_GZIP)
-            find_package(ZLIB)
-            if(ZLIB_FOUND)
-                target_link_libraries(spparks ZLIB::ZLIB)
-            endif()
-        endif()
+if(SPPARKS_PACKAGE_KOKKOS)
+    target_link_libraries(spparks_lib PUBLIC Kokkos::kokkos)
+endif()
+if(SPPARKS_PACKAGE_STITCH)
+    target_link_libraries(spparks_lib PUBLIC stitch)
+endif()
+if(SPPARKS_ENABLE_GZIP)
+    find_package(ZLIB)
+    if(ZLIB_FOUND)
+        target_link_libraries(spparks_lib PUBLIC ZLIB::ZLIB)
     endif()
 endif()
 
-# Compiler flags - applied per-target for better isolation
+add_executable(spparks main.cpp)
+target_link_libraries(spparks PRIVATE spparks_lib)
+
+# Compiler flags, per target
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        target_compile_options(spparks PRIVATE -g -Wall -Wextra)
-        if(TARGET spparks_lib)
-            target_compile_options(spparks_lib PRIVATE -g -Wall -Wextra)
-        endif()
+        set(_spk_flags -g -Wall -Wextra)
     else()
-        # Apply all optimization flags from OPT_FLAGS (defined earlier)
-        # Convert string to list for target_compile_options
-        separate_arguments(OPT_FLAGS_LIST UNIX_COMMAND "${OPT_FLAGS}")
-        target_compile_options(spparks PRIVATE ${OPT_FLAGS_LIST})
-        if(TARGET spparks_lib)
-            target_compile_options(spparks_lib PRIVATE ${OPT_FLAGS_LIST})
-        endif()
+        separate_arguments(_spk_flags UNIX_COMMAND "${OPT_FLAGS}")
     endif()
+    target_compile_options(spparks_lib PRIVATE ${_spk_flags})
+    target_compile_options(spparks PRIVATE ${_spk_flags})
 endif()
 
-# Installation
-if(SPPARKS_BUILD_LIB)
-    install(TARGETS spparks_lib
-        EXPORT SpparksTargets
-        LIBRARY DESTINATION lib
-        ARCHIVE DESTINATION lib
-        RUNTIME DESTINATION bin
-    )
-
-    # Install public headers
-    file(GLOB SPPARKS_PUBLIC_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
-    install(FILES ${SPPARKS_PUBLIC_HEADERS}
-        DESTINATION include/spparks
-    )
-endif()
-
-if(SPPARKS_BUILD_EXECUTABLE)
-    install(TARGETS spparks
-        RUNTIME DESTINATION bin
-    )
-endif()
-
-# Package configuration
-include(CMakePackageConfigHelpers)
-if(SPPARKS_BUILD_LIB)
-    write_basic_package_version_file(
-        "${CMAKE_CURRENT_BINARY_DIR}/SpparksConfigVersion.cmake"
-        VERSION ${PROJECT_VERSION}
-        COMPATIBILITY AnyNewerVersion
-    )
-    
-    export(EXPORT SpparksTargets
-        FILE "${CMAKE_CURRENT_BINARY_DIR}/SpparksTargets.cmake"
-        NAMESPACE Spparks::
-    )
-    
-    configure_file(cmake/SpparksConfig.cmake.in SpparksConfig.cmake @ONLY)
-    
-    install(EXPORT SpparksTargets
-        FILE SpparksTargets.cmake
-        NAMESPACE Spparks::
-        DESTINATION lib/cmake/spparks
-    )
-    
-    install(FILES
-        "${CMAKE_CURRENT_BINARY_DIR}/SpparksConfig.cmake"
-        "${CMAKE_CURRENT_BINARY_DIR}/SpparksConfigVersion.cmake"
-        DESTINATION lib/cmake/spparks
-    )
-endif()
+install(TARGETS spparks RUNTIME DESTINATION bin)
 
 # Print configuration summary
 message(STATUS "=== SPPARKS Configuration Summary ===")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
-message(STATUS "Build executable: ${SPPARKS_BUILD_EXECUTABLE}")
-message(STATUS "Build library: ${SPPARKS_BUILD_LIB}")
 message(STATUS "MPI support: ${SPPARKS_ENABLE_MPI}")
 message(STATUS "GZIP support: ${SPPARKS_ENABLE_GZIP}")
 message(STATUS "JPEG support: ${SPPARKS_ENABLE_JPEG}")

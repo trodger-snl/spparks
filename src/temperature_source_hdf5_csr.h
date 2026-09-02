@@ -36,7 +36,6 @@ class HDF5CSRTemperatureSource : public HDF5UnstructuredTemperatureSource {
 public:
   HDF5CSRTemperatureSource(class SPPARKS *spk);
   virtual ~HDF5CSRTemperatureSource() = default;
-  virtual std::string get_source_type() const override { return "hdf5_csr"; }
 
 protected:
   virtual void read_time_temperature_data(

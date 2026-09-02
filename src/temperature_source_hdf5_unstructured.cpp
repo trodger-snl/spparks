@@ -170,23 +170,6 @@ double HDF5UnstructuredTemperatureSource::get_temperature_at_xyz_and_time(
 
 /* ---------------------------------------------------------------------- */
 
-void HDF5UnstructuredTemperatureSource::update_temperatures(double dt, double simulation_time)
-{
-  // This temperature source is passive - no update needed
-}
-
-/* ---------------------------------------------------------------------- */
-
-bool HDF5UnstructuredTemperatureSource::needs_data_refresh(double simulation_time)
-{
-  if (!source_initialized) return false;
-  
-  auto layer = get_active_layer(simulation_time);
-  return (layer != active_layer);
-}
-
-/* ---------------------------------------------------------------------- */
-
 void HDF5UnstructuredTemperatureSource::cleanup()
 {
   file.reset();

@@ -77,15 +77,8 @@ class RosenthalTemperatureSource : public TemperatureSource {
   // TemperatureSource interface
   virtual void setup_temperature_source(const std::vector<std::string> &args) override;
   virtual double get_temperature_at_xyz_and_time(double x, double y, double z, double time) override;
-  virtual void update_temperatures(double dt, double simulation_time) override;
-  virtual bool needs_data_refresh(double simulation_time) override;
-  virtual void cleanup() override;
-  virtual std::string get_source_type() const override { return "rosenthal"; }
   virtual void print_source_info() const override;
-
-  // Fast-forward support: the source declares it; ThermalManager does the
-  // actual time prediction from the scan-path geometry.
-  virtual bool supports_time_queries() const override { return true; }
+  void cleanup();
 
   // Pool-local-frame query used by AppAdditiveTexture every step.
   // (xi, y_rel, z_rel) are coordinates of a lattice site relative to the

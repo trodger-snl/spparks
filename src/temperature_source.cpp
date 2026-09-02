@@ -32,21 +32,6 @@ TemperatureSource::TemperatureSource(SPPARKS *spk) : Pointers(spk)
 }
 
 /* ----------------------------------------------------------------------
-   Default implementation for site-based temperature access
-   Gets site coordinates and calls xyz-based method
-------------------------------------------------------------------------- */
-
-double TemperatureSource::get_temperature_at_site(int site_index, double time)
-{
-  check_initialization();
-  
-  // This default implementation should be overridden by derived classes
-  // that have access to the specific app's coordinate arrays
-  error->one(FLERR,"get_temperature_at_site must be overridden by derived temperature source classes");
-  return ambient_temperature;
-}
-
-/* ----------------------------------------------------------------------
    Check if temperature source has been properly initialized
 ------------------------------------------------------------------------- */
 
@@ -55,16 +40,6 @@ void TemperatureSource::check_initialization() const
   if (!source_initialized) {
     error->one(FLERR,"Temperature source not initialized - call setup_temperature_source first");
   }
-}
-
-/* ----------------------------------------------------------------------
-   Helper method for derived classes to indicate unimplemented methods
-------------------------------------------------------------------------- */
-
-void TemperatureSource::error_not_implemented(const std::string &method_name) const
-{
-  std::string msg = "Method " + method_name + " not implemented in " + get_source_type() + " temperature source";
-  error->one(FLERR,msg.c_str());
 }
 
 /* ----------------------------------------------------------------------

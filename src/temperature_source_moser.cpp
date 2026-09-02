@@ -589,20 +589,6 @@ double MoserTemperatureSource::get_temperature_at_xyz_and_time(double x, double 
 
 /* ---------------------------------------------------------------------- */
 
-void MoserTemperatureSource::update_temperatures(double /*dt*/, double /*simulation_time*/)
-{
-  // Analytic Green's function: nothing to refresh per timestep.
-}
-
-/* ---------------------------------------------------------------------- */
-
-bool MoserTemperatureSource::needs_data_refresh(double /*simulation_time*/)
-{
-  return false;
-}
-
-/* ---------------------------------------------------------------------- */
-
 void MoserTemperatureSource::cleanup()
 {
   for (int li = 0; li < 2; ++li) {

@@ -554,9 +554,6 @@ void ThermalManager::update_temperatures(double simulation_time)
   const int nlocal = host_->nlocal;
   const double dx = host_->dx;
 
-  // Update temperature source (may load new data)
-  temperature_source->update_temperatures(host_->dt, simulation_time);
-
   // Cache the dynamic_cast results outside the loop.
   HDF5UnstructuredTemperatureSource* hdf5_source =
     dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
@@ -735,8 +732,8 @@ ThermalManager::ThermalStep ThermalManager::advance(double current_time, double 
   int global_t_active;
   MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, world);
 
-  // If no active sites and the source supports time queries, fast forward.
-  if (global_t_active == 0 && current_time > 1e-6 && temperature_source->supports_time_queries()) {
+  // If no active sites, fast forward.
+  if (global_t_active == 0 && current_time > 1e-6) {
     // Moser pause_below: fire a pending pass once the global peak temperature
     // first drops below threshold AFTER the current pass has finished.
     bool dynamic_fire = false;
@@ -852,10 +849,6 @@ RosenthalDevicePlan ThermalManager::rosenthal_device_plan(double simulation_time
   // Material parameters; false (e.g. KEYHOLE) -> host path.
   if (!ros->fill_device_plan(plan)) { plan.valid = false; return plan; }
 
-  // Let any data-driven source state advance (no-op for Rosenthal, kept for
-  // parity with update_temperatures()).
-  temperature_source->update_temperatures(host_->dt, simulation_time);
-
   // Sync the laser pose to simulation_time in dt-sized chunks (move(dt) does
   // not carry remainder across path boundaries) -- identical to the host loop.
   if (scan_layer_active) {
@@ -923,7 +916,7 @@ ThermalManager::rosenthal_fast_forward(double current_time, double stoptime,
   // below collective-safe).
   const bool any_active = (global_max_T > fast_forward_threshold);
 
-  if (!any_active && current_time > 1e-6 && ros->supports_time_queries()) {
+  if (!any_active && current_time > 1e-6) {
     const double local_next =
       rosenthal_next_active_time(current_time, fast_forward_threshold);
     double next_thermal_time;
@@ -969,9 +962,6 @@ MoserDevicePlan ThermalManager::moser_device_plan(double simulation_time)
   // device fill bypasses; keep smoothed runs on the host path. (Dynamic
   // inter-pass pause/reset is handled on the device via moser_advance_device.)
   if (temperature_smooth_enabled) return plan;
-
-  // Per-step source bookkeeping (no-op for a statically built Moser scan).
-  temperature_source->update_temperatures(host_->dt, simulation_time);
 
   if (!moser->fill_device_plan(plan)) { plan.valid = false; return plan; }
   plan.time = simulation_time;
@@ -1044,8 +1034,7 @@ ThermalManager::moser_advance_device(double current_time, double stoptime)
   const double fast_forward_threshold =
     (laser_pause_below > 0.0) ? laser_pause_below : host_->tl;
 
-  if (gmax <= fast_forward_threshold && current_time > 1e-6 &&
-      moser->supports_time_queries()) {
+  if (gmax <= fast_forward_threshold && current_time > 1e-6) {
     bool dynamic_fire = false;
 
     // pause_below: fire a pending pass once the peak temperature drops below
@@ -1143,7 +1132,6 @@ HDF5DevicePlan ThermalManager::hdf5_device_plan(double simulation_time)
   // precompute the nodal-temperature slice (time interpolation + optional nodal
   // mesh smoothing). This is exactly the host fast path (update_temperatures
   // Path 3) minus the per-site T loop -- that loop is what moves to the device.
-  temperature_source->update_temperatures(host_->dt, simulation_time);
   hdf5->prepare_for_timestep(simulation_time);
 
   plan.version = hdf5->cache_generation();
@@ -1254,8 +1242,7 @@ ThermalManager::hdf5_advance_device(double current_time, double stoptime)
 
   const double fast_forward_threshold = hdf5->get_fast_forward_threshold();
 
-  if (gmax <= fast_forward_threshold && current_time > 1e-6 &&
-      hdf5->supports_time_queries()) {
+  if (gmax <= fast_forward_threshold && current_time > 1e-6) {
     const double local_next =
       hdf5->get_next_time_with_temperature(current_time, fast_forward_threshold);
     double next_thermal_time;

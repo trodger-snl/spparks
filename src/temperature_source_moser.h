@@ -108,10 +108,7 @@ class MoserTemperatureSource : public TemperatureSource {
   // TemperatureSource interface
   virtual void setup_temperature_source(const std::vector<std::string> &args) override;
   virtual double get_temperature_at_xyz_and_time(double x, double y, double z, double time) override;
-  virtual void update_temperatures(double dt, double simulation_time) override;
-  virtual bool needs_data_refresh(double simulation_time) override;
-  virtual void cleanup() override;
-  virtual std::string get_source_type() const override { return "moser"; }
+  void cleanup();
   virtual void print_source_info() const override;
 
   // Build scans from a RASTER-style straight-line repeated path. Called
@@ -176,10 +173,6 @@ class MoserTemperatureSource : public TemperatureSource {
              ? scan_t_origin
              : pass_start_times_.back() + scan_pass_duration;
   }
-
-  // Time-resolved source: peak local cooling between passes is meaningful,
-  // so the app's fast-forward path can call its Moser predictor.
-  virtual bool supports_time_queries() const override { return true; }
 
   MoserMode get_mode() const { return mode; }
 

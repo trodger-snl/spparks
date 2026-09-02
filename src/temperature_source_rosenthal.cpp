@@ -140,20 +140,6 @@ double RosenthalTemperatureSource::get_temperature_at_xyz_and_time(double /*x*/,
   return ambient_temperature;
 }
 
-/* ---------------------------------------------------------------------- */
-
-void RosenthalTemperatureSource::update_temperatures(double /*dt*/, double /*simulation_time*/)
-{
-  // Analytical solution: nothing to load.
-}
-
-/* ---------------------------------------------------------------------- */
-
-bool RosenthalTemperatureSource::needs_data_refresh(double /*simulation_time*/)
-{
-  return false;
-}
-
 /* ----------------------------------------------------------------------
    Core kernel (Eq. B4 form):
    T_rise = (Q_eff / (2 pi k R)) * exp(-v (xi + R) / (2 alpha))

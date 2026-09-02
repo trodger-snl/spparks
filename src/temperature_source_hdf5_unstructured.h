@@ -107,11 +107,8 @@ public:
   // Required virtual methods from base class
   virtual void setup_temperature_source(const std::vector<std::string> &args) override;
   virtual double get_temperature_at_xyz_and_time(double x, double y, double z, double time) override;
-  virtual void update_temperatures(double dt, double simulation_time) override;
-  virtual bool needs_data_refresh(double simulation_time) override;
-  virtual void cleanup() override;
-  virtual std::string get_source_type() const override { return "hdf5_unstructured"; }
   virtual void print_source_info() const override;
+  void cleanup();
 
   // Constants from reference implementation
   static constexpr unsigned NODES_PER_ELEM = 4;  // Tetrahedral elements
@@ -124,8 +121,6 @@ public:
   void set_use_spatial_grid(bool enable) { use_spatial_grid = enable; }
   void set_use_element_cache(bool enable) { use_element_cache = enable; }
   
-  // Time query interface implementation
-  virtual bool supports_time_queries() const override { return true; }
   virtual double get_next_time_with_temperature(double current_time, double threshold_temp) override;
   
   // Thermal interval data structure
@@ -136,8 +131,8 @@ public:
     ThermalInterval(double start, double end) : start_time(start), end_time(end) {}
   };
 
-  // Site-based temperature access optimized for lattice
-  virtual double get_temperature_at_site(int site_index, double time) override;
+  // Site-based temperature access (prepares the caches, then the fast path)
+  double get_temperature_at_site(int site_index, double time);
 
   // Enable anisotropic mesh-Laplacian smoothing of the per-node temperature
   // field. Parameters are stored and the edge-weighted node adjacency is

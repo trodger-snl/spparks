@@ -31,8 +31,16 @@ set(SPK_STYLE_RULES
     "solve|SOLVE_CLASS|solve_"
 )
 
-# Directories whose headers can register styles.
+# Directories whose headers can register styles. Package directories are only
+# scanned when the package is on, so a disabled package's headers never reach a
+# style header.
 set(SPK_STYLE_DIRS "${SPK_SOURCE_DIR}")
+if(SPPARKS_PACKAGE_KOKKOS)
+    list(APPEND SPK_STYLE_DIRS "${SPK_SOURCE_DIR}/KOKKOS")
+endif()
+if(SPPARKS_PACKAGE_STITCH)
+    list(APPEND SPK_STYLE_DIRS "${SPK_SOURCE_DIR}/STITCH")
+endif()
 
 # Sets SPK_STYLE_${STYLE}_HEADERS (candidate headers, for build dependencies)
 # in the caller's scope and rewrites style_${STYLE}.h if its content changed.

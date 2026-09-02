@@ -39,22 +39,28 @@ function(configure_conditional_sources)
         message(STATUS "Added image-dependent sources")
     endif()
 
-    # Add KOKKOS package sources
+    # Package sources compile in place from src/KOKKOS/ and src/STITCH/ (those
+    # directories are on the include path when the package is on).
     if(SPPARKS_PACKAGE_KOKKOS)
         list(APPEND SPPARKS_SOURCES
-            app_lattice_kokkos.cpp
-            app_potts_kokkos.cpp
-            app_potts_neigh_kokkos.cpp
-            app_potts_neighonly_kokkos.cpp
-            app_potts_quaternion_kokkos.cpp
+            KOKKOS/app_lattice_kokkos.cpp
+            KOKKOS/app_potts_kokkos.cpp
+            KOKKOS/app_potts_neigh_kokkos.cpp
+            KOKKOS/app_potts_neighonly_kokkos.cpp
+            KOKKOS/app_potts_quaternion_kokkos.cpp
         )
         # The Kokkos additive/texture app links against the HighFive-based HDF5
         # temperature sources (same gating rationale as the CPU app above), so it
         # is only registered when both HighFive and MPI are enabled.
         if(SPPARKS_ENABLE_HIGHFIVE AND SPPARKS_ENABLE_MPI)
-            list(APPEND SPPARKS_SOURCES app_additive_texture_kokkos.cpp)
+            list(APPEND SPPARKS_SOURCES KOKKOS/app_additive_texture_kokkos.cpp)
         endif()
         message(STATUS "Added KOKKOS package sources")
+    endif()
+    if(SPPARKS_PACKAGE_STITCH AND STITCH_LIBRARY)
+        list(APPEND SPPARKS_SOURCES STITCH/dump_stitch.cpp)
+    elseif(SPPARKS_PACKAGE_STITCH)
+        message(WARNING "STITCH package enabled but library not found at '${STITCH_LIBRARY}' - dump_stitch not added to sources")
     endif()
 
     # Update the parent scope

@@ -154,7 +154,9 @@ option(SPPARKS_ENABLE_HIGHFIVE "Enable HighFive C++ HDF5 wrapper" OFF)
 option(SPPARKS_USE_EXTERNAL_HIGHFIVE "Use system-provided HighFive instead of FetchContent" OFF)
 option(SPPARKS_UNORDERED_MAP "Use unordered_map" OFF)
 
-# Kokkos options
+# Packages: optional components whose sources live in src/KOKKOS/ and src/STITCH/
+# and compile from there (no copying into src/).
+option(SPPARKS_PACKAGE_STITCH "Enable STITCH package (dump stitch)" OFF)
 option(SPPARKS_PACKAGE_KOKKOS "Enable KOKKOS package for GPU acceleration" OFF)
 set(SPPARKS_KOKKOS_BACKEND "OPENMP" CACHE STRING "Kokkos backend (OPENMP, CUDA, HIP, SYCL, SERIAL)")
 set_property(CACHE SPPARKS_KOKKOS_BACKEND PROPERTY STRINGS OPENMP CUDA HIP SYCL SERIAL)
@@ -681,6 +683,12 @@ endif()
 
 # Include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+if(SPPARKS_PACKAGE_KOKKOS)
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/KOKKOS)
+endif()
+if(SPPARKS_PACKAGE_STITCH)
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/STITCH)
+endif()
 
 # Source files (base list - conditional sources added below)
 set(SPPARKS_SOURCES
@@ -774,19 +782,9 @@ set(SPPARKS_SOURCES
 include(cmake/ConditionalSources.cmake)
 configure_conditional_sources()
 
-# Add package-specific sources
-if(SPPARKS_PACKAGE_STITCH AND STITCH_LIBRARY)
-    list(APPEND SPPARKS_SOURCES STITCH/dump_stitch.cpp)
-    message(STATUS "Added STITCH/dump_stitch.cpp to sources")
-elseif(SPPARKS_PACKAGE_STITCH)
-    message(WARNING "STITCH package enabled but library not found at '${STITCH_LIBRARY}' - dump_stitch not added to sources")
-endif()
-
 # Generate style headers after all dependencies are resolved
 include(cmake/generate_styles.cmake)
 
-# Header files for style generation
-file(GLOB SPPARKS_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
 
 # Create library targets
 if(SPPARKS_BUILD_LIB OR NOT SPPARKS_BUILD_EXECUTABLE)

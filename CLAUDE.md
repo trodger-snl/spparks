@@ -45,24 +45,24 @@ exists but the CMake/HighFive path is the supported one for the additive apps.
 There is no unit-test harness for this work; correctness is verified by running
 inputs and comparing output — see "Validating the GPU port" below.
 
-## CRITICAL: package dual-directory system + reconfigure gotcha
+## Packages and style headers
 
-Optional components (KOKKOS, STITCH) are *packages*: reference sources live in
-`src/PACKAGE/` (tracked in git) and are **copied into `src/`** (the git-ignored
-"installed" copies that actually compile) at CMake configure time.
+Optional components (KOKKOS, STITCH) are *packages*: their sources live in
+`src/KOKKOS/` and `src/STITCH/` and compile from there when
+`SPPARKS_PACKAGE_KOKKOS` / `SPPARKS_PACKAGE_STITCH` are on (the package
+directory goes on the include path). Nothing is copied into `src/`; edit the
+package files in place and rebuild. Adding a *new* source or style header
+still needs a reconfigure (`cmake -S src -B build-verify`) because the source
+list and the style headers are built at configure time.
 
-- **Always edit `src/KOKKOS/…`, never the `src/…` installed copy** — installed
-  copies are overwritten on reinstall.
-- **After editing any `src/KOKKOS/` file, re-run `cmake -S src -B build-verify`
-  before `cmake --build`** — otherwise the stale `src/` copy is compiled and your
-  change silently has no effect. (This bites repeatedly.)
-
-`style_*.h` headers are auto-generated and register app/command/etc. classes via
-`AppStyle(...)` macros in the headers. The `additive/texture*` styles are gated on
-**HighFive + MPI** (`src/cmake/ConditionalSources.cmake`,
-`generate_styles.cmake`, `regenerate_single_style.cmake`). If a style is "not
-recognized" at runtime, the style header generation skipped it — check that
-gating, not the C++.
+`style_*.h` headers are auto-generated (`src/cmake/generate_styles.cmake`) and
+register app/command/etc. classes via `AppStyle(...)` macros in the headers.
+The `additive/texture*` styles are gated on **HighFive + MPI**
+(`src/cmake/ConditionalSources.cmake`). If a style is "not recognized" at
+runtime, the style header generation skipped it — check that gating, not the
+C++. Any `cmake -S src -B <dir>` rewrites the shared `src/style_*.h`, so a
+scratch configure with fewer features can deregister styles for a working
+build; reconfigure the real build dir afterwards.
 
 ## Core SPPARKS architecture (big picture)
 
@@ -132,8 +132,7 @@ bit-for-bit match. The Kokkos app requires `sweep color`. Base test inputs are i
 
 Commit each task as it completes (don't batch — interactive `git add -p` is
 unavailable here, so interleaved changes are painful to split). Exclude the
-`lib/kokkos` submodule pointer, `build-verify/` artifacts, and pre-existing
-`src/cmake/package_installer.cmake` changes unless asked. End commit messages with
+`lib/kokkos` submodule pointer and `build-*/` artifacts unless asked. End commit messages with
 the `Co-Authored-By:` / `Claude-Session:` trailer the harness specifies for the
 current session.
 

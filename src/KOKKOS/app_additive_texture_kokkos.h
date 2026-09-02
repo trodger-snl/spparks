@@ -107,7 +107,6 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   int nucleation_kernel(Kokkos::View<int*> d_active_sites, int n_active);
   int particle_flipper_kernel(Kokkos::View<int*> d_active_sites, int n_active);
   int solidification_kernel(Kokkos::View<int*> d_active_sites, int n_active);
-  int smoothing_kernel();
   int smoothing_kernel_efficient(Kokkos::View<int*> d_smoothing_sites, int n_sites);
 
   // Powder phase activation

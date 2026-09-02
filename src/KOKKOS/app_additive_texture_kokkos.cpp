@@ -754,19 +754,18 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
   // (Re)upload the shared geometry, per-lobe powers, and per-lobe fluctuation
   // tables when the scan generation changes.
   if (d_seg_version != plan.version) {
-    std::vector<double> b, xl, yl, nx, ny, sp, pw, ft, fw, fd, fp;
-    thermal->moser_source()->copy_device_data(b, xl, yl, nx, ny, sp, pw, ft, fw, fd, fp);
-    d_seg_bounds = upload_vec<double>("seg_bounds", b);
-    d_seg_xl     = upload_vec<double>("seg_xl", xl);
-    d_seg_yl     = upload_vec<double>("seg_yl", yl);
-    d_seg_nx     = upload_vec<double>("seg_nx", nx);
-    d_seg_ny     = upload_vec<double>("seg_ny", ny);
-    d_seg_speeds = upload_vec<double>("seg_speeds", sp);
-    d_seg_powers = upload_vec<double>("seg_powers", pw);
-    d_fluct_t    = upload_vec<double>("fluct_t", ft);
-    d_fluct_w    = upload_vec<double>("fluct_w", fw);
-    d_fluct_d    = upload_vec<double>("fluct_d", fd);
-    d_fluct_p    = upload_vec<double>("fluct_p", fp);
+    const MoserTemperatureSource::DeviceArrays a = thermal->moser_source()->copy_device_data();
+    d_seg_bounds = upload_vec<double>("seg_bounds", a.bounds);
+    d_seg_xl     = upload_vec<double>("seg_xl", a.xl);
+    d_seg_yl     = upload_vec<double>("seg_yl", a.yl);
+    d_seg_nx     = upload_vec<double>("seg_nx", a.normals_x);
+    d_seg_ny     = upload_vec<double>("seg_ny", a.normals_y);
+    d_seg_speeds = upload_vec<double>("seg_speeds", a.speeds);
+    d_seg_powers = upload_vec<double>("seg_powers", a.powers);
+    d_fluct_t    = upload_vec<double>("fluct_t", a.fluct_t);
+    d_fluct_w    = upload_vec<double>("fluct_w", a.fluct_w);
+    d_fluct_d    = upload_vec<double>("fluct_d", a.fluct_d);
+    d_fluct_p    = upload_vec<double>("fluct_p", a.fluct_p);
     d_seg_version = plan.version;
   }
 

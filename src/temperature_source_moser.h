@@ -183,21 +183,16 @@ class MoserTemperatureSource : public TemperatureSource {
   // false otherwise (host path). plan.time is set by the caller.
   bool fill_device_plan(struct MoserDevicePlan &plan) const;
 
-  // Copy the variable-length device data for upload. The path geometry
+  // The variable-length device data for upload. The path geometry
   // (bounds/xl/yl/normals/speeds, length nseg) is shared across lobes; `powers`
   // is concatenated per lobe (length n_lobes*nseg, lobe-major); the fluctuation
   // arrays are concatenated per lobe (length sum of fluct_n). Only valid after
   // a successful fill_device_plan.
-  void copy_device_data(std::vector<double> &bounds,
-                        std::vector<double> &xl, std::vector<double> &yl,
-                        std::vector<double> &normals_x,
-                        std::vector<double> &normals_y,
-                        std::vector<double> &speeds,
-                        std::vector<double> &powers,
-                        std::vector<double> &fluct_t,
-                        std::vector<double> &fluct_w,
-                        std::vector<double> &fluct_d,
-                        std::vector<double> &fluct_p) const;
+  struct DeviceArrays {
+    std::vector<double> bounds, xl, yl, normals_x, normals_y, speeds, powers;
+    std::vector<double> fluct_t, fluct_w, fluct_d, fluct_p;
+  };
+  DeviceArrays copy_device_data() const;
 
   // ----- Stochastic ΔW/W, ΔD/D, ΔP/P fluctuations -----------------------
   // Time-domain recursive PSD generator. Pre-builds an emission-time-keyed

@@ -515,14 +515,9 @@ bool MoserTemperatureSource::fill_device_plan(MoserDevicePlan &plan) const
   return plan.valid;
 }
 
-void MoserTemperatureSource::copy_device_data(
-    std::vector<double> &bounds, std::vector<double> &xl,
-    std::vector<double> &yl, std::vector<double> &normals_x,
-    std::vector<double> &normals_y, std::vector<double> &speeds,
-    std::vector<double> &powers, std::vector<double> &fluct_t,
-    std::vector<double> &fluct_w, std::vector<double> &fluct_d,
-    std::vector<double> &fluct_p) const
+MoserTemperatureSource::DeviceArrays MoserTemperatureSource::copy_device_data() const
 {
+  DeviceArrays a;
   // Shared path geometry from lobe 0 (identical across lobes).
   const auto &geom = *lobes_[0].scan;
   const int n = static_cast<int>(geom.bounds.size());
@@ -530,26 +525,25 @@ void MoserTemperatureSource::copy_device_data(
     dst.assign(src, src + n);
   };
   auto &g = const_cast<GREENAM_Scan &>(geom);
-  load(bounds, g.bounds.data());
-  load(xl, g.xl.data());
-  load(yl, g.yl.data());
-  load(normals_x, g.normals_x.data());
-  load(normals_y, g.normals_y.data());
-  load(speeds, g.speeds.data());
+  load(a.bounds, g.bounds.data());
+  load(a.xl, g.xl.data());
+  load(a.yl, g.yl.data());
+  load(a.normals_x, g.normals_x.data());
+  load(a.normals_y, g.normals_y.data());
+  load(a.speeds, g.speeds.data());
 
   // Per-lobe powers (lobe-major: lobe 0 segments, then lobe 1 segments) and
   // per-lobe fluctuation tables (concatenated).
-  powers.clear();
-  fluct_t.clear(); fluct_w.clear(); fluct_d.clear(); fluct_p.clear();
   for (int li = 0; li < n_lobes_; ++li) {
     auto &s = const_cast<GREENAM_Scan &>(*lobes_[li].scan);
-    powers.insert(powers.end(), s.powers.data(), s.powers.data() + n);
+    a.powers.insert(a.powers.end(), s.powers.data(), s.powers.data() + n);
     const auto &ft = lobes_[li].fluct_table;
-    fluct_t.insert(fluct_t.end(), ft.t_grid.begin(),   ft.t_grid.end());
-    fluct_w.insert(fluct_w.end(), ft.factor_W.begin(), ft.factor_W.end());
-    fluct_d.insert(fluct_d.end(), ft.factor_D.begin(), ft.factor_D.end());
-    fluct_p.insert(fluct_p.end(), ft.factor_P.begin(), ft.factor_P.end());
+    a.fluct_t.insert(a.fluct_t.end(), ft.t_grid.begin(),   ft.t_grid.end());
+    a.fluct_w.insert(a.fluct_w.end(), ft.factor_W.begin(), ft.factor_W.end());
+    a.fluct_d.insert(a.fluct_d.end(), ft.factor_D.begin(), ft.factor_D.end());
+    a.fluct_p.insert(a.fluct_p.end(), ft.factor_P.begin(), ft.factor_P.end());
   }
+  return a;
 }
 
 /* ----------------------------------------------------------------------

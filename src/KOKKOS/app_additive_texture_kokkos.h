@@ -262,8 +262,6 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   double *solid_d;
   double *G;
   double *V;
-  double *neigh_dist;
-  double *unique_dot;
 
   // Temperature-I/O orchestration: shared with the CPU app. ThermalManager owns
   // the temperature_source, laser path, fast-forward predictors, and smoothing;
@@ -271,20 +269,8 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // refresh_thermal_host() populates each step. See thermal_manager.h.
   std::unique_ptr<ThermalManager> thermal;
   ThermalHost thermal_host_;
-  bool use_temperature_source;        // vestigial; thermal->enabled() is canonical
-  double fast_forward_search_window;
-
-  // Index-based selective ghost communication (used by ThermalManager's
-  // optional temperature-smoothing / diagnostics paths). Null/0 disables it,
-  // which is the default for the Kokkos app (device buffers carry the KMC
-  // ghost exchange); set when host-side temperature smoothing is enabled.
-  const int *ghost_iindices = nullptr;
-  int nghost_iarray = 0;
-  const int *ghost_dindices = nullptr;
-  int nghost_darray = 0;
 
   // Physical parameters (same as CPU version)
-  double time_step;
   double dt;
   double dx;
   double tl;  // Liquidus temperature
@@ -375,17 +361,6 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   int *nucleation_flags;
   double *nucleation_temps;
   double *nucleation_sizes;
-
-  // Void parameters
-  double void_density;
-  double void_pore_fraction;
-  double void_radius_mean;
-  double void_radius_std;
-  double void_radius_min;
-  double void_radius_max;
-  int enable_voids;
-
-  int t_active;
 
   // Powder activation tracking
   double last_powder_activation_time;  // Track when we last activated powder sites

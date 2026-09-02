@@ -101,8 +101,6 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
   solid_d = nullptr;
   G = nullptr;
   V = nullptr;
-  neigh_dist = nullptr;
-  unique_dot = nullptr;
   nucleation_flags = nullptr;
   nucleation_temps = nullptr;
   nucleation_sizes = nullptr;
@@ -146,19 +144,6 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
   solid_front_coeffs[2] = 2.2196e-3;
   solid_front_coeffs[3] = 0.0;
 
-  // Void parameters (disabled by default)
-  enable_voids = 0;
-  void_density = 0.0;
-  void_pore_fraction = 0.0;
-  void_radius_mean = 1.0;
-  void_radius_std = 0.1;
-  void_radius_min = 0.5;
-  void_radius_max = 2.0;
-
-  // Temperature source (initialized via input command)
-  use_temperature_source = false;
-  fast_forward_search_window = 0.1;  // seconds
-
   // Temperature-I/O orchestration (source setup/update, laser scan path,
   // multi-pass pause/reset scheduling, fast-forward predictors, smoothing)
   // lives in the shared ThermalManager, exactly as the CPU AppAdditiveTexture.
@@ -166,9 +151,6 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
   // the manager reads/writes; the manager fills the host T[] which we then
   // sync to the device k_T DualView.
   thermal = std::unique_ptr<ThermalManager>(new ThermalManager(spk, &thermal_host_));
-
-  t_active = 0;
-  time_step = dt;
 
   // Initialize powder activation tracking
   last_powder_activation_time = -1.0;  // Force activation at init
@@ -196,8 +178,6 @@ AppAdditiveTextureKokkos::~AppAdditiveTextureKokkos()
   delete[] nucleation_flags;
   delete[] nucleation_temps;
   delete[] nucleation_sizes;
-  delete[] neigh_dist;
-  delete[] unique_dot;
 }
 
 /* ----------------------------------------------------------------------
@@ -217,13 +197,6 @@ void AppAdditiveTextureKokkos::grow_app()
   solid_d = darray[6];
   G = darray[7];
   V = darray[8];
-
-  // Allocate neighbor distance and unique arrays on host (used in site_event methods)
-  if (neigh_dist) delete[] neigh_dist;
-  neigh_dist = new double[maxneigh];
-
-  if (unique_dot) delete[] unique_dot;
-  unique_dot = new double[maxneigh];
 }
 
 /* ----------------------------------------------------------------------
@@ -389,10 +362,12 @@ void AppAdditiveTextureKokkos::refresh_thermal_host()
   thermal_host_.time = time;
   thermal_host_.dt = dt;
   thermal_host_.comm = comm;
-  thermal_host_.ghost_iindices = ghost_iindices;
-  thermal_host_.nghost_iarray = nghost_iarray;
-  thermal_host_.ghost_dindices = ghost_dindices;
-  thermal_host_.nghost_darray = nghost_darray;
+  // No index-selective host ghost comm here: device buffers carry the KMC
+  // ghost exchange, so the manager's host smoothing paths see an empty list.
+  thermal_host_.ghost_iindices = nullptr;
+  thermal_host_.nghost_iarray = 0;
+  thermal_host_.ghost_dindices = nullptr;
+  thermal_host_.nghost_darray = 0;
 }
 
 /* ----------------------------------------------------------------------
@@ -1794,7 +1769,6 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
 
   // Capture parameters
   double tl_local = this->tl;
-  double ts_local = this->ts;
   double dt_local = this->dt;
   int nrefine_local = this->nrefine;
   double dx_local = this->dx;

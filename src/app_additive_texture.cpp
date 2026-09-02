@@ -1537,140 +1537,47 @@ std::vector<double> AppAdditiveTexture::normal_finder(int site)
 	// neighbor directly above, so treat them as melt-surface.
 	bool is_melt_surface = (numneigh[site] <= 13) ||
 	                       (active_flag[neighbor[site][13]] <= 1);
+	double site_z = xyz[site][2];
 
-	if (is_melt_surface) {
-		// Filter neighbors to only include those at or below current z-level
-		double site_z = xyz[site][2];
-		
-		// Weighted least squares with z-filtered neighbors
-		double AtA[9] = {0}; // 3x3 matrix A^T * W * A
-		double Atb[3] = {0}; // 3x1 vector A^T * W * b
-		double T_center = T[site];
-		int valid_neighbors = 0;
-		
-		for (int n = 0; n < numneigh[site] && n < 26; n++) {
-			int neighbor_site = neighbor[site][n];
-			
-			// Skip invalid neighbors
-			if (neighbor_site < 0 || neighbor_site >= app->nlocal + app->nghost) continue;
-			
-			// Only use neighbors at or below current site's z-coordinate
-			if (xyz[neighbor_site][2] > site_z) continue;
-			
-			// Get neighbor offset coordinates
-			double dx_n = offset_map[n][0] * dx;
-			double dy_n = offset_map[n][1] * dx;
-			double dz_n = offset_map[n][2] * dx;
-			
-			// Temperature difference
-			double dT = T[neighbor_site] - T_center;
-			
-			// Distance and weight
-			double dist = sqrt(dx_n*dx_n + dy_n*dy_n + dz_n*dz_n);
-			double weight = 1.0 / (dist*dist + 1e-12);
-			
-			// Build weighted normal equations
-			AtA[0] += weight * dx_n * dx_n;  // AtA[0,0]
-			AtA[1] += weight * dx_n * dy_n;  // AtA[0,1]
-			AtA[2] += weight * dx_n * dz_n;  // AtA[0,2]
-			AtA[3] += weight * dy_n * dx_n;  // AtA[1,0] 
-			AtA[4] += weight * dy_n * dy_n;  // AtA[1,1]
-			AtA[5] += weight * dy_n * dz_n;  // AtA[1,2]
-			AtA[6] += weight * dz_n * dx_n;  // AtA[2,0]
-			AtA[7] += weight * dz_n * dy_n;  // AtA[2,1]
-			AtA[8] += weight * dz_n * dz_n;  // AtA[2,2]
-			
-			Atb[0] += weight * dx_n * dT;
-			Atb[1] += weight * dy_n * dT;
-			Atb[2] += weight * dz_n * dT;
-			
-			valid_neighbors++;
-		}
-
-		// Compute gradient using weighted least squares with Cramer's rule
-		// Note: Diagnostics (2M+ calls) showed matrix always non-singular and valid_neighbors always >= 3
-		double det = AtA[0]*(AtA[4]*AtA[8] - AtA[5]*AtA[7]) -
-		             AtA[1]*(AtA[3]*AtA[8] - AtA[5]*AtA[6]) +
-		             AtA[2]*(AtA[3]*AtA[7] - AtA[4]*AtA[6]);
-
-		grad_x = (Atb[0]*(AtA[4]*AtA[8] - AtA[5]*AtA[7]) -
-		          AtA[1]*(Atb[1]*AtA[8] - AtA[5]*Atb[2]) +
-		          AtA[2]*(Atb[1]*AtA[7] - AtA[4]*Atb[2])) / det;
-
-		grad_y = (AtA[0]*(Atb[1]*AtA[8] - AtA[5]*Atb[2]) -
-		          Atb[0]*(AtA[3]*AtA[8] - AtA[5]*AtA[6]) +
-		          AtA[2]*(AtA[3]*Atb[2] - Atb[1]*AtA[6])) / det;
-
-		grad_z = (AtA[0]*(AtA[4]*Atb[2] - Atb[1]*AtA[7]) -
-		          AtA[1]*(AtA[3]*Atb[2] - Atb[1]*AtA[6]) +
-		          Atb[0]*(AtA[3]*AtA[7] - AtA[4]*AtA[6])) / det;
-		
-		// Normalize and return (with magnitude as 4th element)
-		// Note: Diagnostics (2M+ calls) showed norm always > 1e-12
-		double norm = sqrt(grad_x*grad_x + grad_y*grad_y + grad_z*grad_z);
-		std::vector<double> result(4);  // 4 elements: [norm_x, norm_y, norm_z, magnitude]
-
-		result[0] = fabs(grad_x)/norm;
-		result[1] = fabs(grad_y)/norm;
-		result[2] = fabs(grad_z)/norm;
-		result[3] = norm;  // Store the actual gradient magnitude
-
-		return result;
-	}
-
-	// Use weighted least squares with all available neighbors
-	
-	// Weighted least squares matrices: A*grad = b
-	// A is 26x3 matrix of [dx dy dz] for each neighbor
-	// b is 26x1 vector of temperature differences
-	// weights based on inverse distance
+	// Weighted least squares: A*grad = b, A rows [dx dy dz] per neighbor, b the
+	// temperature differences, weights inverse distance squared. At the melt
+	// surface only neighbors at or below the site's z-level contribute.
 	double AtA[9] = {0}; // 3x3 matrix A^T * W * A
 	double Atb[3] = {0}; // 3x1 vector A^T * W * b
-	
 	double T_center = T[site];
-	
+
 	for (int n = 0; n < numneigh[site] && n < 26; n++) {
 		int neighbor_site = neighbor[site][n];
-		
-		// Skip invalid neighbors
 		if (neighbor_site < 0 || neighbor_site >= app->nlocal + app->nghost) continue;
-		
-		// Get neighbor offset coordinates
-		double dx_n = offset_map[n][0] * dx;  // x offset in physical units
-		double dy_n = offset_map[n][1] * dx;  // y offset 
-		double dz_n = offset_map[n][2] * dx;  // z offset
-		
-		// Temperature difference
+		if (is_melt_surface && xyz[neighbor_site][2] > site_z) continue;
+
+		double dx_n = offset_map[n][0] * dx;
+		double dy_n = offset_map[n][1] * dx;
+		double dz_n = offset_map[n][2] * dx;
 		double dT = T[neighbor_site] - T_center;
-		
-		// Distance and weight (inverse distance squared with small regularization)
 		double dist = sqrt(dx_n*dx_n + dy_n*dy_n + dz_n*dz_n);
 		double weight = 1.0 / (dist*dist + 1e-12);
-		
-		// Build weighted normal equations: AtA * grad = Atb
-		// A matrix row: [dx_n, dy_n, dz_n]
+
 		AtA[0] += weight * dx_n * dx_n;  // AtA[0,0]
 		AtA[1] += weight * dx_n * dy_n;  // AtA[0,1]
 		AtA[2] += weight * dx_n * dz_n;  // AtA[0,2]
-		AtA[3] += weight * dy_n * dx_n;  // AtA[1,0] 
+		AtA[3] += weight * dy_n * dx_n;  // AtA[1,0]
 		AtA[4] += weight * dy_n * dy_n;  // AtA[1,1]
 		AtA[5] += weight * dy_n * dz_n;  // AtA[1,2]
 		AtA[6] += weight * dz_n * dx_n;  // AtA[2,0]
 		AtA[7] += weight * dz_n * dy_n;  // AtA[2,1]
 		AtA[8] += weight * dz_n * dz_n;  // AtA[2,2]
-		
-		Atb[0] += weight * dx_n * dT;    // Atb[0]
-		Atb[1] += weight * dy_n * dT;    // Atb[1] 
-		Atb[2] += weight * dz_n * dT;    // Atb[2]
+		Atb[0] += weight * dx_n * dT;
+		Atb[1] += weight * dy_n * dT;
+		Atb[2] += weight * dz_n * dT;
 	}
-	
-	// Solve 3x3 system AtA * grad = Atb using Cramer's rule
+
+	// Solve the 3x3 system with Cramer's rule.
 	// Note: Diagnostics (2M+ calls) showed matrix always non-singular
 	double det = AtA[0]*(AtA[4]*AtA[8] - AtA[5]*AtA[7]) -
 	             AtA[1]*(AtA[3]*AtA[8] - AtA[5]*AtA[6]) +
 	             AtA[2]*(AtA[3]*AtA[7] - AtA[4]*AtA[6]);
 
-	// Compute gradient using Cramer's rule
 	grad_x = (Atb[0]*(AtA[4]*AtA[8] - AtA[5]*AtA[7]) -
 	          AtA[1]*(Atb[1]*AtA[8] - AtA[5]*Atb[2]) +
 	          AtA[2]*(Atb[1]*AtA[7] - AtA[4]*Atb[2])) / det;
@@ -1686,13 +1593,11 @@ std::vector<double> AppAdditiveTexture::normal_finder(int site)
 	// Normalize and return gradient direction (with magnitude as 4th element)
 	// Note: Diagnostics (2M+ calls) showed norm always > 1e-12
 	double norm = sqrt(grad_x*grad_x + grad_y*grad_y + grad_z*grad_z);
-	std::vector<double> result(4);  // 4 elements: [norm_x, norm_y, norm_z, magnitude]
-
+	std::vector<double> result(4);  // [norm_x, norm_y, norm_z, magnitude]
 	result[0] = fabs(grad_x)/norm;
 	result[1] = fabs(grad_y)/norm;
 	result[2] = fabs(grad_z)/norm;
-	result[3] = norm;  // Store the actual gradient magnitude
-
+	result[3] = norm;
 	return result;
 }
 

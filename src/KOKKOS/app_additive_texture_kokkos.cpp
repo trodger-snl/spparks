@@ -53,6 +53,23 @@ using HostUnmanagedInt =
 using HostUnmanagedDouble =
     Kokkos::View<double*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>;
 
+// Upload a host array into a fresh device View, casting element-wise. A
+// zero-length source yields a zero-extent View (legal; never indexed).
+template<typename U, typename T>
+static Kokkos::View<U*> upload_vec(const char *name, const T *src, size_t n)
+{
+  Kokkos::View<U*> dv(name, n);
+  auto hm = Kokkos::create_mirror_view(dv);
+  for (size_t i = 0; i < n; i++) hm(i) = (U) src[i];
+  Kokkos::deep_copy(dv, hm);
+  return dv;
+}
+template<typename U, typename T>
+static Kokkos::View<U*> upload_vec(const char *name, const std::vector<T> &v)
+{
+  return upload_vec<U>(name, v.data(), v.size());
+}
+
 /* ----------------------------------------------------------------------
    Helper to construct parent class args from user input
 ------------------------------------------------------------------------- */
@@ -216,13 +233,8 @@ void AppAdditiveTextureKokkos::allocate_app_views()
   d_grad_z = Kokkos::View<double*>("gradient_z", nall);
   d_V = Kokkos::View<double*>("solidification_velocity", nall);
 
-  // Per-spin nucleation parameter arrays (device-accessible)
-  d_nucleation_flags = Kokkos::View<int*>("nucleation_flags", nspins);
-  d_nucleation_temps = Kokkos::View<double*>("nucleation_temps", nspins);
-  d_nucleation_sizes = Kokkos::View<double*>("nucleation_sizes", nspins);
-
-  // Global parameter arrays (device-accessible constants)
-  d_solid_front_coeffs = Kokkos::View<double*>("solid_front_coeffs", solid_front_length);
+  // Global parameter arrays (device-accessible constants); the per-spin
+  // nucleation arrays and solid-front coefficients are uploaded at init.
   d_texture_params = Kokkos::View<double[3]>("texture_params");
 }
 
@@ -570,17 +582,8 @@ void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
   if (plan.mode == 2 && d_ros_nquad != plan.n_quad) {
     std::vector<double> nodes, weights;
     thermal->rosenthal_copy_keyhole_quadrature(nodes, weights);
-    auto up = [](Kokkos::View<double*> &dv, const std::vector<double> &h,
-                 const char *name) {
-      const int n = (int)h.size();
-      dv = Kokkos::View<double*>(name, n);
-      if (n == 0) return;
-      auto hm = Kokkos::create_mirror_view(dv);
-      for (int i = 0; i < n; i++) hm(i) = h[i];
-      Kokkos::deep_copy(dv, hm);
-    };
-    up(d_ros_qnodes, nodes, "ros_qnodes");
-    up(d_ros_qweights, weights, "ros_qweights");
+    d_ros_qnodes = upload_vec<double>("ros_qnodes", nodes);
+    d_ros_qweights = upload_vec<double>("ros_qweights", weights);
     d_ros_nquad = plan.n_quad;
   }
 
@@ -589,17 +592,9 @@ void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
   auto qnodes = d_ros_qnodes;
   auto qweights = d_ros_qweights;
 
-  // Capture plan scalars by value for device lambda.
+  // The plan is a trivially-copyable POD: capture it by value.
+  const RosenthalDevicePlan p = plan;
   const double dx_l = this->dx;
-  const double px = plan.px, py = plan.py, layer_z = plan.layer_z;
-  const double ux = plan.ux, uy = plan.uy;
-  const double v = plan.v, T0 = plan.T0;
-  const double lambdaQ = plan.lambdaQ, k_cond = plan.k_cond, alpha = plan.alpha;
-  const double r_min = plan.r_min, eta_y = plan.eta_y, eta_z = plan.eta_z;
-  const double lambda_pQ = plan.lambda_pQ, lambda_lQ = plan.lambda_lQ;
-  const int n_quad = plan.n_quad;
-  const int mode = plan.mode;
-  const bool scan_active = plan.scan_active;
   const double two_pi = 2.0 * 3.14159265358979323846;
   const int nlocal_l = this->nlocal;
 
@@ -615,51 +610,51 @@ void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
     const double z = d_xyz_local(i,2) * dx_l;
 
     // Pool-local frame: project (site - laser) onto scan / transverse axes.
-    const double rsx0 = x - px;
-    const double rsx1 = y - py;
-    const double z_rel_d = z - layer_z;
-    const double xi_d = ux*rsx0 + uy*rsx1;          // along scan direction
-    const double tsx0 = rsx0 - xi_d*ux;
-    const double tsx1 = rsx1 - xi_d*uy;
-    const double y_rel_d = -uy*tsx0 + ux*tsx1;      // transverse
+    const double rsx0 = x - p.px;
+    const double rsx1 = y - p.py;
+    const double z_rel_d = z - p.layer_z;
+    const double xi_d = p.ux*rsx0 + p.uy*rsx1;          // along scan direction
+    const double tsx0 = rsx0 - xi_d*p.ux;
+    const double tsx1 = rsx1 - xi_d*p.uy;
+    const double y_rel_d = -p.uy*tsx0 + p.ux*tsx1;      // transverse
 
-    double Tval = T0;
-    // Free-surface cutoff: vacuum above the laser plane. Inactive path -> T0.
-    if (scan_active && z_rel_d <= 0.0) {
+    double Tval = p.T0;
+    // Free-surface cutoff: vacuum above the laser plane. Inactive path -> p.T0.
+    if (p.scan_active && z_rel_d <= 0.0) {
       // Cast the (small, pool-local) coordinates and material params to AMReal.
       // The transcendental kernel math below runs in AMReal -- FP32 when built
       // -DSPK_AM_TEMP_FP32, otherwise identical FP64 to the original path.
       const AMReal xi = (AMReal)xi_d;
       const AMReal y_rel = (AMReal)y_rel_d;
       const AMReal z_rel = (AMReal)z_rel_d;
-      const AMReal rv = (AMReal)v, rr_min = (AMReal)r_min;
-      const AMReal rk_cond = (AMReal)k_cond, ralpha = (AMReal)alpha;
+      const AMReal rv = (AMReal)p.v, rr_min = (AMReal)p.r_min;
+      const AMReal rk_cond = (AMReal)p.k_cond, ralpha = (AMReal)p.alpha;
       const AMReal rtwo_pi = (AMReal)two_pi;
-      if (mode == 2) {
+      if (p.mode == 2) {
         // KEYHOLE: image-doubled surface point source + buried line source
         // integrated over the Gauss-Legendre nodes (image-doubled per node).
         const AMReal R = Kokkos::sqrt(xi*xi + y_rel*y_rel + z_rel*z_rel);
         AMReal T_rise = (AMReal)2 * rosenthal_device_kernel<AMReal>(
-                            (AMReal)lambda_pQ, rv, xi, R, rr_min, rk_cond, ralpha, rtwo_pi);
-        for (int q = 0; q < n_quad; q++) {
+                            (AMReal)p.lambda_pQ, rv, xi, R, rr_min, rk_cond, ralpha, rtwo_pi);
+        for (int q = 0; q < p.n_quad; q++) {
           const AMReal zarg = (AMReal)qnodes(q) + z_rel;
           const AMReal Rp = Kokkos::sqrt(xi*xi + y_rel*y_rel + zarg*zarg);
           T_rise += (AMReal)2 * (AMReal)qweights(q) *
                     rosenthal_device_kernel<AMReal>(
-                        (AMReal)lambda_lQ, rv, xi, Rp, rr_min, rk_cond, ralpha, rtwo_pi);
+                        (AMReal)p.lambda_lQ, rv, xi, Rp, rr_min, rk_cond, ralpha, rtwo_pi);
         }
-        Tval = T0 + (double)T_rise;
+        Tval = p.T0 + (double)T_rise;
       } else {
         AMReal R;
-        if (mode == 1) {                            // ANISOTROPIC
-          const AMReal yy = (AMReal)eta_y * y_rel;
-          const AMReal zz = (AMReal)eta_z * z_rel;
+        if (p.mode == 1) {                            // ANISOTROPIC
+          const AMReal yy = (AMReal)p.eta_y * y_rel;
+          const AMReal zz = (AMReal)p.eta_z * z_rel;
           R = Kokkos::sqrt(xi*xi + yy*yy + zz*zz);
         } else {                                    // STANDARD
           R = Kokkos::sqrt(xi*xi + y_rel*y_rel + z_rel*z_rel);
         }
-        Tval = T0 + 2.0 * (double)rosenthal_device_kernel<AMReal>(
-                              (AMReal)lambdaQ, rv, xi, R, rr_min, rk_cond, ralpha, rtwo_pi);
+        Tval = p.T0 + 2.0 * (double)rosenthal_device_kernel<AMReal>(
+                              (AMReal)p.lambdaQ, rv, xi, R, rr_min, rk_cond, ralpha, rtwo_pi);
       }
     }
     d_T(i) = Tval;
@@ -710,17 +705,9 @@ void AppAdditiveTextureKokkos::build_gl_table()
     }
   }
 
-  d_gl_offset = Kokkos::View<int*>("gl_offset", maxN + 1);
-  d_gl_roots  = Kokkos::View<double*>("gl_roots", roots.size());
-  d_gl_weights = Kokkos::View<double*>("gl_weights", weights.size());
-  auto h_off = Kokkos::create_mirror_view(d_gl_offset);
-  auto h_r   = Kokkos::create_mirror_view(d_gl_roots);
-  auto h_w   = Kokkos::create_mirror_view(d_gl_weights);
-  for (int N = 0; N <= maxN; N++) h_off(N) = offset[N];
-  for (size_t i = 0; i < roots.size(); i++) { h_r(i) = roots[i]; h_w(i) = weights[i]; }
-  Kokkos::deep_copy(d_gl_offset, h_off);
-  Kokkos::deep_copy(d_gl_roots, h_r);
-  Kokkos::deep_copy(d_gl_weights, h_w);
+  d_gl_offset  = upload_vec<int>("gl_offset", offset);
+  d_gl_roots   = upload_vec<double>("gl_roots", roots);
+  d_gl_weights = upload_vec<double>("gl_weights", weights);
   d_gl_built = true;
 }
 
@@ -768,21 +755,17 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
   if (d_seg_version != plan.version) {
     std::vector<double> b, xl, yl, nx, ny, sp, pw, ft, fw, fd, fp;
     thermal->moser_copy_device_data(b, xl, yl, nx, ny, sp, pw, ft, fw, fd, fp);
-    auto up = [](Kokkos::View<double*> &dv, const std::vector<double> &h,
-                 const char *name) {
-      const int n = (int)h.size();
-      dv = Kokkos::View<double*>(name, n);   // n == 0 is valid (never indexed)
-      if (n == 0) return;
-      auto hm = Kokkos::create_mirror_view(dv);
-      for (int i = 0; i < n; i++) hm(i) = h[i];
-      Kokkos::deep_copy(dv, hm);
-    };
-    up(d_seg_bounds, b, "seg_bounds"); up(d_seg_xl, xl, "seg_xl");
-    up(d_seg_yl, yl, "seg_yl");        up(d_seg_nx, nx, "seg_nx");
-    up(d_seg_ny, ny, "seg_ny");        up(d_seg_speeds, sp, "seg_speeds");
-    up(d_seg_powers, pw, "seg_powers");
-    up(d_fluct_t, ft, "fluct_t");      up(d_fluct_w, fw, "fluct_w");
-    up(d_fluct_d, fd, "fluct_d");      up(d_fluct_p, fp, "fluct_p");
+    d_seg_bounds = upload_vec<double>("seg_bounds", b);
+    d_seg_xl     = upload_vec<double>("seg_xl", xl);
+    d_seg_yl     = upload_vec<double>("seg_yl", yl);
+    d_seg_nx     = upload_vec<double>("seg_nx", nx);
+    d_seg_ny     = upload_vec<double>("seg_ny", ny);
+    d_seg_speeds = upload_vec<double>("seg_speeds", sp);
+    d_seg_powers = upload_vec<double>("seg_powers", pw);
+    d_fluct_t    = upload_vec<double>("fluct_t", ft);
+    d_fluct_w    = upload_vec<double>("fluct_w", fw);
+    d_fluct_d    = upload_vec<double>("fluct_d", fd);
+    d_fluct_p    = upload_vec<double>("fluct_p", fp);
     d_seg_version = plan.version;
   }
 
@@ -794,19 +777,10 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
   auto ftv = d_fluct_t; auto fwv = d_fluct_w; auto fdv = d_fluct_d; auto fpv = d_fluct_p;
   auto gl_roots = d_gl_roots; auto gl_weights = d_gl_weights; auto gl_off = d_gl_offset;
 
+  // The plan is a trivially-copyable POD: capture it by value. p.zl[0] (top
+  // lobe, z_offset 0) is the real free surface.
+  const MoserDevicePlan p = plan;
   const double dx_l = this->dx;
-  const double tt = plan.time, T0 = plan.T0;
-  const double alpha = plan.alpha, c = plan.c;
-  const double cl = plan.char_length;
-  const int nseg = plan.nseg;
-  const int nlobes = plan.n_lobes;
-  // Per-lobe scalars (captured individually; rebuilt into local arrays in-kernel).
-  const double sx0 = plan.sx[0], sx1 = plan.sx[1];
-  const double sy0 = plan.sy[0], sy1 = plan.sy[1];
-  const double sz0 = plan.sz[0], sz1 = plan.sz[1];
-  const double zl0 = plan.zl[0], zl1 = plan.zl[1];
-  const int fn0 = plan.fluct_n[0], fn1 = plan.fluct_n[1];
-  const double surface_z = plan.zl[0];   // top lobe zl = real free surface (z_offset 0)
   const int maxN = MOSER_GL_MAX_ORDER;
   const double eps = 2.220446049250313e-16;
   const double invPi3_2 = 1.0 / (M_PI * 1.7724538509055160273); // 1/(pi*sqrt(pi))
@@ -821,38 +795,34 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
     const double z = d_xyz_local(site,2) * dx_l;
 
     // Vacuum above the real free surface; integral is empty before t=0.
-    if (z > surface_z || tt <= 0.0 || nseg <= 0) {
-      d_T(site) = T0;
-      if (site < nlocal_l && T0 > m) m = T0;
+    if (z > p.zl[0] || p.time <= 0.0 || p.nseg <= 0) {
+      d_T(site) = p.T0;
+      if (site < nlocal_l && p.T0 > m) m = p.T0;
       return;
     }
 
-    // binary_search(bounds, tt, nseg): largest i with bounds(i) <= tt.
+    // binary_search(bounds, p.time, p.nseg): largest i with bounds(i) <= p.time.
     int end_idx = -1;
-    { int L = 0, R = nseg - 1;
+    { int L = 0, R = p.nseg - 1;
       while (L <= R) { int m = (L + R) / 2;
-        if (bounds(m) <= tt) {
-          if (m + 1 == nseg || bounds(m+1) >= tt) { end_idx = m; break; }
+        if (bounds(m) <= p.time) {
+          if (m + 1 == p.nseg || bounds(m+1) >= p.time) { end_idx = m; break; }
           L = m + 1;
         } else R = m - 1; } }
     if (end_idx < 0) {
-      d_T(site) = T0;
-      if (site < nlocal_l && T0 > m) m = T0;
+      d_T(site) = p.T0;
+      if (site < nlocal_l && p.T0 > m) m = p.T0;
       return;
     }
-    if (Kokkos::fabs(tt - bounds(end_idx)) <= 4.0 * eps) end_idx--;
-
-    const double sxa[2] = {sx0, sx1}, sya[2] = {sy0, sy1};
-    const double sza[2] = {sz0, sz1}, zla[2] = {zl0, zl1};
-    const int    fna[2] = {fn0, fn1};
+    if (Kokkos::fabs(p.time - bounds(end_idx)) <= 4.0 * eps) end_idx--;
 
     // KEYHOLE sums the contributions of both lobes; STANDARD has one.
     double res = 0.0;
-    for (int lobe = 0; lobe < nlobes; lobe++) {
-      const double sx = sxa[lobe], sy = sya[lobe], sz = sza[lobe], zl = zla[lobe];
-      const int fn = fna[lobe];
-      const int foff = (lobe == 0) ? 0 : fn0;     // fluct slice for this lobe
-      const int poff = lobe * nseg;               // power slice for this lobe
+    for (int lobe = 0; lobe < p.n_lobes; lobe++) {
+      const double sx = p.sx[lobe], sy = p.sy[lobe], sz = p.sz[lobe], zl = p.zl[lobe];
+      const int fn = p.fluct_n[lobe];
+      const int foff = (lobe == 0) ? 0 : p.fluct_n[0];   // fluct slice for this lobe
+      const int poff = lobe * p.nseg;               // power slice for this lobe
       const double avg_sigma = (sx + sy + sz) / 3.0;
       const double avg_sigma_sq = avg_sigma * avg_sigma;
 
@@ -864,13 +834,13 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
         const double sp_i = speeds(i), t0_i = bounds(i);
 
         const double tstart = bounds(i);
-        const double tend = (i + 1 >= nseg) ? tt
-            : (tt <= bounds(i+1) + 4.0*eps ? tt : bounds(i+1));
+        const double tend = (i + 1 >= p.nseg) ? p.time
+            : (p.time <= bounds(i+1) + 4.0*eps ? p.time : bounds(i+1));
 
-        const double sigma_eff = 4.0*alpha*(tt - tend) + avg_sigma_sq;
-        double quad_size = cl*cl*sigma_eff/4.0/alpha;
+        const double sigma_eff = 4.0*p.alpha*(p.time - tend) + avg_sigma_sq;
+        double quad_size = p.char_length*p.char_length*sigma_eff/4.0/p.alpha;
         if (sp_i > 4.0*eps)
-          quad_size = Kokkos::fmin(cl*Kokkos::sqrt(sigma_eff)/sp_i, quad_size);
+          quad_size = Kokkos::fmin(p.char_length*Kokkos::sqrt(sigma_eff)/sp_i, quad_size);
 
         const double n_quad_pts = (tend - tstart)/quad_size;
         int order = (int)Kokkos::ceil(n_quad_pts); if (order < 1) order = 1;
@@ -896,7 +866,7 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
             double fW = 1.0, fD = 1.0, fP = 1.0;
             if (fn > 0) moser_fluct_get_at(ftv, fwv, fdv, fpv, foff, fn, s, fW, fD, fP);
             // Cancellation-prone time deltas / geometry differences stay double.
-            const double st_d = 4.0*alpha*(tt - s);
+            const double st_d = 4.0*p.alpha*(p.time - s);
             const double cx = x - xl_i, cy = y - yl_i;
             const double xt = cx*nx_i + cy*ny_i;
             const double yt = -cx*ny_i + cy*nx_i;
@@ -912,7 +882,7 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
             const AMReal vx = (AMReal)1/(sxu*sxu+st), vy = (AMReal)1/(syu*syu+st),
                          vz = (AMReal)1/(szu*szu+st);
             const AMReal e = Kokkos::exp(-xeff*xeff*vx - ytr*ytr*vy - ztr*ztr*vz);
-            const AMReal term = ((AMReal)2*pu/(AMReal)c*(AMReal)invPi3_2 * e *
+            const AMReal term = ((AMReal)2*pu/(AMReal)p.c*(AMReal)invPi3_2 * e *
                                  Kokkos::sqrt(vx*vy*vz)) * (AMReal)w;
             sum += (double)term;
           }
@@ -921,7 +891,7 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
         }
       }
     }
-    const double Tval = T0 + res;
+    const double Tval = p.T0 + res;
     d_T(site) = Tval;
     if (site < nlocal_l && Tval > m) m = Tval;
   }, Kokkos::Max<double>(local_max));
@@ -947,32 +917,6 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
    (same global field, same physical point), so multi-rank needs no T ghost comm
    and no host round-trip -- the field is fully device-resident. See hdf5_device.h.
 ------------------------------------------------------------------------- */
-
-/* ----------------------------------------------------------------------
-   Upload a host double time-series/temperature vector into a device View whose
-   element type is AMReal. Overloaded rather than `if constexpr` because both
-   branches of the latter must still typecheck in a non-template function, and
-   deep_copy(View<float*>, View<const double*>) does not.
-
-   The double overload keeps the original ZERO-COPY unmanaged path, so the
-   default FP64 build does exactly what it did before this knob existed. The
-   float overload pays one host cast pass -- once per layer, not per step.
-------------------------------------------------------------------------- */
-static void upload_hdf5_reals(Kokkos::View<double*> dst,
-                              const double *src, size_t n)
-{
-  Kokkos::View<const double*, Kokkos::HostSpace,
-               Kokkos::MemoryTraits<Kokkos::Unmanaged>> h(src, n);
-  Kokkos::deep_copy(dst, h);
-}
-
-static void upload_hdf5_reals(Kokkos::View<float*> dst,
-                              const double *src, size_t n)
-{
-  auto h = Kokkos::create_mirror_view(dst);
-  for (size_t k = 0; k < n; k++) h(k) = (float) src[k];
-  Kokkos::deep_copy(dst, h);
-}
 
 /* ---------------------------------------------------------------------- */
 
@@ -1035,25 +979,15 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
       const size_t n_samp = ts_t.size();
       const int n_off = (int) ts_o.size();   // == n_nodes + 1
       if (n_samp > 0 && n_off > 1) {
-        d_ts_times   = Kokkos::View<double*>("ts_times", n_samp);
-        d_ts_temps   = Kokkos::View<AMReal*>("ts_temps", n_samp);
-        d_ts_offsets = Kokkos::View<int*>("ts_offsets", n_off);
         // Times ALWAYS stay FP64 (absolute sim times ~3.9e4 s on a 3e-6 s step)
         // -- see am_temp_precision.h. Only the temperatures are narrowable.
-        Kokkos::View<const double*, Kokkos::HostSpace,
-                     Kokkos::MemoryTraits<Kokkos::Unmanaged>> h_t(ts_t.data(), n_samp);
-        Kokkos::deep_copy(d_ts_times, h_t);
-        upload_hdf5_reals(d_ts_temps, ts_T.data(), n_samp);
-        auto h_o = Kokkos::create_mirror_view(d_ts_offsets);
-        for (int k = 0; k < n_off; k++) h_o(k) = (int) ts_o[k];
-        Kokkos::deep_copy(d_ts_offsets, h_o);
+        d_ts_times   = upload_vec<double>("ts_times", ts_t);
+        d_ts_temps   = upload_vec<AMReal>("ts_temps", ts_T);
+        d_ts_offsets = upload_vec<int>("ts_offsets", ts_o);
 
         const std::vector<unsigned> &an = thermal->hdf5_active_nodes();
         d_n_active_nodes = (int) an.size();
-        d_active_nodes = Kokkos::View<int*>("active_nodes", d_n_active_nodes > 0 ? d_n_active_nodes : 1);
-        auto h_an = Kokkos::create_mirror_view(d_active_nodes);
-        for (int k = 0; k < d_n_active_nodes; k++) h_an(k) = (int) an[k];
-        Kokkos::deep_copy(d_active_nodes, h_an);
+        d_active_nodes = upload_vec<int>("active_nodes", an);
 
         d_ts_version = plan.version;
       } else {
@@ -1101,9 +1035,7 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
   } else if (nnodes > 0) {
     // Fallback: the host precompute filled the slice; upload it per step.
     const std::vector<double> &nt = thermal->hdf5_nodal_temps();
-    auto h_nt = Kokkos::create_mirror_view(d_hdf5_nodal_temps);
-    for (int k = 0; k < nnodes; k++) h_nt(k) = (AMReal) nt[k];
-    Kokkos::deep_copy(d_hdf5_nodal_temps, h_nt);
+    d_hdf5_nodal_temps = upload_vec<AMReal>("hdf5_nodal_temps", nt.data(), nnodes);
   }
 
   auto d_T = k_T.view_device();
@@ -1211,27 +1143,11 @@ void AppAdditiveTextureKokkos::initialize_nucleation_parameters()
     nucleation_sizes[i] = dist_S(gen);
   }
 
-  // Copy to device views
-  auto h_nucleation_flags = Kokkos::create_mirror_view(d_nucleation_flags);
-  auto h_nucleation_temps = Kokkos::create_mirror_view(d_nucleation_temps);
-  auto h_nucleation_sizes = Kokkos::create_mirror_view(d_nucleation_sizes);
-
-  for (int i = 0; i < nspins; i++) {
-    h_nucleation_flags(i) = nucleation_flags[i];
-    h_nucleation_temps(i) = nucleation_temps[i];
-    h_nucleation_sizes(i) = nucleation_sizes[i];
-  }
-
-  Kokkos::deep_copy(d_nucleation_flags, h_nucleation_flags);
-  Kokkos::deep_copy(d_nucleation_temps, h_nucleation_temps);
-  Kokkos::deep_copy(d_nucleation_sizes, h_nucleation_sizes);
-
-  // Copy global parameters to device
-  auto h_solid_front_coeffs = Kokkos::create_mirror_view(d_solid_front_coeffs);
-  for (int i = 0; i < solid_front_length; i++) {
-    h_solid_front_coeffs(i) = solid_front_coeffs[i];
-  }
-  Kokkos::deep_copy(d_solid_front_coeffs, h_solid_front_coeffs);
+  d_nucleation_flags = upload_vec<int>("nucleation_flags", nucleation_flags, nspins);
+  d_nucleation_temps = upload_vec<double>("nucleation_temps", nucleation_temps, nspins);
+  d_nucleation_sizes = upload_vec<double>("nucleation_sizes", nucleation_sizes, nspins);
+  d_solid_front_coeffs =
+      upload_vec<double>("solid_front_coeffs", solid_front_coeffs, solid_front_length);
 
   auto h_texture_params = Kokkos::create_mirror_view(d_texture_params);
   h_texture_params(0) = c1;
@@ -1384,14 +1300,8 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
             d_qz_local(i) = q[3];
             rand_pool_local.free_state(generator);
 
-            // Compute solidification velocity using polynomial: V = Σ coeffs[k] * Tcool^k
-            double V_i = 0.0;
-            double Tcool_power = 1.0;
-            for (int k = solid_front_length_local - 1; k >= 0; k--) {
-              V_i += d_solid_front_coeffs_local(k) * Tcool_power;
-              Tcool_power *= Tcool;
-            }
-            d_V_local(i) = V_i;
+            d_V_local(i) = solid_front_velocity(d_solid_front_coeffs_local,
+                                                solid_front_length_local, Tcool);
           }
           // No else branch - site keeps current values if not nucleating
         }
@@ -1576,54 +1486,15 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
           double q_nbr[4] = {q_i[0], q_i[1], q_i[2], q_i[3]};
 
           if (nucl_rotate) {
-            // Hop distance from the seed, lattice units -> meters. The
-            // sqrt(3) clamp guards against a periodic-wrap neighbor pair
-            // reading as a box-length hop.
-            double hdx = k_xyz_d(nbr, 0) - k_xyz_d(i, 0);
-            double hdy = k_xyz_d(nbr, 1) - k_xyz_d(i, 1);
-            double hdz = k_xyz_d(nbr, 2) - k_xyz_d(i, 2);
-            double hop_lat = Kokkos::sqrt(hdx * hdx + hdy * hdy + hdz * hdz);
-            hop_lat = Kokkos::fmin(hop_lat, 1.7320508075688772);
-            double mis_angle = mis_cap_rate_local * hop_lat * dx_local;
+            // Hop distance from the seed, lattice units -> meters.
+            double mis_angle = mis_cap_rate_local * hop_distance(k_xyz_d, nbr, i) * dx_local;
 
             double q_rot[4];
-            if (nucl_mode_local == MISORI_TARGET_RANDOM_ROTATION) {
-              // Rotation by mis_angle about a uniformly random axis (same
-              // sampling as the solidification kernel).
-              double z = 2.0 * generator.drand() - 1.0;
-              double phi = 2.0 * MY_PI * generator.drand();
-              double radial = Kokkos::sqrt(Kokkos::fmax(0.0, 1.0 - z * z));
-              double half = 0.5 * mis_angle;
-              double s = Kokkos::sin(half);
-              double dq[4] = {Kokkos::cos(half),
-                              s * radial * Kokkos::cos(phi),
-                              s * radial * Kokkos::sin(phi),
-                              s * z};
-              QuaternionOps::composition(dq, q_nbr, q_rot);
-              QuaternionOps::normalize(q_rot);
-            } else {
-              double target_dir[3];
-              if (nucl_mode_local == MISORI_TARGET_GRADIENT) {
-                target_dir[0] = seed_grad[0];
-                target_dir[1] = seed_grad[1];
-                target_dir[2] = seed_grad[2];
-              } else { // MISORI_TARGET_RANDOM
-                double z = 2.0 * generator.drand() - 1.0;
-                double phi = 2.0 * MY_PI * generator.drand();
-                double radial = Kokkos::sqrt(Kokkos::fmax(0.0, 1.0 - z * z));
-                target_dir[0] = radial * Kokkos::cos(phi);
-                target_dir[1] = radial * Kokkos::sin(phi);
-                target_dir[2] = z;
-              }
-              QuaternionOps::rotate_q_towards_u(q_nbr, target_dir, mis_angle, q_rot);
-            }
+            perturb_orientation(nucl_mode_local, q_nbr, seed_grad, mis_angle, generator, q_rot);
 
             // mis_thresh new-grain check (direct angle, matching the
             // solidification kernel's convention).
-            double dot = q_nbr[0] * q_rot[0] + q_nbr[1] * q_rot[1] +
-                         q_nbr[2] * q_rot[2] + q_nbr[3] * q_rot[3];
-            dot = Kokkos::fmin(1.0, Kokkos::fabs(dot));
-            if (2.0 * Kokkos::acos(dot) >= mis_thresh_local) {
+            if (direct_angle(q_nbr, q_rot) >= mis_thresh_local) {
               spin_nbr = static_cast<int>(nspins_local * generator.drand());
             }
 
@@ -1739,12 +1610,8 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
         double solid_d_i = d_solid_d_local(i);
 
         // Advance solid front distance: solid_d += V(Tcool) * dt
-        double V_advance = 0.0;
-        double Tcool_power = 1.0;
-        for (int k = solid_front_length_local - 1; k >= 0; k--) {
-          V_advance += d_solid_front_coeffs_local(k) * Tcool_power;
-          Tcool_power *= Tcool;
-        }
+        const double V_advance = solid_front_velocity(d_solid_front_coeffs_local,
+                                                      solid_front_length_local, Tcool);
         solid_d_i += V_advance * dt_local;
 
         // Find solid neighbors within reach and calculate texture weights
@@ -1849,18 +1716,12 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
                                (Kokkos::exp(misorient_alpha_local) - 1.0) * MY_PI / 180.0;
 
             // Orientation-gradient steepness cap (matches apply_misorientation
-            // in the CPU app). Coordinates are in lattice units; the sqrt(3)
-            // clamp guards against a periodic-wrap pair reading as a box-
-            // length hop (the true SC_26N stencil distance is at most sqrt(3)).
+            // in the CPU app); hop_distance() is in lattice units.
             if (mis_cap_rate_local > 0.0 && mis_cap_mode_local == 0) { // CAP_PARENT
               // Bound the rotation relative to the neighbor the orientation
               // is inherited from.
-              double hdx = k_xyz_d(i, 0) - k_xyz_d(selected_nbr, 0);
-              double hdy = k_xyz_d(i, 1) - k_xyz_d(selected_nbr, 1);
-              double hdz = k_xyz_d(i, 2) - k_xyz_d(selected_nbr, 2);
-              double hop_lat = Kokkos::sqrt(hdx * hdx + hdy * hdy + hdz * hdz);
-              hop_lat = Kokkos::fmin(hop_lat, solid_reach);
-              mis_angle = Kokkos::fmin(mis_angle, mis_cap_rate_local * hop_lat * dx_local);
+              mis_angle = Kokkos::fmin(mis_angle,
+                  mis_cap_rate_local * hop_distance(k_xyz_d, i, selected_nbr) * dx_local);
             } else if (mis_cap_rate_local > 0.0) {                    // CAP_NEIGHBORS
               // Budget rule against every solidified same-spin neighbour:
               // theta <= cap_j - d_j keeps each satisfied i-j pair within its
@@ -1877,19 +1738,9 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
                 const int af_j = d_active_flag_local(j);
                 if (af_j != 1 && af_j != 3) continue;
                 if (d_spin_local(j) != new_spin) continue;
-                double hdx = k_xyz_d(i, 0) - k_xyz_d(j, 0);
-                double hdy = k_xyz_d(i, 1) - k_xyz_d(j, 1);
-                double hdz = k_xyz_d(i, 2) - k_xyz_d(j, 2);
-                double hop_lat = Kokkos::sqrt(hdx * hdx + hdy * hdy + hdz * hdz);
-                hop_lat = Kokkos::fmin(hop_lat, solid_reach);
-                const double cap_j = mis_cap_rate_local * hop_lat * dx_local;
-                double dot = q_nbr_inherited[0] * d_q0_local(j) +
-                             q_nbr_inherited[1] * d_qx_local(j) +
-                             q_nbr_inherited[2] * d_qy_local(j) +
-                             q_nbr_inherited[3] * d_qz_local(j);
-                dot = Kokkos::fmin(1.0, Kokkos::fabs(dot));
-                const double d_j = 2.0 * Kokkos::acos(dot);
-                mis_angle = Kokkos::fmin(mis_angle, cap_j - d_j);
+                const double cap_j = mis_cap_rate_local * hop_distance(k_xyz_d, i, j) * dx_local;
+                const double q_j[4] = {d_q0_local(j), d_qx_local(j), d_qy_local(j), d_qz_local(j)};
+                mis_angle = Kokkos::fmin(mis_angle, cap_j - direct_angle(q_nbr_inherited, q_j));
               }
               // A negative angle would still rotate by |angle| downstream
               // (rotate_q_towards_u takes fabs) -- clamp to a true no-op.
@@ -1903,54 +1754,14 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
             QuaternionOps::normalize(q_nbr_inherited);
 
             // Perturb the inherited orientation per the misorientation_target
-            // mode. random_rotation rotates by mis_angle about a uniformly
-            // random axis (composition, no toward-target step); gradient and
-            // random rotate the orientation TOWARD a target direction -- the
-            // thermal-gradient direction, or a uniform random unit vector (the
-            // kk default). Random unit vector uses the same z/phi sampling as
-            // AppAdditiveTexture::sample_random_unit_vector.
+            // mode (see perturb_orientation).
             double q_rotated[4];
-            if (misori_mode_local == MISORI_TARGET_RANDOM_ROTATION) {
-              double z = 2.0 * generator.drand() - 1.0;
-              double phi = 2.0 * MY_PI * generator.drand();
-              double radial = Kokkos::sqrt(Kokkos::fmax(0.0, 1.0 - z * z));
-              double half = 0.5 * mis_angle;
-              double s = Kokkos::sin(half);
-              double dq[4] = {Kokkos::cos(half),
-                              s * radial * Kokkos::cos(phi),
-                              s * radial * Kokkos::sin(phi),
-                              s * z};
-              QuaternionOps::composition(dq, q_nbr_inherited, q_rotated);
-              QuaternionOps::normalize(q_rotated);
-            } else {
-              double target_dir[3];
-              if (misori_mode_local == MISORI_TARGET_GRADIENT) {
-                target_dir[0] = grad_dir[0];
-                target_dir[1] = grad_dir[1];
-                target_dir[2] = grad_dir[2];
-              } else { // MISORI_TARGET_RANDOM (default)
-                double z = 2.0 * generator.drand() - 1.0;
-                double phi = 2.0 * MY_PI * generator.drand();
-                double radial = Kokkos::sqrt(Kokkos::fmax(0.0, 1.0 - z * z));
-                target_dir[0] = radial * Kokkos::cos(phi);
-                target_dir[1] = radial * Kokkos::sin(phi);
-                target_dir[2] = z;
-              }
-              QuaternionOps::rotate_q_towards_u(q_nbr_inherited, target_dir, mis_angle, q_rotated);
-            }
+            perturb_orientation(misori_mode_local, q_nbr_inherited, grad_dir,
+                                mis_angle, generator, q_rotated);
 
-            // Compute rotation angle between original and rotated quaternion
-            // This determines if we create a new grain
-            double dot_product = q_nbr_inherited[0] * q_rotated[0] +
-                                 q_nbr_inherited[1] * q_rotated[1] +
-                                 q_nbr_inherited[2] * q_rotated[2] +
-                                 q_nbr_inherited[3] * q_rotated[3];
-            dot_product = Kokkos::fabs(dot_product);  // Handle quaternion double cover
-            dot_product = Kokkos::fmin(1.0, dot_product);  // Clamp to avoid numerical issues
-            double direct_angle = 2.0 * Kokkos::acos(dot_product);
-
-            // If rotation exceeds threshold, create new grain with random spin
-            if (direct_angle >= mis_thresh_local) {
+            // If the rotation exceeds the threshold, create a new grain with a
+            // random spin.
+            if (direct_angle(q_nbr_inherited, q_rotated) >= mis_thresh_local) {
               new_spin = static_cast<int>(nspins_local * generator.drand());
             }
 
@@ -2177,24 +1988,14 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     // a host consumer reads T -- powder activation below, or the d6 diagnostic
     // at an output step (end of app_update). The global peak temperature for the
     // fast-forward decision is reduced on the device, so no host T is needed.
+    ThermalManager::ThermalStep s{time, false, false};
     if (rplan.valid) {
       // ---- DEVICE Rosenthal path ----
       device_temp = true;
       fill_temperature_rosenthal_device(rplan);
       host_T_stale = true;
-      double global_max = global_max_temperature_from_fill();
-      ThermalManager::ThermalStep s =
-        thermal->rosenthal_fast_forward(time, stoptime, global_max);
-      if (s.end_run) { time = s.new_time; sync_temperature_to_host(); return; }
-      if (s.new_time > time) {
-        time = s.new_time;
-        fill_temperature_rosenthal_device(thermal->rosenthal_device_plan(time));
-        host_T_stale = true;
-        if (s.activate_powder) {
-          activate_powder_sites();
-          last_powder_activation_time = time;
-        }
-      }
+      s = thermal->rosenthal_fast_forward(time, stoptime,
+                                          global_max_temperature_from_fill());
     } else if (mplan.valid) {
       // ---- DEVICE Moser path ----
       // ThermalManager runs the per-pass pause/reset + fast-forward decisions on
@@ -2209,15 +2010,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
         host_T_stale = true;
         return global_max_temperature_from_fill();
       });
-      ThermalManager::ThermalStep s = thermal->moser_advance_device(time, stoptime);
-      if (s.end_run) { time = s.new_time; sync_temperature_to_host(); return; }
-      if (s.new_time > time) {
-        time = s.new_time;
-        if (s.activate_powder) {
-          activate_powder_sites();
-          last_powder_activation_time = time;
-        }
-      }
+      s = thermal->moser_advance_device(time, stoptime);
     } else if (thermal->hdf5_device_eligible()) {
       // ---- DEVICE HDF5 (unstructured-mesh) path ----
       // The host still does the expensive HDF5 work (reads, layer load, element
@@ -2240,15 +2033,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
         // step's kernels); exactly the old blocking path at nprocs==1.
         return global_max_temperature_from_fill_stale();
       });
-      ThermalManager::ThermalStep s = thermal->hdf5_advance_device(time, stoptime);
-      if (s.end_run) { time = s.new_time; sync_temperature_to_host(); return; }
-      if (s.new_time > time) {
-        time = s.new_time;
-        if (s.activate_powder) {
-          activate_powder_sites();
-          last_powder_activation_time = time;
-        }
-      }
+      s = thermal->hdf5_advance_device(time, stoptime);
       // Ghost temperatures need no special handling: the element cache covers
       // nall (owned + ghost via the chunk-load pad), so the device fill already
       // wrote correct ghost k_T positionally. A ghost equals the owning rank's
@@ -2256,14 +2041,25 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       // fully device-resident -- no host T round-trip, no T ghost comm.
     } else {
       // ---- HOST path (Rosenthal-keyhole / temperature_smooth / other) ----
-      ThermalManager::ThermalStep s = thermal->advance(time, stoptime);
-      if (s.end_run) { time = s.new_time; return; }
-      if (s.new_time > time) {
-        time = s.new_time;
-        if (s.activate_powder) {
-          activate_powder_sites();
-          last_powder_activation_time = time;
-        }
+      s = thermal->advance(time, stoptime);
+    }
+
+    // Apply the manager's decision. The Moser/HDF5 fillers already refilled the
+    // device field at s.new_time; the Rosenthal path refills here.
+    if (s.end_run) {
+      time = s.new_time;
+      if (host_T_stale) sync_temperature_to_host();
+      return;
+    }
+    if (s.new_time > time) {
+      time = s.new_time;
+      if (rplan.valid) {
+        fill_temperature_rosenthal_device(thermal->rosenthal_device_plan(time));
+        host_T_stale = true;
+      }
+      if (s.activate_powder) {
+        activate_powder_sites();
+        last_powder_activation_time = time;
       }
     }
   }

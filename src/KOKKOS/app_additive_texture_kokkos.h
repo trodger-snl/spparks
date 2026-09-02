@@ -31,6 +31,7 @@ AppStyle(additive/texture/kk,AppAdditiveTextureKokkos)
 #include "moser_device.h"
 #include "hdf5_device.h"
 #include "am_temp_precision.h"
+#include "math_const.h"
 #include <Kokkos_Core.hpp>
 #include <Kokkos_DualView.hpp>
 #include <memory>
@@ -371,6 +372,75 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // the sqrt(3) solid-front reach in the solidification kernel is the SC_26N
   // cube-corner distance. For other lattices these would need revisiting.
   //
+  // Hop between two lattice sites in lattice units, clamped at the SC_26N
+  // cube-corner distance sqrt(3) so a periodic-wrap neighbour pair never
+  // reads as a box-length hop.
+  KOKKOS_INLINE_FUNCTION
+  static double hop_distance(const Kokkos::View<double*[3]> &xyz, int i, int j) {
+    const double hdx = xyz(i, 0) - xyz(j, 0);
+    const double hdy = xyz(i, 1) - xyz(j, 1);
+    const double hdz = xyz(i, 2) - xyz(j, 2);
+    return Kokkos::fmin(Kokkos::sqrt(hdx * hdx + hdy * hdy + hdz * hdz),
+                        1.7320508075688772);
+  }
+
+  // Direct rotation angle between two unit quaternions (double cover folded).
+  KOKKOS_INLINE_FUNCTION
+  static double direct_angle(const double *a, const double *b) {
+    double dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+    dot = Kokkos::fmin(1.0, Kokkos::fabs(dot));
+    return 2.0 * Kokkos::acos(dot);
+  }
+
+  // Solid-front velocity polynomial V = sum_k coeffs[k] * Tcool^(n-1-k).
+  KOKKOS_INLINE_FUNCTION
+  static double solid_front_velocity(const Kokkos::View<double*> &coeffs, int n,
+                                     double Tcool) {
+    double V = 0.0, Tcool_power = 1.0;
+    for (int k = n - 1; k >= 0; k--) {
+      V += coeffs(k) * Tcool_power;
+      Tcool_power *= Tcool;
+    }
+    return V;
+  }
+
+  // Perturb orientation q by `angle` per a misorientation-target mode:
+  // RANDOM_ROTATION composes a rotation about a uniformly random axis;
+  // GRADIENT rotates toward `target`; RANDOM rotates toward a uniformly random
+  // unit vector (same z/phi sampling as AppAdditiveTexture's
+  // sample_random_unit_vector). Two RNG draws in the random modes.
+  template<typename Gen>
+  KOKKOS_INLINE_FUNCTION
+  static void perturb_orientation(int mode, const double *q, const double *target,
+                                  double angle, Gen &gen, double *out) {
+    if (mode == MISORI_TARGET_RANDOM_ROTATION) {
+      const double z = 2.0 * gen.drand() - 1.0;
+      const double phi = 2.0 * MathConst::MY_PI * gen.drand();
+      const double radial = Kokkos::sqrt(Kokkos::fmax(0.0, 1.0 - z * z));
+      const double half = 0.5 * angle;
+      const double s = Kokkos::sin(half);
+      const double dq[4] = {Kokkos::cos(half),
+                            s * radial * Kokkos::cos(phi),
+                            s * radial * Kokkos::sin(phi),
+                            s * z};
+      QuaternionOps::composition(dq, q, out);
+      QuaternionOps::normalize(out);
+      return;
+    }
+    double dir[3];
+    if (mode == MISORI_TARGET_GRADIENT) {
+      dir[0] = target[0]; dir[1] = target[1]; dir[2] = target[2];
+    } else {  // MISORI_TARGET_RANDOM
+      const double z = 2.0 * gen.drand() - 1.0;
+      const double phi = 2.0 * MathConst::MY_PI * gen.drand();
+      const double radial = Kokkos::sqrt(Kokkos::fmax(0.0, 1.0 - z * z));
+      dir[0] = radial * Kokkos::cos(phi);
+      dir[1] = radial * Kokkos::sin(phi);
+      dir[2] = z;
+    }
+    QuaternionOps::rotate_q_towards_u(q, dir, angle, out);
+  }
+
   struct ThermalOps {
     // Maximum neighbors for sc/26n lattice
     static constexpr int MAX_NEIGHBORS_SC26N = 26;

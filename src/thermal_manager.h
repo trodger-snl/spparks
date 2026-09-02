@@ -117,6 +117,14 @@ class ThermalManager : protected Pointers {
   // temperature smoothing, or an unbuilt/>2-lobe scan -- KEYHOLE, fluctuations,
   // and dynamic inter-pass pause are all handled on the device.
   MoserDevicePlan moser_device_plan(double simulation_time);
+  // Moser per-pass control flow shared by the host and device paths: the
+  // time-gated pause+reset firing, pause_below dynamic firing / clean exit,
+  // and the fast-forward predictor. refill(t) fills the temperature field at
+  // t and returns the global (MPI-reduced) peak temperature; every firing is
+  // followed by a refill, and the field is left filled at step.new_time.
+  ThermalStep moser_advance(double current_time, double stoptime,
+                            const std::function<double(double)> &refill);
+
   // Register the device temperature filler used by moser_advance_device(): given
   // a simulation time, it fills the device temperature field (k_T) at that time
   // and returns the global (MPI-reduced) max temperature. Set once by the app.

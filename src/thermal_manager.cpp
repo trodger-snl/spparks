@@ -650,51 +650,32 @@ void ThermalManager::update_temperatures(double simulation_time)
 
 ThermalManager::ThermalStep ThermalManager::advance(double current_time, double stoptime)
 {
+  // Moser: the per-pass pause/reset control flow is shared with the device
+  // path; the host refill fills T[] and reduces its peak.
+  if (moser_source()) {
+    return moser_advance(current_time, stoptime, [this](double t) {
+      update_temperatures(t);
+      double local_max = 0.0;
+      for (int i = 0; i < host_->nlocal; i++)
+        local_max = std::max(local_max, host_->T[i]);
+      double gmax;
+      MPI_Allreduce(&local_max, &gmax, 1, MPI_DOUBLE, MPI_MAX, world);
+      return gmax;
+    });
+  }
+
   ThermalStep step{current_time, false, false};
 
   // Update temperature first to get current temperatures
   update_temperatures(current_time);
 
-  // Check for active sites using temperature source's threshold. HDF5
-  // sources expose their own threshold; Rosenthal/Moser use liquidus tl
-  // (or pause_below override).
-  double fast_forward_threshold = host_->t_room; // Default to t_room
-
+  // Active-site threshold: HDF5 sources expose their own; Rosenthal uses the
+  // liquidus tl.
   HDF5UnstructuredTemperatureSource* hdf5_source = this->hdf5_source();
   RosenthalTemperatureSource* ros_source = hdf5_source ? nullptr : rosenthal_source();
-  MoserTemperatureSource* moser_source =
-    (hdf5_source || ros_source) ? nullptr : this->moser_source();
-
-  // Moser pause + reset_temperature: time-gated dynamic fire (unconditional
-  // on time, not gated on cool-state, so it lives outside the fast-forward
-  // block).
-  if (moser_source &&
-      laser_pause_constant > 0.0 &&
-      laser_reset_temperature > 0.0 &&
-      pending_moser_passes > 0) {
-    const double next_fire =
-      moser_source->get_last_pass_end_time() + laser_pause_constant;
-    if (current_time >= next_fire) {
-      moser_source->reset_history_and_start(current_time, laser_reset_temperature);
-      --pending_moser_passes;
-      if (domain->me == 0) {
-        std::cout << "pause+reset: gap of " << laser_pause_constant
-                  << " s elapsed at t=" << current_time
-                  << " s; firing next Moser pass (reset to "
-                  << laser_reset_temperature << " K, "
-                  << pending_moser_passes << " more queued)" << std::endl;
-      }
-      update_temperatures(current_time);
-    }
-  }
-
-  if (hdf5_source) {
-    fast_forward_threshold = hdf5_source->get_fast_forward_threshold();
-  } else if (ros_source || moser_source) {
-    // `laser_path ... pause_below <Tk>` overrides the default liquidus-based
-    // threshold.
-    fast_forward_threshold = (laser_pause_below > 0.0) ? laser_pause_below : host_->tl;
-  }
+  double fast_forward_threshold = host_->t_room;
+  if (hdf5_source) fast_forward_threshold = hdf5_source->get_fast_forward_threshold();
+  else if (ros_source) fast_forward_threshold = host_->tl;
 
   int t_active = 0;
   for (int i = 0; i < host_->nlocal; i++) {
@@ -707,60 +688,12 @@ ThermalManager::ThermalStep ThermalManager::advance(double current_time, double 
 
   // If no active sites, fast forward.
   if (global_t_active == 0 && current_time > 1e-6) {
-    // Moser pause_below: fire a pending pass once the global peak temperature
-    // first drops below threshold AFTER the current pass has finished.
-    bool dynamic_fire = false;
-    if (moser_source && laser_pause_below > 0.0 && pending_moser_passes > 0) {
-      if (current_time >= moser_source->get_last_pass_end_time()) {
-        if (laser_reset_temperature > 0.0) {
-          moser_source->reset_history_and_start(current_time, laser_reset_temperature);
-        } else {
-          moser_source->append_pass(current_time);
-        }
-        --pending_moser_passes;
-        dynamic_fire = true;
-        if (domain->me == 0) {
-          std::cout << "pause_below: max(T) < " << fast_forward_threshold
-                    << " K reached at t=" << current_time
-                    << " s; firing next Moser pass (";
-          if (laser_reset_temperature > 0.0)
-            std::cout << "reset to " << laser_reset_temperature << " K, ";
-          std::cout << pending_moser_passes << " more queued)" << std::endl;
-        }
-        // Refresh temperatures to reflect the just-fired pass.
-        update_temperatures(current_time);
-      }
-    }
-    // pause_below: once the FINAL pass has finished emitting and the global
-    // peak temperature has dropped below threshold, end the run early by
-    // advancing time to stoptime.
-    if (!dynamic_fire && moser_source && laser_pause_below > 0.0 &&
-        pending_moser_passes == 0 &&
-        current_time >= moser_source->get_last_pass_end_time() &&
-        current_time < stoptime) {
-      if (domain->me == 0) {
-        std::cout << "pause_below: final pass complete and max(T) < "
-                  << fast_forward_threshold << " K at t=" << current_time
-                  << " s; advancing to stoptime=" << stoptime
-                  << " s for clean exit." << std::endl;
-      }
-      step.new_time = stoptime;
-      step.end_run = true;
-      return step;
-    }
-    if (!dynamic_fire) {
-      double local_next_time;
-      if (ros_source) {
-        local_next_time = rosenthal_next_active_time(current_time, fast_forward_threshold);
-      } else if (moser_source) {
-        local_next_time = moser_next_active_time(current_time, fast_forward_threshold);
-      } else {
-        local_next_time = temperature_source->get_next_time_with_temperature(current_time, fast_forward_threshold);
-      }
-      if (predict_skip(local_next_time, current_time, stoptime, fast_forward_threshold,
-                       "host", step))
-        update_temperatures(step.new_time);
-    }
+    const double local_next_time = ros_source
+      ? rosenthal_next_active_time(current_time, fast_forward_threshold)
+      : temperature_source->get_next_time_with_temperature(current_time, fast_forward_threshold);
+    if (predict_skip(local_next_time, current_time, stoptime, fast_forward_threshold,
+                     "host", step))
+      update_temperatures(step.new_time);
   }
 
   return step;
@@ -911,32 +844,34 @@ MoserDevicePlan ThermalManager::moser_device_plan(double simulation_time)
 }
 
 /* ----------------------------------------------------------------------
-   Device Moser driver. Mirrors the Moser branch of advance() -- time-gated
-   pause+reset firing, pause_below dynamic firing / clean-exit, and the
-   fast-forward predictor -- but replaces the host per-site fill +
-   host-temperature scan with the registered device filler (which fills k_T and
-   returns the global max). The pause/reset firings (reset_history_and_start /
-   append_pass) rebuild the scan from temperature feedback on the host; each is
-   followed by a device refill. The static (no-pause) case falls straight
-   through to the predictor, so this also subsumes the plain fast-forward path.
-   The global max is already MPI-reduced, so the active-site test is consistent
-   on every rank and all ranks make the same collective calls.
+   Moser driver: time-gated pause+reset firing, pause_below dynamic firing /
+   clean exit, and the fast-forward predictor, shared by the host path
+   (advance(), refill = update_temperatures + max scan) and the device path
+   (moser_advance_device(), refill = the registered device filler). The
+   pause/reset firings (reset_history_and_start / append_pass) rebuild the
+   scan from temperature feedback on the host; each is followed by a refill.
+   The static (no-pause) case falls straight through to the predictor. The
+   global max is MPI-reduced, so the active-site test is consistent on every
+   rank and all ranks make the same collective calls.
 ------------------------------------------------------------------------- */
 
 ThermalManager::ThermalStep
 ThermalManager::moser_advance_device(double current_time, double stoptime)
 {
-  ThermalStep step;
-  step.new_time = current_time;
-  step.activate_powder = false;
-  step.end_run = false;
+  if (!moser_source() || !moser_device_filler_)
+    return ThermalStep{current_time, false, false};
+  return moser_advance(current_time, stoptime, moser_device_filler_);
+}
 
-  MoserTemperatureSource* moser =
-    moser_source();
-  if (!moser || !moser_device_filler_) return step;
+ThermalManager::ThermalStep
+ThermalManager::moser_advance(double current_time, double stoptime,
+                              const std::function<double(double)> &refill)
+{
+  ThermalStep step{current_time, false, false};
+  MoserTemperatureSource* moser = moser_source();
 
-  // Fill the device field at current_time and get the global peak temperature.
-  double gmax = moser_device_filler_(current_time);
+  // Fill the field at current_time and get the global peak temperature.
+  double gmax = refill(current_time);
 
   // Moser pause + reset_temperature: time-gated dynamic fire (fires on elapsed
   // time since the last pass end, independent of temperature).
@@ -954,7 +889,7 @@ ThermalManager::moser_advance_device(double current_time, double stoptime)
                   << laser_reset_temperature << " K, "
                   << pending_moser_passes << " more queued)" << std::endl;
       }
-      gmax = moser_device_filler_(current_time);   // scan changed -> refill
+      gmax = refill(current_time);   // scan changed -> refill
     }
   }
 
@@ -982,7 +917,7 @@ ThermalManager::moser_advance_device(double current_time, double stoptime)
             std::cout << "reset to " << laser_reset_temperature << " K, ";
           std::cout << pending_moser_passes << " more queued)" << std::endl;
         }
-        gmax = moser_device_filler_(current_time);   // scan changed -> refill
+        gmax = refill(current_time);   // scan changed -> refill
       }
     }
 
@@ -1006,8 +941,8 @@ ThermalManager::moser_advance_device(double current_time, double stoptime)
     // Fast-forward predict-skip (also the sole behavior in the static case).
     if (!dynamic_fire &&
         predict_skip(moser_next_active_time(current_time, fast_forward_threshold),
-                     current_time, stoptime, fast_forward_threshold, "device Moser", step))
-      moser_device_filler_(step.new_time);   // refill at the advanced time
+                     current_time, stoptime, fast_forward_threshold, "Moser", step))
+      refill(step.new_time);   // refill at the advanced time
   }
   return step;
 }

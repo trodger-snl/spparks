@@ -126,8 +126,6 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // global_max_temperature_from_fill() for the fast-forward and Moser
   // pause/reset decisions; only valid immediately after a fill.
   double fill_maxT_local = 0.0;
-  double t_ff_allreduce = 0.0;  // 1-double MPI_Allreduce feeding fast-forward
-  long   n_ff_checks = 0;
 
   // One-step-stale fast-forward state (HDF5 path, nprocs>1 only). The peak-T
   // Allreduce is a per-step collective whose cost is almost entirely waiting
@@ -145,8 +143,6 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   MPI_Request ff_ia_req = MPI_REQUEST_NULL;
   bool        ff_ia_active = false;
   bool        ff_gmax_primed = false;  // false until the first result lands
-  double      t_ff_iwait = 0.0;        // time actually spent waiting on it
-  long        n_ff_stale = 0;
 
   // Cached device copy of site coordinates (lattice units). The lattice is
   // static for the run, so this is uploaded once and reused by the device

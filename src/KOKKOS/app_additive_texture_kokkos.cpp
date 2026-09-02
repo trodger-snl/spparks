@@ -460,10 +460,7 @@ double AppAdditiveTextureKokkos::global_max_temperature_from_fill()
   // k_T write -- no separate device pass, no extra stream sync); this only
   // reduces the per-rank value across ranks.
   double global_max = fill_maxT_local;
-  const double t0 = MPI_Wtime();
   MPI_Allreduce(&fill_maxT_local, &global_max, 1, MPI_DOUBLE, MPI_MAX, world);
-  t_ff_allreduce += MPI_Wtime() - t0;
-  n_ff_checks++;
   return global_max;
 }
 
@@ -486,33 +483,18 @@ double AppAdditiveTextureKokkos::global_max_temperature_from_fill_stale()
 {
   if (nprocs == 1) return global_max_temperature_from_fill();
 
-  // Benchmark switch: SPK_FF_BLOCKING=1 forces the old blocking Allreduce so
-  // the two schemes can be A/B'd at any rank count from one binary. Read once
-  // (function-static init is thread-safe and happens on first use). Verify it
-  // took effect via the timing summary: the blocking form prints
-  // "FF Allreduce", the stale form "FF Iallreduce wait".
-  static const bool force_blocking = [](){
-    const char *e = getenv("SPK_FF_BLOCKING");
-    return e && atoi(e) != 0;
-  }();
-  if (force_blocking) return global_max_temperature_from_fill();
-
-  const double t0 = MPI_Wtime();
   if (ff_ia_active) {
     MPI_Wait(&ff_ia_req, MPI_STATUS_IGNORE);
     ff_ia_active = false;
     ff_gmax_prev = ff_ia_recv;
     ff_gmax_primed = true;
   }
-  t_ff_iwait += MPI_Wtime() - t0;
 
   // Post this fill's reduction; it is harvested on the next call.
   ff_ia_send = fill_maxT_local;
   MPI_Iallreduce(&ff_ia_send, &ff_ia_recv, 1, MPI_DOUBLE, MPI_MAX, world,
                  &ff_ia_req);
   ff_ia_active = true;
-  n_ff_checks++;
-  n_ff_stale++;
 
   return ff_gmax_primed ? ff_gmax_prev
                         : std::numeric_limits<double>::infinity();
@@ -2169,12 +2151,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   // PHASE 3.1-3.2: Melting and nucleation kernels
   // PHASE 3.3-3.4: Will add solidification and smoothing
 
-  // Timing instrumentation
-  static int step_count = 0;
-  static double t_temp_update = 0.0, t_temp_sync = 0.0;
-  static double t_melting = 0.0, t_nucleation = 0.0, t_particle = 0.0;
-  static double t_solidification = 0.0, t_smoothing = 0.0, t_sync_host = 0.0;
-  double t_start, t_end;
+  static int step_count = 0;   // cadence for maybe_run_diagnostics
   step_count++;
 
   // 1. Update temperature + fast-forward.
@@ -2189,7 +2166,6 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   // Other sources (HDF5 / Moser / Rosenthal KEYHOLE): host path via
   // ThermalManager::advance(), which fills host T[]; we then sync to device.
   refresh_thermal_host();
-  t_start = MPI_Wtime();
   bool device_temp = false;
   device_active_list_fresh = false;  // set true only by a fill that built d_active_sites (HDF5)
   if (thermal->enabled()) {
@@ -2291,15 +2267,10 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       }
     }
   }
-  t_end = MPI_Wtime();
-  t_temp_update += (t_end - t_start);
 
   // 2. Sync temperature to device (host path only; the device path already
   //    wrote k_T on the GPU).
-  t_start = MPI_Wtime();
   if (!device_temp) sync_temperature_to_device();
-  t_end = MPI_Wtime();
-  t_temp_sync += (t_end - t_start);
 
   // 3. Gradient computation moved to on-demand inside solidification kernel
   // (Removed global compute_gradients_kernel() - gradients now computed only when needed)
@@ -2353,7 +2324,6 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
 
   // 4. Phase transition kernels with event tracking
   // Phase 3.1: Melting (with Phase 1 optimization: early temperature scan)
-  t_start = MPI_Wtime();
 
   // Melt over the active-front list. Melt candidates (T>=tl && active_flag!=2)
   // are a subset of the active list (hot clause), so the old CheckMeltingCandidates
@@ -2365,11 +2335,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   naccept += nmelt;
   bool melting_occurred = (nmelt > 0);
 
-  t_end = MPI_Wtime();
-  t_melting += (t_end - t_start);
-
   // Phase 3.2: Nucleation (stochastic nucleation in undercooled liquid)
-  t_start = MPI_Wtime();
 
   // Nucleation ranges over the active-front list, which contains EVERY liquid
   // (active_flag==2) site, so nucleation still sees all liquid every step -- the
@@ -2379,12 +2345,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   // is correct.
   naccept += nucleation_kernel(d_active_sites, n_active);
 
-  t_end = MPI_Wtime();
-  t_nucleation += (t_end - t_start);
-
   // Phase 3.5: Particle flipper (grow nuclei to specified size)
-  // Only launch if there are newly nucleated sites (solid_d == -nrefine-2)
-  t_start = MPI_Wtime();
 
   // Grow nuclei over the active-front list. Nucleus sites (active_flag==3 &&
   // solid_d==-nrefine-2) are a subset of the active list (leftover-nucleus
@@ -2393,19 +2354,11 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   // correct no-op (no nuclei).
   naccept += particle_flipper_kernel(d_active_sites, n_active);
 
-  t_end = MPI_Wtime();
-  t_particle += (t_end - t_start);
-
   // Phase 3.3: Solidification (epitaxial growth with texture weighting)
-  t_start = MPI_Wtime();
   naccept += solidification_kernel(d_active_sites, n_active);
-  t_end = MPI_Wtime();
-  t_solidification += (t_end - t_start);
 
   // Phase 3.4: Smoothing kernel (Potts MC for grain boundary refinement)
   // Call once per timestep - sites smooth over multiple timesteps as solid_d increments
-  // OPTIMIZATION 3: Work-efficient smoothing - only process sites in smoothing range
-  t_start = MPI_Wtime();
 
   // Build compact list of smoothing sites using parallel_scan (Phase 1
   // optimization). The list View is cached (member) and reallocated only when
@@ -2451,15 +2404,9 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     naccept += smoothing_kernel_efficient(d_smoothing_sites, n_smoothing_sites);
   }
 
-  t_end = MPI_Wtime();
-  t_smoothing += (t_end - t_start);
-
   // 5. Single fence after all kernels complete (replaces individual kernel fences)
   // This ensures all device writes are visible before proceeding
-  t_start = MPI_Wtime();
   Kokkos::fence();
-  t_end = MPI_Wtime();
-  t_sync_host += (t_end - t_start);
 
   // Activate powder once melting first occurs, BEFORE syncing to host so the
   // device activation (which writes d_active_flag) is reflected in the host
@@ -2525,30 +2472,6 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   // (which also force the host temperature path, so host T is current here).
   if (host_T_stale) sync_temperature_to_host();
   thermal->maybe_run_diagnostics(step_count);
-
-  // Print timing summary every 100 steps
-  if (step_count % 100 == 0 && domain->me == 0) {
-    double total_time = t_temp_update + t_temp_sync + t_melting +
-                        t_nucleation + t_particle + t_solidification + t_smoothing + t_sync_host;
-    fprintf(screen, "\n=== Kokkos Timing Summary (after %d steps, %.4f total sec) ===\n", step_count, total_time);
-    fprintf(screen, "  Temperature update:   %8.3f s (%5.1f%%)\n", t_temp_update, 100.0*t_temp_update/total_time);
-    if (n_ff_stale > 0)
-      fprintf(screen, "    - FF Iallreduce wait:%7.3f s  [%ld checks, one-step-stale; Tmax fused into fill]\n",
-              t_ff_iwait, n_ff_checks);
-    else
-      fprintf(screen, "    - FF Allreduce:     %8.3f s  [%ld checks; Tmax fused into fill; included above]\n",
-              t_ff_allreduce, n_ff_checks);
-    fprintf(screen, "  Temp sync to device:  %8.3f s (%5.1f%%)\n", t_temp_sync, 100.0*t_temp_sync/total_time);
-    fprintf(screen, "  Melting kernel:       %8.3f s (%5.1f%%) [selective launch]\n", t_melting, 100.0*t_melting/total_time);
-    fprintf(screen, "  Nucleation kernel:    %8.3f s (%5.1f%%) [selective launch]\n", t_nucleation, 100.0*t_nucleation/total_time);
-    fprintf(screen, "  Particle kernel:      %8.3f s (%5.1f%%) [selective launch]\n", t_particle, 100.0*t_particle/total_time);
-    fprintf(screen, "  Solidification kernel:%8.3f s (%5.1f%%) [on-demand gradients]\n", t_solidification, 100.0*t_solidification/total_time);
-    fprintf(screen, "  Smoothing kernel:     %8.3f s (%5.1f%%) [selective launch, 1x/timestep]\n", t_smoothing, 100.0*t_smoothing/total_time);
-    fprintf(screen, "  Sync to host:         %8.3f s (%5.1f%%)\n", t_sync_host, 100.0*t_sync_host/total_time);
-    fprintf(screen, "  TOTAL:                %8.3f s\n", total_time);
-    fprintf(screen, "  Avg per step:         %8.6f s\n", total_time/step_count);
-    fprintf(screen, "  Optimizations: on-demand gradients, selective kernel launching\n\n");
-  }
 
   // Lazy device->host temperature copy-back: if a device fill left host T (d6)
   // stale and an output step is imminent, refresh host T now so the diagnostic

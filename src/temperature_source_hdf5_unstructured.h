@@ -52,12 +52,11 @@ namespace SPPARKS_NS {
 template <typename T>
 class Array2D {
 public:
-  Array2D() : ncols(0), nrows(0) {}
+  Array2D() : ncols(0) {}
   Array2D(unsigned ncols_, std::vector<T>&& data_) :
     ncols(ncols_), data(std::move(data_)) {
     if (data.size() % ncols != 0)
       throw std::runtime_error("Data size must be multiple of number of columns");
-    nrows = data.size() / ncols;
   }
 
   const T& operator()(unsigned i, unsigned j) const { return data[i*ncols + j]; }
@@ -68,7 +67,6 @@ public:
 
 private:
   unsigned ncols;
-  unsigned nrows;
   std::vector<T> data;
 };
 
@@ -78,29 +76,6 @@ template <typename T>
 class CompressedArray2D {
 public:
   CompressedArray2D() {}
-
-  // Construct from rectangular Array2D data by compacting rows in-place.
-  // ncols_rect: number of columns in the source rectangular layout
-  // rect_data:  row-major rectangular data (nrows * ncols_rect elements)
-  // row_lengths: actual element count per row (dataCounts)
-  CompressedArray2D(unsigned ncols_rect,
-                    std::vector<T>&& rect_data,
-                    const std::vector<unsigned>& row_lengths)
-  {
-    unsigned nrows = row_lengths.size();
-    offsets.resize(nrows + 1);
-    offsets[0] = 0;
-    for (unsigned i = 0; i < nrows; i++)
-      offsets[i + 1] = offsets[i] + row_lengths[i];
-
-    size_t total = offsets[nrows];
-    data.resize(total);
-    for (unsigned i = 0; i < nrows; i++) {
-      std::copy(rect_data.begin() + i * ncols_rect,
-                rect_data.begin() + i * ncols_rect + row_lengths[i],
-                data.begin() + offsets[i]);
-    }
-  }
 
   // Construct directly from flat CSR data (zero-copy move).
   CompressedArray2D(std::vector<T>&& flat_data,
@@ -278,7 +253,6 @@ private:
   double threshold_temp;  // Threshold temperature for fast-forward (K)
   double default_temp;    // Default/ambient temperature (K)
   bool device_time_interp_ = false;  // skip host precompute; device interps in time
-  int bounds_check_mode;  // 0 = exact, 1 = subvolume
   double grid_cell_size_multiplier;  // Spatial grid cell size = dx * multiplier (default 50)
   // Latches the "pad wider than the decomposed subdomain" warning in
   // load_layer() so it is emitted once per run rather than once per layer.

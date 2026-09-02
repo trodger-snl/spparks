@@ -617,16 +617,6 @@ void MoserTemperatureSource::cleanup()
 
 /* ---------------------------------------------------------------------- */
 
-bool MoserTemperatureSource::has_fluctuations() const
-{
-  for (int li = 0; li < n_lobes_; ++li) {
-    if (lobes_[li].psd_spec_set) return true;
-  }
-  return false;
-}
-
-/* ---------------------------------------------------------------------- */
-
 void MoserTemperatureSource::print_source_info() const
 {
   std::cout << "Moser temperature source (unsteady-Green's-function ellipsoid integral)\n"

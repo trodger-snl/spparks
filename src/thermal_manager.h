@@ -59,14 +59,9 @@ class ThermalManager : protected Pointers {
     bool   end_run;         // app should set time=new_time and return
   };
 
-  // True once the modular temperature system is enabled (always) and a
-  // temperature source has been configured via setup_temperature_source.
-  bool enabled() const {
-    return use_temperature_source && (bool)temperature_source;
-  }
-  // Mirrors the historical use_temperature_source flag (always true);
-  // used by init-time validation in the app.
-  bool uses_temperature_source() const { return use_temperature_source; }
+  // True once a temperature source has been configured via
+  // setup_temperature_source.
+  bool enabled() const { return (bool)temperature_source; }
 
   // ---- input-script command handlers (called from app input_app) ----
   void setup_cmd(int narg, char **arg);
@@ -221,7 +216,6 @@ class ThermalManager : protected Pointers {
 
   // Modular temperature source interface
   std::unique_ptr<TemperatureSource> temperature_source;
-  bool use_temperature_source;        // enable flag (always true)
   double fast_forward_search_window;  // look-ahead for fast-forward (s)
 
   // Laser scan path state for the analytical Rosenthal source. SI meters,

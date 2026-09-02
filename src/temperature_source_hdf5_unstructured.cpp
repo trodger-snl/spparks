@@ -66,16 +66,17 @@ HDF5UnstructuredTemperatureSource::~HDF5UnstructuredTemperatureSource()
 
 void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vector<std::string> &args)
 {
-  // Parse arguments: filename dx threshold_temp default_temp [bounds_check_mode] [grid_cell_mult]
+  // Parse arguments: filename dx threshold_temp default_temp [ignored] [grid_cell_mult]
+  // (args[4] was a bounds_check_mode that nothing ever read; the slot is kept
+  // so existing decks that pass grid_cell_mult in position 5 keep working.)
   if (args.size() < 4) {
-    error->all(FLERR, "HDF5 unstructured temperature source requires: filename dx threshold_temp default_temp [bounds_check_mode] [grid_cell_mult]");
+    error->all(FLERR, "HDF5 unstructured temperature source requires: filename dx threshold_temp default_temp [ignored] [grid_cell_mult]");
   }
 
   filename = args[0];
   dx = std::stod(args[1]);  // Grid spacing in meters
   threshold_temp = std::stod(args[2]);  // Threshold temperature for fast-forward
   default_temp = std::stod(args[3]);    // Default/ambient temperature
-  bounds_check_mode = (args.size() > 4) ? std::stoi(args[4]) : 0;
   grid_cell_size_multiplier = (args.size() > 5) ? std::stod(args[5]) : 100.0;
 
   // Open HDF5 file with parallel I/O when available

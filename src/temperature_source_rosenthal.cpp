@@ -155,19 +155,6 @@ bool RosenthalTemperatureSource::needs_data_refresh(double /*simulation_time*/)
 }
 
 /* ----------------------------------------------------------------------
-   Fast-forward query: the source itself has no path geometry, so it
-   declares "yes I support time queries" but returns +inf here. The
-   driving app intercepts and computes the real next-active time using
-   its scan_layer state.
-------------------------------------------------------------------------- */
-
-double RosenthalTemperatureSource::get_next_time_with_temperature(double /*current_time*/,
-                                                                  double /*threshold_temp*/)
-{
-  return std::numeric_limits<double>::max();
-}
-
-/* ----------------------------------------------------------------------
    Core kernel (Eq. B4 form):
    T_rise = (Q_eff / (2 pi k R)) * exp(-v (xi + R) / (2 alpha))
 ------------------------------------------------------------------------- */

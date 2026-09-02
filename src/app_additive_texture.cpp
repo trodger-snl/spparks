@@ -920,7 +920,7 @@ void AppAdditiveTexture::init_app()
 	if (nucleation_mode == NUCLEATION_CONTINUOUS) {
 	  if (tsig <= 0.0)
 	    error->all(FLERR, "undercooling_deviation must be > 0 for continuous nucleation mode");
-	  if (!thermal->uses_temperature_source())
+	  if (!thermal->enabled())
 	    error->all(FLERR, "continuous nucleation mode requires a temperature source");
 	}
 

@@ -83,10 +83,9 @@ class RosenthalTemperatureSource : public TemperatureSource {
   virtual std::string get_source_type() const override { return "rosenthal"; }
   virtual void print_source_info() const override;
 
-  // Fast-forward support: the source declares it; the driving app
-  // implements the actual time prediction using path geometry.
+  // Fast-forward support: the source declares it; ThermalManager does the
+  // actual time prediction from the scan-path geometry.
   virtual bool supports_time_queries() const override { return true; }
-  virtual double get_next_time_with_temperature(double current_time, double threshold_temp) override;
 
   // Pool-local-frame query used by AppAdditiveTexture every step.
   // (xi, y_rel, z_rel) are coordinates of a lattice site relative to the

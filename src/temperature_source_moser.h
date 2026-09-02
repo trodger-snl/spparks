@@ -167,7 +167,6 @@ class MoserTemperatureSource : public TemperatureSource {
   double get_scan_y0() const { return scan_y0; }
   double get_scan_x1() const { return scan_x1; }
   double get_scan_y1() const { return scan_y1; }
-  double get_T0() const { return T0_default; }
   // End time of the most-recently-scheduled active emission window. The
   // app's pause_below logic uses this to gate `append_pass` on "the
   // current pass has actually finished emitting" so it doesn't drain
@@ -182,19 +181,9 @@ class MoserTemperatureSource : public TemperatureSource {
   // so the app's fast-forward path can call its Moser predictor.
   virtual bool supports_time_queries() const override { return true; }
 
-  // Quadrature character length (Moser's `char_length`); 0.5 gives
-  // ~1e-4 fractional integration error per the GREENAM comments.
-  void set_char_length(double cl) { char_length = cl; }
-
   MoserMode get_mode() const { return mode; }
-  int  num_lobes() const { return n_lobes_; }
 
   // ----- Device (Kokkos) evaluation support -----------------------------
-  // Generation counter; bumps whenever the scan segment arrays / fluctuation
-  // tables are rebuilt (build_scan / append_pass / reset_history_and_start). A
-  // device caller re-uploads its Views when this changes.
-  long scan_version() const { return scan_version_; }
-
   // Fill the scalar device plan (per-lobe ellipsoid / zl / fluct sizes,
   // material params, segment count). Supports STANDARD (1 lobe) and KEYHOLE
   // (2 lobes), with or without fluctuations. Returns true if the scan is built;
@@ -260,8 +249,6 @@ class MoserTemperatureSource : public TemperatureSource {
   //   idx = 0  -> top lobe (or sole lobe in STANDARD mode)
   //   idx = 1  -> bottom lobe (KEYHOLE only)
   void set_psd_spec(int idx, const PsdSpec &spec);
-
-  bool has_fluctuations() const;
 
   // Lobe indices (also available to the parser).
   static constexpr int LOBE_TOP = 0;

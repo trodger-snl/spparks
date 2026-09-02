@@ -45,7 +45,6 @@ ThermalManager::ThermalManager(SPPARKS *spk, ThermalHost *host) :
 {
   // Initialize modular temperature source system
   temperature_source = nullptr;
-  use_temperature_source = true;     // Always use modular temperature system
   fast_forward_search_window = 0.1;  // Default 100ms search window
 
   // Rosenthal scan-path state (only used when temperature_source is Rosenthal)
@@ -118,9 +117,6 @@ void ThermalManager::setup_cmd(int narg, char **arg)
 
   // Setup the temperature source with provided arguments
   temperature_source->setup_temperature_source(source_args);
-
-  // Enable the new temperature source system
-  use_temperature_source = true;
 
   if (domain->me == 0) {
     std::cout << "Modular temperature source (" << source_type << ") enabled" << std::endl;
@@ -548,7 +544,7 @@ void ThermalManager::update_temperatures(double simulation_time)
 {
   timer->stamp();
 
-  if (!use_temperature_source || !temperature_source) {
+  if (!temperature_source) {
     timer->stamp(TIME_APP);
     return; // No temperature source configured
   }
@@ -1126,7 +1122,7 @@ ThermalManager::moser_advance_device(double current_time, double stoptime)
 
 bool ThermalManager::hdf5_device_eligible() const
 {
-  if (!use_temperature_source || !temperature_source) return false;
+  if (!temperature_source) return false;
   // Solidification-band smoothing is applied in update_temperatures(), which the
   // device fill bypasses; keep smoothed runs on the host path.
   if (temperature_smooth_enabled) return false;

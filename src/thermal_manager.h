@@ -240,6 +240,13 @@ class ThermalManager : protected Pointers {
   // Physical (meters) bounding box of this rank's owned sites; false if none.
   bool local_bbox(double lo[3], double hi[3]) const;
 
+  // Shared predict-skip: reduce the earliest local wake-up time across ranks
+  // and, if min(next, stoptime) is meaningfully ahead of current_time, record
+  // the skip in step (new_time, activate_powder for skips > 1 s). Returns true
+  // on a skip; the caller refills the temperature field at step.new_time.
+  bool predict_skip(double local_next, double current_time, double stoptime,
+                    double threshold, const char *tag, ThermalStep &step);
+
   // Gaussian smoothing of T[] inside the configured window, and the
   // isotherm-compactness diagnostic.
   void apply_smoothing();

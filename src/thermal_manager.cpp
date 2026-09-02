@@ -757,46 +757,42 @@ ThermalManager::ThermalStep ThermalManager::advance(double current_time, double 
       } else {
         local_next_time = temperature_source->get_next_time_with_temperature(current_time, fast_forward_threshold);
       }
-
-      // Earliest wake-up across the entire MPI communicator is the single
-      // time we may safely advance to.
-      double next_thermal_time;
-      MPI_Allreduce(&local_next_time, &next_thermal_time, 1, MPI_DOUBLE,
-                    MPI_MIN, world);
-
-      if (next_thermal_time > current_time && next_thermal_time < std::numeric_limits<double>::max()) {
-        // Fast-forward to whichever comes first: next thermal activity or run end.
-        double target_time = std::min(next_thermal_time, stoptime);
-        double time_skip = target_time - current_time;
-
-        if (time_skip > 1e-6) {  // Only skip if meaningful time difference
-          if (domain->me == 0) {
-            if (target_time < next_thermal_time) {
-              std::cout << "Fast-forward: Skipping " << time_skip << " seconds from time "
-                        << current_time << " to run end " << target_time
-                        << " (next thermal activity at " << next_thermal_time << ")" << std::endl;
-            } else {
-              std::cout << "Fast-forward: Skipping " << time_skip << " seconds from time "
-                        << current_time << " to " << target_time
-                        << " (all temperatures < " << fast_forward_threshold << "K)" << std::endl;
-            }
-          }
-
-          step.new_time = target_time;
-
-          // Update temperatures at new time
-          update_temperatures(target_time);
-
-          // Activate powder after significant time skip (new layer deposition)
-          if (time_skip > 1.0) {
-            step.activate_powder = true;
-          }
-        }
-      }
+      if (predict_skip(local_next_time, current_time, stoptime, fast_forward_threshold,
+                       "host", step))
+        update_temperatures(step.new_time);
     }
   }
 
   return step;
+}
+
+bool ThermalManager::predict_skip(double local_next, double current_time,
+                                  double stoptime, double threshold,
+                                  const char *tag, ThermalStep &step)
+{
+  // Earliest wake-up across the entire MPI communicator is the single time we
+  // may safely advance to.
+  double next_thermal_time;
+  MPI_Allreduce(&local_next, &next_thermal_time, 1, MPI_DOUBLE, MPI_MIN, world);
+  if (!(next_thermal_time > current_time &&
+        next_thermal_time < std::numeric_limits<double>::max()))
+    return false;
+
+  // Skip to whichever comes first: next thermal activity or run end.
+  const double target_time = std::min(next_thermal_time, stoptime);
+  const double time_skip = target_time - current_time;
+  if (time_skip <= 1e-6) return false;   // only a meaningful skip
+
+  if (domain->me == 0) {
+    std::cout << "Fast-forward (" << tag << "): skipping " << time_skip
+              << " s from t=" << current_time << " to " << target_time
+              << " (all T < " << threshold << " K; next thermal activity at "
+              << next_thermal_time << ")" << std::endl;
+  }
+  step.new_time = target_time;
+  // Activate powder after a significant skip (new layer deposition).
+  if (time_skip > 1.0) step.activate_powder = true;
+  return true;
 }
 
 /* ----------------------------------------------------------------------
@@ -881,26 +877,8 @@ ThermalManager::rosenthal_fast_forward(double current_time, double stoptime,
   const bool any_active = (global_max_T > fast_forward_threshold);
 
   if (!any_active && current_time > 1e-6) {
-    const double local_next =
-      rosenthal_next_active_time(current_time, fast_forward_threshold);
-    double next_thermal_time;
-    MPI_Allreduce(&local_next, &next_thermal_time, 1, MPI_DOUBLE, MPI_MIN, world);
-
-    if (next_thermal_time > current_time &&
-        next_thermal_time < std::numeric_limits<double>::max()) {
-      const double target_time = std::min(next_thermal_time, stoptime);
-      const double time_skip = target_time - current_time;
-      if (time_skip > 1e-6) {
-        if (domain->me == 0) {
-          std::cout << "Fast-forward (device): skipping " << time_skip
-                    << " s from t=" << current_time << " to " << target_time
-                    << " (all T < " << fast_forward_threshold << " K)"
-                    << std::endl;
-        }
-        step.new_time = target_time;
-        if (time_skip > 1.0) step.activate_powder = true;
-      }
-    }
+    predict_skip(rosenthal_next_active_time(current_time, fast_forward_threshold),
+                 current_time, stoptime, fast_forward_threshold, "device", step);
   }
   return step;
 }
@@ -1026,28 +1004,10 @@ ThermalManager::moser_advance_device(double current_time, double stoptime)
     }
 
     // Fast-forward predict-skip (also the sole behavior in the static case).
-    if (!dynamic_fire) {
-      const double local_next =
-        moser_next_active_time(current_time, fast_forward_threshold);
-      double next_thermal_time;
-      MPI_Allreduce(&local_next, &next_thermal_time, 1, MPI_DOUBLE, MPI_MIN, world);
-      if (next_thermal_time > current_time &&
-          next_thermal_time < std::numeric_limits<double>::max()) {
-        const double target_time = std::min(next_thermal_time, stoptime);
-        const double time_skip = target_time - current_time;
-        if (time_skip > 1e-6) {
-          if (domain->me == 0) {
-            std::cout << "Fast-forward (device Moser): skipping " << time_skip
-                      << " s from t=" << current_time << " to " << target_time
-                      << " (all T < " << fast_forward_threshold << " K)"
-                      << std::endl;
-          }
-          step.new_time = target_time;
-          moser_device_filler_(target_time);   // refill at the advanced time
-          if (time_skip > 1.0) step.activate_powder = true;
-        }
-      }
-    }
+    if (!dynamic_fire &&
+        predict_skip(moser_next_active_time(current_time, fast_forward_threshold),
+                     current_time, stoptime, fast_forward_threshold, "device Moser", step))
+      moser_device_filler_(step.new_time);   // refill at the advanced time
   }
   return step;
 }
@@ -1134,28 +1094,10 @@ ThermalManager::hdf5_advance_device(double current_time, double stoptime)
 
   const double fast_forward_threshold = hdf5->get_fast_forward_threshold();
 
-  if (gmax <= fast_forward_threshold && current_time > 1e-6) {
-    const double local_next =
-      hdf5->get_next_time_with_temperature(current_time, fast_forward_threshold);
-    double next_thermal_time;
-    MPI_Allreduce(&local_next, &next_thermal_time, 1, MPI_DOUBLE, MPI_MIN, world);
-    if (next_thermal_time > current_time &&
-        next_thermal_time < std::numeric_limits<double>::max()) {
-      const double target_time = std::min(next_thermal_time, stoptime);
-      const double time_skip = target_time - current_time;
-      if (time_skip > 1e-6) {
-        if (domain->me == 0) {
-          std::cout << "Fast-forward (device HDF5): skipping " << time_skip
-                    << " s from t=" << current_time << " to " << target_time
-                    << " (all T < " << fast_forward_threshold << " K)"
-                    << std::endl;
-        }
-        step.new_time = target_time;
-        hdf5_device_filler_(target_time);   // refill at the advanced time
-        if (time_skip > 1.0) step.activate_powder = true;
-      }
-    }
-  }
+  if (gmax <= fast_forward_threshold && current_time > 1e-6 &&
+      predict_skip(hdf5->get_next_time_with_temperature(current_time, fast_forward_threshold),
+                   current_time, stoptime, fast_forward_threshold, "device HDF5", step))
+    hdf5_device_filler_(step.new_time);   // refill at the advanced time
   return step;
 }
 

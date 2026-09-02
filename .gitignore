@@ -61,3 +61,6 @@ micro_analysis_scripts/*.tar.gz
 micro_analysis_scripts/*.tar.xz
 # Large binary dump files - simulation output
 examples/**/DumpFiles*/*.st
+
+# CMake build trees (build-verify = HIP/gfx1151, build-openmp = CPU reference)
+build-*/

@@ -1313,25 +1313,12 @@ int AppAdditiveTextureKokkos::melting_kernel(Kokkos::View<int*> d_active_sites, 
         d_spin_local(i) = static_cast<int>(nspins_local * generator.drand());
 
         // Randomize orientation (destroy crystallographic texture)
-        // Generate random unit quaternion using Marsaglia method
-        double x0, x1, x2, x3, r1, r2;
-        do {
-          x0 = 2.0 * generator.drand() - 1.0;
-          x1 = 2.0 * generator.drand() - 1.0;
-          r1 = x0*x0 + x1*x1;
-        } while (r1 >= 1.0);
-
-        do {
-          x2 = 2.0 * generator.drand() - 1.0;
-          x3 = 2.0 * generator.drand() - 1.0;
-          r2 = x2*x2 + x3*x3;
-        } while (r2 >= 1.0);
-
-        double s = Kokkos::sqrt((1.0 - r1) / r2);
-        d_q0_local(i) = x0;
-        d_qx_local(i) = x1;
-        d_qy_local(i) = x2 * s;
-        d_qz_local(i) = x3 * s;
+        double q[4];
+        QuaternionOps::generate_random_quaternion(q, generator);
+        d_q0_local(i) = q[0];
+        d_qx_local(i) = q[1];
+        d_qy_local(i) = q[2];
+        d_qz_local(i) = q[3];
 
         // Reset solidification tracking
         d_solid_d_local(i) = 0.0;
@@ -1419,27 +1406,14 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
             // Keep the assigned spin (already set during initialization)
             // d_spin_local(i) = spin_i;  // No-op, already has this value
 
-            // Generate random unit quaternion for new grain orientation
-            // Using Marsaglia method (same as melting kernel)
+            // Random unit quaternion for the new grain orientation
             auto generator = rand_pool_local.get_state();
-            double x0, x1, x2, x3, r1, r2;
-            do {
-              x0 = 2.0 * generator.drand() - 1.0;
-              x1 = 2.0 * generator.drand() - 1.0;
-              r1 = x0*x0 + x1*x1;
-            } while (r1 >= 1.0);
-
-            do {
-              x2 = 2.0 * generator.drand() - 1.0;
-              x3 = 2.0 * generator.drand() - 1.0;
-              r2 = x2*x2 + x3*x3;
-            } while (r2 >= 1.0);
-
-            double s = Kokkos::sqrt((1.0 - r1) / r2);
-            d_q0_local(i) = x0;
-            d_qx_local(i) = x1;
-            d_qy_local(i) = x2 * s;
-            d_qz_local(i) = x3 * s;
+            double q[4];
+            QuaternionOps::generate_random_quaternion(q, generator);
+            d_q0_local(i) = q[0];
+            d_qx_local(i) = q[1];
+            d_qy_local(i) = q[2];
+            d_qz_local(i) = q[3];
             rand_pool_local.free_state(generator);
 
             // Compute solidification velocity using polynomial: V = Σ coeffs[k] * Tcool^k
@@ -1983,17 +1957,8 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
             // Use gradient direction from on-demand computation above
             // (grad_dir already computed when first solid neighbor was found)
 
-            // Normalize the inherited quaternion (should already be normalized, but ensure it)
-            double q_mag = Kokkos::sqrt(q_nbr_inherited[0] * q_nbr_inherited[0] +
-                                        q_nbr_inherited[1] * q_nbr_inherited[1] +
-                                        q_nbr_inherited[2] * q_nbr_inherited[2] +
-                                        q_nbr_inherited[3] * q_nbr_inherited[3]);
-            if (q_mag > 1.0e-15) {
-              q_nbr_inherited[0] /= q_mag;
-              q_nbr_inherited[1] /= q_mag;
-              q_nbr_inherited[2] /= q_mag;
-              q_nbr_inherited[3] /= q_mag;
-            }
+            // Normalize the inherited quaternion (should already be unit length)
+            QuaternionOps::normalize(q_nbr_inherited);
 
             // Perturb the inherited orientation per the misorientation_target
             // mode. random_rotation rotates by mis_angle about a uniformly

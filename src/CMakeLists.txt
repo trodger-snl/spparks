@@ -12,28 +12,6 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Compiler version validation for C++17 support
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.0)
-        message(WARNING "GCC ${CMAKE_CXX_COMPILER_VERSION} may not fully support C++17. "
-                        "GCC 7.0 or later is recommended. Build may fail.")
-    endif()
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang")
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-        # Apple Clang 11+ (Xcode 11+) supports C++17
-        if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 11.0)
-            message(WARNING "Apple Clang ${CMAKE_CXX_COMPILER_VERSION} may not fully support C++17. "
-                            "Apple Clang 11.0 (Xcode 11) or later is recommended. Build may fail.")
-        endif()
-    else()
-        # Regular Clang 5+ supports C++17
-        if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 5.0)
-            message(WARNING "Clang ${CMAKE_CXX_COMPILER_VERSION} may not fully support C++17. "
-                            "Clang 5.0 or later is recommended. Build may fail.")
-        endif()
-    endif()
-endif()
-
 # Set default build type
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
@@ -99,46 +77,6 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
     # Optimized with debug info
     set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -DNDEBUG")
     message(STATUS "RelWithDebInfo: Using -O2 -g optimizations")
-endif()
-
-# Automatic CPU detection and parallel build optimization
-include(ProcessorCount)
-ProcessorCount(N)
-if(NOT N EQUAL 0)
-    # On Apple Silicon, use all available cores for compilation
-    if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
-        message(STATUS "Apple Silicon detected: Using all ${N} cores for parallel compilation")
-        set(CMAKE_BUILD_PARALLEL_LEVEL ${N} CACHE STRING "Number of parallel jobs")
-        # Set make flags for parallel builds
-        set(CMAKE_MAKE_PROGRAM_ARGS "-j${N}" CACHE STRING "Make parallel arguments")
-    else()
-        # For other systems, use most cores but leave one free
-        math(EXPR PARALLEL_JOBS "${N} - 1")
-        if(PARALLEL_JOBS LESS 1)
-            set(PARALLEL_JOBS 1)
-        endif()
-        message(STATUS "Using ${PARALLEL_JOBS} of ${N} available cores for parallel compilation")
-        set(CMAKE_BUILD_PARALLEL_LEVEL ${PARALLEL_JOBS} CACHE STRING "Number of parallel jobs")
-        set(CMAKE_MAKE_PROGRAM_ARGS "-j${PARALLEL_JOBS}" CACHE STRING "Make parallel arguments")
-    endif()
-else()
-    message(WARNING "Could not detect CPU count, using single-threaded build")
-    set(CMAKE_BUILD_PARALLEL_LEVEL 1 CACHE STRING "Number of parallel jobs")
-endif()
-
-# WSL2 Detection (Windows Subsystem for Linux)
-if(UNIX AND NOT APPLE)
-    execute_process(
-        COMMAND uname -r
-        OUTPUT_VARIABLE UNAME_R
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET
-    )
-    if(UNAME_R MATCHES "microsoft|WSL")
-        set(WSL_BUILD ON CACHE BOOL "Building in Windows Subsystem for Linux")
-        message(STATUS "Windows Subsystem for Linux (WSL2) detected")
-        message(STATUS "  Using Linux build configuration within WSL environment")
-    endif()
 endif()
 
 # Build options
@@ -1020,12 +958,6 @@ if(SPPARKS_BUILD_LIB)
         "${CMAKE_CURRENT_BINARY_DIR}/SpparksConfigVersion.cmake"
         DESTINATION lib/cmake/spparks
     )
-endif()
-
-# Testing support
-enable_testing()
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
-    add_subdirectory(tests)
 endif()
 
 # Print configuration summary

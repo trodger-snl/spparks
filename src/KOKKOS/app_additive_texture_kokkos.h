@@ -48,24 +48,20 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   virtual void app_update(double) override;
   virtual void input_app(char *, int, char **) override;
   virtual void stats(char *) override;
-  virtual void stats_header(char *) override;
 
   // Override required virtual methods from AppLatticeKokkos
   virtual void sync_app_data_to_device() override;
   virtual void sync_app_data_to_host() override;
   virtual void allocate_app_views() override;
-  virtual void sweep_color_kokkos(int color, int start, int count) override;
 
   // Temperature field management
   void refresh_thermal_host();
-  void update_temperature_from_source(double simulation_time);
   void sync_temperature_to_device();
   void sync_temperature_to_host();   // device k_T -> host T (for diag/host code)
   // Phase 2 selective ghost sync: move only neighbor-read MC state
   // (spin/active_flag/q0-3) device<->host raw arrays (owned out, ghost in).
   void sync_ghost_to_host();
   void sync_ghost_to_device();
-  double ghost_mc_checksum();        // device ghost-slice MC checksum (verify)
   double global_max_temperature_from_fill();  // blocking Allreduce of the fill-fused owned max
   // One-step-stale variant for the HDF5 path at nprocs>1: posts a
   // non-blocking Iallreduce for THIS fill and returns the PREVIOUS fill's
@@ -73,7 +69,6 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // instead of blocking on the slowest rank every step. See the impl.
   double global_max_temperature_from_fill_stale();
   void   ff_finish_pending();   // complete any outstanding Iallreduce
-  void compute_gradients_kernel();
 
   // Ensure the cached device copy of site coordinates (d_xyz) is built for the
   // current site count. The host xyz is row-major [nall][3]; this fills d_xyz
@@ -221,7 +216,6 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
 
   // Phase state arrays (device views - simple Views are race-safe for these kernels)
   Kokkos::View<int*> d_active_flag;      // 0=inactive, 1=active, 2=molten, 3=solidified, 5=void
-  Kokkos::View<double*> d_mobility_out;  // Arrhenius mobility
   Kokkos::View<double*> d_solid_d;       // Solid front distance
 
   // Compact list of sites needing smoothing, rebuilt each step by a parallel_scan.

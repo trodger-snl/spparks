@@ -76,10 +76,6 @@ static char** construct_parent_args(char **arg) {
 AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char **arg) :
   AppPottsQuaternionKokkos(spk, 3, construct_parent_args(arg))
 {
-  // Validate input arguments
-  if (narg == 6)
-    error->all(FLERR,"app_style command format changed: remove temperature file path argument and use 'setup_temperature_source' command instead");
-
   if (narg != 5)
     error->all(FLERR,"Illegal app_style command");
 
@@ -243,7 +239,6 @@ void AppAdditiveTextureKokkos::allocate_app_views()
 
   // AM-specific device views
   d_active_flag = Kokkos::View<int*>("active_flag", nall);
-  d_mobility_out = Kokkos::View<double*>("mobility_out", nall);
   d_solid_d = Kokkos::View<double*>("solid_d", nall);
 
   // Temperature field (CPU updates from HDF5, device reads)
@@ -337,8 +332,6 @@ void AppAdditiveTextureKokkos::sync_app_data_to_device()
   const auto all = Kokkos::make_pair(0, nall);
   Kokkos::deep_copy(Kokkos::subview(d_active_flag, all),
                     Kokkos::subview(HostUnmanagedInt(active_flag, nall), all));
-  Kokkos::deep_copy(Kokkos::subview(d_mobility_out, all),
-                    Kokkos::subview(HostUnmanagedDouble(mobility_out, nall), all));
   Kokkos::deep_copy(Kokkos::subview(d_solid_d, all),
                     Kokkos::subview(HostUnmanagedDouble(solid_d, nall), all));
 
@@ -363,8 +356,6 @@ void AppAdditiveTextureKokkos::sync_app_data_to_host()
   const auto owned = Kokkos::make_pair(0, nlocal);
   Kokkos::deep_copy(Kokkos::subview(HostUnmanagedInt(active_flag, nall), owned),
                     Kokkos::subview(d_active_flag, owned));
-  Kokkos::deep_copy(Kokkos::subview(HostUnmanagedDouble(mobility_out, nall), owned),
-                    Kokkos::subview(d_mobility_out, owned));
   Kokkos::deep_copy(Kokkos::subview(HostUnmanagedDouble(solid_d, nall), owned),
                     Kokkos::subview(d_solid_d, owned));
 
@@ -374,22 +365,6 @@ void AppAdditiveTextureKokkos::sync_app_data_to_host()
                     Kokkos::subview(d_G, owned));
   Kokkos::deep_copy(Kokkos::subview(HostUnmanagedDouble(V, nall), owned),
                     Kokkos::subview(d_V, owned));
-}
-
-/* ----------------------------------------------------------------------
-   sweep_color_kokkos - Override for additive app
-   For the additive app, the main MC work is done in app_update() via
-   phase transition kernels. This sweep method uses the parent's
-   implementation for any optional Potts sweeping on solidified regions.
-------------------------------------------------------------------------- */
-
-void AppAdditiveTextureKokkos::sweep_color_kokkos(int color, int start, int count)
-{
-  // For additive manufacturing, the phase transition kernels in app_update()
-  // handle the main simulation work. The sweep is primarily used for
-  // optional grain coarsening in solidified regions.
-  // Delegate to parent class implementation.
-  AppPottsQuaternionKokkos::sweep_color_kokkos(color, start, count);
 }
 
 /* ----------------------------------------------------------------------
@@ -418,15 +393,6 @@ void AppAdditiveTextureKokkos::refresh_thermal_host()
   thermal_host_.nghost_iarray = nghost_iarray;
   thermal_host_.ghost_dindices = ghost_dindices;
   thermal_host_.nghost_darray = nghost_darray;
-}
-
-void AppAdditiveTextureKokkos::update_temperature_from_source(double simulation_time)
-{
-  // Delegate to the ThermalManager, which fills host T[] (== this->T) from the
-  // configured source at simulation_time (and applies optional smoothing).
-  if (!thermal->enabled()) return;
-  refresh_thermal_host();
-  thermal->update_temperatures(simulation_time);
 }
 
 /* ----------------------------------------------------------------------
@@ -513,28 +479,6 @@ void AppAdditiveTextureKokkos::sync_ghost_to_device()
   Kokkos::deep_copy(Kokkos::subview(d_qx, ghost), Kokkos::subview(HUd(qx, nall), ghost));
   Kokkos::deep_copy(Kokkos::subview(d_qy, ghost), Kokkos::subview(HUd(qy, nall), ghost));
   Kokkos::deep_copy(Kokkos::subview(d_qz, ghost), Kokkos::subview(HUd(qz, nall), ghost));
-}
-
-/* ----------------------------------------------------------------------
-   Checksum of the device GHOST-slice MC state (spin/active_flag/quaternions),
-   used by the SPK_VERIFY_GHOST correctness check to compare the selective and
-   full ghost-exchange paths. Distinct per-array scales keep different fields
-   from cancelling. Reduced over this rank's ghost slice only.
-------------------------------------------------------------------------- */
-
-double AppAdditiveTextureKokkos::ghost_mc_checksum()
-{
-  if (nghost == 0) return 0.0;
-  auto d_s = d_spin; auto d_a = d_active_flag;
-  auto q0v = d_q0; auto qxv = d_qx; auto qyv = d_qy; auto qzv = d_qz;
-  double sum = 0.0;
-  Kokkos::parallel_reduce("ghost_mc_checksum",
-    Kokkos::RangePolicy<>(nlocal, nlocal + nghost),
-    KOKKOS_LAMBDA(const int i, double &s) {
-      s += 1.0 * d_s(i) + 1000.0 * d_a(i)
-         + q0v(i) + 2.0 * qxv(i) + 3.0 * qyv(i) + 4.0 * qzv(i);
-    }, sum);
-  return sum;
 }
 
 /* ----------------------------------------------------------------------
@@ -1272,51 +1216,6 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
   Kokkos::fence();
   k_T.modify_device();
   device_active_list_fresh = true;
-}
-
-/* ----------------------------------------------------------------------
-   Compute thermal gradients on device (cache for later use)
-------------------------------------------------------------------------- */
-
-void AppAdditiveTextureKokkos::compute_gradients_kernel()
-{
-  // Get device views
-  auto d_T = k_T.view_device();  // Read-only temperature on device
-  auto k_numneigh_d = k_numneigh.view_device();
-  auto k_neighbor_d = k_neighbor.view_device();
-
-  // Cached, layout-correct device copy of site coordinates.
-  ensure_device_xyz();
-  auto k_xyz_d = d_xyz;
-
-  // Get active_flag for melt surface detection (simple View)
-  auto d_active_flag_local = this->d_active_flag;
-
-  // Capture member variables for lambda
-  double dx_lattice = this->dx;
-  auto d_G_local = this->d_G;
-  auto d_grad_x_local = this->d_grad_x;
-  auto d_grad_y_local = this->d_grad_y;
-  auto d_grad_z_local = this->d_grad_z;
-  int nlocal_local = this->nlocal;
-
-  // Compute gradients in parallel
-  Kokkos::parallel_for("ComputeGradients", nlocal,
-    KOKKOS_LAMBDA(int i) {
-      double gradient[3], magnitude;
-
-      ThermalOps::compute_temperature_gradient(
-        i, d_T, d_active_flag_local, k_numneigh_d, k_neighbor_d, k_xyz_d,
-        dx_lattice, gradient, &magnitude);
-
-      // Cache results for later use
-      d_G_local(i) = magnitude;
-      d_grad_x_local(i) = gradient[0];
-      d_grad_y_local(i) = gradient[1];
-      d_grad_z_local(i) = gradient[2];
-    });
-
-  // Fence removed - single fence at end of app_update() handles all kernels
 }
 
 /* ----------------------------------------------------------------------
@@ -2735,19 +2634,6 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     else             comm->all_selective(sel_i, 2, sel_d_host, 5);
     timer->stamp(TIME_COMM);
     sync_ghost_to_device();                     // host ghost -> device
-
-    // Optional deterministic correctness check (SPK_VERIFY_GHOST): redo the old
-    // FULL exchange and confirm the device ghost MC state is bit-identical to
-    // the selective path. Same owned state + same swap => must match; a mismatch
-    // means a bug in the selective subviews/indices. Debug-only (doubles sync).
-    if (getenv("SPK_VERIFY_GHOST")) {
-      double sel = ghost_mc_checksum();
-      sync_app_data_to_host(); comm->all(); sync_app_data_to_device();
-      double full = ghost_mc_checksum();
-      if (Kokkos::fabs(sel - full) > 1.0e-6 && domain->me == 0)
-        fprintf(stderr, "GHOST MISMATCH step=%d selective=%.17g full=%.17g\n",
-                step_count, sel, full);
-    }
   }
   // Full device->host of ALL arrays only on output steps (stats/dumps/diags read
   // the host iarray/darray). Applies to both single and multi rank.
@@ -2896,12 +2782,6 @@ void AppAdditiveTextureKokkos::stats(char *strtmp)
   AppPottsQuaternionKokkos::stats(strtmp);
 }
 
-void AppAdditiveTextureKokkos::stats_header(char *strtmp)
-{
-  // Just forward to parent - no sync needed for header
-  AppPottsQuaternionKokkos::stats_header(strtmp);
-}
-
 /* ----------------------------------------------------------------------
    Process input commands
 ------------------------------------------------------------------------- */
@@ -2944,13 +2824,6 @@ void AppAdditiveTextureKokkos::input_app(char *command, int narg, char **arg)
     // Reparametrized to match the CPU AppAdditiveTexture: 2 args (c2 c3) with
     // c1 fixed at 1.0 (only mobility ratios affect roulette-wheel selection).
     // The device kernels use mobility = c1 + c2*cos(c3*theta) with c1 == 1.0.
-    if (narg == 3)
-      error->all(FLERR,
-        "texture_parameters now takes 2 arguments (c2 c3), not 3. "
-        "The baseline coefficient c1 has been fixed at 1.0 because "
-        "only mobility ratios affect selection. To migrate an old "
-        "input file: texture_parameters c2/c1 c3 (divide old c2 by "
-        "old c1, drop old c1)");
     if (narg != 2) error->all(FLERR, "Illegal texture_parameters command");
     c1 = 1.0;
     c2 = atof(arg[0]);

@@ -21,11 +21,16 @@ ap = argparse.ArgumentParser()
 ap.add_argument('stitch'); ap.add_argument('--out', default='analysis')
 ap.add_argument('--dx', type=float, default=3e-6); ap.add_argument('--floor-um', type=float, default=90.0)
 ap.add_argument('--D', type=float, default=4.2e5, help='input D, deg^2/m'); ap.add_argument('--time', type=float, default=None)
+ap.add_argument('--crop', type=float, nargs=4, metavar=('X0','X1','Y0','Y1'), default=None, help='analyse only this lateral window (um)')
 ap.add_argument('--lamb', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'docs'), help='dir with lamb2023_fig5{a,c}_srod.json')
 a = ap.parse_args(); os.makedirs(a.out, exist_ok=True); dxu = a.dx*1e6
 with StitchReader(a.stitch) as r:
     b = r.get_global_bounds(); t = a.time if a.time is not None else r.times[-1]
     f = {k: r.read_field_at_time(k, t, bounds=b)[0] for k in ('i1','i2','d1','d2','d3','d4')}
+if a.crop:
+    c = [int(round(v/(a.dx*1e6))) for v in a.crop]
+    f = {k: v[c[0]:c[1], c[2]:c[3], :] for k, v in f.items()}
+    print(f'cropped to x {a.crop[0]:.0f}-{a.crop[1]:.0f} um, y {a.crop[2]:.0f}-{a.crop[3]:.0f} um')
 solid = f['i2'] == 3
 spin = np.where(solid, f['i1'], 0).astype(np.int64)
 q = np.stack([f['d1'],f['d2'],f['d3'],f['d4']], -1)

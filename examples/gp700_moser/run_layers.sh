@@ -1,6 +1,9 @@
 #!/bin/bash
 # Box-per-layer driver for the GP700 Moser build.
-# usage: run_layers.sh <spparks-binary> <outdir> [nlayers=12] [seed=12345]
+# usage: run_layers.sh <spparks-binary> <outdir> [nlayers=12] [seed=12345] [nx_voxels=267] [nhatch=10]
+# Lateral box = nx_voxels * 3 um square; hatches at 40 um + k*80 um, lines 100 um past
+# both edges. Analyse a central crop (gp700_analysis.py --crop) away from the walls,
+# where each pool has solid tracks alongside as in the print.
 # Detach it (setsid nohup ... &) for a full build; touch <outdir>/STOP to end it
 # cleanly after the current box. Completed boxes (completion.marker) are skipped.
 # Box n (0-based) = layer n+1: laser plane at z_top = 50 + 10*(n+1) voxels (150 um
@@ -9,14 +12,16 @@
 # Each box is a fresh Moser history (T0 = preheat, the recoat interval); the
 # microstructure continues through the stitch file.
 set -eu
-BIN=$(readlink -f "$1"); OUT=$(readlink -f "$2"); NL=${3:-12}; SEED=${4:-12345}
+BIN=$(readlink -f "$1"); OUT=$(readlink -f "$2"); NL=${3:-12}; SEED=${4:-12345}; NX=${5:-267}; NH=${6:-10}
 HERE=$(cd "$(dirname "$0")" && pwd); TPL=$HERE/in.gp700_layer
 mkdir -p "$OUT"; ST=$OUT/gp700.st
 DX=3e-6; TGAP=10.0
 # Inter-hatch pause = the real 10 mm track length / speed (8.8 ms): the previous
 # track has solidified (~0.75 ms) before the next hatch overlaps it. Box time
 # covers 5 hatches + pauses + 2 ms cooling; the predictor skips the idle gaps.
-PAUSE=8.8e-3; TBOX=0.040
+PAUSE=8.8e-3
+# box time: NH passes of (NX*dx+200um)/v, (NH-1) pauses, 2 ms cooling
+TBOX=$(python3 -c "print(round($NH*($NX*$DX+200e-6)/1.137 + ($NH-1)*$PAUSE + 2e-3, 6))")
 for ((n=0; n<NL; n++)); do
   D=$OUT/box_$(printf %03d $n); mkdir -p "$D"
   [ -f "$D/completion.marker" ] && { echo "box $n done, skipping"; continue; }
@@ -24,10 +29,11 @@ for ((n=0; n<NL; n++)); do
   # the surface, so anything thinner melts through in box 0.
   ztop=$((50 + 10*(n+1))); zlo=$((ztop-60)); [ $zlo -lt 0 ] && zlo=0
   z0=$(python3 -c "print($ztop*$DX)")
+  LEND=$(python3 -c "print($NX*$DX + 100e-6)"); YLAST=$(python3 -c "print(40e-6 + 80e-6*($NH-1))")
   if [ $((n%2)) -eq 0 ]; then
-    LASER="laser_path start -100e-6 40e-6 $z0 end 502e-6 40e-6 speed 1.137 hatch 80e-6 5 serpentine pause $PAUSE"
+    LASER="laser_path start -100e-6 40e-6 $z0 end $LEND 40e-6 speed 1.137 hatch 80e-6 $NH serpentine pause $PAUSE"
   else
-    LASER="laser_path start 360e-6 -100e-6 $z0 end 360e-6 502e-6 speed 1.137 hatch 80e-6 5 serpentine pause $PAUSE"
+    LASER="laser_path start $YLAST -100e-6 $z0 end $YLAST $LEND speed 1.137 hatch 80e-6 $NH serpentine pause $PAUSE"
   fi
   T0=$(python3 -c "print($n*$TGAP)"); T1=$(python3 -c "print($n*$TGAP + $TBOX)")
   if [ $n -eq 0 ]; then
@@ -49,12 +55,12 @@ set d6 value 473
 set d8 value 0.0 if i2 != 3
 set d9 value 0.0 if i2 != 3"
   fi
-  python3 - "$TPL" "$D/in.box" "$((SEED+n))" "$zlo" "$ztop" "$INIT" "$LASER" "$T0" "$T1" "$ST" <<'PY'
+  python3 - "$TPL" "$D/in.box" "$((SEED+n))" "$zlo" "$ztop" "$INIT" "$LASER" "$T0" "$T1" "$ST" "$NX" <<'PY'
 import sys
-tpl,out,seed,zlo,zhi,init,laser,t0,t1,st = sys.argv[1:]
+tpl,out,seed,zlo,zhi,init,laser,t0,t1,st,nx = sys.argv[1:]
 s = open(tpl).read()
 for k,v in {'__SEED__':seed,'__ZLO__':zlo,'__ZHI__':zhi,'__INIT_OR_STITCH__':init,
-            '__LASER__':laser,'__T0__':t0,'__T1__':t1,'__STITCH__':st}.items():
+            '__LASER__':laser,'__T0__':t0,'__T1__':t1,'__STITCH__':st,'__NX__':nx}.items():
     s = s.replace(k, v)
 open(out,'w').write(s)
 PY

@@ -10,7 +10,7 @@ app_style additive/texture/kk 1000000 ${DX} 2e-6 2
 seed             __SEED__
 dimension        3
 lattice          sc/26n 1.0
-region           box block 0 134 0 134 __ZLO__ __ZHI__
+region           box block 0 __NX__ 0 __NX__ __ZLO__ __ZHI__
 boundary         n n n
 create_box       box
 create_sites     box

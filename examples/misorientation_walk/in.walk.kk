@@ -1,0 +1,36 @@
+# Misorientation random-walk check (docs/MISORIENTATION_DIFFUSION_PLAN.md).
+# One Rosenthal pass over a substrate of single-voxel random grains; the
+# re-solidified grains carry a per-hop random rotation of sqrt(D*hop).
+# Analyse with: python3 scripts/srod_analysis.py "dump.walk.kk.*" --dx 5e-6 --D 4.2e5
+# Expect RMS(SROD)^2 ~= D * distance and (p95-p5)/mean ~= 1.38.
+app_style additive/texture/kk 1000000 5e-6 5e-6 2
+seed             56789
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 160 0 48 0 24
+boundary         n n n
+create_box       box
+create_sites     box
+set              site range 1 1000000
+set              i2 value 1
+set              d6 value 573
+sector           yes
+sweep            color
+diag_style       array d6 sum d6 max
+temperature      0.0
+liquidus         1573
+solidus          1523
+solid_front_vel  4 -1.0302e-7 1.0533e-4 2.2196e-3 0
+nucleation_density      1e11
+critical_undercooling   5
+undercooling_deviation  3
+mean_nuclei_volume      8.4375e-16
+nuclei_volume_deviation 1.5625e-17
+misorientation_diffusion 4.2e5 30
+misorientation_target random_rotation
+setup_temperature_source rosenthal standard 285.0 0.0775 11.2 2.0959e-6 573.0
+laser_path start -1.0e-3 0.12e-3 0.12e-3 end 1.0e-3 0.12e-3 speed 1.2 repeats 1
+fast_forward_search_window 1e-4
+stats            2e-4
+dump             1 text 2.0e-3 dump.walk.kk.* id i1 i2 d1 d2 d3 d4 x y z
+run              2.0e-3

@@ -17,7 +17,7 @@ diag_style       array d6 sum d6 max
 temperature      0.0
 liquidus         1646
 solidus          1592
-solid_front_vel  4 -1.0302e-7 1.0533e-4 2.2196e-3 0
+solid_front_vel  4 -3.6057e-7 3.68655e-4 7.7686e-3 0
 nucleation_density      1e6
 critical_undercooling   5
 undercooling_deviation  2

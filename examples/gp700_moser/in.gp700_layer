@@ -3,8 +3,7 @@
 # 30 um layers, 90 deg interlayer rotation, 473 K preheat (Lamb et al. 2023/2026).
 # Material (Met Trans 2026 3DThesis set): k 22.5 W/mK, rho 8650, cp 600 ->
 # alpha 4.335e-6 m^2/s, absorptivity 0.9, Tl 1646 K, Ts 1592 K.
-# Filled in by run_layers.sh: __SEED__ __ZLO__ __ZHI__ __INIT_OR_STITCH__
-# __LASER__ __T0__ __T1__ __STITCH__
+# Placeholders (double-underscore tokens) are filled in by run_layers.sh.
 variable DX equal 3e-6
 
 app_style additive/texture/kk 1000000 ${DX} 2e-6 2
@@ -23,7 +22,9 @@ temperature      0.0
 
 liquidus         1646
 solidus          1592
-solid_front_vel  4 -1.0302e-7 1.0533e-4 2.2196e-3 0
+# ct15 (304L) V(dT) polynomial scaled 3.5x so the front keeps up with the
+# 1.137 m/s scan at ~30 K undercooling (Plan 2 5.1); V(50 K) = 1.27 m/s.
+solid_front_vel  4 -3.6057e-7 3.68655e-4 7.7686e-3 0
 nucleation_density      1e12
 critical_undercooling   5
 undercooling_deviation  2

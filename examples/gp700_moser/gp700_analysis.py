@@ -61,17 +61,24 @@ sol_above = solid.copy(); sol_above[:,:,:int(floor)] = False
 ang = axis_angle_to_z(q[sol_above])
 print(f'texture above floor: <001> within 15 deg of BD: {np.mean(ang<15):.2f} (random ~0.09), within 10 deg: {np.mean(ang<10):.2f}')
 
-# ---- SROD vs distance, Lamb's rules
+# ---- SROD vs distance, Lamb's conventions: distance = height along the build
+# direction; originating grains referenced to their origin voxel (lowest z),
+# established grains to their cross-section centroid at the analysis floor
+# (Lamb: "centroid of the grain on the lowest layer of the dataset").
 keep = (height>=60)&(esd>=40)
 dist=[]; srod=[]; cls=[]
 for gi in np.where(keep)[0]:
     c = coords[starts[gi]:ends[gi]]
-    o = c[np.argmin(c[:,2])]; qo = np.broadcast_to(q[tuple(o)], (len(c),4))
-    d = np.linalg.norm(c - o, axis=1)*dxu
-    s = disorientation_deg(qo, q[c[:,0],c[:,1],c[:,2]])
-    origin_inside = o[2] >= floor
-    m = c[:,2] >= floor            # only analyse voxels above the floor
-    dist.append(d[m]); srod.append(s[m]); cls.append(np.full(m.sum(), 0 if origin_inside else 1))
+    if zmin[gi] >= floor:                      # originating: origin inside the volume
+        o = c[np.argmin(c[:,2])]; k = 0; zref = o[2]
+    else:                                      # established: reference at the floor
+        cf = c[c[:,2] == int(floor)]
+        if len(cf) == 0: continue
+        cen = cf[:, :2].mean(0); o = cf[np.argmin(((cf[:, :2]-cen)**2).sum(1))]; k = 1; zref = floor
+    qo = np.broadcast_to(q[tuple(o)], (len(c),4))
+    m = c[:,2] >= zref
+    d = (c[m,2] - zref)*dxu
+    srod.append(disorientation_deg(qo[m], q[c[m,0],c[m,1],c[m,2]])); dist.append(d); cls.append(np.full(m.sum(), k))
 res = {}
 if dist:
     dist=np.concatenate(dist); srod=np.concatenate(srod); cls=np.concatenate(cls)
@@ -85,8 +92,8 @@ if dist:
             if mm.sum() < 50: continue
             s = srod[mm]; p5,p95 = np.percentile(s,[5,95]); rows.append((dist[mm].mean(), s.mean(), p5, p95, np.sqrt((s**2).mean()), mm.sum()))
         rows = np.array(rows); res[name] = rows.tolist()
-        Dfit = (rows[:,0]*rows[:,4]**2).sum()/(rows[:,0]**2).sum()*1e6   # deg^2/m vs Euclidean distance
-        print(f'{name}: {m.sum()} voxels, D_fit(Euclid) = {Dfit:.3g} deg^2/m = {Dfit/a.D:.2f} x input; '
+        Dfit = (rows[:,0]*rows[:,4]**2).sum()/(rows[:,0]**2).sum()*1e6   # deg^2/m vs height (established: includes the floor spread)
+        print(f'{name}: {m.sum()} voxels, D_fit(height) = {Dfit:.3g} deg^2/m = {Dfit/a.D:.2f} x input; '
               f'band/mean ' + ' '.join(f'{(r[3]-r[2])/r[1]:.2f}' for r in rows[::max(1,len(rows)//6)]))
         for r in rows: print(f'   d={r[0]:6.1f} um n={int(r[5]):7d} mean {r[1]:5.2f} p5 {r[2]:5.2f} p95 {r[3]:5.2f} rms {r[4]:5.2f}')
         ax_.fill_between(rows[:,0], rows[:,2], rows[:,3], color='#2a78d6', alpha=0.15, lw=0)
@@ -97,7 +104,7 @@ if dist:
         if os.path.exists(lf):
             L = json.load(open(lf)); ax_.plot(L['x'], L['mean'], color='#eb6834', lw=1.6, label='Lamb 2023 mean')
             ax_.plot(L['x'], L['p5'], color='#eb6834', lw=0.9, ls=(0,(3,2))); ax_.plot(L['x'], L['p95'], color='#eb6834', lw=0.9, ls=(0,(3,2)))
-        ax_.set_title(name, loc='left'); ax_.set_xlabel('distance from origin (um)'); ax_.grid(axis='y', color='#e6e5e1')
+        ax_.set_title(name, loc='left'); ax_.set_xlabel('height above origin (um)' if k==0 else 'height above floor (um)'); ax_.grid(axis='y', color='#e6e5e1')
     ax[0].set_ylabel('SROD (deg)'); ax[0].legend(frameon=False); fig.tight_layout(); fig.savefig(f'{a.out}/srod.png', dpi=150)
 
 # ---- IPF cross-sections (BD = z) and pole figures

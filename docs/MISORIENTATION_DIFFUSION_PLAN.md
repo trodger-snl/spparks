@@ -53,17 +53,27 @@ Validation (Rosenthal one-pass deck, dx = 5 µm, D = 4.2e5 deg²/m, 4 seeds):
   preferred direction" (full mobility), clamp negative mobility to a
   zero-weight candidate, and share the CPU defaults (0.5, 0.5, 2.5). kk now
   solidifies exactly the CPU's 21 740 sites.
-- **Centerline-grain discrepancy: RESOLVED (babbecf3).** The kk solidification
-  and smoothing kernels read neighbours live while writing their own site,
-  i.e. Gauss-Seidel in site-index order (x fastest): a voxel solidified early
-  in a step was immediately a parent for the next voxel along +x, so a liquid
-  line along x solidified in one step as one grain. Proof: with the scan along
-  y the long grain vanished (extents 13x17 vs 144 along x), and slabs of the
-  GP700 build last solidified by y-scanned layers were still elongated along
-  x. Both kernels now judge neighbours on start-of-step snapshots (Jacobi).
-  After the fix the walk deck gives largest grains of 124 voxels, 10x8
-  (CPU 176, 10x12), and the SROD path factor is 1.64 (CPU 1.73). The earlier
-  "≈2x kk" number was this bug.
+- **Centerline-grain / CPU-vs-kk discrepancy: RESOLVED (babbecf3, 1a9712b3).**
+  Three kk kernel defects, isolated on the GP700 single-hatch deck against the
+  CPU app (dt 2 µs: 732 grains, ESD 25 µm, isotropic):
+  1. live neighbour reads in site-index order (x fastest) — a 144-voxel grain
+     along x on the Rosenthal walk deck; now multicolour (8 parity classes,
+     order shuffled per step) so reads are race-free and spatially random;
+  2. the solid-front distance advanced for every undercooled liquid site (CPU:
+     only while adjacent to solid) — now CPU parity;
+  3. **the smoothing band counter was incremented and clamped at 0 (one pass
+     regardless of nrefine) and the pass ran in the same step the voxel
+     solidified, with its neighbours still liquid** — a greedy majority vote
+     at the front that handed each track to a few grains 200+ µm long
+     (23 grains, ESD 64 µm). Now decremented (nrefine passes) and the list is
+     built before the solidification kernel. With smoothing off the two apps
+     already agreed (18.5k vs 18.8k grains); after the fix with smoothing on:
+     kk 494 grains / ESD 27.5 µm / extents 27-42-45 µm vs CPU 732 / 25.3 /
+     24-39-45; dt 4 µs gives 391 / 32 µm.
+  The phase fields of the two apps had been identical at every frame
+  throughout — the defects were all in parent selection and post-capture
+  smoothing, not in front kinetics. The earlier "≈2x kk" SROD path factor
+  was defect 1; re-measure after the GP700 reruns.
 
 ## Findings this plan encodes
 

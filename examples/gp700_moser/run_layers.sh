@@ -16,7 +16,7 @@ DX=3e-6; TGAP=10.0
 # Inter-hatch pause = the real 10 mm track length / speed (8.8 ms): the previous
 # track has solidified (~0.75 ms) before the next hatch overlaps it. Box time
 # covers 5 hatches + pauses + 2 ms cooling; the predictor skips the idle gaps.
-PAUSE=8.8e-3; TBOX=0.05
+PAUSE=8.8e-3; TBOX=0.040
 for ((n=0; n<NL; n++)); do
   D=$OUT/box_$(printf %03d $n); mkdir -p "$D"
   [ -f "$D/completion.marker" ] && { echo "box $n done, skipping"; continue; }

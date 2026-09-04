@@ -66,7 +66,7 @@ print(f'texture above floor: <001> within 15 deg of BD: {np.mean(ang<15):.2f} (r
 # established grains to their cross-section centroid at the analysis floor
 # (Lamb: "centroid of the grain on the lowest layer of the dataset").
 keep = (height>=60)&(esd>=40)
-dist=[]; srod=[]; cls=[]
+dist_h=[]; dist_e=[]; srod=[]; cls=[]
 for gi in np.where(keep)[0]:
     c = coords[starts[gi]:ends[gi]]
     if zmin[gi] >= floor:                      # originating: origin inside the volume
@@ -75,37 +75,41 @@ for gi in np.where(keep)[0]:
         cf = c[c[:,2] == int(floor)]
         if len(cf) == 0: continue
         cen = cf[:, :2].mean(0); o = cf[np.argmin(((cf[:, :2]-cen)**2).sum(1))]; k = 1; zref = floor
-    qo = np.broadcast_to(q[tuple(o)], (len(c),4))
-    m = c[:,2] >= zref
-    d = (c[m,2] - zref)*dxu
-    srod.append(disorientation_deg(qo[m], q[c[m,0],c[m,1],c[m,2]])); dist.append(d); cls.append(np.full(m.sum(), k))
+    m = c[:,2] >= zref; cm = c[m]
+    qo = np.broadcast_to(q[tuple(o)], (len(cm),4))
+    srod.append(disorientation_deg(qo, q[cm[:,0],cm[:,1],cm[:,2]]))
+    dist_h.append((cm[:,2] - zref)*dxu)                       # height along BD (Lamb)
+    dist_e.append(np.linalg.norm(cm - o, axis=1)*dxu)          # straight line from the reference voxel
+    cls.append(np.full(m.sum(), k))
 res = {}
-if dist:
-    dist=np.concatenate(dist); srod=np.concatenate(srod); cls=np.concatenate(cls)
-    fig,ax = plt.subplots(1,2,figsize=(11,4.4),sharey=True)
-    for k,(name,ax_) in enumerate((('originating',ax[0]),('established',ax[1]))):
-        m = cls==k
-        if m.sum() < 100: print(f'{name}: too few voxels ({m.sum()})'); continue
-        bins = np.arange(0, dist[m].max()+10, 10); rows=[]
-        for lo in bins[:-1]:
-            mm = m & (dist>=lo) & (dist<lo+10) & (dist>0)
-            if mm.sum() < 50: continue
-            s = srod[mm]; p5,p95 = np.percentile(s,[5,95]); rows.append((dist[mm].mean(), s.mean(), p5, p95, np.sqrt((s**2).mean()), mm.sum()))
-        rows = np.array(rows); res[name] = rows.tolist()
-        Dfit = (rows[:,0]*rows[:,4]**2).sum()/(rows[:,0]**2).sum()*1e6   # deg^2/m vs height (established: includes the floor spread)
-        print(f'{name}: {m.sum()} voxels, D_fit(height) = {Dfit:.3g} deg^2/m = {Dfit/a.D:.2f} x input; '
-              f'band/mean ' + ' '.join(f'{(r[3]-r[2])/r[1]:.2f}' for r in rows[::max(1,len(rows)//6)]))
-        for r in rows: print(f'   d={r[0]:6.1f} um n={int(r[5]):7d} mean {r[1]:5.2f} p5 {r[2]:5.2f} p95 {r[3]:5.2f} rms {r[4]:5.2f}')
-        ax_.fill_between(rows[:,0], rows[:,2], rows[:,3], color='#2a78d6', alpha=0.15, lw=0)
-        ax_.plot(rows[:,0], rows[:,1], color='#2a78d6', lw=2, label='simulation mean, 5/95%')
-        dd = np.linspace(1, rows[:,0].max(), 200)
-        ax_.plot(dd, 0.921*np.sqrt(a.D*1e-6*dd), color='#0b0b0b', lw=1.2, ls='--', label='random walk, input D')
-        lf = os.path.join(a.lamb, 'lamb2023_fig5%s_srod.json' % ('a' if k==0 else 'c'))
-        if os.path.exists(lf):
-            L = json.load(open(lf)); ax_.plot(L['x'], L['mean'], color='#eb6834', lw=1.6, label='Lamb 2023 mean')
-            ax_.plot(L['x'], L['p5'], color='#eb6834', lw=0.9, ls=(0,(3,2))); ax_.plot(L['x'], L['p95'], color='#eb6834', lw=0.9, ls=(0,(3,2)))
-        ax_.set_title(name, loc='left'); ax_.set_xlabel('height above origin (um)' if k==0 else 'height above floor (um)'); ax_.grid(axis='y', color='#e6e5e1')
-    ax[0].set_ylabel('SROD (deg)'); ax[0].legend(frameon=False); fig.tight_layout(); fig.savefig(f'{a.out}/srod.png', dpi=150)
+if srod:
+    srod=np.concatenate(srod); cls=np.concatenate(cls); dist_h=np.concatenate(dist_h); dist_e=np.concatenate(dist_e)
+    for metric, dist, xlabel in (('height', dist_h, 'height above origin / floor (um)'),
+                                 ('euclid', dist_e, 'straight-line distance from origin / floor reference (um)')):
+        fig,ax = plt.subplots(1,2,figsize=(11,4.4),sharey=True)
+        for k,(name,ax_) in enumerate((('originating',ax[0]),('established',ax[1]))):
+            m = cls==k
+            if m.sum() < 100: print(f'{metric} {name}: too few voxels ({m.sum()})'); continue
+            bins = np.arange(0, dist[m].max()+10, 10); rows=[]
+            for lo in bins[:-1]:
+                mm = m & (dist>=lo) & (dist<lo+10) & (dist>0)
+                if mm.sum() < 50: continue
+                sv = srod[mm]; p5,p95 = np.percentile(sv,[5,95]); rows.append((dist[mm].mean(), sv.mean(), p5, p95, np.sqrt((sv**2).mean()), mm.sum()))
+            rows = np.array(rows); res[f'{metric}_{name}'] = rows.tolist()
+            Dfit = (rows[:,0]*rows[:,4]**2).sum()/(rows[:,0]**2).sum()*1e6   # RMS^2 = D d through the origin
+            print(f'{metric:6s} {name:11s}: {m.sum():8d} voxels, D_fit = {Dfit:.3g} deg^2/m = {Dfit/a.D:.2f} x input; '
+                  f'band/mean ' + ' '.join(f'{(r[3]-r[2])/r[1]:.2f}' for r in rows[::max(1,len(rows)//6)]))
+            for r in rows: print(f'   d={r[0]:6.1f} um n={int(r[5]):7d} mean {r[1]:5.2f} p5 {r[2]:5.2f} p95 {r[3]:5.2f} rms {r[4]:5.2f}')
+            ax_.fill_between(rows[:,0], rows[:,2], rows[:,3], color='#2a78d6', alpha=0.15, lw=0)
+            ax_.plot(rows[:,0], rows[:,1], color='#2a78d6', lw=2, label='simulation mean, 5/95%')
+            dd = np.linspace(1, rows[:,0].max(), 200)
+            ax_.plot(dd, 0.921*np.sqrt(a.D*1e-6*dd), color='#0b0b0b', lw=1.2, ls='--', label='random walk, input D')
+            lf = os.path.join(a.lamb, 'lamb2023_fig5%s_srod.json' % ('a' if k==0 else 'c'))
+            if os.path.exists(lf):
+                L = json.load(open(lf)); ax_.plot(L['x'], L['mean'], color='#eb6834', lw=1.6, label='Lamb 2023 mean (height)')
+                ax_.plot(L['x'], L['p5'], color='#eb6834', lw=0.9, ls=(0,(3,2))); ax_.plot(L['x'], L['p95'], color='#eb6834', lw=0.9, ls=(0,(3,2)))
+            ax_.set_title(f'{name} ({metric})', loc='left'); ax_.set_xlabel(xlabel); ax_.grid(axis='y', color='#e6e5e1')
+        ax[0].set_ylabel('SROD (deg)'); ax[0].legend(frameon=False); fig.tight_layout(); fig.savefig(f'{a.out}/srod_{metric}.png', dpi=150)
 
 # ---- IPF cross-sections (BD = z) and pole figures
 rgb = generate_ipf_colors(q.reshape(-1,4), 'fcc', 'z').reshape(nx,ny,nz,3); rgb[~solid] = 0.25

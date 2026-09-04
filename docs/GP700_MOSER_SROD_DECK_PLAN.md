@@ -1,6 +1,7 @@
 # Plan 2: GammaPrint-700 Moser deck to test against the published thermal simulation and SROD data
 
-Status: **PLANNED, not implemented** (2026-09-04). Depends on Plan 1
+Status: **IN PROGRESS** (2026-09-04): §2 hatch extension, deck, driver and
+gate 5.1 done (see "Progress log" at the end); 5.2/5.3 running. Depends on Plan 1
 (`docs/MISORIENTATION_DIFFUSION_PLAN.md`) for the rotation law and on one
 small scan-path extension (§2). Targets Lamb et al., Acta Mater 2023 (SROD,
 Fig. 5) and Lamb et al., Met Trans A 2026 (3DThesis thermal simulation,
@@ -182,3 +183,38 @@ not fitted to the simulation.
   random. Excluding the bottom 90 µm from analysis is the mitigation; if the
   established-grain class looks wrong, seed the substrate from a prior
   6-layer run's top instead.
+
+## Progress log
+
+**2026-09-04.** Implemented: `laser_path ... hatch <s> <n> [serpentine]`
+(440f3be0, Moser + Rosenthal; CPU/kk d6 bit-identical on a 3-pass serpentine
+deck), `examples/gp700_moser/{in.gp700_layer, run_layers.sh, in.gp700_thermal,
+thermal_check.py, gp700_analysis.py}`. Two bugs found on the way, both fixed:
+the template's placeholder comment expanded into live `set` lines before
+`app_style` (segfault), and `laser_path` anchored the scan at the stale
+ThermalHost time so `reset_time` was ignored and continuation boxes ran cold
+(56bbcc86: both apps refresh the snapshot first; `reset_time` precedes
+`laser_path` in the template).
+
+Gate 5.1 (single hatch, `in.gp700_thermal`, 540k sites, 18 s on the GPU):
+- pool 147 µm wide × 69 µm deep, **W/D = 2.1** through the pass (Fig. 3
+  aspect ≈ 2:1 ✓); G median 1.0e7 K/m, 2.6–2.9e7 at the fusion boundary
+  (Fig. 3: 3e7 at the boundary, decreasing inward ✓).
+- the pool tail is long: liquid spans the full 400 µm box behind the laser
+  and takes ~0.75 ms to solidify after the laser exits; the interface normal
+  velocity is 0.4–0.7 m/s along the tail sides, > 1 m/s only at the tip —
+  consistent with the paper's V map and with the isotherm geometry.
+- `solid_front_vel` refit: the ct15 polynomial capped V at 0.43 m/s with every
+  site solidifying at 43–53 K undercooling (the front could not keep up with
+  the isotherms). Scaled 3.5× (adopted in the template) the front runs at
+  **25–35 K undercooling** with V median 0.56 m/s; pool geometry unchanged
+  (it is set by the thermal field, not the kinetics).
+- peak T ~3e4 K at the source (no evaporation cap in the Green's function);
+  harmless for the melt criterion, but do not read T > T_l values as physical.
+
+Gate 5.2 first finding: five 147 µm-wide hatches at 80 µm spacing remelt to
+**80–100 µm below the surface** (heat accumulation across the layer), so the
+original 60 µm substrate melted through entirely in box 0 and the layer
+re-solidified from a few surviving islands as a radial "starburst" of giant
+grains (383 grains, volume-weighted median ESD 88 µm). Substrate raised to
+150 µm (z_top = 50 + 10·layer voxels), boxes stay 180 µm deep.

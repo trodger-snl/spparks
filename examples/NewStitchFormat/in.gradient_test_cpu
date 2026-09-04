@@ -36,7 +36,7 @@ undercooling_deviation 3
 mean_nuclei_volume 8.4375e-16
 nuclei_volume_deviation 1.5625e-17
 texture_parameters 0.1 0.9 2.5
-misorientation_function 10 5
+misorientation_diffusion 4.2e5 5
 fast_forward_search_window 0.001
 
 shell cd DumpFiles_gradient_test/

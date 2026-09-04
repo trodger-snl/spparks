@@ -2,7 +2,7 @@
 # Updated 2026-07 for the current API (see README.md in this directory):
 #   - style renamed additive_temperature_texture/kk -> additive/texture/kk
 #   - the Kokkos app requires `sweep color` (not `sweep random`)
-#   - texture_parameters/misorientation_function now take 2 args (c1 fixed at 1.0)
+#   - texture_parameters/misorientation_function replaced by misorientation_diffusion <D_deg2_per_m> <thresh_deg> [alpha]
 #   - temperature I/O is a modular source: `setup_temperature_source hdf5_unstructured ...`
 #
 # The unstructured thermal HDF5 file is ~1 GB and is NOT shipped in-repo. Point
@@ -55,7 +55,7 @@ undercooling_deviation  3
 mean_nuclei_volume      8.4375e-16
 nuclei_volume_deviation 1.5625e-17
 texture_parameters      2.990000e+00 2
-misorientation_function 1.883553e+01 2
+misorientation_diffusion 4.2e5 2
 fast_forward_search_window 0.001
 
 stats            2e-4

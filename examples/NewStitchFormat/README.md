@@ -55,6 +55,6 @@ forms and will error until updated the same way:
   non-negative mobility over all misorientation angles or the app errors — the
   old three-argument coefficients do not always map to a valid two-argument pair,
   so a known-valid set may be needed (the example uses `2.990000e+00 2`).
-- `misorientation_function` likewise takes 2 args.
+- `misorientation_function` was replaced by `misorientation_diffusion <D_deg2_per_m> <thresh_deg> [alpha]` (see docs/MISORIENTATION_DIFFUSION_PLAN.md).
 - `dump ... stitch ...` requires the STITCH package; it is commented out in the
   updated example so it runs without STITCH.

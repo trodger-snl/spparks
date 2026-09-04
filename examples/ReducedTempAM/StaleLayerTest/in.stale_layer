@@ -47,7 +47,7 @@ undercooling_deviation  2
 mean_nuclei_volume      1.685280e-15
 nuclei_volume_deviation 1.5625e-17
 texture_parameters 1.990000e+00 2.180000e+00
-misorientation_function 3.372846e+01 2
+misorientation_diffusion 4.2e5 2
 fast_forward_search_window 0.001
 
 stats            1e-4

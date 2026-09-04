@@ -1532,9 +1532,26 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
    Phase 3.3: Liquid sites captured by solid neighbors based on texture
 ------------------------------------------------------------------------- */
 
+void AppAdditiveTextureKokkos::ensure_snapshot_views()
+{
+  const size_t n = d_active_flag.extent(0);
+  if (d_flag_snap.extent(0) != n) {
+    d_flag_snap = Kokkos::View<int*>("flag_snap", n);
+    d_spin_snap = Kokkos::View<int*>("spin_snap", n);
+    d_q0_snap = Kokkos::View<double*>("q0_snap", n);
+    d_qx_snap = Kokkos::View<double*>("qx_snap", n);
+    d_qy_snap = Kokkos::View<double*>("qy_snap", n);
+    d_qz_snap = Kokkos::View<double*>("qz_snap", n);
+  }
+}
+
 int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_sites, int n_active)
 {
-  // Get device views - simple Views (no double buffering needed for self-only writes)
+  // Own-site writes go to the live Views; NEIGHBOUR eligibility is judged on
+  // the start-of-step phase snapshot (Jacobi, see ensure_snapshot_views).
+  ensure_snapshot_views();
+  Kokkos::deep_copy(d_flag_snap, d_active_flag);
+  auto d_flag_snap_local = d_flag_snap;
   auto d_active_sites_local = d_active_sites;
   auto d_T_local = k_T.view_device();
   auto d_spin_local = d_spin;
@@ -1620,7 +1637,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
         double cumulative_sum = 0.0;
         for (int j = 0; j < nn && j < 26; j++) {
           int nbr = k_neighbor_d(i, j);
-          int nbr_flag = d_active_flag_local(nbr);
+          int nbr_flag = d_flag_snap_local(nbr);   // start-of-step phase (Jacobi)
 
           // Check if neighbor is solid (active_flag == 1 or 3) and within reach
           if ((nbr_flag == 1 || nbr_flag == 3) && solid_reach * dx_local <= solid_d_i) {
@@ -1777,7 +1794,15 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
 int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
     Kokkos::View<int*> d_smoothing_sites, int n_sites)
 {
-  // Get device views - simple Views (color-based sweeping makes this race-safe)
+  // Own-site reads/writes go to the live Views; every NEIGHBOUR read goes to
+  // the start-of-step snapshot (Jacobi, see ensure_snapshot_views).
+  ensure_snapshot_views();
+  Kokkos::deep_copy(d_flag_snap, d_active_flag);
+  Kokkos::deep_copy(d_spin_snap, d_spin);
+  Kokkos::deep_copy(d_q0_snap, d_q0); Kokkos::deep_copy(d_qx_snap, d_qx);
+  Kokkos::deep_copy(d_qy_snap, d_qy); Kokkos::deep_copy(d_qz_snap, d_qz);
+  auto d_spin_s = d_spin_snap; auto d_flag_s = d_flag_snap;
+  auto d_q0_s = d_q0_snap; auto d_qx_s = d_qx_snap; auto d_qy_s = d_qy_snap; auto d_qz_s = d_qz_snap;
   auto d_spin_local = d_spin;
   auto d_q0_local = d_q0;
   auto d_qx_local = d_qx;
@@ -1823,7 +1848,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
       int unique_spins[27];
       int nevent = 0;
       for (int n = 0; n < nn; n++) {
-        const int v = d_spin_local(k_neighbor_d(i, n));
+        const int v = d_spin_s(k_neighbor_d(i, n));
         if (v == spin_i) continue;
         bool found = false;
         for (int k = 0; k < nevent; k++)
@@ -1836,7 +1861,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
         int einitial = 0;
         for (int n = 0; n < nn; n++) {
           const int nbr = k_neighbor_d(i, n);
-          if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != spin_i) einitial++;
+          if (d_flag_s(nbr) == 3 && d_spin_s(nbr) != spin_i) einitial++;
         }
 
         auto generator = rand_pool_local.get_state();
@@ -1847,14 +1872,14 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
           efinal = 0;
           for (int n = 0; n < nn; n++) {
             const int nbr = k_neighbor_d(i, n);
-            if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != new_spin) efinal++;
+            if (d_flag_s(nbr) == 3 && d_spin_s(nbr) != new_spin) efinal++;
           }
           for (int c = 1; c < nevent; c++) {
             const int cand = unique_spins[c];
             int e = 0;
             for (int n = 0; n < nn; n++) {
               const int nbr = k_neighbor_d(i, n);
-              if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != cand) e++;
+              if (d_flag_s(nbr) == 3 && d_spin_s(nbr) != cand) e++;
             }
             if (e < efinal) { efinal = e; new_spin = cand; }  // strict -> first-encounter
           }
@@ -1865,7 +1890,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
           efinal = 0;
           for (int n = 0; n < nn; n++) {
             const int nbr = k_neighbor_d(i, n);
-            if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != new_spin) efinal++;
+            if (d_flag_s(nbr) == 3 && d_spin_s(nbr) != new_spin) efinal++;
           }
         }
 
@@ -1885,9 +1910,9 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
           int cq = 0; bool first = false;
           for (int n = 0; n < nn; n++) {
             const int nbr = k_neighbor_d(i, n);
-            if (d_spin_local(nbr) != new_spin) continue;
-            double n0 = d_q0_local(nbr), nx = d_qx_local(nbr),
-                   ny = d_qy_local(nbr), nz = d_qz_local(nbr);
+            if (d_spin_s(nbr) != new_spin) continue;
+            double n0 = d_q0_s(nbr), nx = d_qx_s(nbr),
+                   ny = d_qy_s(nbr), nz = d_qz_s(nbr);
             if (!first) { r0 = n0; rx = nx; ry = ny; rz = nz; first = true; }
             else if (r0*n0 + rx*nx + ry*ny + rz*nz < 0.0) {
               n0 = -n0; nx = -nx; ny = -ny; nz = -nz;  // q and -q are the same orientation

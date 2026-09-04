@@ -53,17 +53,17 @@ Validation (Rosenthal one-pass deck, dx = 5 µm, D = 4.2e5 deg²/m, 4 seeds):
   preferred direction" (full mobility), clamp negative mobility to a
   zero-weight candidate, and share the CPU defaults (0.5, 0.5, 2.5). kk now
   solidifies exactly the CPU's 21 740 sites.
-- **New CPU-vs-kk discrepancy uncovered by that fix:** with the same melted
-  volume, each kk run contains one grain of ~3000 voxels spanning the full
-  144-voxel scan length along x, while the CPU app's largest grains are
-  < 180 voxels with x-extents ≤ 16 (grain counts match, ~2400). Both apps
-  solidify most of the pool after the scan ends (flat field, uniform
-  weights), the CPU in one random-order sequential sweep, kk in ~20 Jacobi
-  shell steps. The long centerline grain therefore comes from the update
-  ordering, not from the mobility or rotation code. It dominates any SROD
-  statistic (bins out to 700 µm at ~27°), so resolve it before Plan 2 §5.2.
-  The pre-fix kk D-fit numbers above (≈2× D) were taken on the truncated pool
-  and should be re-measured once this is settled.
+- **Centerline-grain discrepancy: RESOLVED (babbecf3).** The kk solidification
+  and smoothing kernels read neighbours live while writing their own site,
+  i.e. Gauss-Seidel in site-index order (x fastest): a voxel solidified early
+  in a step was immediately a parent for the next voxel along +x, so a liquid
+  line along x solidified in one step as one grain. Proof: with the scan along
+  y the long grain vanished (extents 13x17 vs 144 along x), and slabs of the
+  GP700 build last solidified by y-scanned layers were still elongated along
+  x. Both kernels now judge neighbours on start-of-step snapshots (Jacobi).
+  After the fix the walk deck gives largest grains of 124 voxels, 10x8
+  (CPU 176, 10x12), and the SROD path factor is 1.64 (CPU 1.73). The earlier
+  "≈2x kk" number was this bug.
 
 ## Findings this plan encodes
 

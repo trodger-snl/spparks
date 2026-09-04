@@ -218,3 +218,12 @@ original 60 µm substrate melted through entirely in box 0 and the layer
 re-solidified from a few surviving islands as a radial "starburst" of giant
 grains (383 grains, volume-weighted median ESD 88 µm). Substrate raised to
 150 µm (z_top = 50 + 10·layer voxels), boxes stay 180 µm deep.
+
+**Later the same day.** Domain widened to 801 µm square with 10 hatches
+(analyse `--crop 200 600 200 600`); inter-hatch pause set to the real 10 mm
+track time (8.8 ms) so tracks solidify before the next hatch; timestep is a
+driver argument. A dt 2 vs 4 µs comparison of box 0 disagreed wildly (161 vs
+3443 grains, ESD 99 vs 35 µm, grains 378 µm long along x at 2 µs) and led to
+the kk kernel-ordering bug (babbecf3, see Plan 1): neighbours were read live,
+making the kernels Gauss-Seidel in x-index order. Box 0 is being rerun at
+both steps with the Jacobi kernels; gates 5.2/5.3 restart from there.

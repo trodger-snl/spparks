@@ -227,3 +227,15 @@ driver argument. A dt 2 vs 4 µs comparison of box 0 disagreed wildly (161 vs
 the kk kernel-ordering bug (babbecf3, see Plan 1): neighbours were read live,
 making the kernels Gauss-Seidel in x-index order. Box 0 is being rerun at
 both steps with the Jacobi kernels; gates 5.2/5.3 restart from there.
+
+**Timestep decision (16:20).** With the three kk kernel fixes (1a9712b3) box 0
+of the wide build agrees between dt 2 and 4 µs within seed noise on the
+central 400 µm crop: 2330 vs 2174 grains, ESD p50 37.5 vs 39.4 µm, extents
+33/72/69 vs 36/69/72 µm, <001> within 15° of BD 0.20 vs 0.18, same-grain
+z-neighbour disorientation 2.20 vs 2.27°, SROD D-fit (height) 1.22 vs 1.42×
+input, (straight line) 0.99 vs 1.03×. Single-hatch check vs the CPU app at
+2 µs: CPU 732 grains / ESD 25.3 µm, kk 494 / 27.5 (2 µs), 391 / 32.3 (4 µs).
+The CPU app's guard dt ≤ dx/V(Tl−Ts) = 2.09 µs would reject 4 µs; the front
+actually runs at 25–35 K (V ≤ 0.71 m/s, limit 4.2 µs) and the capture reach is
+√3 dx (3.6 µs). The kk app now prints the same guard as a warning. Production
+build `wide12_v2` launched at 4 µs on a frozen binary copy (~12 min/box).

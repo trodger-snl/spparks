@@ -1,10 +1,55 @@
 # Plan 1: diffusion-coefficient misorientation in `additive/texture` and `additive/texture/kk`
 
-Status: **PLANNED, not implemented** (2026-09-04). Replaces the earlier
-versions of this file (power-law decay, two-regime cap, first random-walk
-draft). Evidence: `docs/srod_random_walk.png`, `docs/srod_experimental_analysis.png`,
+Status: **Part A implemented 2026-09-04** (commits fa8930f3, 63a68bad, 74c331e1);
+Part B (the undercooling test matrix) is still to run. Evidence:
+`docs/srod_random_walk.png`, `docs/srod_experimental_analysis.png`,
 `docs/srod_random_walk.py`. Companion: `docs/GP700_MOSER_SROD_DECK_PLAN.md`
 (Plan 2, the validation deck).
+
+## Implementation record (Part A)
+
+What landed, in both apps unless noted:
+- `misorientation_diffusion <D_deg2_per_m> <thresh_deg> [alpha]` as in A1;
+  `misorientation_function` / `misorientation_cap` / `misorientation_target
+  gradient` are parse errors with a migration hint. `nucleation_misorientation_target`
+  takes `on|off|none`. Defaults: rotation off, `random_rotation`, shells on.
+- Nucleation shells: `sqrt(D_eff * distance_from_seed)` relative to the seed
+  (CPU flipper re-rooted onto the seed; kk unchanged in form). kk
+  `t_cool_max` is now `tl - ts` (was 100 K).
+- Check deck `examples/misorientation_walk/in.walk.{cpu,kk}` and
+  `scripts/srod_analysis.py` (origin-referenced SROD vs distance, D fit,
+  width ratio).
+
+Validation (Rosenthal one-pass deck, dx = 5 µm, D = 4.2e5 deg²/m, 4 seeds):
+- `examples/am_validation/compare.sh`: d6 sum/max bit-identical CPU vs kk
+  on all three decks.
+- Per-hop step exact in both apps: with smoothing off (`nrefine 0`) the
+  axis-neighbour same-grain disorientation has a sharp peak in [1.4, 1.5)°
+  (expected sqrt(D·dx) = 1.449°) holding 19% (CPU) / 29% (kk) of pairs; the
+  rest are cousin pairs.
+- Width ratio (p95−p5)/mean = 1.3–1.5 in both apps at every distance bin
+  (Maxwell 1.38). SROD grows as √d.
+- **Calibration factor to remember:** fitting RMS² = D_fit·(Euclidean
+  distance from the lowest-z voxel) gives D_fit/D = 1.3 (CPU, no smoothing;
+  0.88 with the default `nrefine 2` smoothing, which copies quaternions) and
+  ≈ 2.0 (kk, HIP and OpenMP alike). The walk accumulates along the
+  inheritance *path*, which is longer than the straight-line distance, and
+  the lowest-z origin is only approximately the true origin. The experiment
+  measures SROD against Euclidean distance, so the B-stage gate must compare
+  the same quantity and the input D will need to be scaled down by the
+  app's path factor (~0.8 CPU-with-smoothing, ~0.5 kk on this deck). Why kk
+  paths are more tortuous than the CPU app's (parallel front vs sequential
+  random sweep) is worth a look but is not a rotation-code issue.
+- alpha = 5 runs clean (no NaN); on this deck nearly every site solidifies
+  at Tcool ≥ tl − ts, so g ≈ 1 and the step is unchanged — the deck is too
+  hot to exercise alpha, which is what the Rosenthal singularity does.
+- kk np = 2 (OpenMP) runs clean.
+- **Pre-existing, not from this change:** on this Rosenthal 400 W deck the
+  kk app leaves 14 084 sites liquid (i2 = 2) at 573 K after the pass while
+  the CPU app solidifies everything; the pre-change kk binary gives the
+  identical phase counts. Worth its own investigation before Plan 2's
+  thermal gate (a pool that never re-solidifies would corrupt every SROD
+  statistic).
 
 ## Findings this plan encodes
 

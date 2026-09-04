@@ -135,9 +135,13 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
   size_norm = 8.4375e-16;  // Mean nuclei volume (m^3)
   size_sig = 1.5625e-17;   // Nuclei volume std dev (m^3)
 
-  // Texture parameters (default values)
-  c1 = 0.1;
-  c2 = 0.9;
+  // Texture parameters: match AppAdditiveTexture's defaults (c1 0.5, c2 0.5,
+  // c3 2.5). The old 0.1/0.9 gave a NEGATIVE mobility for neighbours more than
+  // ~40 deg off the gradient -- and for every neighbour once the field is flat
+  // (see the zero-gradient note in the solidification kernel) -- which this
+  // kernel rejects outright, so a cooled pool could never finish solidifying.
+  c1 = 0.5;
+  c2 = 0.5;
   c3 = 2.5;
   // Match AppAdditiveTexture's defaults (app_additive_texture.cpp:150-152).
   mis_diffusion = 0.0;   // rotation off until misorientation_diffusion, as on the CPU
@@ -1649,19 +1653,27 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
             double c2 = d_texture_params_local(1);
             double c3 = d_texture_params_local(2);
 
-            // Use QuaternionOps from parent class to get cosine of min angle
-            // This finds the minimum angle between any <100> direction and gradient
-            double cos_min_angle = QuaternionOps::get_cosine_angle_q_u(q_nbr, grad_dir);
-            double theta = Kokkos::acos(cos_min_angle);
-            double mobility = c1 + c2 * Kokkos::cos(c3 * theta);
-
-            // Accumulate weight (must be positive)
-            if (mobility > 0.0) {
-              cumulative_sum += mobility;
-              cumulative_weight[num_solid_neighbors] = cumulative_sum;
-              solid_neighbor_idx[num_solid_neighbors] = nbr;
-              num_solid_neighbors++;
+            // Minimum angle between any <100> of the neighbour and the gradient.
+            // A zero gradient (flat field, e.g. a pool that has cooled to
+            // ambient) has no preferred growth direction: every candidate gets
+            // the full mobility. get_cosine_angle_q_u returns 0 for a zero
+            // vector, i.e. a bogus 90 deg, which with c3 = 2.5 turns the
+            // mobility negative. Matches AppAdditiveTexture::melt_misorientation.
+            double mobility;
+            if (grad_magnitude > 0.0) {
+              double cos_min_angle = QuaternionOps::get_cosine_angle_q_u(q_nbr, grad_dir);
+              double theta = Kokkos::acos(cos_min_angle);
+              mobility = c1 + c2 * Kokkos::cos(c3 * theta);
+            } else {
+              mobility = c1 + c2;
             }
+            // Negative mobility is a zero-weight candidate, never a rejected
+            // one (same clamp as the CPU app): a site with a solid neighbour in
+            // reach must eventually solidify.
+            cumulative_sum += Kokkos::fmax(mobility, 0.0);
+            cumulative_weight[num_solid_neighbors] = cumulative_sum;
+            solid_neighbor_idx[num_solid_neighbors] = nbr;
+            num_solid_neighbors++;
           }
         }
 
@@ -1671,13 +1683,18 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
           auto generator = rand_pool_local.get_state();
           double rand_val = generator.drand() * cumulative_sum;
 
-          // Find selected neighbor using binary-like search
+          // Roulette wheel; all-zero weights degrade to a uniform pick.
           int selected_idx = 0;
-          for (int k = 0; k < num_solid_neighbors; k++) {
-            if (rand_val <= cumulative_weight[k]) {
-              selected_idx = k;
-              break;
+          if (cumulative_sum > 0.0) {
+            for (int k = 0; k < num_solid_neighbors; k++) {
+              if (rand_val <= cumulative_weight[k]) {
+                selected_idx = k;
+                break;
+              }
             }
+          } else {
+            selected_idx = static_cast<int>(generator.drand() * num_solid_neighbors);
+            if (selected_idx >= num_solid_neighbors) selected_idx = num_solid_neighbors - 1;
           }
 
           int selected_nbr = solid_neighbor_idx[selected_idx];

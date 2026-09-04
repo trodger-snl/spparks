@@ -1651,6 +1651,11 @@ double AppAdditiveTexture::melt_misorientation(int site, double c1, double c2, d
 
 	//Calculate the unit-vector surface norm (use voxel counting)
 	vector<double> grad_full = normal_finder(site);  // Returns [norm_x, norm_y, norm_z, magnitude]
+	// A zero gradient (flat field) has no preferred growth direction: full
+	// mobility for every candidate. The cosine helper returns 0 for a zero
+	// vector (a bogus 90 deg), which with c3 = 2.5 can go negative. Same rule
+	// as the kk SolidificationKernel.
+	if (grad_full[3] <= 0.0) return c1 + c2;
 	vector<double> grad_vector = {grad_full[0], grad_full[1], grad_full[2]};  // Extract direction only
 	
 	// Create quaternion vector from site's orientation
@@ -1663,8 +1668,10 @@ double AppAdditiveTexture::melt_misorientation(int site, double c1, double c2, d
 	// Calculate angle from cosine
 	theta = acos(dotMax);
 	
-	// Apply texture mobility model
+	// Apply texture mobility model; a negative mobility is a zero-weight
+	// candidate (the roulette wheel below needs monotone cumulative weights).
 	mobOut = c1 + c2 * cos(c3 * theta);
+	if (mobOut < 0.0) mobOut = 0.0;
 	
 	return mobOut;
 }

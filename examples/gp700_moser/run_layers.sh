@@ -12,7 +12,11 @@ set -eu
 BIN=$(readlink -f "$1"); OUT=$(readlink -f "$2"); NL=${3:-12}; SEED=${4:-12345}
 HERE=$(cd "$(dirname "$0")" && pwd); TPL=$HERE/in.gp700_layer
 mkdir -p "$OUT"; ST=$OUT/gp700.st
-DX=3e-6; TBOX=5.0e-3; TGAP=10.0
+DX=3e-6; TGAP=10.0
+# Inter-hatch pause = the real 10 mm track length / speed (8.8 ms): the previous
+# track has solidified (~0.75 ms) before the next hatch overlaps it. Box time
+# covers 5 hatches + pauses + 2 ms cooling; the predictor skips the idle gaps.
+PAUSE=8.8e-3; TBOX=0.05
 for ((n=0; n<NL; n++)); do
   D=$OUT/box_$(printf %03d $n); mkdir -p "$D"
   [ -f "$D/completion.marker" ] && { echo "box $n done, skipping"; continue; }
@@ -21,9 +25,9 @@ for ((n=0; n<NL; n++)); do
   ztop=$((50 + 10*(n+1))); zlo=$((ztop-60)); [ $zlo -lt 0 ] && zlo=0
   z0=$(python3 -c "print($ztop*$DX)")
   if [ $((n%2)) -eq 0 ]; then
-    LASER="laser_path start -100e-6 40e-6 $z0 end 502e-6 40e-6 speed 1.137 hatch 80e-6 5 serpentine pause 1e-4"
+    LASER="laser_path start -100e-6 40e-6 $z0 end 502e-6 40e-6 speed 1.137 hatch 80e-6 5 serpentine pause $PAUSE"
   else
-    LASER="laser_path start 360e-6 -100e-6 $z0 end 360e-6 502e-6 speed 1.137 hatch 80e-6 5 serpentine pause 1e-4"
+    LASER="laser_path start 360e-6 -100e-6 $z0 end 360e-6 502e-6 speed 1.137 hatch 80e-6 5 serpentine pause $PAUSE"
   fi
   T0=$(python3 -c "print($n*$TGAP)"); T1=$(python3 -c "print($n*$TGAP + $TBOX)")
   if [ $n -eq 0 ]; then

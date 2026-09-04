@@ -44,12 +44,26 @@ Validation (Rosenthal one-pass deck, dx = 5 µm, D = 4.2e5 deg²/m, 4 seeds):
   at Tcool ≥ tl − ts, so g ≈ 1 and the step is unchanged — the deck is too
   hot to exercise alpha, which is what the Rosenthal singularity does.
 - kk np = 2 (OpenMP) runs clean.
-- **Pre-existing, not from this change:** on this Rosenthal 400 W deck the
-  kk app leaves 14 084 sites liquid (i2 = 2) at 573 K after the pass while
-  the CPU app solidifies everything; the pre-change kk binary gives the
-  identical phase counts. Worth its own investigation before Plan 2's
-  thermal gate (a pool that never re-solidifies would corrupt every SROD
-  statistic).
+- **kk left the pool liquid (fixed, commit after 74c331e1):** on this
+  Rosenthal 400 W deck the kk app left 14 084 sites liquid at 573 K after the
+  pass. Root cause: once the field is flat the gradient is zero, the cosine
+  helper returns 0 (a bogus 90°), and the kk texture defaults (c1 0.1, c2 0.9)
+  made the mobility c1 + c2·cos(2.5·90°) negative for every candidate, which
+  the kernel rejected outright. Both apps now treat a zero gradient as "no
+  preferred direction" (full mobility), clamp negative mobility to a
+  zero-weight candidate, and share the CPU defaults (0.5, 0.5, 2.5). kk now
+  solidifies exactly the CPU's 21 740 sites.
+- **New CPU-vs-kk discrepancy uncovered by that fix:** with the same melted
+  volume, each kk run contains one grain of ~3000 voxels spanning the full
+  144-voxel scan length along x, while the CPU app's largest grains are
+  < 180 voxels with x-extents ≤ 16 (grain counts match, ~2400). Both apps
+  solidify most of the pool after the scan ends (flat field, uniform
+  weights), the CPU in one random-order sequential sweep, kk in ~20 Jacobi
+  shell steps. The long centerline grain therefore comes from the update
+  ordering, not from the mobility or rotation code. It dominates any SROD
+  statistic (bins out to 700 µm at ~27°), so resolve it before Plan 2 §5.2.
+  The pre-fix kk D-fit numbers above (≈2× D) were taken on the truncated pool
+  and should be re-measured once this is settled.
 
 ## Findings this plan encodes
 

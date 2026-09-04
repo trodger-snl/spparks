@@ -72,11 +72,10 @@ for q in (10,30,60,100,200,260): i=np.argmin(abs(A['x']-q)); print(' a d=%3d: da
 for q in (0,100,250,400,475): i=np.argmin(abs(C['x']-q)); print(' c d=%3d: data mean %.2f [%.1f,%.1f]  model %.2f [%.1f,%.1f]'%(q,C['mean'][i],C['p5'][i],C['p95'][i],mean_model(q,D,rms0),*band(q,D,rms0)))
 json.dump(dict(D=D, rms0=rms0), open('fit.json','w'))
 
-# ---- plot
-BLUE='#2a78d6'; ORANGE='#eb6834'; INK='#0b0b0b'; INK2='#52514e'; GRID='#e6e5e1'; SURF='#fcfcfb'
+# ---- plots
+BLUE='#2a78d6'; ORANGE='#eb6834'; AQUA='#1baf7a'; INK='#0b0b0b'; INK2='#52514e'; GRID='#e6e5e1'; SURF='#fcfcfb'
 plt.rcParams.update({'font.size':10,'axes.edgecolor':INK2,'axes.labelcolor':INK,'xtick.color':INK2,'ytick.color':INK2,
                      'axes.spines.top':False,'axes.spines.right':False,'figure.facecolor':SURF,'axes.facecolor':SURF})
-fig,(ax1,ax2)=plt.subplots(1,2,figsize=(11,4.6),sharey=True)
 def panel(ax, data, dmax, D, rms0, title):
     d=np.linspace(0.5,dmax,400); lo,hi=band(d,D,rms0)
     ax.fill_between(d,lo,hi,color=BLUE,alpha=0.15,lw=0,label='random-walk model, 90% band')
@@ -87,10 +86,14 @@ def panel(ax, data, dmax, D, rms0, title):
     ax.set_title(title,loc='left',fontsize=11,color=INK)
     ax.grid(axis='y',color=GRID,lw=0.8); ax.set_axisbelow(True)
     ax.set_xlim(0,dmax); ax.set_ylim(0,30)
-panel(ax1,A,265,D,0.0,'(a) Grains originating in the volume')
-# the authors' reading and the current coherent cap, panel (a) only
+def authors_reading(ax):
+    d=np.linspace(0,265,300)
+    ax.plot(d,np.where(d<30,3.5*d/30,3.5+0.85*(d-30)/30),color=ORANGE,lw=1.4,ls=(0,(5,2)),label="authors' reading: fast 30 µm, then 0.85°/layer")
+
+# Figure 1: data + model, with the current SPPARKS cap for reference
+fig,(ax1,ax2)=plt.subplots(1,2,figsize=(11,4.6),sharey=True)
+panel(ax1,A,265,D,0.0,'(a) Grains originating in the volume'); authors_reading(ax1)
 d=np.linspace(0,265,300)
-ax1.plot(d,np.where(d<30,3.5*d/30,3.5+0.85*(d-30)/30),color=ORANGE,lw=1.4,ls=(0,(5,2)),label="authors' reading: fast 30 µm, then 0.85°/layer")
 ax1.plot(d,2.0*d/30,color=INK2,lw=1.1,ls=(0,(1,2)),label='current coherent cap 2°/30 µm (no spread)')
 ax1.set_xlabel('Distance from grain origin (µm)'); ax1.set_ylabel('SROD (°)')
 panel(ax2,C,480,D,rms0,'(b) Established grains (reference at dataset bottom)')
@@ -99,5 +102,25 @@ ax1.text(150,27.2,'fit: D = %.2f deg²/µm'%D,color=BLUE,fontsize=9)
 ax2.text(20,27.2,'prediction with the same D, plus %.1f° initial spread in quadrature'%rms0,color=BLUE,fontsize=9)
 h,l=ax1.get_legend_handles_labels(); fig.legend(h,l,loc='lower center',ncol=3,frameon=False,fontsize=8.5,bbox_to_anchor=(0.5,-0.02))
 fig.suptitle('SROD vs distance grown: Lamb et al. (Acta Mater. 2023, Fig. 5, GammaPrint-700 PBF-L) against a random-axis rotation walk',fontsize=10.5,color=INK,x=0.01,ha='left')
-fig.tight_layout(rect=(0,0.08,1,0.96))
-fig.savefig('srod_random_walk.png',dpi=170); print('saved')
+fig.tight_layout(rect=(0,0.08,1,0.96)); fig.savefig('srod_random_walk.png',dpi=170); plt.close(fig)
+
+# Figure 2: experimental-data analysis only. Third panel: the width/mean ratio,
+# which a diffusive (Maxwell) process pins at a constant regardless of D.
+ratio_maxwell = (maxwell.ppf(0.95)-maxwell.ppf(0.05))/MEANF
+fig,(ax1,ax2,ax3)=plt.subplots(1,3,figsize=(14.5,4.6),gridspec_kw=dict(width_ratios=[1.1,1.1,0.9]))
+panel(ax1,A,265,D,0.0,'(a) Grains originating in the volume'); authors_reading(ax1)
+ax1.set_xlabel('Distance from grain origin (µm)'); ax1.set_ylabel('SROD (°)')
+ax1.text(115,27.2,'√d fit: RMS² = D·d, D = %.2f deg²/µm'%D,color=BLUE,fontsize=9)
+panel(ax2,C,480,D,rms0,'(b) Established grains'); ax2.set_ylabel('SROD (°)')
+ax2.set_xlabel('Distance from dataset bottom (µm)')
+ax2.text(15,27.2,'same D, initial spread %.1f° RMS added in quadrature'%rms0,color=BLUE,fontsize=9)
+for data,col,lab in ((A,INK,'(a) originating grains'),(C,AQUA,'(b) established grains')):
+    ok=np.isfinite(data['p5'])&np.isfinite(data['p95'])&(data['x']>20)
+    ax3.plot(data['x'][ok],(data['p95']-data['p5'])[ok]/data['mean'][ok],color=col,lw=1.4,label=lab)
+ax3.axhline(ratio_maxwell,color=BLUE,lw=2,label='Maxwell (3D random walk): %.2f'%ratio_maxwell)
+ax3.set_ylim(0,3); ax3.set_xlim(0,480); ax3.set_xlabel('Distance (µm)'); ax3.set_ylabel('(95% − 5%) / mean')
+ax3.set_title('(c) Band width relative to the mean',loc='left',fontsize=11,color=INK)
+ax3.grid(axis='y',color=GRID,lw=0.8); ax3.set_axisbelow(True); ax3.legend(frameon=False,fontsize=8.5,loc='lower right')
+h,l=ax1.get_legend_handles_labels(); fig.legend(h,l,loc='lower center',ncol=5,frameon=False,fontsize=8.5,bbox_to_anchor=(0.42,-0.02))
+fig.suptitle('Misorientation from grain origin (SROD) in 3D EBSD of PBF-L GammaPrint-700 (Lamb et al., Acta Mater. 2023, Fig. 5): a √d, constant-relative-width signature',fontsize=10.5,color=INK,x=0.01,ha='left')
+fig.tight_layout(rect=(0,0.08,1,0.96)); fig.savefig('srod_experimental_analysis.png',dpi=170); print('saved both')

@@ -49,6 +49,8 @@ def digitize(c, seed_um):
     fig.savefig(c['fn'].replace('.png','_track.png'),dpi=110); plt.close(fig)
     return d
 A=digitize(CAL['a'],150); C=digitize(CAL['c'],250)
+for tag,d in (('fig5a',A),('fig5c',C)):
+    json.dump({k:[None if np.isnan(v) else round(float(v),3) for v in d[k]] for k in d}, open(f'{tag}_digitized.json','w'))
 print('digitized columns a:',len(A['x']),' c:',len(C['x']))
 
 # ---- random-walk model: rotation vector ~ 3D Gaussian, sigma^2 = (RMS0^2 + D d)/3 ; |v| ~ Maxwell(sigma)

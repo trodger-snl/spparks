@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""GP700 build analysis from the stitch file (Plan 2 gates 5.2/5.3).
+Grain structure (sizes, columnar heights, texture), IPF cross-sections, pole
+figures, and origin-referenced SROD vs distance with Lamb et al.'s grain
+filters and originating/established classes.
+
+usage (WORK conda env):
+  python gp700_analysis.py gp700.st --out analysis/ [--dx 3e-6] [--floor-um 90] [--D 4.2e5]
+"""
+import argparse, os, sys, json
+import numpy as np
+sys.path.insert(0, '/home/tron/spparks-micro-analysis/src')
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'scripts'))
+from spparks_micro_analysis.stitch_reader import StitchReader
+from spparks_micro_analysis.grain_size_analysis import relabel_grains
+from spparks_micro_analysis.orientation_analysis import generate_ipf_colors, create_pole_density_plots_from_quaternions
+from srod_analysis import disorientation_deg
+import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
+
+ap = argparse.ArgumentParser()
+ap.add_argument('stitch'); ap.add_argument('--out', default='analysis')
+ap.add_argument('--dx', type=float, default=3e-6); ap.add_argument('--floor-um', type=float, default=90.0)
+ap.add_argument('--D', type=float, default=4.2e5, help='input D, deg^2/m'); ap.add_argument('--time', type=float, default=None)
+ap.add_argument('--lamb', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'docs'), help='dir with lamb2023_fig5{a,c}_srod.json')
+a = ap.parse_args(); os.makedirs(a.out, exist_ok=True); dxu = a.dx*1e6
+with StitchReader(a.stitch) as r:
+    b = r.get_global_bounds(); t = a.time if a.time is not None else r.times[-1]
+    f = {k: r.read_field_at_time(k, t, bounds=b)[0] for k in ('i1','i2','d1','d2','d3','d4')}
+solid = f['i2'] == 3
+spin = np.where(solid, f['i1'], 0).astype(np.int64)
+q = np.stack([f['d1'],f['d2'],f['d3'],f['d4']], -1)
+nx,ny,nz = solid.shape
+print(f'{a.stitch} t={t}: grid {solid.shape}, solid {solid.sum()} ({solid.mean():.3f}), liquid {(f["i2"]==2).sum()}')
+zs = np.arange(nz); sf = solid.mean(axis=(0,1))
+print('solid fraction by z (um): ' + ' '.join(f'{z*dxu:.0f}:{v:.2f}' for z,v in zip(zs[::10], sf[::10])))
+
+# ---- grains: same-spin face-connected regions (O(N) union-find)
+lab = relabel_grains(spin)
+ids, counts = np.unique(lab[lab>0], return_counts=True)
+idx = np.argsort(lab, axis=None, kind='stable'); flat = lab.ravel()[idx]; coords = np.column_stack(np.unravel_index(idx, lab.shape))
+starts = np.searchsorted(flat, ids); ends = starts + counts
+zmin = np.array([coords[s:e,2].min() for s,e in zip(starts,ends)]); zmax = np.array([coords[s:e,2].max() for s,e in zip(starts,ends)])
+height = (zmax - zmin + 1) * dxu; esd = 2*(3*counts*dxu**3/(4*np.pi))**(1/3)
+print(f'grains: {len(ids)}; volume-weighted median ESD {np.median(np.repeat(esd, counts)):.1f} um; '
+      f'grains with height>=60um & ESD>=40um: {((height>=60)&(esd>=40)).sum()}; max height {height.max():.0f} um; '
+      f'grains spanning >300 um: {(height>300).sum()}')
+floor = a.floor_um/dxu
+
+# ---- texture: <001> within 15 deg of the build direction
+def axis_angle_to_z(qq):
+    w,x,y,z = qq[:,0],qq[:,1],qq[:,2],qq[:,3]
+    # rows of R^T = crystal axes in sample frame; take max |component along z| over the 3 <100>
+    m = np.stack([2*(x*z - w*y), 2*(y*z + w*x), 1-2*(x*x+y*y)], 1)   # sample z expressed in crystal frame
+    return np.degrees(np.arccos(np.clip(np.abs(m).max(1), 0, 1)))
+sol_above = solid.copy(); sol_above[:,:,:int(floor)] = False
+ang = axis_angle_to_z(q[sol_above])
+print(f'texture above floor: <001> within 15 deg of BD: {np.mean(ang<15):.2f} (random ~0.09), within 10 deg: {np.mean(ang<10):.2f}')
+
+# ---- SROD vs distance, Lamb's rules
+keep = (height>=60)&(esd>=40)
+dist=[]; srod=[]; cls=[]
+for gi in np.where(keep)[0]:
+    c = coords[starts[gi]:ends[gi]]
+    o = c[np.argmin(c[:,2])]; qo = np.broadcast_to(q[tuple(o)], (len(c),4))
+    d = np.linalg.norm(c - o, axis=1)*dxu
+    s = disorientation_deg(qo, q[c[:,0],c[:,1],c[:,2]])
+    origin_inside = o[2] >= floor
+    m = c[:,2] >= floor            # only analyse voxels above the floor
+    dist.append(d[m]); srod.append(s[m]); cls.append(np.full(m.sum(), 0 if origin_inside else 1))
+res = {}
+if dist:
+    dist=np.concatenate(dist); srod=np.concatenate(srod); cls=np.concatenate(cls)
+    fig,ax = plt.subplots(1,2,figsize=(11,4.4),sharey=True)
+    for k,(name,ax_) in enumerate((('originating',ax[0]),('established',ax[1]))):
+        m = cls==k
+        if m.sum() < 100: print(f'{name}: too few voxels ({m.sum()})'); continue
+        bins = np.arange(0, dist[m].max()+10, 10); rows=[]
+        for lo in bins[:-1]:
+            mm = m & (dist>=lo) & (dist<lo+10) & (dist>0)
+            if mm.sum() < 50: continue
+            s = srod[mm]; p5,p95 = np.percentile(s,[5,95]); rows.append((dist[mm].mean(), s.mean(), p5, p95, np.sqrt((s**2).mean()), mm.sum()))
+        rows = np.array(rows); res[name] = rows.tolist()
+        Dfit = (rows[:,0]*rows[:,4]**2).sum()/(rows[:,0]**2).sum()*1e6   # deg^2/m vs Euclidean distance
+        print(f'{name}: {m.sum()} voxels, D_fit(Euclid) = {Dfit:.3g} deg^2/m = {Dfit/a.D:.2f} x input; '
+              f'band/mean ' + ' '.join(f'{(r[3]-r[2])/r[1]:.2f}' for r in rows[::max(1,len(rows)//6)]))
+        for r in rows: print(f'   d={r[0]:6.1f} um n={int(r[5]):7d} mean {r[1]:5.2f} p5 {r[2]:5.2f} p95 {r[3]:5.2f} rms {r[4]:5.2f}')
+        ax_.fill_between(rows[:,0], rows[:,2], rows[:,3], color='#2a78d6', alpha=0.15, lw=0)
+        ax_.plot(rows[:,0], rows[:,1], color='#2a78d6', lw=2, label='simulation mean, 5/95%')
+        dd = np.linspace(1, rows[:,0].max(), 200)
+        ax_.plot(dd, 0.921*np.sqrt(a.D*1e-6*dd), color='#0b0b0b', lw=1.2, ls='--', label='random walk, input D')
+        lf = os.path.join(a.lamb, 'lamb2023_fig5%s_srod.json' % ('a' if k==0 else 'c'))
+        if os.path.exists(lf):
+            L = json.load(open(lf)); ax_.plot(L['x'], L['mean'], color='#eb6834', lw=1.6, label='Lamb 2023 mean')
+            ax_.plot(L['x'], L['p5'], color='#eb6834', lw=0.9, ls=(0,(3,2))); ax_.plot(L['x'], L['p95'], color='#eb6834', lw=0.9, ls=(0,(3,2)))
+        ax_.set_title(name, loc='left'); ax_.set_xlabel('distance from origin (um)'); ax_.grid(axis='y', color='#e6e5e1')
+    ax[0].set_ylabel('SROD (deg)'); ax[0].legend(frameon=False); fig.tight_layout(); fig.savefig(f'{a.out}/srod.png', dpi=150)
+
+# ---- IPF cross-sections (BD = z) and pole figures
+rgb = generate_ipf_colors(q.reshape(-1,4), 'fcc', 'z').reshape(nx,ny,nz,3); rgb[~solid] = 0.25
+fig,ax = plt.subplots(1,3,figsize=(15,5))
+ax[0].imshow(np.transpose(rgb[:,ny//2,:,:],(1,0,2)), origin='lower', extent=[0,nx*dxu,0,nz*dxu]); ax[0].set_title('xz at y = mid (IPF-z)')
+ax[1].imshow(np.transpose(rgb[nx//2,:,:,:],(1,0,2)), origin='lower', extent=[0,ny*dxu,0,nz*dxu]); ax[1].set_title('yz at x = mid')
+ztop = int(np.max(np.where(sf>0.5)[0])) if (sf>0.5).any() else nz-1
+ax[2].imshow(np.transpose(rgb[:,:,ztop-5,:],(1,0,2)), origin='lower', extent=[0,nx*dxu,0,ny*dxu]); ax[2].set_title(f'xy at z = {(ztop-5)*dxu:.0f} um')
+for a_ in ax: a_.set_xlabel('um')
+fig.tight_layout(); fig.savefig(f'{a.out}/ipf_sections.png', dpi=140)
+sub = q[sol_above]; rng = np.random.default_rng(0); sub = sub[rng.choice(len(sub), min(len(sub),200000), replace=False)]
+try:
+    create_pole_density_plots_from_quaternions(sub, 'fcc', output_path=f'{a.out}/pole')
+except Exception as e: print('pole figure skipped:', e)
+json.dump(dict(time=float(t), n_grains=int(len(ids)), n_filtered=int(keep.sum()), max_height_um=float(height.max()),
+               frac_001_15deg=float(np.mean(ang<15)), srod=res), open(f'{a.out}/summary.json','w'), indent=1)
+print('wrote', a.out)

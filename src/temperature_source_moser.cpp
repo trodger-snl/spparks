@@ -249,7 +249,9 @@ void MoserTemperatureSource::build_scan(double start_time,
                                              double laser_plane_z,
                                              double speed,
                                              int repeats,
-                                             double pause_between_repeats)
+                                             double pause_between_repeats,
+                                             double hatch,
+                                             bool serpentine)
 {
   if (!source_initialized)
     error->all(FLERR,"moser build_scan: source must be set up first");
@@ -262,6 +264,8 @@ void MoserTemperatureSource::build_scan(double start_time,
   scan_x1 = x1;  scan_y1 = y1;
   scan_laser_plane_z = laser_plane_z;
   scan_speed = speed;
+  scan_hatch = hatch;
+  scan_serpentine = serpentine;
   scan_repeats = repeats;
   scan_pause_between_repeats = pause_between_repeats;
 
@@ -381,15 +385,17 @@ void MoserTemperatureSource::rebuild_scan_from_pass_list_()
   sierra::greenam::VectorWrapper<double> ys("YLaser", nwp);
 
   int wp = 0;
+  double px0 = scan_x0, py0 = scan_y0, px1 = scan_x1, py1 = scan_y1;
   for (int r = 0; r < repeats; ++r) {
+    pass_geometry(r, px0, py0, px1, py1);
     ts(wp) = pass_start_times_[r];
-    xs(wp) = scan_x0;
-    ys(wp) = scan_y0;
+    xs(wp) = px0;
+    ys(wp) = py0;
     ++wp;
 
     ts(wp) = pass_start_times_[r] + dt_scan;
-    xs(wp) = scan_x1;
-    ys(wp) = scan_y1;
+    xs(wp) = px1;
+    ys(wp) = py1;
     ++wp;
   }
 
@@ -399,8 +405,8 @@ void MoserTemperatureSource::rebuild_scan_from_pass_list_()
   const double t_end_active = pass_start_times_.back() + dt_scan;
 
   ts(wp) = t_end_active + 1.0e6;
-  xs(wp) = scan_x1;
-  ys(wp) = scan_y1;
+  xs(wp) = px1;
+  ys(wp) = py1;
   ++wp;
 
   if (wp != nwp) {
@@ -480,6 +486,27 @@ void MoserTemperatureSource::rebuild_scan_from_pass_list_()
 
   // Segment arrays changed; invalidate any device-side cached copy.
   ++scan_version_;
+}
+
+/* ----------------------------------------------------------------------
+   Endpoints of pass r: the base line shifted r*hatch along its in-plane
+   normal, direction reversed on odd passes when serpentine. hatch == 0
+   returns the base line for every r.
+------------------------------------------------------------------------- */
+
+void MoserTemperatureSource::pass_geometry(int r, double &x0, double &y0,
+                                           double &x1, double &y1) const
+{
+  const double ddx = scan_x1 - scan_x0, ddy = scan_y1 - scan_y0;
+  const double L = std::sqrt(ddx*ddx + ddy*ddy);
+  const double off = (L > 0.0) ? r * scan_hatch : 0.0;
+  const double nx = (L > 0.0) ? -ddy / L : 0.0, ny = (L > 0.0) ? ddx / L : 0.0;
+  x0 = scan_x0 + off * nx;  y0 = scan_y0 + off * ny;
+  x1 = scan_x1 + off * nx;  y1 = scan_y1 + off * ny;
+  if (scan_serpentine && (r % 2 == 1)) {
+    std::swap(x0, x1);
+    std::swap(y0, y1);
+  }
 }
 
 /* ----------------------------------------------------------------------

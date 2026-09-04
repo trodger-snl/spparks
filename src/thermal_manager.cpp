@@ -134,10 +134,12 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
       "<type> ...' line before 'laser_path'.");
 
   // Expected token layout (0-based, command name already stripped):
-  //   start X0 Y0 Z0 end X1 Y1 speed V [repeats N]
+  //   start X0 Y0 Z0 end X1 Y1 speed V [repeats N | hatch S N] [serpentine]
   //     [pause <T> | pause_below <Tk>]
+  // hatch S N: N passes, pass k offset by k*S along the line's in-plane
+  // normal; serpentine reverses the direction on odd passes.
   if (narg < 9)
-    error->all(FLERR,"Illegal laser_path command: expected start X0 Y0 Z0 end X1 Y1 speed V [repeats N] [pause T | pause_below Tk]");
+    error->all(FLERR,"Illegal laser_path command: expected start X0 Y0 Z0 end X1 Y1 speed V [repeats N | hatch S N] [serpentine] [pause T | pause_below Tk]");
   if (strcmp(arg[0],"start") != 0)
     error->all(FLERR,"laser_path: expected keyword 'start'");
   const double x0 = atof(arg[1]);
@@ -154,6 +156,8 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
     error->all(FLERR,"laser_path: speed must be > 0");
 
   int repeats = 1;
+  double hatch = 0.0;
+  bool serpentine = false;
   double pause_constant   = 0.0;
   double pause_below_T    = 0.0;
   double reset_temperature_T = 0.0;
@@ -166,6 +170,19 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
       if (repeats < 1)
         error->all(FLERR,"laser_path: repeats must be >= 1");
       i += 2;
+    }
+    else if (strcmp(arg[i],"hatch") == 0) {
+      if (i + 2 >= narg)
+        error->all(FLERR,"laser_path: expected 'hatch <spacing_m> <n_passes>'");
+      hatch = atof(arg[i+1]);
+      repeats = atoi(arg[i+2]);
+      if (hatch <= 0.0 || repeats < 1)
+        error->all(FLERR,"laser_path: hatch spacing must be > 0 and n_passes >= 1");
+      i += 3;
+    }
+    else if (strcmp(arg[i],"serpentine") == 0) {
+      serpentine = true;
+      i += 1;
     }
     else if (strcmp(arg[i],"pause") == 0) {
       if (i + 1 >= narg)
@@ -192,7 +209,7 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
       i += 2;
     }
     else {
-      error->all(FLERR,"laser_path: unknown keyword (expected 'repeats', 'pause', 'pause_below', or 'reset_temperature')");
+      error->all(FLERR,"laser_path: unknown keyword (expected 'repeats', 'hatch', 'serpentine', 'pause', 'pause_below', or 'reset_temperature')");
     }
   }
 
@@ -205,6 +222,10 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
     error->all(FLERR,
       "laser_path: 'reset_temperature' requires either 'pause <T>' or "
       "'pause_below <Tk>' to define when the reset is applied.");
+  if (hatch > 0.0 && reset_temperature_T > 0.0)
+    error->all(FLERR,
+      "laser_path: 'hatch' and 'reset_temperature' cannot be combined "
+      "(a reset restarts the pass index at the base line).");
 
   // Both pause modes require a time-resolved source. Rosenthal is the
   // steady-state moving-point solution, so each pass is already independent
@@ -232,12 +253,21 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
   laser_pause_below       = pause_below_T;
   laser_reset_temperature = reset_temperature_T;
 
-  // Build N identical paths back-to-back in the Rosenthal scan_layer
-  // (Moser does not consume scan_layer).
-  RASTER::Point a(x0,y0,0.0), b(x1,y1,0.0);
+  // Build N paths back-to-back in the Rosenthal scan_layer (Moser does not
+  // consume scan_layer): the base line offset r*hatch along its in-plane
+  // normal, reversed on odd passes when serpentine.
   std::vector<RASTER::Path> paths;
   paths.reserve(repeats);
-  for (int r = 0; r < repeats; ++r) paths.emplace_back(a, b, v);
+  {
+    const double ddx = x1 - x0, ddy = y1 - y0, L = std::sqrt(ddx*ddx + ddy*ddy);
+    const double nx = (L > 0.0) ? -ddy / L : 0.0, ny = (L > 0.0) ? ddx / L : 0.0;
+    for (int r = 0; r < repeats; ++r) {
+      const double off = r * hatch;
+      RASTER::Point a(x0 + off*nx, y0 + off*ny, 0.0), b(x1 + off*nx, y1 + off*ny, 0.0);
+      if (serpentine && (r % 2 == 1)) paths.emplace_back(b, a, v);
+      else                            paths.emplace_back(a, b, v);
+    }
+  }
 
   scan_layer = RASTER::Layer(paths, /*thickness*/0);
   scan_layer_z = z0;
@@ -260,10 +290,12 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
     (pause_constant > 0.0 && reset_temperature_T > 0.0);
   if (auto* moser = moser_source()) {
     if (dynamic_pass_scheduling) {
-      moser->build_scan(host_->time, x0, y0, x1, y1, z0, v, /*repeats*/1, /*pause*/0.0);
+      moser->build_scan(host_->time, x0, y0, x1, y1, z0, v, /*repeats*/1, /*pause*/0.0,
+                        hatch, serpentine);
       pending_moser_passes = repeats - 1;
     } else {
-      moser->build_scan(host_->time, x0, y0, x1, y1, z0, v, repeats, pause_constant);
+      moser->build_scan(host_->time, x0, y0, x1, y1, z0, v, repeats, pause_constant,
+                        hatch, serpentine);
       pending_moser_passes = 0;
     }
   }
@@ -272,6 +304,8 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
     std::cout << "laser_path: (" << x0 << "," << y0 << "," << z0
               << ") -> (" << x1 << "," << y1 << "," << z0 << ")"
               << " speed=" << v << " m/s, repeats=" << repeats;
+    if (hatch > 0.0)
+      std::cout << ", hatch=" << hatch << " m" << (serpentine ? " serpentine" : "");
     if (pause_constant > 0.0)
       std::cout << ", pause=" << pause_constant << " s";
     if (pause_below_T > 0.0)
@@ -1094,10 +1128,6 @@ double ThermalManager::moser_next_active_time(double current_time, double thresh
   const double pass_dur    = moser->get_scan_pass_duration();
   const double pause_gap   = moser->get_scan_pause();
   const int    n_reps      = moser->get_scan_repeats();
-  const double x0          = moser->get_scan_x0();
-  const double y0          = moser->get_scan_y0();
-  const double x1          = moser->get_scan_x1();
-  const double y1          = moser->get_scan_y1();
   const double laser_z     = moser->get_scan_laser_plane_z();
 
   const double ddt = (fast_forward_search_window > 0.0)
@@ -1106,6 +1136,8 @@ double ThermalManager::moser_next_active_time(double current_time, double thresh
     const double t_r_start = t_origin + r * pass_dur + r * pause_gap;
     const double t_r_end   = t_r_start + pass_dur;
     if (t_r_end <= current_time) continue;  // pass already completed
+    double x0, y0, x1, y1;
+    moser->pass_geometry(r, x0, y0, x1, y1);
 
     double t = std::max(current_time, t_r_start);
     while (t <= t_r_end) {

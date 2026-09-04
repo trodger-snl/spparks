@@ -1,0 +1,48 @@
+# GammaPrint-700 PBF-L, one build layer per box (docs/GP700_MOSER_SROD_DECK_PLAN.md).
+# Print: 176 W, 1137 mm/s, 80 um spot (D4sigma -> sx=sy=20 um), 80 um hatch,
+# 30 um layers, 90 deg interlayer rotation, 473 K preheat (Lamb et al. 2023/2026).
+# Material (Met Trans 2026 3DThesis set): k 22.5 W/mK, rho 8650, cp 600 ->
+# alpha 4.335e-6 m^2/s, absorptivity 0.9, Tl 1646 K, Ts 1592 K.
+# Filled in by run_layers.sh: __SEED__ __ZLO__ __ZHI__ __INIT_OR_STITCH__
+# __LASER__ __T0__ __T1__ __STITCH__
+variable DX equal 3e-6
+
+app_style additive/texture/kk 1000000 ${DX} 2e-6 2
+seed             __SEED__
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 134 0 134 __ZLO__ __ZHI__
+boundary         n n n
+create_box       box
+create_sites     box
+__INIT_OR_STITCH__
+sector           yes
+sweep            color
+diag_style       array d6 sum d6 max
+temperature      0.0
+
+liquidus         1646
+solidus          1592
+solid_front_vel  4 -1.0302e-7 1.0533e-4 2.2196e-3 0
+nucleation_density      1e12
+critical_undercooling   5
+undercooling_deviation  2
+mean_nuclei_volume      8.4375e-16
+nuclei_volume_deviation 1.5625e-17
+texture_parameters 1.0 2.5
+smooth_greedy_multiproposal on
+nuclei_smooth off
+
+misorientation_diffusion 4.2e5 30
+misorientation_target random_rotation
+nucleation_misorientation_target on
+
+setup_temperature_source moser 176 0.9 22.5 4.335e-6 473 600 20e-6 20e-6 10e-6
+__LASER__
+fast_forward_search_window 1e-4
+stats            2e-4
+
+dump             dump.id.1 stitch __T1__ __STITCH__ i1 i2 d1 d2 d3 d4 d8 d9
+dump_modify      dump.id.1 delay __T1__
+reset_time       __T0__
+run              __T1__ upto

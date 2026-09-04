@@ -123,13 +123,21 @@ class MoserTemperatureSource : public TemperatureSource {
   // back to a numerical floor that keeps the waypoint velocity calc
   // well-defined; pass 0 (default) for the legacy near-instant repeat
   // behavior.
+  // hatch != 0: pass r is the base line offset by r*hatch along the in-plane
+  // normal (-dy, dx)/L; serpentine reverses the direction on odd passes.
+  // hatch == 0 repeats the base line in place (legacy behaviour).
   void build_scan(double start_time,
                   double x0, double y0,
                   double x1, double y1,
                   double laser_plane_z,
                   double speed,
                   int repeats,
-                  double pause_between_repeats = 0.0);
+                  double pause_between_repeats = 0.0,
+                  double hatch = 0.0,
+                  bool serpentine = false);
+
+  // Endpoints of pass r under the hatch/serpentine rule (r >= 0).
+  void pass_geometry(int r, double &x0, double &y0, double &x1, double &y1) const;
 
   // Append a single new pass to an already-built scan starting at
   // t_start. Reuses the path geometry (x0..y1, plane_z, speed) stashed
@@ -266,6 +274,8 @@ class MoserTemperatureSource : public TemperatureSource {
   double scan_x0, scan_y0, scan_x1, scan_y1;
   double scan_laser_plane_z;   // actual free surface; lobe zl_eff differ in KEYHOLE
   double scan_speed;
+  double scan_hatch = 0.0;       // per-pass lateral offset [m]; 0 = repeat in place
+  bool   scan_serpentine = false;
   int    scan_repeats;
   bool   scan_built;
   // Multi-pass timing (consumed by the app-level inter-pass predictor).

@@ -147,14 +147,11 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
     c3 = 2.5;
     time_step = dt;
     t_room = 300;
-    max_misorient = 0;
+    mis_diffusion = 0.0;               // rotation off until misorientation_diffusion
     mis_thresh = 10.0 * MY_PI / 180.0; // Default 10 degrees converted to radians
-    misorient_alpha = 5.0; // Default exponential steepness parameter
-    misorientation_target_mode = MISORI_TARGET_GRADIENT;
-    nucleation_misorient_target_mode = MISORI_TARGET_GRADIENT;
-    // Steepness cap default: 2 degrees of orientation change per 30 microns.
-    mis_cap_rate = (2.0 * MY_PI / 180.0) / 30.0e-6;
-    mis_cap_mode = CAP_PARENT;
+    misorient_alpha = 0.0;             // constant D
+    misorientation_target_mode = MISORI_TARGET_RANDOM_ROTATION;
+    nucleation_misorient_enabled = true;
     nucleation_mode = NUCLEATION_THRESHOLD;
 
     // Void generation defaults
@@ -366,69 +363,48 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
          "orientation dependence\n");
      }
   }
-  else if (strcmp(command,"misorientation_function") == 0) {
-     if (narg != 2 && narg != 3) error->all(FLERR,"Illegal misorientation_function command");
-     max_misorient = atof(arg[0]);
-     mis_thresh = atof(arg[1]) * MY_PI / 180.0; // Convert from degrees to radians
-     if (narg == 3) {
-       misorient_alpha = atof(arg[2]);
-       if (misorient_alpha <= 0)
-         error->all(FLERR,"Illegal misorientation_function alpha value: must be greater than 0");
-     }
-     if (max_misorient < 0) 
-       error->all(FLERR,"Illegal misorientation_function maximum value: must be greater than 0");
+  else if (strcmp(command,"misorientation_diffusion") == 0) {
+     // misorientation_diffusion <D_deg2_per_m> <thresh_deg> [alpha]
+     if (narg != 2 && narg != 3) error->all(FLERR,"Illegal misorientation_diffusion command");
+     double D_deg2 = atof(arg[0]);
+     mis_diffusion = D_deg2 * (MY_PI / 180.0) * (MY_PI / 180.0);
+     mis_thresh = atof(arg[1]) * MY_PI / 180.0;
      if (mis_thresh < 0)
-       error->all(FLERR,"Illegal misorientation_function threshold value: must be greater than 0");
+       error->all(FLERR,"Illegal misorientation_diffusion threshold: must be >= 0");
+     misorient_alpha = (narg == 3) ? atof(arg[2]) : 0.0;
+     if (misorient_alpha < 0)
+       error->all(FLERR,"Illegal misorientation_diffusion alpha: must be >= 0 (0 = constant D)");
+     if (domain->me == 0 && screen)
+       fprintf(screen,"misorientation_diffusion D = %g deg^2/m, thresh = %g deg, alpha = %g\n",
+               D_deg2, atof(arg[1]), misorient_alpha);
+  }
+  else if (strcmp(command,"misorientation_function") == 0 ||
+           strcmp(command,"misorientation_cap") == 0) {
+     error->all(FLERR,"misorientation_function/misorientation_cap were replaced by "
+                "'misorientation_diffusion <D_deg2_per_m> <thresh_deg> [alpha]' "
+                "(docs/MISORIENTATION_DIFFUSION_PLAN.md)");
   }
   else if (strcmp(command,"misorientation_target") == 0) {
      if (narg != 1) error->all(FLERR,"Illegal misorientation_target command");
-     if (strcmp(arg[0],"gradient") == 0) {
-       misorientation_target_mode = MISORI_TARGET_GRADIENT;
-     } else if (strcmp(arg[0],"random") == 0) {
+     if (strcmp(arg[0],"random") == 0) {
        misorientation_target_mode = MISORI_TARGET_RANDOM;
      } else if (strcmp(arg[0],"random_rotation") == 0) {
        misorientation_target_mode = MISORI_TARGET_RANDOM_ROTATION;
+     } else if (strcmp(arg[0],"gradient") == 0) {
+       error->all(FLERR,"misorientation_target gradient was removed (cells switch <100> "
+                  "variants at fusion lines rather than rotating toward the heat flux); "
+                  "use random_rotation");
      } else {
-       error->all(FLERR,"Illegal misorientation_target value: use gradient, random, or random_rotation");
+       error->all(FLERR,"Illegal misorientation_target value: use random_rotation or random");
      }
   }
   else if (strcmp(command,"nucleation_misorientation_target") == 0) {
      if (narg != 1) error->all(FLERR,"Illegal nucleation_misorientation_target command");
-     if (strcmp(arg[0],"gradient") == 0) {
-       nucleation_misorient_target_mode = MISORI_TARGET_GRADIENT;
-     } else if (strcmp(arg[0],"random") == 0) {
-       nucleation_misorient_target_mode = MISORI_TARGET_RANDOM;
-     } else if (strcmp(arg[0],"random_rotation") == 0) {
-       nucleation_misorient_target_mode = MISORI_TARGET_RANDOM_ROTATION;
-     } else if (strcmp(arg[0],"none") == 0) {
-       nucleation_misorient_target_mode = MISORI_TARGET_NONE;
-     } else {
-       error->all(FLERR,"Illegal nucleation_misorientation_target value: "
-                  "use gradient, random, random_rotation, or none");
-     }
-  }
-  else if (strcmp(command,"misorientation_cap") == 0) {
-     // misorientation_cap <degrees> <distance_m> [parent|neighbors]:
-     // clamp every rotation event to (degrees over distance) * hop_distance.
-     // degrees <= 0 disables the cap (and with it the nucleation-shell
-     // rotation, which is cap-driven). The optional mode selects what the
-     // clamp is enforced against: the inheritance parent only (default), or
-     // every solidified same-spin neighbour (see MisCapMode in the header).
-     if (narg != 2 && narg != 3) error->all(FLERR,"Illegal misorientation_cap command");
-     double cap_deg = atof(arg[0]);
-     double cap_dist = atof(arg[1]);
-     if (cap_deg <= 0) {
-       mis_cap_rate = 0.0;
-     } else {
-       if (cap_dist <= 0)
-         error->all(FLERR,"Illegal misorientation_cap distance: must be greater than 0");
-       mis_cap_rate = cap_deg * MY_PI / 180.0 / cap_dist;
-     }
-     if (narg == 3) {
-       if (strcmp(arg[2],"parent") == 0) mis_cap_mode = CAP_PARENT;
-       else if (strcmp(arg[2],"neighbors") == 0) mis_cap_mode = CAP_NEIGHBORS;
-       else error->all(FLERR,"Illegal misorientation_cap mode: use parent or neighbors");
-     }
+     if (strcmp(arg[0],"on") == 0) nucleation_misorient_enabled = true;
+     else if (strcmp(arg[0],"off") == 0 || strcmp(arg[0],"none") == 0)
+       nucleation_misorient_enabled = false;
+     else error->all(FLERR,"Illegal nucleation_misorientation_target value: use on, off, or none "
+                     "(shells use the misorientation_target axis rule)");
   }
   else if (strcmp(command,"nucleation_mode") == 0) {
     if (narg != 1) error->all(FLERR,"Illegal nucleation_mode command");
@@ -1010,7 +986,7 @@ void AppAdditiveTexture::execute_nucleation_event(int i, double Tcool) {
     }
 
     naccept++;
-    nucleation_particle_flipper(i, round(nucleation_sizes[spin[i]] / pow(dx, 3)), ranapp);
+    nucleation_particle_flipper(i, round(nucleation_sizes[spin[i]] / pow(dx, 3)), ranapp, i, Tcool);
 
     if (nucleation_mode == NUCLEATION_CONTINUOUS) {
       T_prev_map.erase(i);
@@ -1166,75 +1142,43 @@ void AppAdditiveTexture::site_event_solidification(int i, double Tcool, RandomPa
 /* ----------------------------------------------------------------------
     Apply misorientation based on temperature gradient and cooling rate
 ------------------------------------------------------------------------- */
-void AppAdditiveTexture::apply_misorientation(int i, int parent, double Tcool, RandomPark *ranapp) {
-    if(max_misorient <= 0) return;
-
-    // Exponential function: grows slowly initially, then rapidly in last ~10%
-    double normalized_temp = Tcool / t_cool_max;
-    double mis_angle = max_misorient * (exp(misorient_alpha * normalized_temp) - 1.0) / (exp(misorient_alpha) - 1.0) * MY_PI/180;
-
-    // Orientation-gradient steepness cap. Coordinate differences are in
-    // lattice units; the sqrt(3) clamp guards against a periodic-wrap
-    // neighbor pair reading as a box-length hop (the true SC_26N stencil
-    // distance is at most sqrt(3)).
-    if (mis_cap_rate > 0.0 && mis_cap_mode == CAP_PARENT) {
-        // Parent mode: bound the rotation relative to the site the
-        // orientation was inherited from.
-        double ddx = xyz[i][0] - xyz[parent][0];
-        double ddy = xyz[i][1] - xyz[parent][1];
-        double ddz = xyz[i][2] - xyz[parent][2];
-        double hop_lat = sqrt(ddx*ddx + ddy*ddy + ddz*ddz);
-        if (hop_lat > 1.7320508076) hop_lat = 1.7320508076;
-        double cap = mis_cap_rate * hop_lat * dx;
-        if (mis_angle > cap) mis_angle = cap;
-    } else if (mis_cap_rate > 0.0 && mis_cap_mode == CAP_NEIGHBORS) {
-        // Neighbors mode: budget rule against every solidified same-spin
-        // neighbour. Rotating by theta changes the disorientation to any
-        // fixed neighbour by at most theta (triangle inequality on the
-        // disorientation metric), so theta <= cap_j - d_j guarantees the
-        // i-j pair stays within its cap; a pre-existing violation gives a
-        // negative budget and the rotation collapses to zero rather than
-        // making it worse. The parent contributes cap * hop (d = 0),
-        // reproducing CAP_PARENT for that neighbour exactly. spin[i] and
-        // q0..qz[i] already hold the inherited values here (flip_site ran).
-        vector<double> qi = {q0[i], qx[i], qy[i], qz[i]};
-        for (int jj = 0; jj < numneigh[i]; jj++) {
-            int j = neighbor[i][jj];
-            if (active_flag[j] != 3 && active_flag[j] != 1) continue;
-            if (spin[j] != spin[i]) continue;
-            double ddx = xyz[i][0] - xyz[j][0];
-            double ddy = xyz[i][1] - xyz[j][1];
-            double ddz = xyz[i][2] - xyz[j][2];
-            double hop_lat = sqrt(ddx*ddx + ddy*ddy + ddz*ddz);
-            if (hop_lat > 1.7320508076) hop_lat = 1.7320508076;
-            double cap_j = mis_cap_rate * hop_lat * dx;
-
-            double d_j;
-            if (symmetries.empty()) {
-                double dot = qi[0]*q0[j] + qi[1]*qx[j] + qi[2]*qy[j] + qi[3]*qz[j];
-                d_j = 2.0 * acos(std::min(1.0, std::abs(dot)));
-            } else {
-                vector<double> qj = {q0[j], qx[j], qy[j], qz[j]};
-                d_j = disorientation::compute_disorientation(symmetries, qi, qj)
-                      * MY_PI / 180.0;
-            }
-            double budget = cap_j - d_j;
-            if (budget < mis_angle) mis_angle = budget;
-        }
-        if (mis_angle <= 0.0) return;
+double AppAdditiveTexture::diffusion_angle(double Tcool, double hop_m) const {
+    double D = mis_diffusion;
+    if (misorient_alpha > 0.0) {
+        double x = Tcool / t_cool_max;
+        if (x < 0.0) x = 0.0;
+        if (x > 1.0) x = 1.0;
+        double g = (exp(misorient_alpha * x) - 1.0) / (exp(misorient_alpha) - 1.0);
+        D *= g * g;
     }
-
-    rotate_toward_target(i, mis_angle, misorientation_target_mode, ranapp, nullptr);
+    return sqrt(D * hop_m);
 }
+
+void AppAdditiveTexture::apply_misorientation(int i, int parent, double Tcool, RandomPark *ranapp) {
+    if (mis_diffusion <= 0.0) return;
+
+    // Hop to the inheritance parent. Coordinate differences are in lattice
+    // units; the sqrt(3) clamp guards against a periodic-wrap neighbor pair
+    // reading as a box-length hop (the true SC_26N stencil distance is at
+    // most sqrt(3)).
+    double ddx = xyz[i][0] - xyz[parent][0];
+    double ddy = xyz[i][1] - xyz[parent][1];
+    double ddz = xyz[i][2] - xyz[parent][2];
+    double hop_lat = sqrt(ddx*ddx + ddy*ddy + ddz*ddz);
+    if (hop_lat > 1.7320508076) hop_lat = 1.7320508076;
+
+    rotate_toward_target(i, diffusion_angle(Tcool, hop_lat * dx),
+                         misorientation_target_mode, ranapp);
+}
+
 
 /* ----------------------------------------------------------------------
     Rotate site i's orientation by mis_angle per the given target mode, then
     apply the mis_thresh new-grain check. Shared by the solidification path
-    and the nucleation particle flipper. grad_dir supplies a precomputed
-    gradient direction for MISORI_TARGET_GRADIENT (nullptr => compute at i).
+    and the nucleation particle flipper.
 ------------------------------------------------------------------------- */
 void AppAdditiveTexture::rotate_toward_target(int i, double mis_angle, int target_mode,
-                                              RandomPark *ranapp, const double *grad_dir) {
+                                              RandomPark *ranapp) {
     // Create quaternion vector from site's orientation
     vector<double> q_site = {q0[i], qx[i], qy[i], qz[i]};
 
@@ -1262,28 +1206,8 @@ void AppAdditiveTexture::rotate_toward_target(int i, double mis_angle, int targe
         if (m > 1e-15) {
             q_new[0] /= m; q_new[1] /= m; q_new[2] /= m; q_new[3] /= m;
         }
-    } else {
-        vector<double> target_dir;
-        if (target_mode == MISORI_TARGET_GRADIENT) {
-            if (grad_dir) {
-                target_dir = {grad_dir[0], grad_dir[1], grad_dir[2]};
-            } else {
-                // Calculate the unit-vector surface norm (use voxel counting)
-                vector<double> grad_full = normal_finder(i);  // Returns [norm_x, norm_y, norm_z, magnitude]
-                target_dir = {grad_full[0], grad_full[1], grad_full[2]};
-            }
-        } else if (target_mode == MISORI_TARGET_RANDOM) {
-            target_dir = sample_random_unit_vector(ranapp);
-        } else {
-            error->all(FLERR,"Unknown misorientation target mode");
-        }
-        // A degenerate target (zero gradient in a thermally flat neighborhood)
-        // means no preferred direction: keep the orientation unchanged. The
-        // device QuaternionOps::rotate_q_towards_u does the same; the host
-        // quaternion library throws instead, so guard here.
-        double t_mag = sqrt(target_dir[0]*target_dir[0] + target_dir[1]*target_dir[1]
-                          + target_dir[2]*target_dir[2]);
-        if (t_mag < 1e-15) return;
+    } else {  // MISORI_TARGET_RANDOM: rotate the nearest <100> toward a random direction
+        vector<double> target_dir = sample_random_unit_vector(ranapp);
         q_new = quaternion::rotate_q_towards_u(q_site, target_dir, mis_angle);
     }
 
@@ -1313,7 +1237,8 @@ void AppAdditiveTexture::rotate_toward_target(int i, double mis_angle, int targe
     Only nucleating one site at a time introduce lattice size dependency. Here we will
     use a user-defined nucleation particle size and flip neighboring sites until that size is met
 ------------------------------------------------------------------------- */
-void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomPark *random) {
+void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomPark *random,
+                                                     int seed, double Tcool) {
     
     //If one site is big enough to satisfy, skip evertyhing
     if(partRad <= 0) return;
@@ -1325,35 +1250,21 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
     int third_nearest [ ] = {0,25,23,2,6,19,17,8};
     int nneigh = 0;
     int possible_neigh[26];
-    SiteState s_in(spin[i],{q0[i], qx[i], qy[i], qz[i]});
-
-    // Nucleated-shell misorientation: every site a nucleus claims (other than
-    // the seed voxel) rotates from the inherited orientation toward the
-    // nucleation target by the steepness-cap rate times its hop distance from
-    // the current growth center, so the nucleus develops the maximum-allowed
-    // internal orientation fan (2 deg / 30 um by default). The recursion below
-    // re-reads the (already rotated) center orientation, so the rotation
-    // accumulates outward naturally.
-    bool nucl_rotate = (max_misorient > 0 && mis_cap_rate > 0.0 &&
-                        nucleation_misorient_target_mode != MISORI_TARGET_NONE);
-    double center_grad[3] = {0.0, 0.0, 0.0};
-    bool have_center_grad = false;
-    if (nucl_rotate && nucleation_misorient_target_mode == MISORI_TARGET_GRADIENT) {
-        std::vector<double> nf = normal_finder(i);
-        center_grad[0] = nf[0]; center_grad[1] = nf[1]; center_grad[2] = nf[2];
-        have_center_grad = true;
-    }
+    // Every claimed site inherits the SEED orientation (not the current
+    // growth center's, which the recursion re-roots on) and takes one walk
+    // step of sqrt(D_eff * distance_from_seed) about a random axis -- the
+    // random walk's RMS for that growth distance, so nuclei and epitaxial
+    // growth obey one law. Same rule as the kk particle_flipper_kernel.
+    SiteState s_in(spin[seed],{q0[seed], qx[seed], qy[seed], qz[seed]});
+    bool nucl_rotate = (mis_diffusion > 0.0 && nucleation_misorient_enabled);
     auto rotate_flipped = [&](int i_chosen) {
         if (!nucl_rotate) return;
-        double ddx = xyz[i_chosen][0] - xyz[i][0];
-        double ddy = xyz[i_chosen][1] - xyz[i][1];
-        double ddz = xyz[i_chosen][2] - xyz[i][2];
-        double hop_lat = sqrt(ddx*ddx + ddy*ddy + ddz*ddz);
-        // Periodic-wrap guard: the true stencil hop is at most sqrt(3).
-        if (hop_lat > 1.7320508076) hop_lat = 1.7320508076;
-        rotate_toward_target(i_chosen, mis_cap_rate * hop_lat * dx,
-                             nucleation_misorient_target_mode, random,
-                             have_center_grad ? center_grad : nullptr);
+        double ddx = xyz[i_chosen][0] - xyz[seed][0];
+        double ddy = xyz[i_chosen][1] - xyz[seed][1];
+        double ddz = xyz[i_chosen][2] - xyz[seed][2];
+        double r_m = sqrt(ddx*ddx + ddy*ddy + ddz*ddz) * dx;
+        rotate_toward_target(i_chosen, diffusion_angle(Tcool, r_m),
+                             misorientation_target_mode, random);
     };
 
 
@@ -1497,7 +1408,7 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
     
     int next_site = neighbor[i][possible_neigh[neighran]];
     if (next_site < nlocal)
-        nucleation_particle_flipper(next_site, nSites, random);
+        nucleation_particle_flipper(next_site, nSites, random, seed, Tcool);
     return;
     
 }

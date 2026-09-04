@@ -300,59 +300,46 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
 
   // Texture model parameters
   double c1, c2, c3;
-  double max_misorient;
-  double t_cool_max;
+  // Misorientation random walk (`misorientation_diffusion <D> <thresh> [alpha]`),
+  // mirrors AppAdditiveTexture. mis_diffusion: D in rad^2/m (input deg^2/m);
+  // <= 0 disables rotation. misorient_alpha > 0: D_eff = D * g(Tcool/(tl-ts))^2,
+  // g(x) = (exp(alpha x)-1)/(exp(alpha)-1); 0 = constant D. mis_thresh (rad):
+  // a single step at or above it starts a new grain. NB the new-grain test
+  // here uses the direct quaternion angle, the CPU app the symmetry-reduced
+  // disorientation.
+  double mis_diffusion;
+  double t_cool_max;   // tl - ts, set in init_app (was a hardcoded 100 K)
   double mis_thresh;
   double misorient_alpha;
 
-  // How the per-site misorientation perturbation chooses its target during
-  // solidification (set by the "misorientation_target" command). Mirrors
-  // AppAdditiveTexture's modes/values. NB: the kk default is RANDOM (the CPU
-  // app defaults to GRADIENT) -- this matches the ct15 study inputs and avoids
-  // the device-side surface-normal computation the gradient mode needs.
+  // Rotation-axis choice (`misorientation_target`), mirrors AppAdditiveTexture:
+  // random_rotation (default) = uniformly random axis, the isotropic walk D is
+  // calibrated for; random = nearest <100> rotated toward a random direction.
+  // The gradient target was removed (cells switch <100> variants at fusion
+  // lines rather than rotating toward the heat flux -- Lamb et al. 2026).
   enum MisoriTargetMode {
-    MISORI_TARGET_GRADIENT = 0,
     MISORI_TARGET_RANDOM = 1,
-    MISORI_TARGET_RANDOM_ROTATION = 2,
-    // Valid only for the nucleation target: claimed shell sites copy the seed
-    // orientation verbatim (the pre-existing uniform-nucleus behavior).
-    MISORI_TARGET_NONE = 3
+    MISORI_TARGET_RANDOM_ROTATION = 2
   };
-  // INTENTIONALLY diverges from AppAdditiveTexture, which defaults to
-  // MISORI_TARGET_GRADIENT (app_additive_texture.cpp:153). Kept as RANDOM by
-  // deliberate choice -- do not "align" it with the CPU app. The other two
-  // misorientation defaults (max_misorient, mis_thresh) ARE matched to the CPU
-  // app; this one is the exception.
-  int misorientation_target_mode = MISORI_TARGET_RANDOM;
+  int misorientation_target_mode = MISORI_TARGET_RANDOM_ROTATION;
 
-  // Target mode for the rotation applied to nucleated shell sites (sites a
-  // nucleus claims in particle_flipper_kernel, i.e. everything but the seed
-  // voxel). Set by `nucleation_misorientation_target`; matches the CPU app's
-  // default of GRADIENT -- here the target is the seed's stored gradient
-  // direction (d_grad_x/y/z), which the nucleation kernel already computes.
-  int nucleation_misorient_target_mode = MISORI_TARGET_GRADIENT;
+  // Nucleated shell sites (claimed in particle_flipper_kernel) take one walk
+  // step of sqrt(D_eff * distance_from_seed) relative to the seed
+  // orientation. `nucleation_misorientation_target off|none` disables.
+  bool nucleation_misorient_enabled = true;
 
-  // Orientation-gradient steepness cap in rad/m (`misorientation_cap`
-  // command, degrees per meters). Every rotation event (epitaxial and
-  // nucleation) is clamped to mis_cap_rate * hop_distance. <= 0 disables the
-  // clamp; the nucleation-shell rotation magnitude is cap-driven, so it also
-  // requires a positive cap. Active only while max_misorient > 0. Default set
-  // in the constructor alongside the other misorientation defaults.
-  double mis_cap_rate;
-
-  // What the cap is enforced against (optional 3rd misorientation_cap arg;
-  // mirrors AppAdditiveTexture::MisCapMode). CAP_PARENT (default): the hop to
-  // the inheritance parent only. CAP_NEIGHBORS: budget rule against every
-  // solidified same-spin neighbour, theta <= min_j (cap_j - d_j) clamped at
-  // 0 -- the triangle inequality guarantees no satisfied pair is pushed over
-  // its cap and pre-existing violations are never worsened. d_j here is the
-  // DIRECT quaternion angle (this app's kernel convention, same as the
-  // mis_thresh check), not the symmetry-reduced disorientation the CPU app
-  // uses. Solidification kernel only; the nucleation flipper keeps the
-  // seed-distance rule (its shells are claimed concurrently via CAS, so
-  // reading sibling shells' quaternions mid-kernel would race).
-  enum MisCapMode { CAP_PARENT = 0, CAP_NEIGHBORS = 1 };
-  int mis_cap_mode = CAP_PARENT;
+  // Per-hop rotation angle of the walk: sqrt(D_eff * hop_m). The sqrt(hop)
+  // scaling keeps RMS^2 = D * distance independent of lattice spacing.
+  KOKKOS_INLINE_FUNCTION
+  static double diffusion_angle(double D, double alpha, double t_cool_max,
+                                double Tcool, double hop_m) {
+    if (alpha > 0.0) {
+      const double x = Kokkos::fmin(Kokkos::fmax(Tcool / t_cool_max, 0.0), 1.0);
+      const double g = (Kokkos::exp(alpha * x) - 1.0) / (Kokkos::exp(alpha) - 1.0);
+      D *= g * g;
+    }
+    return Kokkos::sqrt(D * hop_m);
+  }
 
   // Nucleation data
   int *nucleation_flags;
@@ -406,12 +393,12 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
 
   // Perturb orientation q by `angle` per a misorientation-target mode:
   // RANDOM_ROTATION composes a rotation about a uniformly random axis;
-  // GRADIENT rotates toward `target`; RANDOM rotates toward a uniformly random
-  // unit vector (same z/phi sampling as AppAdditiveTexture's
-  // sample_random_unit_vector). Two RNG draws in the random modes.
+  // RANDOM rotates the nearest <100> toward a uniformly random unit vector
+  // (same z/phi sampling as AppAdditiveTexture's sample_random_unit_vector).
+  // Two RNG draws either way.
   template<typename Gen>
   KOKKOS_INLINE_FUNCTION
-  static void perturb_orientation(int mode, const double *q, const double *target,
+  static void perturb_orientation(int mode, const double *q,
                                   double angle, Gen &gen, double *out) {
     if (mode == MISORI_TARGET_RANDOM_ROTATION) {
       const double z = 2.0 * gen.drand() - 1.0;
@@ -427,10 +414,9 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
       QuaternionOps::normalize(out);
       return;
     }
+    // MISORI_TARGET_RANDOM
     double dir[3];
-    if (mode == MISORI_TARGET_GRADIENT) {
-      dir[0] = target[0]; dir[1] = target[1]; dir[2] = target[2];
-    } else {  // MISORI_TARGET_RANDOM
+    {
       const double z = 2.0 * gen.drand() - 1.0;
       const double phi = 2.0 * MathConst::MY_PI * gen.drand();
       const double radial = Kokkos::sqrt(Kokkos::fmax(0.0, 1.0 - z * z));

@@ -37,13 +37,18 @@ class ThermalManager;
 
 class AppAdditiveTexture : public AppPottsQuaternion {
  public:
+  // Rotation-axis choice for the per-hop misorientation step. random_rotation
+  // (default) rotates about a uniformly random axis -- the isotropic random
+  // walk the diffusion coefficient is calibrated for. random rotates the
+  // nearest <100> toward a random direction (axis confined perpendicular to
+  // that <100>; still diffusive, with a geometric factor on D). The former
+  // gradient target was removed: 3D EBSD (Lamb et al. 2026) shows cells keep
+  // their lattice and switch <100> growth variants at fusion lines rather
+  // than rotating toward the heat flux; gradient dependence lives in the
+  // mobility (melt_misorientation), not in the rotation.
   enum MisorientationTargetMode {
-    MISORI_TARGET_GRADIENT = 0,
     MISORI_TARGET_RANDOM = 1,
-    MISORI_TARGET_RANDOM_ROTATION = 2,
-    // Valid only for the nucleation target: shell sites copy the seed
-    // orientation verbatim (the pre-existing uniform-nucleus behavior).
-    MISORI_TARGET_NONE = 3
+    MISORI_TARGET_RANDOM_ROTATION = 2
   };
 
   enum NucleationMode {
@@ -60,7 +65,11 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   virtual void nucleation_spins(class RandomPark *);
   virtual void  input_app(char *, int , char **);
   virtual void nucleation_init();
-  virtual void nucleation_particle_flipper(int, int,class RandomPark *);
+  // Grow a nucleus from site i to partRad sites. seed/Tcool: the seed voxel
+  // every claimed site inherits from and the undercooling of the nucleation
+  // event (recursion re-roots i, never seed).
+  virtual void nucleation_particle_flipper(int i, int partRad, class RandomPark *,
+                                           int seed, double Tcool);
   virtual void mushy_phase(int, class RandomPark *);
   virtual double site_energy(int);
   void site_event_solidification(int, double, class RandomPark *);
@@ -68,12 +77,16 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   std::vector<double> normal_finder(int);
 	double melt_misorientation(int, double, double, double);
   void apply_misorientation(int, int, double, class RandomPark *);
-  // Shared rotate-toward-target + new-grain-threshold step used by both the
-  // solidification path (apply_misorientation) and the nucleation flipper.
-  // grad_dir: precomputed gradient direction for MISORI_TARGET_GRADIENT, or
-  // nullptr to compute it at the site via normal_finder().
-  void rotate_toward_target(int, double, int, class RandomPark *,
-                            const double *grad_dir);
+  // Per-hop rotation angle (rad) of the misorientation random walk:
+  // sqrt(D_eff * hop_m), D_eff = mis_diffusion * g(Tcool)^2 with the
+  // exponential undercooling shape g when misorient_alpha > 0, else
+  // mis_diffusion. Scaling as sqrt(hop) makes the accumulated misorientation
+  // (RMS^2 = D * distance) independent of the lattice spacing.
+  double diffusion_angle(double Tcool, double hop_m) const;
+  // Rotate site i by mis_angle per the target mode, then apply the
+  // mis_thresh new-grain check. Shared by the solidification path
+  // (apply_misorientation) and the nucleation flipper.
+  void rotate_toward_target(int, double, int, class RandomPark *);
   std::vector<double> get_average_neighbor_quaternion(int site, int target_spin);
   void smooth_site(int site);
   double site_energy_smooth(int site);
@@ -133,40 +146,23 @@ class AppAdditiveTexture : public AppPottsQuaternion {
 	int    solid_front_length;
   // Texture model parameters
 	double c1, c2, c3;
-  double max_misorient;
+  // Misorientation random walk (`misorientation_diffusion <D> <thresh> [alpha]`).
+  // mis_diffusion: D in rad^2/m (input in deg^2/m); <= 0 disables rotation.
+  // Calibrated against 3D EBSD SROD data: D = 0.42 deg^2/um = 4.2e5 deg^2/m
+  // for GammaPrint-700 PBF-L (docs/MISORIENTATION_DIFFUSION_PLAN.md).
+  // misorient_alpha > 0 makes D_eff = D * g(Tcool/(tl-ts))^2 with
+  // g(x) = (exp(alpha x)-1)/(exp(alpha)-1); 0 = constant D.
+  // mis_thresh (rad): a single step at or above it starts a new grain.
+  double mis_diffusion;
   double t_cool_max;
   double mis_thresh;
   double misorient_alpha;
   int misorientation_target_mode;
-  // Target mode for the rotation applied to nucleated shell sites (all sites
-  // of a nucleus other than the seed voxel). Set by the input command
-  // `nucleation_misorientation_target`; MISORI_TARGET_NONE restores the
-  // historical uniform-orientation nucleus.
-  int nucleation_misorient_target_mode;
-  // Orientation-gradient steepness cap in rad/m (`misorientation_cap`
-  // command, degrees per meters). Every rotation event (epitaxial and
-  // nucleation) is clamped to mis_cap_rate * hop_distance, so the sustained
-  // orientation gradient cannot exceed the cap. <= 0 disables the clamp.
-  // The nucleation-path rotation magnitude is cap-driven, so it requires a
-  // positive cap. Active only while max_misorient > 0, like the rest of the
-  // misorientation model.
-  double mis_cap_rate;
-
-  // What the cap is enforced against (optional 3rd misorientation_cap arg):
-  //   CAP_PARENT (default): only the hop to the parent the orientation was
-  //     inherited from. Bounds the increment along the solidification path;
-  //     non-parent same-grain neighbour pairs (cousins from different growth
-  //     paths) can still exceed the nominal spatial gradient.
-  //   CAP_NEIGHBORS: budget rule against EVERY solidified same-spin
-  //     neighbour j: theta <= min_j (cap_rate*dist_j - disorientation_j),
-  //     clamped at 0. By the triangle inequality on the disorientation
-  //     metric this guarantees no satisfied i-j pair is pushed over its cap,
-  //     and a pre-existing violation is never worsened (theta -> 0). The
-  //     parent term (disorientation 0) reproduces CAP_PARENT exactly, so
-  //     this mode is strictly tighter. Solidification path only; nucleation
-  //     shells keep the seed-distance rule.
-  enum MisCapMode { CAP_PARENT = 0, CAP_NEIGHBORS = 1 };
-  int mis_cap_mode;
+  // Nucleated shell sites (all but the seed voxel) take one walk step of
+  // sqrt(D_eff * distance_from_seed) relative to the seed orientation --
+  // the walk's RMS for that growth distance. `nucleation_misorientation_target
+  // off|none` restores the uniform-orientation nucleus.
+  bool nucleation_misorient_enabled;
 
  	// Monte Carlo nucleation model parameters
 	int *nucleation_flags;

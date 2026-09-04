@@ -140,8 +140,8 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
   c2 = 0.9;
   c3 = 2.5;
   // Match AppAdditiveTexture's defaults (app_additive_texture.cpp:150-152).
-  max_misorient = 0;     // degrees; 0 => misorientation disabled, as on the CPU
-  t_cool_max = 100.0;    // K
+  mis_diffusion = 0.0;   // rotation off until misorientation_diffusion, as on the CPU
+  t_cool_max = 100.0;    // placeholder; init_app sets tl - ts like the CPU app
   // RADIANS. `misorientation_function` stores atof(arg[1]) * MY_PI/180 into
   // this, and the new-grain test compares it against an angle in radians, so a
   // bare degree literal here was unreachable: the previous default of 5.0 was
@@ -149,10 +149,7 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
   // fire and a deck relying on the default silently never created new grains
   // through the misorientation path.
   mis_thresh = 10.0 * MY_PI / 180.0;
-  misorient_alpha = 5.0;
-  // Steepness cap default: 2 degrees of orientation change per 30 microns
-  // (matches AppAdditiveTexture).
-  mis_cap_rate = (2.0 * MY_PI / 180.0) / 30.0e-6;
+  misorient_alpha = 0.0;   // constant D (matches AppAdditiveTexture)
 
   // Solidification velocity polynomial (default: V = -1.0302e-7*dT^3 + 1.0533e-4*dT^2 + 2.2196e-3*dT)
   solid_front_length = 4;
@@ -363,6 +360,7 @@ void AppAdditiveTextureKokkos::refresh_thermal_host()
   thermal_host_.dx = dx;
   thermal_host_.tl = tl;
   thermal_host_.ts = ts;
+  t_cool_max = tl - ts;  // undercooling normalization for misorient_alpha (matches CPU)
   thermal_host_.t_room = t_room;
   thermal_host_.time = time;
   thermal_host_.dt = dt;
@@ -1359,19 +1357,20 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
   double dx_local = dx;
 
   // Nucleated-shell misorientation (mirrors the CPU
-  // nucleation_particle_flipper): claimed sites rotate from the seed
-  // orientation toward the nucleation target by the steepness-cap rate times
-  // their hop distance from the seed. Cap-driven, so it needs a positive cap;
-  // gated behind max_misorient like the rest of the misorientation model.
+  // nucleation_particle_flipper): each claimed site takes one walk step of
+  // sqrt(D_eff * distance_from_seed) about a random axis, relative to the
+  // seed orientation, with the seed's undercooling.
   ensure_device_xyz();
   auto k_xyz_d = d_xyz;
   auto d_T_local = k_T.view_device();
-  const double mis_cap_rate_local = mis_cap_rate;
+  const double mis_diffusion_local = mis_diffusion;
+  const double misorient_alpha_local = misorient_alpha;
+  const double t_cool_max_local = t_cool_max;
+  const double tl_local = tl;
   const double mis_thresh_local = mis_thresh;
   const int nspins_local = nspins;
-  const int nucl_mode_local = nucleation_misorient_target_mode;
-  const bool nucl_rotate = (max_misorient > 0.0 && mis_cap_rate > 0.0 &&
-                            nucleation_misorient_target_mode != MISORI_TARGET_NONE);
+  const int misori_mode_local = misorientation_target_mode;
+  const bool nucl_rotate = (mis_diffusion > 0.0 && nucleation_misorient_enabled);
 
   // Terminal solid_d for a nucleus and for the neighbours it claims. `off`
   // (default) keeps -nrefine-3, which sits OUTSIDE the smoothing window
@@ -1407,22 +1406,7 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
       double G_i = d_G_local(i);
       double V_i = d_V_local(i);
 
-      // Gradient target for the nucleated-shell rotation, computed on demand
-      // at the seed: the global gradient pre-pass no longer exists, so the
-      // stored d_grad_* at a fresh nucleus may be stale or zero. Stored back
-      // so the per-neighbor d_grad_* copies below stay consistent with the
-      // direction actually used. Matches the CPU flipper, which calls
-      // normal_finder() at the growth center at flip time.
-      double seed_grad[3] = {0.0, 0.0, 0.0};
-      if (nucl_rotate && nucl_mode_local == MISORI_TARGET_GRADIENT) {
-        double gmag = 0.0;
-        ThermalOps::compute_temperature_gradient(
-            i, d_T_local, d_active_flag_local, k_numneigh_d, k_neighbor_d,
-            k_xyz_d, dx_local, seed_grad, &gmag);
-        d_grad_x_local(i) = seed_grad[0];
-        d_grad_y_local(i) = seed_grad[1];
-        d_grad_z_local(i) = seed_grad[2];
-      }
+      const double Tcool_seed = tl_local - d_T_local(i);
 
       // Calculate target number of sites from nucleus volume
       // nucleation_sizes is in m^3, dx^3 is voxel volume
@@ -1487,11 +1471,15 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
           double q_nbr[4] = {q_i[0], q_i[1], q_i[2], q_i[3]};
 
           if (nucl_rotate) {
-            // Hop distance from the seed, lattice units -> meters.
-            double mis_angle = mis_cap_rate_local * hop_distance(k_xyz_d, nbr, i) * dx_local;
+            // Distance from the seed (lattice units -> m); the flipper only
+            // claims the seed's 26 neighbours, so hop_distance's sqrt(3)
+            // clamp is exact here.
+            double mis_angle = diffusion_angle(mis_diffusion_local, misorient_alpha_local,
+                                               t_cool_max_local, Tcool_seed,
+                                               hop_distance(k_xyz_d, nbr, i) * dx_local);
 
             double q_rot[4];
-            perturb_orientation(nucl_mode_local, q_nbr, seed_grad, mis_angle, generator, q_rot);
+            perturb_orientation(misori_mode_local, q_nbr, mis_angle, generator, q_rot);
 
             // mis_thresh new-grain check (direct angle, matching the
             // solidification kernel's convention).
@@ -1576,14 +1564,12 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
   auto d_grad_z_local = this->d_grad_z;
   auto rand_pool_local = *rand_pool;
 
-  // Misorientation parameters (Phase 3.6)
-  double max_misorient_local = this->max_misorient;
-  double t_cool_max_local = this->t_cool_max;
-  double mis_thresh_local = this->mis_thresh;
-  double misorient_alpha_local = this->misorient_alpha;
+  // Misorientation random walk parameters
+  const double mis_diffusion_local = this->mis_diffusion;
+  const double t_cool_max_local = this->t_cool_max;
+  const double mis_thresh_local = this->mis_thresh;
+  const double misorient_alpha_local = this->misorient_alpha;
   const int misori_mode_local = this->misorientation_target_mode;
-  double mis_cap_rate_local = this->mis_cap_rate;
-  const int mis_cap_mode_local = this->mis_cap_mode;
   int nspins_local = this->nspins;
 
   // Solid-front reach threshold: a neighbor becomes eligible once the front
@@ -1705,59 +1691,20 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
             d_qz_local(selected_nbr)
           };
 
-          // Phase 3.6: Apply misorientation rotation toward gradient
-          // Rotate orientation based on cooling rate and gradient direction
-          if (max_misorient_local > 0.0) {
-            // Calculate misorientation angle from cooling rate
-            // Exponential function: grows slowly initially, then rapidly in last ~10%
-            // Clamp normalized_temp to [0, 1] to prevent exponential overflow
-            double normalized_temp = Kokkos::fmin(Tcool / t_cool_max_local, 1.0);
-            double mis_angle = max_misorient_local *
-                               (Kokkos::exp(misorient_alpha_local * normalized_temp) - 1.0) /
-                               (Kokkos::exp(misorient_alpha_local) - 1.0) * MY_PI / 180.0;
-
-            // Orientation-gradient steepness cap (matches apply_misorientation
-            // in the CPU app); hop_distance() is in lattice units.
-            if (mis_cap_rate_local > 0.0 && mis_cap_mode_local == 0) { // CAP_PARENT
-              // Bound the rotation relative to the neighbor the orientation
-              // is inherited from.
-              mis_angle = Kokkos::fmin(mis_angle,
-                  mis_cap_rate_local * hop_distance(k_xyz_d, i, selected_nbr) * dx_local);
-            } else if (mis_cap_rate_local > 0.0) {                    // CAP_NEIGHBORS
-              // Budget rule against every solidified same-spin neighbour:
-              // theta <= cap_j - d_j keeps each satisfied i-j pair within its
-              // cap (triangle inequality) and never worsens a pre-existing
-              // violation (negative budget -> zero rotation). The inheritance
-              // parent has d = 0, so its term reproduces CAP_PARENT exactly.
-              // d_j is the direct quaternion angle (kernel convention, same
-              // as the mis_thresh check below). Neighbour quaternions are
-              // read the same way the mobility weights above read them; the
-              // AM kernels are documented order-dependent, so a concurrently
-              // solidifying neighbour is benign here.
-              for (int jj = 0; jj < nn && jj < 26; jj++) {
-                const int j = k_neighbor_d(i, jj);
-                const int af_j = d_active_flag_local(j);
-                if (af_j != 1 && af_j != 3) continue;
-                if (d_spin_local(j) != new_spin) continue;
-                const double cap_j = mis_cap_rate_local * hop_distance(k_xyz_d, i, j) * dx_local;
-                const double q_j[4] = {d_q0_local(j), d_qx_local(j), d_qy_local(j), d_qz_local(j)};
-                mis_angle = Kokkos::fmin(mis_angle, cap_j - direct_angle(q_nbr_inherited, q_j));
-              }
-              // A negative angle would still rotate by |angle| downstream
-              // (rotate_q_towards_u takes fabs) -- clamp to a true no-op.
-              mis_angle = Kokkos::fmax(mis_angle, 0.0);
-            }
-
-            // Use gradient direction from on-demand computation above
-            // (grad_dir already computed when first solid neighbor was found)
+          // Misorientation random walk: one step of sqrt(D_eff * hop) about a
+          // random axis relative to the inheritance parent (matches
+          // apply_misorientation in the CPU app); hop_distance() is in
+          // lattice units.
+          if (mis_diffusion_local > 0.0) {
+            double mis_angle = diffusion_angle(mis_diffusion_local, misorient_alpha_local,
+                                               t_cool_max_local, Tcool,
+                                               hop_distance(k_xyz_d, i, selected_nbr) * dx_local);
 
             // Normalize the inherited quaternion (should already be unit length)
             QuaternionOps::normalize(q_nbr_inherited);
 
-            // Perturb the inherited orientation per the misorientation_target
-            // mode (see perturb_orientation).
             double q_rotated[4];
-            perturb_orientation(misori_mode_local, q_nbr_inherited, grad_dir,
+            perturb_orientation(misori_mode_local, q_nbr_inherited,
                                 mis_angle, generator, q_rotated);
 
             // If the rotation exceeds the threshold, create a new grain with a
@@ -2500,77 +2447,53 @@ void AppAdditiveTextureKokkos::input_app(char *command, int narg, char **arg)
       fprintf(screen, "nuclei_smooth %s\n",
               nuclei_smooth_enabled ? "enabled" : "disabled");
 
-  } else if (strcmp(command, "misorientation_function") == 0) {
-    if (narg != 2 && narg != 3) error->all(FLERR, "Illegal misorientation_function command");
-    max_misorient = atof(arg[0]);
-    mis_thresh = atof(arg[1]) * MY_PI / 180.0; // Convert from degrees to radians
-    if (narg == 3) {
-      misorient_alpha = atof(arg[2]);
-      if (misorient_alpha <= 0)
-        error->all(FLERR, "Illegal misorientation_function alpha value: must be greater than 0");
-    }
+  } else if (strcmp(command, "misorientation_diffusion") == 0) {
+    // misorientation_diffusion <D_deg2_per_m> <thresh_deg> [alpha]
+    // (matches AppAdditiveTexture::input_app).
+    if (narg != 2 && narg != 3) error->all(FLERR, "Illegal misorientation_diffusion command");
+    double D_deg2 = atof(arg[0]);
+    mis_diffusion = D_deg2 * (MY_PI / 180.0) * (MY_PI / 180.0);
+    mis_thresh = atof(arg[1]) * MY_PI / 180.0;
+    if (mis_thresh < 0)
+      error->all(FLERR, "Illegal misorientation_diffusion threshold: must be >= 0");
+    misorient_alpha = (narg == 3) ? atof(arg[2]) : 0.0;
+    if (misorient_alpha < 0)
+      error->all(FLERR, "Illegal misorientation_diffusion alpha: must be >= 0 (0 = constant D)");
+    if (domain->me == 0 && screen)
+      fprintf(screen, "misorientation_diffusion D = %g deg^2/m, thresh = %g deg, alpha = %g\n",
+              D_deg2, atof(arg[1]), misorient_alpha);
+
+  } else if (strcmp(command, "misorientation_function") == 0 ||
+             strcmp(command, "misorientation_cap") == 0) {
+    error->all(FLERR, "misorientation_function/misorientation_cap were replaced by "
+               "'misorientation_diffusion <D_deg2_per_m> <thresh_deg> [alpha]' "
+               "(docs/MISORIENTATION_DIFFUSION_PLAN.md)");
 
   } else if (strcmp(command, "misorientation_target") == 0) {
-    // Select the target the per-site misorientation rotates toward during
-    // solidification (matches AppAdditiveTexture::input_app). gradient =
-    // thermal-gradient direction; random = uniform random unit vector (the kk
-    // default); random_rotation = rotation by mis_angle about a random axis.
     if (narg != 1) error->all(FLERR, "Illegal misorientation_target command");
-    if (strcmp(arg[0], "gradient") == 0)
-      misorientation_target_mode = MISORI_TARGET_GRADIENT;
-    else if (strcmp(arg[0], "random") == 0)
+    if (strcmp(arg[0], "random") == 0)
       misorientation_target_mode = MISORI_TARGET_RANDOM;
     else if (strcmp(arg[0], "random_rotation") == 0)
       misorientation_target_mode = MISORI_TARGET_RANDOM_ROTATION;
+    else if (strcmp(arg[0], "gradient") == 0)
+      error->all(FLERR, "misorientation_target gradient was removed (cells switch <100> "
+                 "variants at fusion lines rather than rotating toward the heat flux); "
+                 "use random_rotation");
     else
-      error->all(FLERR, "Illegal misorientation_target value: use gradient, random, or random_rotation");
+      error->all(FLERR, "Illegal misorientation_target value: use random_rotation or random");
     if (domain->me == 0 && screen)
       fprintf(screen, "misorientation_target = %s\n", arg[0]);
 
   } else if (strcmp(command, "nucleation_misorientation_target") == 0) {
-    // Target mode for the rotation applied to nucleated shell sites in
-    // particle_flipper_kernel (matches AppAdditiveTexture::input_app).
-    // none restores the historical uniform-orientation nucleus.
     if (narg != 1) error->all(FLERR, "Illegal nucleation_misorientation_target command");
-    if (strcmp(arg[0], "gradient") == 0)
-      nucleation_misorient_target_mode = MISORI_TARGET_GRADIENT;
-    else if (strcmp(arg[0], "random") == 0)
-      nucleation_misorient_target_mode = MISORI_TARGET_RANDOM;
-    else if (strcmp(arg[0], "random_rotation") == 0)
-      nucleation_misorient_target_mode = MISORI_TARGET_RANDOM_ROTATION;
-    else if (strcmp(arg[0], "none") == 0)
-      nucleation_misorient_target_mode = MISORI_TARGET_NONE;
+    if (strcmp(arg[0], "on") == 0) nucleation_misorient_enabled = true;
+    else if (strcmp(arg[0], "off") == 0 || strcmp(arg[0], "none") == 0)
+      nucleation_misorient_enabled = false;
     else
-      error->all(FLERR, "Illegal nucleation_misorientation_target value: "
-                 "use gradient, random, random_rotation, or none");
+      error->all(FLERR, "Illegal nucleation_misorientation_target value: use on, off, or none "
+                 "(shells use the misorientation_target axis rule)");
     if (domain->me == 0 && screen)
       fprintf(screen, "nucleation_misorientation_target = %s\n", arg[0]);
-
-  } else if (strcmp(command, "misorientation_cap") == 0) {
-    // misorientation_cap <degrees> <distance_m> [parent|neighbors]: clamp
-    // every rotation event to (degrees over distance) * hop_distance.
-    // degrees <= 0 disables the cap (and with it the nucleation-shell
-    // rotation, which is cap-driven). The optional mode selects what the
-    // clamp is enforced against (see MisCapMode in the header). Matches
-    // AppAdditiveTexture::input_app.
-    if (narg != 2 && narg != 3) error->all(FLERR, "Illegal misorientation_cap command");
-    double cap_deg = atof(arg[0]);
-    double cap_dist = atof(arg[1]);
-    if (cap_deg <= 0) {
-      mis_cap_rate = 0.0;
-    } else {
-      if (cap_dist <= 0)
-        error->all(FLERR, "Illegal misorientation_cap distance: must be greater than 0");
-      mis_cap_rate = cap_deg * MY_PI / 180.0 / cap_dist;
-    }
-    if (narg == 3) {
-      if (strcmp(arg[2], "parent") == 0) mis_cap_mode = CAP_PARENT;
-      else if (strcmp(arg[2], "neighbors") == 0) mis_cap_mode = CAP_NEIGHBORS;
-      else error->all(FLERR, "Illegal misorientation_cap mode: use parent or neighbors");
-    }
-    if (domain->me == 0 && screen)
-      fprintf(screen, "misorientation_cap = %g deg per %g m (%s)\n", cap_deg, cap_dist,
-              mis_cap_mode == CAP_NEIGHBORS ? "neighbors" : "parent");
 
   } else {
     // Pass to parent class

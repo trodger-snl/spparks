@@ -46,6 +46,12 @@ idx = np.argsort(lab, axis=None, kind='stable'); flat = lab.ravel()[idx]; coords
 starts = np.searchsorted(flat, ids); ends = starts + counts
 zmin = np.array([coords[s:e,2].min() for s,e in zip(starts,ends)]); zmax = np.array([coords[s:e,2].max() for s,e in zip(starts,ends)])
 height = (zmax - zmin + 1) * dxu; esd = 2*(3*counts*dxu**3/(4*np.pi))**(1/3)
+esd_w = np.repeat(esd, counts); q10,q50,q90 = np.percentile(esd_w,[10,50,90])
+print(f'ESD volume-weighted p10/p50/p90: {q10:.1f} / {q50:.1f} / {q90:.1f} um')
+# nearest-neighbour same-grain disorientation along z (per-hop step check)
+mz = solid[:,:,:-1] & solid[:,:,1:] & (spin[:,:,:-1] == spin[:,:,1:])
+nn = disorientation_deg(q[:,:,:-1][mz][:200000], q[:,:,1:][mz][:200000])
+print(f'same-grain z-neighbour disorientation: median {np.median(nn):.2f} deg, p90 {np.percentile(nn,90):.2f} deg (n={mz.sum()})')
 print(f'grains: {len(ids)}; volume-weighted median ESD {np.median(np.repeat(esd, counts)):.1f} um; '
       f'grains with height>=60um & ESD>=40um: {((height>=60)&(esd>=40)).sum()}; max height {height.max():.0f} um; '
       f'grains spanning >300 um: {(height>300).sum()}')
@@ -125,5 +131,6 @@ try:
     create_pole_density_plots_from_quaternions(sub, 'fcc', output_path=f'{a.out}/pole')
 except Exception as e: print('pole figure skipped:', e)
 json.dump(dict(time=float(t), n_grains=int(len(ids)), n_filtered=int(keep.sum()), max_height_um=float(height.max()),
+               esd_p10_p50_p90=[float(q10),float(q50),float(q90)], nn_z_median_deg=float(np.median(nn)), solid_fraction_by_z=sf.tolist(),
                frac_001_15deg=float(np.mean(ang<15)), srod=res), open(f'{a.out}/summary.json','w'), indent=1)
 print('wrote', a.out)

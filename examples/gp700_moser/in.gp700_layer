@@ -6,7 +6,7 @@
 # Placeholders (double-underscore tokens) are filled in by run_layers.sh.
 variable DX equal 3e-6
 
-app_style additive/texture/kk 1000000 ${DX} 2e-6 2
+app_style additive/texture/kk 1000000 ${DX} __DT__ 2
 seed             __SEED__
 dimension        3
 lattice          sc/26n 1.0

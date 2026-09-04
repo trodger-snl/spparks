@@ -250,6 +250,26 @@ void AppAdditiveTextureKokkos::init_app()
   // Parent also initializes rand_pool with seed from MPI rank
   AppPottsQuaternionKokkos::init_app();
 
+  // Timestep guard, same formula as AppAdditiveTexture::init_app (front must
+  // not advance more than one voxel per step at the full freezing range).
+  // The CPU app aborts; here it is a warning, because the front actually runs
+  // well below Tl-Ts undercooling and the capture reach is sqrt(3) dx, and a
+  // 2 vs 4 us comparison on the GP700 build agreed within seed noise
+  // (docs/GP700_MOSER_SROD_DECK_PLAN.md). The reach-based bound is printed too.
+  {
+    double vmax = 0.0;
+    for (int k = 0; k < solid_front_length; k++)
+      vmax += solid_front_coeffs[k] * pow(tl - ts, solid_front_length - 1 - k);
+    if (vmax > 0.0 && domain->me == 0 && screen) {
+      const double dt_cpu = dx / vmax, dt_reach = 1.7320508075688772 * dx / vmax;
+      if (dt > dt_cpu)
+        fprintf(screen, "WARNING: timestep %g s exceeds the CPU app's front limit dx/V(Tl-Ts) = %g s "
+                "(reach-based limit sqrt(3)*dx/V = %g s); the CPU app would abort here\n", dt, dt_cpu, dt_reach);
+      else
+        fprintf(screen, "Maximum allowable timestep (CPU-app rule dx/V(Tl-Ts)) is %e s\n", dt_cpu);
+    }
+  }
+
   // Do NOT initialize T / G / V / active_flag / mobility_out / solid_d here.
   //
   // These are per-site arrays the INPUT DECK owns. init_app() runs from

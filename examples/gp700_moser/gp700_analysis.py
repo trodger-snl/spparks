@@ -46,6 +46,11 @@ idx = np.argsort(lab, axis=None, kind='stable'); flat = lab.ravel()[idx]; coords
 starts = np.searchsorted(flat, ids); ends = starts + counts
 zmin = np.array([coords[s:e,2].min() for s,e in zip(starts,ends)]); zmax = np.array([coords[s:e,2].max() for s,e in zip(starts,ends)])
 height = (zmax - zmin + 1) * dxu; esd = 2*(3*counts*dxu**3/(4*np.pi))**(1/3)
+ext = np.array([np.ptp(coords[s:e], axis=0) + 1 for s,e in zip(starts,ends)]) * dxu   # x,y,z extents (um)
+big = counts >= 100
+print('grain extents (um, grains >= 100 voxels, volume-weighted median): ' +
+      ' '.join(f'{ax} {np.median(np.repeat(ext[big,i], counts[big])):.0f}' for i,ax in enumerate('xyz')) +
+      f'; grains longer than 300 um along x: {(ext[:,0]>300).sum()}, along y: {(ext[:,1]>300).sum()}')
 esd_w = np.repeat(esd, counts); q10,q50,q90 = np.percentile(esd_w,[10,50,90])
 print(f'ESD volume-weighted p10/p50/p90: {q10:.1f} / {q50:.1f} / {q90:.1f} um')
 # nearest-neighbour same-grain disorientation along z (per-hop step check)
@@ -131,6 +136,6 @@ try:
     create_pole_density_plots_from_quaternions(sub, 'fcc', output_path=f'{a.out}/pole')
 except Exception as e: print('pole figure skipped:', e)
 json.dump(dict(time=float(t), n_grains=int(len(ids)), n_filtered=int(keep.sum()), max_height_um=float(height.max()),
-               esd_p10_p50_p90=[float(q10),float(q50),float(q90)], nn_z_median_deg=float(np.median(nn)), solid_fraction_by_z=sf.tolist(),
+               esd_p10_p50_p90=[float(q10),float(q50),float(q90)], extent_xyz_median_um=[float(np.median(np.repeat(ext[big,i], counts[big]))) for i in range(3)], nn_z_median_deg=float(np.median(nn)), solid_fraction_by_z=sf.tolist(),
                frac_001_15deg=float(np.mean(ang<15)), srod=res), open(f'{a.out}/summary.json','w'), indent=1)
 print('wrote', a.out)

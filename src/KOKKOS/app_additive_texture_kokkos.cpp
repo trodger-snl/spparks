@@ -2342,6 +2342,9 @@ void AppAdditiveTextureKokkos::input_app(char *command, int narg, char **arg)
     thermal->setup_cmd(narg, arg);
 
   } else if (strcmp(command, "laser_path") == 0) {
+    // Anchor the scan at the current sim time (a preceding `reset_time` shifts
+    // the pass schedule); the snapshot is otherwise refreshed only per step.
+    refresh_thermal_host();
     thermal->laser_path_cmd(narg, arg);
 
   } else if (strcmp(command, "laser_fluctuations") == 0) {

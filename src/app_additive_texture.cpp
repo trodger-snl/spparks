@@ -468,6 +468,10 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
     thermal->setup_cmd(narg, arg);
   }
   else if (strcmp(command,"laser_path") == 0) {
+    // The scan is anchored at the CURRENT sim time (so a `reset_time` issued
+    // before this command shifts the pass schedule); the ThermalHost snapshot
+    // is otherwise only refreshed at init and per step.
+    refresh_thermal_host();
     thermal->laser_path_cmd(narg, arg);
   }
   else if (strcmp(command,"laser_fluctuations") == 0) {

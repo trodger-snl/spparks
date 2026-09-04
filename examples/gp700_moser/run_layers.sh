@@ -1,6 +1,8 @@
 #!/bin/bash
 # Box-per-layer driver for the GP700 Moser build.
 # usage: run_layers.sh <spparks-binary> <outdir> [nlayers=12] [seed=12345]
+# Detach it (setsid nohup ... &) for a full build; touch <outdir>/STOP to end it
+# cleanly after the current box. Completed boxes (completion.marker) are skipped.
 # Box n (0-based) = layer n+1: laser plane at z_top = 20 + 10*(n+1) voxels (60 um
 # substrate + 30 um layers at dx = 3 um), box spans [max(0, z_top-60), z_top].
 # Even layers hatch along x (5 lines, y = 40..360 um), odd along y, serpentine.
@@ -50,8 +52,10 @@ for k,v in {'__SEED__':seed,'__ZLO__':zlo,'__ZHI__':zhi,'__INIT_OR_STITCH__':ini
     s = s.replace(k, v)
 open(out,'w').write(s)
 PY
+  [ -f "$OUT/STOP" ] && { echo "STOP file present, stopping before box $n"; exit 0; }
   echo "box $n: z [$zlo,$ztop] t [$T0,$T1]  $(date +%T)"
-  ( cd "$D" && mpirun -np 1 --bind-to none "$BIN" < in.box > log.spparks 2>&1 ) || { echo "box $n FAILED"; exit 1; }
-  grep -q 'Loop time' "$D/log.spparks" && touch "$D/completion.marker"
+  # Never kill a running box (HIP kernels mid-flight wedge the GPU): to stop
+  # the build, touch $OUT/STOP and let the current box finish.
+  ( cd "$D" && mpirun -np 1 --bind-to none "$BIN" < in.box > log.spparks 2>&1 && grep -q 'Loop time' log.spparks && touch completion.marker ) || { echo "box $n FAILED"; exit 1; }
 done
 echo "all $NL boxes done $(date +%T)"

@@ -38,6 +38,8 @@ misorientation_diffusion 4.2e5 30
 misorientation_target random_rotation
 nucleation_misorientation_target on
 
+# reset_time BEFORE laser_path: the scan is anchored at the current sim time.
+reset_time       __T0__
 setup_temperature_source moser 176 0.9 22.5 4.335e-6 473 600 20e-6 20e-6 10e-6
 __LASER__
 fast_forward_search_window 1e-4
@@ -45,5 +47,4 @@ stats            2e-4
 
 dump             dump.id.1 stitch __T1__ __STITCH__ i1 i2 d1 d2 d3 d4 d8 d9
 dump_modify      dump.id.1 delay __T1__
-reset_time       __T0__
 run              __T1__ upto

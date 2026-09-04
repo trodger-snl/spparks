@@ -1532,26 +1532,26 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
    Phase 3.3: Liquid sites captured by solid neighbors based on texture
 ------------------------------------------------------------------------- */
 
-void AppAdditiveTextureKokkos::ensure_snapshot_views()
+// Multicolour ordering for the neighbour-reading kernels. Colour = parity
+// class (x&1, y&1, z&1) of the lattice coordinates: no two SC_26N neighbours
+// share a colour, so within one colour's launch every neighbour read is
+// race-free and sees the results of the colours already processed (parallel
+// Gauss-Seidel). The colour order is shuffled every step from the host RNG so
+// the update order is spatially random, like the CPU app's random sweep, and
+// never the site-index order (which grew grains along +x). Non-periodic
+// boxes only: parity would not match across a periodic wrap of odd length.
+void AppAdditiveTextureKokkos::shuffled_colors(int order[8])
 {
-  const size_t n = d_active_flag.extent(0);
-  if (d_flag_snap.extent(0) != n) {
-    d_flag_snap = Kokkos::View<int*>("flag_snap", n);
-    d_spin_snap = Kokkos::View<int*>("spin_snap", n);
-    d_q0_snap = Kokkos::View<double*>("q0_snap", n);
-    d_qx_snap = Kokkos::View<double*>("qx_snap", n);
-    d_qy_snap = Kokkos::View<double*>("qy_snap", n);
-    d_qz_snap = Kokkos::View<double*>("qz_snap", n);
+  for (int c = 0; c < 8; c++) order[c] = c;
+  for (int c = 7; c > 0; c--) {
+    const int k = static_cast<int>(ranapp->uniform() * (c + 1));
+    const int t = order[c]; order[c] = order[k]; order[k] = t;
   }
 }
 
+
 int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_sites, int n_active)
 {
-  // Own-site writes go to the live Views; NEIGHBOUR eligibility is judged on
-  // the start-of-step phase snapshot (Jacobi, see ensure_snapshot_views).
-  ensure_snapshot_views();
-  Kokkos::deep_copy(d_flag_snap, d_active_flag);
-  auto d_flag_snap_local = d_flag_snap;
   auto d_active_sites_local = d_active_sites;
   auto d_T_local = k_T.view_device();
   auto d_spin_local = d_spin;
@@ -1604,11 +1604,18 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
   constexpr double solid_reach = 1.7320508075688772;  // sqrt(3), lattice units
 
   // Solidification kernel: parallel over all local sites with event tracking
-  // Race-free: each site only reads/writes itself
+  // Multicolour Gauss-Seidel: one launch per parity colour in a per-step
+  // random order (see shuffled_colors); neighbour reads are live and race-free.
   int naccept_local = 0;
+  int color_order[8]; shuffled_colors(color_order);
+  for (int cc = 0; cc < 8; cc++) {
+  const int color_local = color_order[cc];
+  int naccept_color = 0;
   Kokkos::parallel_reduce("SolidificationKernel", n_active,
     KOKKOS_LAMBDA(int idx, int& count) {
       const int i = d_active_sites_local(idx);
+      if (((static_cast<int>(k_xyz_d(i,0)) & 1) | ((static_cast<int>(k_xyz_d(i,1)) & 1) << 1) |
+           ((static_cast<int>(k_xyz_d(i,2)) & 1) << 2)) != color_local) return;
       double T_i = d_T_local(i);
       int active_flag_i = d_active_flag_local(i);
 
@@ -1617,13 +1624,26 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
         double Tcool = tl_local - T_i;
         double solid_d_i = d_solid_d_local(i);
 
+        // CPU parity (site_event_solidification): the front distance advances
+        // only while the site is adjacent to solid (or sits on the box
+        // boundary). Advancing it for every undercooled liquid site pre-charged
+        // the whole pool, so the front then followed the isotherm instead of
+        // the kinetics and captured along the scan direction one voxel per
+        // step (grains hundreds of um long along x at dt 2 us).
+        int nn = k_numneigh_d(i);
+        bool adjacent_solid = (nn < 26);
+        for (int j = 0; j < nn && j < 26 && !adjacent_solid; j++) {
+          const int f = d_active_flag_local(k_neighbor_d(i, j));
+          if (f == 1 || f == 3) adjacent_solid = true;
+        }
+        if (!adjacent_solid) return;
+
         // Advance solid front distance: solid_d += V(Tcool) * dt
         const double V_advance = solid_front_velocity(d_solid_front_coeffs_local,
                                                       solid_front_length_local, Tcool);
         solid_d_i += V_advance * dt_local;
 
         // Find solid neighbors within reach and calculate texture weights
-        int nn = k_numneigh_d(i);
         int num_solid_neighbors = 0;
         double cumulative_weight[26];  // Max 26 neighbors
         int solid_neighbor_idx[26];
@@ -1637,7 +1657,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
         double cumulative_sum = 0.0;
         for (int j = 0; j < nn && j < 26; j++) {
           int nbr = k_neighbor_d(i, j);
-          int nbr_flag = d_flag_snap_local(nbr);   // start-of-step phase (Jacobi)
+          int nbr_flag = d_active_flag_local(nbr);   // live: same-colour sites are never neighbours
 
           // Check if neighbor is solid (active_flag == 1 or 3) and within reach
           if ((nbr_flag == 1 || nbr_flag == 3) && solid_reach * dx_local <= solid_d_i) {
@@ -1781,7 +1801,9 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
         }
       }
       // No else branch - site keeps current values if not liquid/undercooled
-    }, naccept_local);
+    }, naccept_color);
+  naccept_local += naccept_color;
+  }
 
   return naccept_local;
 }
@@ -1794,15 +1816,10 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
 int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
     Kokkos::View<int*> d_smoothing_sites, int n_sites)
 {
-  // Own-site reads/writes go to the live Views; every NEIGHBOUR read goes to
-  // the start-of-step snapshot (Jacobi, see ensure_snapshot_views).
-  ensure_snapshot_views();
-  Kokkos::deep_copy(d_flag_snap, d_active_flag);
-  Kokkos::deep_copy(d_spin_snap, d_spin);
-  Kokkos::deep_copy(d_q0_snap, d_q0); Kokkos::deep_copy(d_qx_snap, d_qx);
-  Kokkos::deep_copy(d_qy_snap, d_qy); Kokkos::deep_copy(d_qz_snap, d_qz);
-  auto d_spin_s = d_spin_snap; auto d_flag_s = d_flag_snap;
-  auto d_q0_s = d_q0_snap; auto d_qx_s = d_qx_snap; auto d_qy_s = d_qy_snap; auto d_qz_s = d_qz_snap;
+  // Multicolour Gauss-Seidel (see shuffled_colors): neighbour reads are live
+  // and race-free because same-colour sites are never neighbours.
+  ensure_device_xyz();
+  auto k_xyz_d = d_xyz;
   auto d_spin_local = d_spin;
   auto d_q0_local = d_q0;
   auto d_qx_local = d_qx;
@@ -1821,10 +1838,16 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
 
   // Parallel sweep over ONLY smoothing sites (not all sites!)
   int naccept_local = 0;
+  int color_order[8]; shuffled_colors(color_order);
+  for (int cc = 0; cc < 8; cc++) {
+  const int color_local = color_order[cc];
+  int naccept_color = 0;
   Kokkos::parallel_reduce("SmoothingKernelEfficient", n_sites,
     KOKKOS_LAMBDA(int idx, int& count) {
       // Get actual site index from compact list
       int i = d_smoothing_sites(idx);
+      if (((static_cast<int>(k_xyz_d(i,0)) & 1) | ((static_cast<int>(k_xyz_d(i,1)) & 1) << 1) |
+           ((static_cast<int>(k_xyz_d(i,2)) & 1) << 2)) != color_local) return;
 
       // All sites in this list need smoothing - no branching needed!
       const int active_flag_i = d_active_flag_local(i);
@@ -1848,7 +1871,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
       int unique_spins[27];
       int nevent = 0;
       for (int n = 0; n < nn; n++) {
-        const int v = d_spin_s(k_neighbor_d(i, n));
+        const int v = d_spin_local(k_neighbor_d(i, n));
         if (v == spin_i) continue;
         bool found = false;
         for (int k = 0; k < nevent; k++)
@@ -1861,7 +1884,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
         int einitial = 0;
         for (int n = 0; n < nn; n++) {
           const int nbr = k_neighbor_d(i, n);
-          if (d_flag_s(nbr) == 3 && d_spin_s(nbr) != spin_i) einitial++;
+          if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != spin_i) einitial++;
         }
 
         auto generator = rand_pool_local.get_state();
@@ -1872,14 +1895,14 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
           efinal = 0;
           for (int n = 0; n < nn; n++) {
             const int nbr = k_neighbor_d(i, n);
-            if (d_flag_s(nbr) == 3 && d_spin_s(nbr) != new_spin) efinal++;
+            if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != new_spin) efinal++;
           }
           for (int c = 1; c < nevent; c++) {
             const int cand = unique_spins[c];
             int e = 0;
             for (int n = 0; n < nn; n++) {
               const int nbr = k_neighbor_d(i, n);
-              if (d_flag_s(nbr) == 3 && d_spin_s(nbr) != cand) e++;
+              if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != cand) e++;
             }
             if (e < efinal) { efinal = e; new_spin = cand; }  // strict -> first-encounter
           }
@@ -1890,7 +1913,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
           efinal = 0;
           for (int n = 0; n < nn; n++) {
             const int nbr = k_neighbor_d(i, n);
-            if (d_flag_s(nbr) == 3 && d_spin_s(nbr) != new_spin) efinal++;
+            if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != new_spin) efinal++;
           }
         }
 
@@ -1910,9 +1933,9 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
           int cq = 0; bool first = false;
           for (int n = 0; n < nn; n++) {
             const int nbr = k_neighbor_d(i, n);
-            if (d_spin_s(nbr) != new_spin) continue;
-            double n0 = d_q0_s(nbr), nx = d_qx_s(nbr),
-                   ny = d_qy_s(nbr), nz = d_qz_s(nbr);
+            if (d_spin_local(nbr) != new_spin) continue;
+            double n0 = d_q0_local(nbr), nx = d_qx_local(nbr),
+                   ny = d_qy_local(nbr), nz = d_qz_local(nbr);
             if (!first) { r0 = n0; rx = nx; ry = ny; rz = nz; first = true; }
             else if (r0*n0 + rx*nx + ry*ny + rz*nz < 0.0) {
               n0 = -n0; nx = -nx; ny = -ny; nz = -nz;  // q and -q are the same orientation
@@ -1933,12 +1956,15 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
         // values (this kernel has not written site i up to here).
       }
 
-      // Advance the smoothing window (solid_d) and keep the solid state;
-      // active_flag is left unchanged, matching the CPU.
-      d_solid_d_local(i) = solid_d_i + 1.0;
-      if (d_solid_d_local(i) >= 0.0) d_solid_d_local(i) = 0.0;
+      // Advance the smoothing window exactly like the CPU (solid_d--): a site
+      // enters at -1 on solidification and leaves the band
+      // (-nrefine-1, 0) after nrefine passes. (It used to be incremented and
+      // clamped at 0, i.e. one pass regardless of nrefine.)
+      d_solid_d_local(i) = solid_d_i - 1.0;
       d_active_flag_local(i) = active_flag_i;
-    }, naccept_local);
+    }, naccept_color);
+  naccept_local += naccept_color;
+  }
 
   return naccept_local;
 }
@@ -2140,11 +2166,13 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   // correct no-op (no nuclei).
   naccept += particle_flipper_kernel(d_active_sites, n_active);
 
-  // Phase 3.3: Solidification (epitaxial growth with texture weighting)
-  naccept += solidification_kernel(d_active_sites, n_active);
-
   // Phase 3.4: Smoothing kernel (Potts MC for grain boundary refinement)
-  // Call once per timestep - sites smooth over multiple timesteps as solid_d increments
+  // The list is built BEFORE the solidification kernel, so a site is smoothed on
+  // the steps AFTER it solidified (the CPU app's else-if chain does the same);
+  // smoothing a voxel in the very step it solidified, with most of its
+  // neighbours still liquid, let the greedy majority vote at the front hand
+  // everything to the locally dominant grain (23 vs 732 grains on the GP700
+  // single-hatch check).
 
   // Build compact list of smoothing sites using parallel_scan (Phase 1
   // optimization). The list View is cached (member) and reallocated only when
@@ -2183,6 +2211,9 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
         }
       }, n_smoothing_sites);
   }
+
+  // Phase 3.3: Solidification (epitaxial growth with texture weighting)
+  naccept += solidification_kernel(d_active_sites, n_active);
 
   // Only launch smoothing kernel if there are eligible sites
   // Process ONLY the sites in the compact list (not all 2.99M sites!)

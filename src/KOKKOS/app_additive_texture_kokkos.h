@@ -213,19 +213,9 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
 
   // Phase state arrays (device views - simple Views are race-safe for these kernels)
   Kokkos::View<int*> d_active_flag;      // 0=inactive, 1=active, 2=molten, 3=solidified, 5=void
-  // Start-of-step snapshots so the solidification and smoothing kernels are
-  // true Jacobi updates. Reading neighbours live made them Gauss-Seidel in
-  // site-index order (x fastest): a voxel solidified early in a step was
-  // immediately a parent for the next voxel along +x, so a whole liquid line
-  // along x could solidify in one step as ONE grain (grains 300+ um long along
-  // x regardless of scan direction, and strongly timestep-dependent results).
-  // Only liquid sites write phase/spin/quaternion during a step, so a
-  // snapshot-solid neighbour's live spin/quaternion are unchanged; the
-  // solidification kernel needs only the flag snapshot, the smoothing kernel
-  // (which copies a neighbour's spin+quaternion) needs all five.
-  Kokkos::View<int*> d_flag_snap, d_spin_snap;
-  Kokkos::View<double*> d_q0_snap, d_qx_snap, d_qy_snap, d_qz_snap;
-  void ensure_snapshot_views();
+  // Per-step random order of the 8 parity colours used by the solidification
+  // and smoothing kernels (multicolour Gauss-Seidel; see the .cpp).
+  void shuffled_colors(int order[8]);
   Kokkos::View<double*> d_solid_d;       // Solid front distance
 
   // Compact list of sites needing smoothing, rebuilt each step by a parallel_scan.

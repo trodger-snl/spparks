@@ -311,3 +311,13 @@ spin's candidate voxels, choose the spin by roulette, then the parent voxel
 uniformly within that spin. Intergranular competition (the <001> fibre)
 survives; intragranular selection disappears. Second consequence: the D
 correction to 0.14 in wide12_v3 will likely undershoot the first 100 µm.
+
+**Per-grain parent selection implemented (ad23c1a5, both apps):** candidates
+grouped by spin, each grain weighted by the mobility of the sign-aligned mean
+orientation of its candidate voxels against the gradient at the solidifying
+site, grain drawn by roulette, parent voxel uniform within it. Single-hatch
+statistics unchanged (CPU 748 vs 732 grains, kk 500 vs 494); d6 identity
+intact. Template D restored to 0.42 deg²/µm. `wide12_v4` (per-grain
+selection, D 0.42, nucleation 3e13) is chained to start when v3 finishes; its
+tilt-vs-height table should come out flat and the all-originating SROD should
+follow Lamb beyond 100 µm.

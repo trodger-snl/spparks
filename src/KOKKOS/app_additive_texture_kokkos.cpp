@@ -2477,15 +2477,14 @@ void AppAdditiveTextureKokkos::input_app(char *command, int narg, char **arg)
         "misorientation angle", c3, MY_PI / theta_max);
       error->all(FLERR, msg);
     }
+    // A negative minimum mobility is allowed: the solidification kernel clamps
+    // negative mobility to a zero-weight candidate (grains more than the
+    // zero-crossing angle off the gradient never win a contested site), so
+    // c2 > 1/|cos(c3*theta_max)| is a legitimate strong-selection setting.
     double mob_min = 1.0 + c2 * std::cos(c3 * theta_max);
-    if (mob_min < -1.0e-12) {
-      char msg[256];
-      snprintf(msg, sizeof(msg),
-        "texture_parameters: minimum mobility = %g < 0 at theta = "
-        "theta_max (= %g rad); roulette-wheel selection requires "
-        "non-negative mobility", mob_min, theta_max);
-      error->all(FLERR, msg);
-    }
+    if (mob_min < 0.0 && screen && domain->me == 0)
+      fprintf(screen, "texture_parameters: minimum mobility %g < 0 at theta_max = %g rad; "
+              "such candidates get zero weight (strong selection)\n", mob_min, theta_max);
     if (c2 == 0.0 && screen)
       fprintf(screen,
         "WARNING: texture_parameters c2 = 0; mobility has no "

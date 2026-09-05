@@ -274,3 +274,16 @@ layers. Two things to change for the next build:
    per layer estimate at 1e12 was right) and re-check the ratio and the
    centreline.
 Cost: 12 × 12 min at dt 4 µs.
+
+**Second build launched 19:03 (wide12_v3):** D 0.14 deg²/µm, nucleation_density
+3e13, everything else as wide12_v2. If more tuning is needed after it, switch
+to a formal scheme rather than hand steps: the free parameters are
+`misorientation_diffusion` D, `nucleation_density`, and possibly
+`critical_undercooling` / the smoothing pass count; the targets are the
+Lamb SROD mean curves (originating + established, height convention), the
+band/mean ratio, the originating:established grain ratio under Lamb's
+filters, grain density and the <001> fraction. Each evaluation is one
+12-layer build (~2.5 h) or, for a cheaper proxy, a 4-layer build on the
+same deck. `spparks-micro-analysis/scripts/generate_calibration_sobol.py`
+and `score_sobol_runs.py` already implement a Sobol design + scoring loop
+for this kind of calibration and are the natural starting point.

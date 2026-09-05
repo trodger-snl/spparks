@@ -25,6 +25,7 @@ ap.add_argument('--score-only', default=None, help='score this summary.json and 
 ap.add_argument('--fixed', default=None, help='JSON dict of parameters: run this single point instead of a Sobol design')
 ap.add_argument('--greedy', choices=['on','off'], default=None, help='override smooth_greedy_multiproposal')
 ap.add_argument('--nrefine', type=int, default=None, help='override the app_style nrefine argument')
+ap.add_argument('--substrate', default=None, help='stitch file from make_substrate.py; box 0 starts from it')
 ap.add_argument('--D-range', type=float, nargs=2, default=[0.2, 0.8], help='D range, deg^2/um (log-uniform)')
 ap.add_argument('--texture', action='store_true', help='add texture_parameters c2 (1..4, mobility 1 + c2 cos(2.5 theta)) as a 4th parameter')
 a = ap.parse_args()
@@ -64,7 +65,7 @@ def deck(p, n, out, st, seed):
              f"laser_path start {ylast} -100e-6 {z0} end {ylast} {lend} speed 1.137 hatch 80e-6 {a.nh} serpentine pause {PAUSE}")
     tbox = round(a.nh*(a.nx*DX+200e-6)/1.137 + (a.nh-1)*PAUSE + 2e-3, 6)
     t0 = n*TGAP; t1 = n*TGAP + tbox
-    init = ("set site range 1 1000000\nset i2 value 1\nset d6 value 473" if n == 0 else
+    init = ("set site range 1 1000000\nset i2 value 1\nset d6 value 473" if (n == 0 and not a.substrate) else
             "\n".join([f"set {f} stitch {st} last" for f in ('i1','i2','d1','d2','d3','d4','d8','d9')] +
                       ["set i1 range 1 1000000 if i2 < 1", "set i2 value 1 if i2 < 2", "set d6 value 473",
                        "set d8 value 0.0 if i2 != 3", "set d9 value 0.0 if i2 != 3"]))
@@ -88,6 +89,8 @@ for k, p in enumerate(pts):
     if a.deadline and datetime.datetime.now().strftime('%H:%M') >= a.deadline and datetime.datetime.now().hour < 12:
         log(f'deadline {a.deadline} passed; not starting point {k}'); break
     pd = f'{a.out}/pt_{k:02d}'; os.makedirs(pd, exist_ok=True); st = f'{pd}/gp700.st'
+    if a.substrate and not os.path.exists(st) and not a.dry:
+        import shutil; shutil.copy(a.substrate, st)
     log(f'point {k}: ' + ', '.join(f'{kk}={vv:.4g}' for kk, vv in p.items()))
     ok = True
     for n in range(a.layers):

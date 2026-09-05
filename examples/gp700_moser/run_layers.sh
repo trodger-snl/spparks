@@ -1,6 +1,8 @@
 #!/bin/bash
 # Box-per-layer driver for the GP700 Moser build.
-# usage: run_layers.sh <spparks-binary> <outdir> [nlayers=12] [seed=12345] [nx_voxels=267] [nhatch=10] [dt=2e-6]
+# usage: run_layers.sh <spparks-binary> <outdir> [nlayers=12] [seed=12345] [nx_voxels=267] [nhatch=10] [dt=2e-6] [substrate.st]
+# substrate.st (make_substrate.py): copied to <outdir>/gp700.st before box 0, which then
+# starts from it like a continuation box instead of single-voxel random grains.
 # Lateral box = nx_voxels * 3 um square; hatches at 40 um + k*80 um, lines 100 um past
 # both edges. Analyse a central crop (gp700_analysis.py --crop) away from the walls,
 # where each pool has solid tracks alongside as in the print.
@@ -12,9 +14,10 @@
 # Each box is a fresh Moser history (T0 = preheat, the recoat interval); the
 # microstructure continues through the stitch file.
 set -eu
-BIN=$(readlink -f "$1"); OUT=$(readlink -f "$2"); NL=${3:-12}; SEED=${4:-12345}; NX=${5:-267}; NH=${6:-10}; DT=${7:-2e-6}
+BIN=$(readlink -f "$1"); OUT=$(readlink -f "$2"); NL=${3:-12}; SEED=${4:-12345}; NX=${5:-267}; NH=${6:-10}; DT=${7:-2e-6}; SUB=${8:-}
 HERE=$(cd "$(dirname "$0")" && pwd); TPL=$HERE/in.gp700_layer
 mkdir -p "$OUT"; ST=$OUT/gp700.st
+[ -n "$SUB" ] && [ ! -f "$ST" ] && cp "$SUB" "$ST" && echo "substrate $SUB -> $ST"
 DX=3e-6; TGAP=10.0
 # Inter-hatch pause = the real 10 mm track length / speed (8.8 ms): the previous
 # track has solidified (~0.75 ms) before the next hatch overlaps it. Box time
@@ -36,7 +39,7 @@ for ((n=0; n<NL; n++)); do
     LASER="laser_path start $YLAST -100e-6 $z0 end $YLAST $LEND speed 1.137 hatch 80e-6 $NH serpentine pause $PAUSE"
   fi
   T0=$(python3 -c "print($n*$TGAP)"); T1=$(python3 -c "print($n*$TGAP + $TBOX)")
-  if [ $n -eq 0 ]; then
+  if [ $n -eq 0 ] && [ ! -f "$ST" ]; then
     INIT="set site range 1 1000000
 set i2 value 1
 set d6 value 473"

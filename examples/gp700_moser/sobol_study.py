@@ -22,6 +22,9 @@ ap.add_argument('--layers', type=int, default=8); ap.add_argument('--dt', defaul
 ap.add_argument('--deadline', default=None, help='HH:MM local; do not START new points after this')
 ap.add_argument('--dry', action='store_true')
 ap.add_argument('--score-only', default=None, help='score this summary.json and exit')
+ap.add_argument('--fixed', default=None, help='JSON dict of parameters: run this single point instead of a Sobol design')
+ap.add_argument('--greedy', choices=['on','off'], default=None, help='override smooth_greedy_multiproposal')
+ap.add_argument('--nrefine', type=int, default=None, help='override the app_style nrefine argument')
 ap.add_argument('--D-range', type=float, nargs=2, default=[0.2, 0.8], help='D range, deg^2/um (log-uniform)')
 ap.add_argument('--texture', action='store_true', help='add texture_parameters c2 (1..4, mobility 1 + c2 cos(2.5 theta)) as a 4th parameter')
 a = ap.parse_args()
@@ -44,12 +47,14 @@ if a.score_only:
     print(json.dumps(score(json.load(open(a.score_only))))); sys.exit(0)
 # ---- design
 sob = qmc.Sobol(d=len(RANGES), scramble=True, seed=0).random(a.n)
+if a.fixed: sob = []
 pts = []
 for u in sob:
     p = {}
     for (k, (lo, hi, sc)), x in zip(RANGES.items(), u):
         p[k] = float(np.exp(np.log(lo) + x*(np.log(hi)-np.log(lo)))) if sc == 'log' else float(lo + x*(hi-lo))
     pts.append(p)
+if a.fixed: pts = [json.loads(a.fixed)]
 json.dump(pts, open(f'{a.out}/design.json', 'w'), indent=1)
 tpl = open(os.path.join(HERE, 'in.gp700_layer')).read()
 def deck(p, n, out, st, seed):
@@ -71,6 +76,8 @@ def deck(p, n, out, st, seed):
     s = re.sub(r'^critical_undercooling\s+.*$', f"critical_undercooling   {p['critical_undercooling']:.4g}", s, flags=re.M)
     s = re.sub(r'^misorientation_diffusion\s+\S+', f"misorientation_diffusion {p['D_deg2_um']*1e6:.4g}", s, flags=re.M)
     if 'texture_c2' in p: s = re.sub(r'^texture_parameters\s+.*$', f"texture_parameters {p['texture_c2']:.4g} 2.5", s, flags=re.M)
+    if a.greedy: s = re.sub(r'^smooth_greedy_multiproposal\s+.*$', f'smooth_greedy_multiproposal {a.greedy}', s, flags=re.M)
+    if a.nrefine is not None: s = re.sub(r'^(app_style additive/texture/kk \S+ \S+ \S+) \d+', rf'\g<1> {a.nrefine}', s, flags=re.M)
     open(out, 'w').write(s); return t1
 def log(msg):
     print(f"[{datetime.datetime.now():%H:%M:%S}] {msg}", flush=True)

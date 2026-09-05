@@ -336,3 +336,29 @@ the drift used to mask. Overnight: `sobol1` (16 points, D 0.2–0.8, nucl
 D 0.5–2.0, same nucl/tc, **texture c2 1–4** as a 4th parameter) started at
 23:56 alongside it; both on the 600 µm / 7-hatch / 8-layer proxy, no new
 points after 08:30. Results: /home/tron/gp700_runs/sobol{1,2}/results.jsonl.
+
+## Sobol studies (night of 2026-09-04/05)
+
+Proxy geometry 600 µm / 7 hatches / 8 layers / dt 4 µs, all-originating SROD
+(floor 100 µm) on the central 300 µm crop, scored as RMS of (sim − Lamb Fig. 5a
+mean) over 25–240 µm. 16 scored points (study 1: D 0.2–0.8, c2 = 1; study 2:
+D 0.5–2.0 and texture c2 1–4; both nucl 1e13–1e14, tc 3–25 K). Results:
+/home/tron/gp700_runs/sobol{1,2}/results.jsonl. Linear fits over all points:
+
+- **bias (°) = 10.4 + 2.31·ln D − 0.352·ln(nucl) − 0.003·tc + 0.002·c2, R² 0.97**
+  → D and nucleation density are the only levers on the SROD level; zero bias
+  at D ≈ 1.13 deg²/µm for nucl 1.5e13 (1.25 at 3e13). The walk accumulates
+  ~0.35× its input against height once per-grain selection and the nrefine-2
+  smoothing are in.
+- **<001> within 15° of BD = 0.72 − 0.025·ln D − 0.020·ln(nucl) + 0.034·c2**
+  (R² 0.29, noisy): c2 and low nucleation build the fibre; tc does nothing.
+- **band/mean = 1.73–1.85 at every point** (Lamb ≈ 1.4): structural, not
+  reachable with these parameters — the smoothing pass (quaternion averaging)
+  and/or the per-grain uniform parent draw widen the distribution; next lever
+  is nrefine / the smoothing rule, not D.
+- Best points: D 1.25 / nucl 1.3e13 / tc 22 / c2 2.6 → RMS 0.52°, bias +0.3°,
+  <001> 0.20; D 1.63 / 8.5e13 / 11 / 2.1 → 0.83°, +0.3°, 0.22.
+
+**v5 launched 06:55** (full 12-layer wide build, binary spparks_texguard):
+D 1.15 deg²/µm, nucleation 1.5e13, tc 15 K, c2 2.8, dt 4 µs. Expected: bias
+≈ 0 ± 0.5°, <001> ≈ 0.2–0.25, band ratio ≈ 1.8 (open issue).

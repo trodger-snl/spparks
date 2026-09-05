@@ -390,3 +390,24 @@ Lamb Fig. 5a: **RMS 0.59°, bias −0.16°** over 25–240 µm; D-fit vs height
 ESD p50 138 µm. The SROD level and the fibre are now at Lamb's values with
 the smoothing configuration that produced them (nrefine 2 greedy); the
 nrefine-1 test will say whether the same parameters hold with one pass.
+
+**Smoothing / substrate tests at v5's parameters (proxy, 2026-09-05):**
+
+| configuration | grains (crop) | filtered | SROD bias | D-fit/input | band/mean | <001> |
+|---|---|---|---|---|---|---|
+| greedy on, nrefine 2, single-voxel substrate (= v5) | 2088 | 92 | −0.42° | ≈0.35 | 1.75 | 0.29 |
+| greedy off, nrefine 2 | 331 k (ESD 6.8 µm) | 0 | — | — | — | 0.26 |
+| no smoothing | 507 k (ESD 4.7 µm) | 0 | — | — | — | 0.28 |
+| greedy on, nrefine 1, **50 µm Voronoi substrate** | 1042 | 57 | +1.34° | 1.22 | 1.84 | 0.21 |
+
+With single-voxel seeds the raw structure never coarsens; the greedy pass
+made the columnar grains. With a 50 µm-grained substrate and one pass, growth
+carries the substrate grains up as 50–90 µm columns through the full height,
+the walk keeps ~1.2× its input (as in the single-layer tests) so the input D
+returns to ≈ 0.35–0.4 deg²/µm, i.e. Lamb's own fit. The band/mean stays ≈ 1.8
+in every configuration that has grains — it is not a smoothing artefact but
+heterogeneity of the effective D between voxels/grains (path-length
+differences), a genuine model-vs-experiment difference to keep in view.
+
+**v6 launched 11:38:** 800 µm build, substrate_800um_50um.st (1470 grains),
+greedy on / nrefine 1, D 0.40, nucl 1.5e13, tc 15, c2 2.8, dt 4 µs.

@@ -362,3 +362,22 @@ D 0.5–2.0 and texture c2 1–4; both nucl 1e13–1e14, tc 3–25 K). Results:
 **v5 launched 06:55** (full 12-layer wide build, binary spparks_texguard):
 D 1.15 deg²/µm, nucleation 1.5e13, tc 15 K, c2 2.8, dt 4 µs. Expected: bias
 ≈ 0 ± 0.5°, <001> ≈ 0.2–0.25, band ratio ≈ 1.8 (open issue).
+
+**Smoothing finding (2026-09-05 morning).** All builds and Sobol points ran
+`smooth_greedy_multiproposal on` with nrefine 2 (the ct15 templates pair
+greedy with nrefine 1). Tests at v5's parameters on the proxy and on the walk
+deck: with greedy OFF the structure is the raw solidification structure —
+331 k grains, ESD 6.8 µm on the proxy; 2524 (CPU) / 2303 (kk) grains on the
+walk deck vs 2375 / 2908 with no smoothing at all — while greedy ON coarsens
+it 4–5× (626 / 443 on the walk deck; ~2000 columnar grains on the proxy).
+Because the substrate is seeded with single-voxel random grains and the
+mobility-weighted voxel capture thins them only slowly, the greedy pass is
+what produces the columnar morphology; two passes double the effect and make
+the result timestep-sensitive (the pass runs one step after capture, at the
+front, mostly against solid neighbours behind the voxel). Consequences: (1)
+use greedy on with **nrefine 1** (test queued: smooth_greedyon_nr1); (2) the
+band/mean excess (1.8 vs 1.4) and the walk damping (~0.35×) come from these
+passes averaging neighbour quaternions — expect both to move with nrefine;
+(3) a physically seeded substrate (coarse grains, e.g. a short Potts anneal
+or Voronoi seeding at ~50 µm) would let growth competition, not smoothing,
+carry the columnar selection — worth doing before the next calibration.

@@ -6,7 +6,7 @@
 # Placeholders (double-underscore tokens) are filled in by run_layers.sh.
 variable DX equal 3e-6
 
-app_style additive/texture/kk 1000000 ${DX} __DT__ 2
+app_style additive/texture/kk 1000000 ${DX} __DT__ 1
 seed             __SEED__
 dimension        3
 lattice          sc/26n 1.0
@@ -39,10 +39,11 @@ texture_parameters 2.8 2.5
 smooth_greedy_multiproposal on
 nuclei_smooth off
 
-# Sobol fit: bias(deg) = 10.4 + 2.31 ln D - 0.35 ln(nucl) => zero at D ~1.15 deg^2/um
-# for nucl 1.5e13. The walk accumulates ~0.35x its input against height once the
-# smoothing pass and per-grain selection are in (Lamb's fit vs height is 0.42).
-misorientation_diffusion 1.15e6 30
+# D = 0.40 deg^2/um: with a coarse-grained substrate (make_substrate.py) and ONE greedy
+# smoothing pass (nrefine 1, the ct15 pairing) the walk accumulates ~1.2x its input
+# against height, so the input sits near Lamb's fit (0.42). The 1.15 used in v5
+# compensated the damping of two greedy passes on a single-voxel-seeded substrate.
+misorientation_diffusion 4.0e5 30
 misorientation_target random_rotation
 nucleation_misorientation_target on
 

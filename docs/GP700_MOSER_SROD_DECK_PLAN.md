@@ -321,3 +321,18 @@ intact. Template D restored to 0.42 deg²/µm. `wide12_v4` (per-grain
 selection, D 0.42, nucleation 3e13) is chained to start when v3 finishes; its
 tilt-vs-height table should come out flat and the all-originating SROD should
 follow Lamb beyond 100 µm.
+
+**v3 and v4 (night of 2026-09-04).** v3 (D 0.14, nucl 3e13, per-voxel
+selection): SROD undershoots Lamb by 2.1° (RMS 2.16°), 5180 grains on the crop
+(2× v2) but nucleated grains do not pass the 60 µm / 40 µm filters — the
+originating class stays empty. v4 (per-grain selection, D 0.42, nucl 3e13):
+drift gone, but SROD accumulates only **0.33× the input D** against height
+(RMS 2.9° below Lamb), band/mean 1.8, and the <001> fraction falls to 0.11
+(random 0.09) — the fibre in v2/v3 was intragranular rotation, and
+grain-vs-grain competition at c2 = 1 does not build it. The walk is damped by
+the nrefine 2 smoothing pass (quaternion averaging over neighbours), which
+the drift used to mask. Overnight: `sobol1` (16 points, D 0.2–0.8, nucl
+1e13–1e14, tc 3–25 K) started by the chain at 23:54, and `sobol2` (8 points,
+D 0.5–2.0, same nucl/tc, **texture c2 1–4** as a 4th parameter) started at
+23:56 alongside it; both on the 600 µm / 7-hatch / 8-layer proxy, no new
+points after 08:30. Results: /home/tron/gp700_runs/sobol{1,2}/results.jsonl.

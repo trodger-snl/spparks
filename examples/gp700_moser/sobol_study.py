@@ -22,10 +22,13 @@ ap.add_argument('--layers', type=int, default=8); ap.add_argument('--dt', defaul
 ap.add_argument('--deadline', default=None, help='HH:MM local; do not START new points after this')
 ap.add_argument('--dry', action='store_true')
 ap.add_argument('--score-only', default=None, help='score this summary.json and exit')
+ap.add_argument('--D-range', type=float, nargs=2, default=[0.2, 0.8], help='D range, deg^2/um (log-uniform)')
+ap.add_argument('--texture', action='store_true', help='add texture_parameters c2 (1..4, mobility 1 + c2 cos(2.5 theta)) as a 4th parameter')
 a = ap.parse_args()
 if not a.score_only: os.makedirs(a.out, exist_ok=True)
 DX = 3e-6; PAUSE = 8.8e-3; TGAP = 10.0
-RANGES = {'D_deg2_um': (0.2, 0.8, 'log'), 'nucleation_density': (1e13, 1e14, 'log'), 'critical_undercooling': (3.0, 25.0, 'lin')}
+RANGES = {'D_deg2_um': (a.D_range[0], a.D_range[1], 'log'), 'nucleation_density': (1e13, 1e14, 'log'), 'critical_undercooling': (3.0, 25.0, 'lin')}
+if a.texture: RANGES['texture_c2'] = (1.0, 4.0, 'lin')
 lamb = json.load(open(os.path.join(HERE, '..', '..', 'docs', 'lamb2023_fig5a_srod.json')))
 def score(summary):
     rows = np.array(summary['srod'].get('height_originating', []))
@@ -40,7 +43,7 @@ def score(summary):
 if a.score_only:
     print(json.dumps(score(json.load(open(a.score_only))))); sys.exit(0)
 # ---- design
-sob = qmc.Sobol(d=3, scramble=True, seed=0).random(a.n)
+sob = qmc.Sobol(d=len(RANGES), scramble=True, seed=0).random(a.n)
 pts = []
 for u in sob:
     p = {}
@@ -67,6 +70,7 @@ def deck(p, n, out, st, seed):
     s = re.sub(r'^nucleation_density\s+.*$', f"nucleation_density      {p['nucleation_density']:.4g}", s, flags=re.M)
     s = re.sub(r'^critical_undercooling\s+.*$', f"critical_undercooling   {p['critical_undercooling']:.4g}", s, flags=re.M)
     s = re.sub(r'^misorientation_diffusion\s+\S+', f"misorientation_diffusion {p['D_deg2_um']*1e6:.4g}", s, flags=re.M)
+    if 'texture_c2' in p: s = re.sub(r'^texture_parameters\s+.*$', f"texture_parameters {p['texture_c2']:.4g} 2.5", s, flags=re.M)
     open(out, 'w').write(s); return t1
 def log(msg):
     print(f"[{datetime.datetime.now():%H:%M:%S}] {msg}", flush=True)

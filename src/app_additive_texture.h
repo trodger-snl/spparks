@@ -76,6 +76,7 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   void execute_nucleation_event(int, double);
   std::vector<double> normal_finder(int);
 	double melt_misorientation(int, double, double, double);
+  double mobility_of_orientation(const std::vector<double> &q, const std::vector<double> &grad_full);
   void apply_misorientation(int, int, double, class RandomPark *);
   // Per-hop rotation angle (rad) of the misorientation random walk:
   // sqrt(D_eff * hop_m), D_eff = mis_diffusion * g(Tcool)^2 with the

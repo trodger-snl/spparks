@@ -1088,34 +1088,64 @@ void AppAdditiveTexture::site_event_solidification(int i, double Tcool, RandomPa
           power--;
       }
     
-      //Go through neighbor list and add them to possible switches
+      //Go through neighbor list and collect the eligible solid parents
       for (int j = 0; j < numneigh[i]; j++) {
           // Exclude void neighbors
           if(active_flag[neighbor[i][j]] == 5) continue;
           if(neigh_dist[2] <= solid_d[i] && (active_flag[neighbor[i][j]] == 1 || active_flag[neighbor[i][j]] == 3)) {
-              // Calculate temperature gradient/grain misorientation and store in array
-              // Use cumulative probability for random sampling
-              //Exclude gas or molten sites from the Potts neighbor tally
-              double melt_misori_val = melt_misorientation(neighbor[i][j],c1,c2,c3);
-              dotValue += melt_misori_val;
-              unique_dot[nevent] = dotValue;
-              value = spin[neighbor[i][j]];
-              unique[nevent] = value;
               unique_neigh[nevent] = neighbor[i][j];
+              unique[nevent] = spin[neighbor[i][j]];
               nevent++;
           }
       }
     }
     //If no neighbor is eligible, return before changing anything. Will try next sweep.
     if (nevent == 0) return;
-    
-    // unique_dot[nevent - 1] is the total cumulative mobility (last entry).
-    double dran = (unique_dot[nevent - 1]*random->uniform());
-    // Roulette-wheel selection: find the first j with dran <= unique_dot[j].
-    // Loop must run through j = nevent - 1 so the last neighbor is reachable;
-    // the early return after flip_site keeps the body single-shot.
+
+    // Parent selection is per GRAIN, not per voxel. Weighting each candidate
+    // voxel by its own orientation let the mobility select, among the
+    // randomly rotated voxels of ONE grain, the ones rotated toward gradient
+    // alignment, so whole grains drifted toward <001>||BD with height (12-16
+    // deg over 240-360 um on the GP700 build; Lamb et al. see no such drift).
+    // Now: group the candidates by spin, weight each grain by the mobility of
+    // the sign-aligned mean orientation of its candidate voxels against the
+    // gradient at this site, draw the grain, then draw the parent voxel
+    // uniformly within it. Grain-vs-grain competition (the <001> fibre) is kept.
+    int gspin[27]; double gcum[27]; int ngr = 0; double gtotal = 0.0;
+    std::vector<double> grad_full = normal_finder(i);   // [nx, ny, nz, magnitude]
+    for (int k = 0; k < nevent; k++) {
+        bool seen = false;
+        for (int g = 0; g < ngr; g++) if (gspin[g] == unique[k]) { seen = true; break; }
+        if (seen) continue;
+        std::vector<double> qm = {0.0, 0.0, 0.0, 0.0}, qr;
+        for (int m = 0; m < nevent; m++) {
+            if (unique[m] != unique[k]) continue;
+            int n = unique_neigh[m];
+            std::vector<double> qn = {q0[n], qx[n], qy[n], qz[n]};
+            if (qr.empty()) qr = qn;
+            else if (qr[0]*qn[0] + qr[1]*qn[1] + qr[2]*qn[2] + qr[3]*qn[3] < 0.0)
+                for (int c = 0; c < 4; c++) qn[c] = -qn[c];   // q and -q are one orientation
+            for (int c = 0; c < 4; c++) qm[c] += qn[c];
+        }
+        double nrm = sqrt(qm[0]*qm[0] + qm[1]*qm[1] + qm[2]*qm[2] + qm[3]*qm[3]);
+        if (nrm > 0.0) for (int c = 0; c < 4; c++) qm[c] /= nrm;
+        gtotal += mobility_of_orientation(qm, grad_full);
+        gspin[ngr] = unique[k]; gcum[ngr] = gtotal; ngr++;
+    }
+    int g = 0;
+    if (gtotal > 0.0) {
+        double dran = gtotal * random->uniform();
+        while (g < ngr - 1 && dran > gcum[g]) g++;
+    } else {
+        g = (int)(ngr * random->uniform()); if (g >= ngr) g = ngr - 1;
+    }
+    int nsame = 0;
+    for (int m = 0; m < nevent; m++) if (unique[m] == gspin[g]) nsame++;
+    int pick = (int)(nsame * random->uniform()); if (pick >= nsame) pick = nsame - 1;
     for( int j = 0; j < nevent; j++) {
-        if(dran <= unique_dot[j]) {
+        if (unique[j] != gspin[g]) continue;
+        if (pick-- > 0) continue;
+        {
             int neighran = unique_neigh[j];
             SiteState s1(unique[j],{q0[neighran],qx[neighran],qy[neighran],qz[neighran]});
             flip_site(i,s1);
@@ -1647,6 +1677,22 @@ std::vector<double> AppAdditiveTexture::get_average_neighbor_quaternion(int site
    Inputs: lattice site :: site
    Outputs: double of max dot product
 ------------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------
+   Mobility c1 + c2*cos(c3*theta) of an orientation q against a gradient
+   [nx,ny,nz,magnitude]; theta = angle between the nearest <100> and the
+   gradient. Zero gradient => no preferred direction => full mobility.
+   Negative values clamp to 0 (zero-weight candidate).
+------------------------------------------------------------------------- */
+double AppAdditiveTexture::mobility_of_orientation(const std::vector<double> &q,
+                                                   const std::vector<double> &grad_full)
+{
+	if (grad_full[3] <= 0.0) return c1 + c2;
+	std::vector<double> dir = {grad_full[0], grad_full[1], grad_full[2]};
+	double theta = acos(quaternion::get_cosine_of_minumum_angle_between_q_and_u(q, dir));
+	double mob = c1 + c2 * cos(c3 * theta);
+	return mob < 0.0 ? 0.0 : mob;
+}
+
 double AppAdditiveTexture::melt_misorientation(int site, double c1, double c2, double c3)
 {
 	double dotMax;

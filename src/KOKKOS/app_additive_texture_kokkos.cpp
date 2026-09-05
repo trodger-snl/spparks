@@ -1663,10 +1663,10 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
                                                       solid_front_length_local, Tcool);
         solid_d_i += V_advance * dt_local;
 
-        // Find solid neighbors within reach and calculate texture weights
+        // Find solid neighbors within reach; weights are computed per GRAIN below
         int num_solid_neighbors = 0;
-        double cumulative_weight[26];  // Max 26 neighbors
         int solid_neighbor_idx[26];
+        int solid_neighbor_spin[26];
 
         // On-demand gradient computation: only compute if we might have solid neighbors
         // This is the key optimization - gradients computed only when needed
@@ -1674,7 +1674,6 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
         double grad_magnitude = 0.0;
         bool gradient_computed = false;
 
-        double cumulative_sum = 0.0;
         for (int j = 0; j < nn && j < 26; j++) {
           int nbr = k_neighbor_d(i, j);
           int nbr_flag = d_active_flag_local(nbr);   // live: same-colour sites are never neighbours
@@ -1696,62 +1695,70 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
               gradient_computed = true;
             }
 
-            // Get neighbor quaternion
-            double q_nbr[4] = {
-              d_q0_local(nbr),
-              d_qx_local(nbr),
-              d_qy_local(nbr),
-              d_qz_local(nbr)
-            };
-
-            // Compute texture weight: mobility = c1 + c2 * cos(c3 * theta)
-            // where theta is angle between crystal <100> and gradient
-            double c1 = d_texture_params_local(0);
-            double c2 = d_texture_params_local(1);
-            double c3 = d_texture_params_local(2);
-
-            // Minimum angle between any <100> of the neighbour and the gradient.
-            // A zero gradient (flat field, e.g. a pool that has cooled to
-            // ambient) has no preferred growth direction: every candidate gets
-            // the full mobility. get_cosine_angle_q_u returns 0 for a zero
-            // vector, i.e. a bogus 90 deg, which with c3 = 2.5 turns the
-            // mobility negative. Matches AppAdditiveTexture::melt_misorientation.
-            double mobility;
-            if (grad_magnitude > 0.0) {
-              double cos_min_angle = QuaternionOps::get_cosine_angle_q_u(q_nbr, grad_dir);
-              double theta = Kokkos::acos(cos_min_angle);
-              mobility = c1 + c2 * Kokkos::cos(c3 * theta);
-            } else {
-              mobility = c1 + c2;
-            }
-            // Negative mobility is a zero-weight candidate, never a rejected
-            // one (same clamp as the CPU app): a site with a solid neighbour in
-            // reach must eventually solidify.
-            cumulative_sum += Kokkos::fmax(mobility, 0.0);
-            cumulative_weight[num_solid_neighbors] = cumulative_sum;
             solid_neighbor_idx[num_solid_neighbors] = nbr;
+            solid_neighbor_spin[num_solid_neighbors] = d_spin_local(nbr);
             num_solid_neighbors++;
           }
         }
 
         // If we have solid neighbors, perform stochastic selection
         if (num_solid_neighbors > 0) {
+          // Parent selection is per GRAIN, not per voxel (matches
+          // AppAdditiveTexture::site_event_solidification): weighting each
+          // candidate voxel by its own orientation let the mobility pick, among
+          // the randomly rotated voxels of ONE grain, the ones rotated toward
+          // gradient alignment, so whole grains drifted toward <001>||BD with
+          // height. Group the candidates by spin, weight each grain by the
+          // mobility c1 + c2*cos(c3*theta) of the sign-aligned mean orientation
+          // of its candidate voxels against the gradient at this site (zero
+          // gradient => full mobility; negative => zero weight), draw the grain,
+          // then draw the parent voxel uniformly within it.
+          const double c1 = d_texture_params_local(0);
+          const double c2 = d_texture_params_local(1);
+          const double c3 = d_texture_params_local(2);
+          int gspin[26]; double gcum[26]; int ngr = 0; double gtotal = 0.0;
+          for (int k = 0; k < num_solid_neighbors; k++) {
+            bool seen = false;
+            for (int g = 0; g < ngr; g++) if (gspin[g] == solid_neighbor_spin[k]) { seen = true; break; }
+            if (seen) continue;
+            double qm[4] = {0.0, 0.0, 0.0, 0.0}, qr[4] = {0.0, 0.0, 0.0, 0.0}; bool first = true;
+            for (int m = 0; m < num_solid_neighbors; m++) {
+              if (solid_neighbor_spin[m] != solid_neighbor_spin[k]) continue;
+              const int n = solid_neighbor_idx[m];
+              double qn[4] = {d_q0_local(n), d_qx_local(n), d_qy_local(n), d_qz_local(n)};
+              if (first) { for (int c = 0; c < 4; c++) qr[c] = qn[c]; first = false; }
+              else if (qr[0]*qn[0] + qr[1]*qn[1] + qr[2]*qn[2] + qr[3]*qn[3] < 0.0)
+                for (int c = 0; c < 4; c++) qn[c] = -qn[c];   // q and -q are one orientation
+              for (int c = 0; c < 4; c++) qm[c] += qn[c];
+            }
+            QuaternionOps::normalize(qm);
+            double mobility = c1 + c2;
+            if (grad_magnitude > 0.0) {
+              const double theta = Kokkos::acos(QuaternionOps::get_cosine_angle_q_u(qm, grad_dir));
+              mobility = c1 + c2 * Kokkos::cos(c3 * theta);
+            }
+            gtotal += Kokkos::fmax(mobility, 0.0);
+            gspin[ngr] = solid_neighbor_spin[k]; gcum[ngr] = gtotal; ngr++;
+          }
+
           // Get RNG state
           auto generator = rand_pool_local.get_state();
-          double rand_val = generator.drand() * cumulative_sum;
-
-          // Roulette wheel; all-zero weights degrade to a uniform pick.
-          int selected_idx = 0;
-          if (cumulative_sum > 0.0) {
-            for (int k = 0; k < num_solid_neighbors; k++) {
-              if (rand_val <= cumulative_weight[k]) {
-                selected_idx = k;
-                break;
-              }
-            }
+          int g = 0;
+          if (gtotal > 0.0) {
+            const double rand_val = generator.drand() * gtotal;
+            while (g < ngr - 1 && rand_val > gcum[g]) g++;
           } else {
-            selected_idx = static_cast<int>(generator.drand() * num_solid_neighbors);
-            if (selected_idx >= num_solid_neighbors) selected_idx = num_solid_neighbors - 1;
+            g = static_cast<int>(generator.drand() * ngr);
+            if (g >= ngr) g = ngr - 1;
+          }
+          int nsame = 0;
+          for (int m = 0; m < num_solid_neighbors; m++) if (solid_neighbor_spin[m] == gspin[g]) nsame++;
+          int pick = static_cast<int>(generator.drand() * nsame);
+          if (pick >= nsame) pick = nsame - 1;
+          int selected_idx = 0;
+          for (int m = 0; m < num_solid_neighbors; m++) {
+            if (solid_neighbor_spin[m] != gspin[g]) continue;
+            if (pick-- == 0) { selected_idx = m; break; }
           }
 
           int selected_nbr = solid_neighbor_idx[selected_idx];

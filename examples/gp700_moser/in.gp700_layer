@@ -36,10 +36,10 @@ texture_parameters 1.0 2.5
 smooth_greedy_multiproposal on
 nuclei_smooth off
 
-# Input D = 0.14 deg^2/um: the walk accumulates along the growth path and through
-# smoothing, so the first build (input 0.42) measured 3.6x that against height
-# (docs/gp700_results_v2). Lamb's fit is 0.42 deg^2/um vs height.
-misorientation_diffusion 1.4e5 30
+# D = 0.42 deg^2/um (Lamb's fit vs height). On the first build the walk matched Lamb
+# to ~100 um at this D; the excess beyond was selection-driven intragranular
+# rotation, removed by per-grain parent selection (docs/gp700_results_v2).
+misorientation_diffusion 4.2e5 30
 misorientation_target random_rotation
 nucleation_misorientation_target on
 

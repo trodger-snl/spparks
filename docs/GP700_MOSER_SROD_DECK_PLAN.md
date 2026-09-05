@@ -381,3 +381,12 @@ passes averaging neighbour quaternions — expect both to move with nrefine;
 (3) a physically seeded substrate (coarse grains, e.g. a short Potts anneal
 or Voronoi seeding at ~50 µm) would let growth competition, not smoothing,
 carry the columnar selection — worth doing before the next calibration.
+
+**v5 result (10:26, `docs/gp700_results_v5/`):** D 1.15 deg²/µm, nucl 1.5e13,
+tc 15 K, c2 2.8, greedy on / nrefine 2, dt 4 µs. All-originating SROD vs
+Lamb Fig. 5a: **RMS 0.59°, bias −0.16°** over 25–240 µm; D-fit vs height
+0.87× input; band/mean 1.79 (Lamb 1.4, open); <001> within 15° of BD **0.34**;
+3955 grains on the crop, 164 pass Lamb's filters, 51 taller than 300 µm,
+ESD p50 138 µm. The SROD level and the fibre are now at Lamb's values with
+the smoothing configuration that produced them (nrefine 2 greedy); the
+nrefine-1 test will say whether the same parameters hold with one pass.

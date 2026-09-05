@@ -345,16 +345,12 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
      // Rule 3: positivity of mobility at every angle in [0, theta_max].
      //   With c2 >= 0 and c3 * theta_max <= pi, the binding angle is
      //   theta = theta_max where cos is most negative on the interval.
+     // A negative minimum mobility is allowed: mobility_of_orientation clamps
+     // it to a zero-weight candidate (strong selection), matching the kk app.
      double mob_min = 1.0 + c2 * std::cos(c3 * theta_max);
-     if (mob_min < -1.0e-12) {
-       char msg[256];
-       snprintf(msg, sizeof(msg),
-         "texture_parameters: minimum mobility = %g < 0 at theta = "
-         "theta_max (= %g rad); roulette-wheel selection in "
-         "site_event_solidification requires non-negative mobility",
-         mob_min, theta_max);
-       error->all(FLERR, msg);
-     }
+     if (mob_min < 0.0 && screen && domain->me == 0)
+       fprintf(screen, "texture_parameters: minimum mobility %g < 0 at theta_max = %g rad; "
+               "such candidates get zero weight (strong selection)\n", mob_min, theta_max);
 
      // -------- Soft warning --------
      if (c2 == 0.0 && screen) {

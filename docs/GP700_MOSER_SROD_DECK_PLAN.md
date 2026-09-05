@@ -287,3 +287,27 @@ filters, grain density and the <001> fraction. Each evaluation is one
 same deck. `spparks-micro-analysis/scripts/generate_calibration_sobol.py`
 and `score_sobol_runs.py` already implement a Sobol design + scoring loop
 for this kind of calibration and are the natural starting point.
+
+**All-originating analysis of wide12_v2 (floor 100 µm, below the first melt;
+189 grains, 2.2 M voxels; `docs/gp700_results_v2/srod_height_all_originating_floor100.png`).**
+Up to ~100 µm the simulated SROD mean sits on Lamb's curve (2.9/3.8/5.3/6.4° at
+24/45/84/105 µm vs 2.9/3.8/5.0/5.9°), i.e. the input D = 0.42 deg²/µm is
+right for the walk itself. Beyond 100 µm the simulation grows *linearly*
+(~0.9° per 30 µm; 15.9° at 264 µm vs Lamb 10.8°, 22° at 400 µm) where Lamb
+stays √d. The linear part is a persistent drift, and it is orientation
+selection: grains whose origin <001> is > 40° off the build direction rotate
+toward it by 12° at 240 µm and 16° at 360 µm of height; grains 20–40° off by
+5–6°; grains already within 20° drift away by +1.5/+5°. Mean <001>-to-BD
+angle over the 189 grains falls from 28° at the origin to 20° at 240 µm.
+Mechanism: the mobility weights c1 + c2·cos(c3·θ) select among candidate
+parent VOXELS of the same grain, so among randomly rotated voxels the ones
+rotated toward gradient alignment propagate — the grain rotates as a whole
+(intragranular Lamarckian selection). Lamb's data show no such drift, and
+Met Trans 2026 reports cells switching <100> variants rather than rotating.
+Proposed model change (both apps, before any formal calibration, otherwise the
+optimizer fits D to a drift of the wrong functional form): apply the
+mobility weight per candidate GRAIN (spin), e.g. the mean mobility of that
+spin's candidate voxels, choose the spin by roulette, then the parent voxel
+uniformly within that spin. Intergranular competition (the <001> fibre)
+survives; intragranular selection disappears. Second consequence: the D
+correction to 0.14 in wide12_v3 will likely undershoot the first 100 µm.

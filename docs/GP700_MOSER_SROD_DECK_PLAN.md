@@ -398,10 +398,13 @@ nrefine-1 test will say whether the same parameters hold with one pass.
 | greedy on, nrefine 2, single-voxel substrate (= v5) | 2088 | 92 | −0.42° | ≈0.35 | 1.75 | 0.29 |
 | greedy off, nrefine 2 | 331 k (ESD 6.8 µm) | 0 | — | — | — | 0.26 |
 | no smoothing | 507 k (ESD 4.7 µm) | 0 | — | — | — | 0.28 |
+| greedy on, nrefine 1, single-voxel substrate | 2730 | 102 | +0.02° | ≈0.40 | 1.76 | 0.24 |
 | greedy on, nrefine 1, **50 µm Voronoi substrate** | 1042 | 57 | +1.34° | 1.22 | 1.84 | 0.21 |
 
 With single-voxel seeds the raw structure never coarsens; the greedy pass
-made the columnar grains. With a 50 µm-grained substrate and one pass, growth
+made the columnar grains, and the pass count (1 vs 2) barely changes the walk
+damping (0.40 vs 0.35×) — the damping comes from building grains out of a
+voxel-scale mixture by majority votes, not from the number of passes. With a 50 µm-grained substrate and one pass, growth
 carries the substrate grains up as 50–90 µm columns through the full height,
 the walk keeps ~1.2× its input (as in the single-layer tests) so the input D
 returns to ≈ 0.35–0.4 deg²/µm, i.e. Lamb's own fit. The band/mean stays ≈ 1.8

@@ -239,3 +239,38 @@ The CPU app's guard dt ≤ dx/V(Tl−Ts) = 2.09 µs would reject 4 µs; the fron
 actually runs at 25–35 K (V ≤ 0.71 m/s, limit 4.2 µs) and the capture reach is
 √3 dx (3.6 µs). The kk app now prints the same guard as a warning. Production
 build `wide12_v2` launched at 4 µs on a frozen binary copy (~12 min/box).
+
+## First full build: wide12_v2 (2026-09-04 18:52)
+
+800 µm square, 10 hatches, 12 layers, dt 4 µs, fixed kernels (1a9712b3),
+D = 0.42 deg²/µm, nucleation_density 1e12. Figures in `docs/gp700_results_v2/`;
+stitch file /home/tron/gp700_runs/wide12_v2/gp700.st (3 GB). Analysis on the
+central 400 µm crop with the floor at 240 µm (150 µm substrate + 3 layers).
+
+| quantity | simulation | Lamb et al. 2023 |
+|---|---|---|
+| grain density (full domain) | 10 136 grains in 0.29 mm³ ≈ 3.5e4 /mm³ | > 9000 in 0.275 mm³ ≈ 3.3e4 /mm³ |
+| columnar height | volume-weighted median 400 µm, 289 grains > 300 µm | > 400 µm columnar grains |
+| extents x/y (µm, median, vol-weighted) | 87 / 87 | tens of µm to ~100 µm |
+| <001> within 15° of BD | 0.24–0.28 (random 0.09) | <001> columnar fibre (Met Trans Fig. 2) |
+| originating : established grains (Lamb filters) | ≈ 0 : 189 in the crop | 500 : 100 |
+| SROD, established, mean at 0 / 265 µm | 7.6° / 18.9° | 5.6° / 11° |
+| SROD band/mean (established) | 1.4–1.8 | ≈ 1.4 |
+| SROD D-fit vs height (established) | 3.6 × input | 1 × (by construction) |
+| same-grain z-neighbour disorientation | median 3.6°, p90 13° | KAM > 2° only at cell walls |
+
+Reads: grain density, columnar morphology and the <001> fibre are already
+right; the top-view xy section shows an 80 µm checkerboard following the
+hatch grid of the two last (90°-rotated) layers, as the remelt depth is ~2
+layers. Two things to change for the next build:
+1. **D is ~3× too high as input.** The walk accumulates along the growth path
+   and through smoothing copies, so SROD vs height runs 1.6× Lamb in angle
+   (3.6× in D). Set `misorientation_diffusion` to ≈ 0.42/3 = **0.14 deg²/µm
+   (1.4e5 deg²/m)** and re-measure (Plan 1's "path factor"; on this build it
+   is 3.6 with smoothing, 1.2–1.4 on a single layer).
+2. **Nucleation is an order of magnitude low.** The originating class is
+   empty (5 k voxels); Lamb has 5 originating per established grain after
+   the size filters. Raise `nucleation_density` to 1e13–1e14 (the 50-nuclei
+   per layer estimate at 1e12 was right) and re-check the ratio and the
+   centreline.
+Cost: 12 × 12 min at dt 4 µs.

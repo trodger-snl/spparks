@@ -569,3 +569,24 @@ still rising slowly at the top. So c2 9 keeps selecting with height but the
 walk (D_eff ≈ 0.4 deg²/µm → 13° RMS spread over 400 µm) erodes the 15° cone
 about as fast as selection fills it; the full-build ceiling with these
 mechanics looks like ≈0.25.
+
+**Correction on the fibre target.** Neither Lamb paper quantifies the <001>
+texture; the "Lamb ≈ 0.3" used above was carried over from v5's 0.34 and has
+no experimental basis. The only reference is qualitative (Met Trans 2026
+Fig. 2: <001> columnar fibre along BD). v8/v9 give 0.19–0.24 within 15° of
+BD, 2–2.5× random, i.e. a clear but moderate fibre; pushing it further
+needs a measured target first (e.g. Lamb's IPF/pole-figure MUD, if
+obtainable) rather than more c2. **Template reset to the v8 settings**
+(c2 2.8, nucleation 1.5e13), which is the calibrated deck; v9 (c2 9, 2e13)
+is recorded as the stronger-fibre variant with identical SROD.
+
+## Status (2026-09-06 10:40)
+
+Calibrated GP700 deck = `examples/gp700_moser/in.gp700_layer` as committed:
+Moser source with the GP700 constants, 3.5× front law, dt 4 µs, 50 µm
+Voronoi substrate, `smooth_greedy_multiproposal on` / nrefine 1,
+`smooth_orientation copy`, `misorientation_diffusion 2.2e5 30`, per-grain
+parent selection, nucleation 1.5e13 / tc 15 K, texture 2.8 / 2.5. Against
+Lamb 2023 Fig. 5a (all-originating SROD, height): RMS 0.49°, bias +0.17°,
+band/mean 1.41 vs 1.4; grain density and columnar morphology as before.
+Binary: `/home/tron/gp700_runs/spparks_smoothcopy` (= da2fad29 kernels).

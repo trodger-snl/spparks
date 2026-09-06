@@ -414,3 +414,44 @@ differences), a genuine model-vs-experiment difference to keep in view.
 
 **v6 launched 11:38:** 800 µm build, substrate_800um_50um.st (1470 grains),
 greedy on / nrefine 1, D 0.40, nucl 1.5e13, tc 15, c2 2.8, dt 4 µs.
+
+**v6 result (14:09, coarse Voronoi substrate, nrefine 1, D 0.40):** misses low.
+All-originating SROD vs Lamb Fig. 5a: RMS 2.18°, bias −1.76° over 25–240 µm;
+D-fit 1.64e5 deg²/m = **0.41× input**; band/mean 1.85; <001> within 15° of
+BD 0.16 (v5: 0.34); 2572 grains on the crop, 95 pass Lamb's filters, 47 taller
+than 300 µm, ESD p50 148 µm, lateral extents 117 × 105 µm (v5: 96 × 96).
+Established class (floor 240): D-fit 3.9e5 = 0.93×, but over only 165 µm of
+range.
+
+**Correction to the table above.** `gp700_analysis.py` divided every D-fit
+by a default 4.2e5 instead of the deck's D (no chain or Sobol point passed
+`--D`), so the "D-fit/input" column was wrong for every run with D ≠ 0.42.
+Corrected ratios (D-fit ÷ the actual input):
+
+| configuration | input D | D-fit (deg²/µm) | ratio |
+|---|---|---|---|
+| v5 full build, greedy on nrefine 2, single-voxel substrate | 1.15 | 0.367 | 0.32 |
+| proxy, greedy on nrefine 2, single-voxel (= v5 config) | 1.15 | 0.147 | 0.13 |
+| proxy, greedy on nrefine 1, single-voxel | 1.15 | 0.168 | 0.15 |
+| proxy, greedy on nrefine 1, 50 µm Voronoi substrate | 1.15 | 0.511 | 0.44 |
+| v6 full build, greedy on nrefine 1, 50 µm Voronoi substrate | 0.40 | 0.164 | 0.41 |
+
+So the coarse substrate does **not** restore the walk to its input D (the
+"1.22×" was the artefact); it roughly triples the retained fraction relative
+to single-voxel seeding on the proxy (0.15 → 0.44), and the full build keeps
+≈0.4× of the input in both v5-like and v6-like configurations. The
+single-hatch walk deck (1.2×, `scripts/srod_analysis.py`, correct D) remains
+the only configuration without damping, so the loss is a multi-layer /
+remelt / smoothing effect, still unexplained. The fix is committed
+(26732622); the chain scripts now pass `--D`.
+
+**v7 launched 20:31** (two builds sharing the GPU, ~1.4× slower each):
+D = 0.80 deg²/µm from the measured bias slope (v6 −1.76° at 0.40, the
+Voronoi proxy +1.34° at 1.15 → zero bias at ≈0.73–0.86), everything else as
+v6 (nrefine 1, nucl 1.5e13, tc 15, c2 2.8, dt 4 µs).
+- `wide12_v7a`: 50 µm Voronoi substrate (as v6).
+- `wide12_v7b`: substrate = the top 150 µm of v6 (`substrate_from_top.py`,
+  1235 competed columnar grains) — a stand-in for Lamb's sample being far
+  above the baseplate; tests whether the <001> fibre (0.16 on the random
+  substrate vs 0.34 in v5 and Lamb) is a substrate-texture effect.
+Chain: `/home/tron/gp700_runs/chain_v7.{sh,log}`; analysis with `--D 8e5`.

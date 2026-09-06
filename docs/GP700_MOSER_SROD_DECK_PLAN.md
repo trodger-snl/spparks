@@ -498,3 +498,24 @@ D, substrate or pass count. The band/mean excess may come from the same
 averaging (heterogeneous damping). Test: a `smooth_orientation copy` mode
 (take ONE random same-spin neighbour's quaternion instead of the average)
 should restore ≈1× retention at D ≈ 0.42.
+
+**Smoothing-average damping CONFIRMED (proxy, 02:05, D 0.42, Voronoi
+substrate, greedy on / nrefine 1, binary spparks_smoothcopy = da2fad29):**
+
+| smooth_orientation | retention (height / straight line) | band/mean | bias vs Lamb | <001> | same-grain z-nbr disorientation median |
+|---|---|---|---|---|---|
+| average (default) | 0.46 / 0.40 | 1.8 | −1.53° | 0.23 | 2.3° |
+| **copy** | **1.85 / 1.62** | **1.34–1.44** | +2.67° | 0.17 | 5.0° |
+
+Copy mode restores the walk (retention > 1 because the growth path is
+longer than the height, as on the walk deck) AND brings band/mean to Lamb's
+1.4 — the long-standing "structural" discrepancy was the quaternion
+averaging. Scaling the copy-mode curve onto Lamb Fig. 5a over 25–240 µm
+gives D = 0.216 deg²/µm (RMS 0.41° on the proxy shape), i.e. about half of
+Lamb's own √h fit, consistent with the 1.6–1.85× path factor.
+
+**v8 launched 02:06:** full 800 µm / 12-layer build, `smooth_orientation
+copy`, D 0.22, Voronoi 50 µm substrate, nrefine 1, nucl 1.5e13, tc 15,
+c2 2.8, dt 4 µs; chain `chain_v8.sh`, analysis `--D 2.2e5`. Open after
+this: the <001> fibre (0.17–0.23 vs Lamb ≈ 0.3) — c2 / nucleation are the
+levers per the Sobol surface.

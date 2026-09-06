@@ -519,3 +519,17 @@ copy`, D 0.22, Voronoi 50 µm substrate, nrefine 1, nucl 1.5e13, tc 15,
 c2 2.8, dt 4 µs; chain `chain_v8.sh`, analysis `--D 2.2e5`. Open after
 this: the <001> fibre (0.17–0.23 vs Lamb ≈ 0.3) — c2 / nucleation are the
 levers per the Sobol surface.
+
+**v8 result (04:30, `docs/gp700_results_v8/`):** `smooth_orientation copy`,
+D 0.22 deg²/µm, Voronoi 50 µm substrate, greedy on / nrefine 1, nucl 1.5e13,
+tc 15, c2 2.8, dt 4 µs. All-originating SROD vs Lamb Fig. 5a: **RMS 0.49°,
+bias +0.17°, band/mean 1.41 (Lamb 1.4)**; the curve follows Lamb's √h shape
+over the whole 25–260 µm range (mean 4.4° at 54 µm, 8.5° at 204 µm, 12.3° at
+402 µm; retention 1.88× vs height, 1.80× straight-line). 2496 grains on the
+crop, 86 pass Lamb's filters, 41 taller than 300 µm, ESD p50 151 µm,
+extents 114 × 99 µm, same-grain z-neighbour disorientation median 4.2°.
+Remaining gap: <001> within 15° of BD **0.19** vs Lamb ≈ 0.3.
+
+**Fibre calibration launched 04:40** (two Sobol studies in parallel on the
+proxy, copy mode, D 0.22 and tc 15 fixed): texture c2 2–8, nucleation
+5e12–5e13; results `/home/tron/gp700_runs/sobol_fibre{1,2}/results.jsonl`.

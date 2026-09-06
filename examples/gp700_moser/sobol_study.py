@@ -21,6 +21,8 @@ ap.add_argument('--nx', type=int, default=200); ap.add_argument('--nh', type=int
 ap.add_argument('--layers', type=int, default=8); ap.add_argument('--dt', default='4e-6')
 ap.add_argument('--deadline', default=None, help='HH:MM local; do not START new points after this')
 ap.add_argument('--dry', action='store_true')
+ap.add_argument('--range', nargs=3, action='append', default=[], metavar=('NAME','LO','HI'), help='override/add a design range (log for D/nucleation, lin otherwise); LO==HI fixes it')
+ap.add_argument('--seed', type=int, default=0, help='Sobol scramble seed')
 ap.add_argument('--extra', default=None, help='extra deck line(s) inserted after smooth_greedy_multiproposal (use ; to separate)')
 ap.add_argument('--score-only', default=None, help='score this summary.json and exit')
 ap.add_argument('--fixed', default=None, help='JSON dict of parameters: run this single point instead of a Sobol design')
@@ -34,6 +36,7 @@ if not a.score_only: os.makedirs(a.out, exist_ok=True)
 DX = 3e-6; PAUSE = 8.8e-3; TGAP = 10.0
 RANGES = {'D_deg2_um': (a.D_range[0], a.D_range[1], 'log'), 'nucleation_density': (1e13, 1e14, 'log'), 'critical_undercooling': (3.0, 25.0, 'lin')}
 if a.texture: RANGES['texture_c2'] = (1.0, 4.0, 'lin')
+for nm, lo, hi in a.range: RANGES[nm] = (float(lo), float(hi), 'log' if nm in ('D_deg2_um','nucleation_density') else 'lin')
 lamb = json.load(open(os.path.join(HERE, '..', '..', 'docs', 'lamb2023_fig5a_srod.json')))
 def score(summary):
     rows = np.array(summary['srod'].get('height_originating', []))
@@ -48,7 +51,7 @@ def score(summary):
 if a.score_only:
     print(json.dumps(score(json.load(open(a.score_only))))); sys.exit(0)
 # ---- design
-sob = qmc.Sobol(d=len(RANGES), scramble=True, seed=0).random(a.n)
+sob = qmc.Sobol(d=len(RANGES), scramble=True, seed=a.seed).random(a.n)
 if a.fixed: sob = []
 pts = []
 for u in sob:

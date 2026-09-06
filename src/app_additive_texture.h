@@ -219,6 +219,10 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   // effect on the Boltzmann acceptance gate, so a non-zero `temperature`
   // setting is still respected for the uphill branch.
   bool      smooth_greedy_multiproposal_enabled;
+  // `smooth_orientation copy`: an accepted smoothing flip takes ONE random
+  // neighbour's quaternion from the new grain instead of the sign-aligned
+  // average (averaging damps the misorientation walk). Default average.
+  bool      smooth_orientation_copy = false;
 
   // When true, nucleation events initialize solid_d[i] = -1 for both the
   // seed site (execute_nucleation_event) and the captured shell sites

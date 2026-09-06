@@ -513,6 +513,15 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
       fprintf(screen,"smooth_greedy_multiproposal %s\n",
               smooth_greedy_multiproposal_enabled ? "enabled" : "disabled");
   }
+  else if (strcmp(command,"smooth_orientation") == 0) {
+    // Usage: smooth_orientation average|copy
+    if (narg != 1) error->all(FLERR,"Illegal smooth_orientation command");
+    if (strcmp(arg[0],"copy") == 0) smooth_orientation_copy = true;
+    else if (strcmp(arg[0],"average") == 0) smooth_orientation_copy = false;
+    else error->all(FLERR,"smooth_orientation: argument must be average or copy");
+    if (domain->me == 0)
+      fprintf(screen,"smooth_orientation %s\n", smooth_orientation_copy ? "copy" : "average");
+  }
 
   else if (strcmp(command,"nuclei_smooth") == 0) {
     // Usage: nuclei_smooth on|off
@@ -1580,6 +1589,14 @@ std::vector<double> AppAdditiveTexture::normal_finder(int site)
 ------------------------------------------------------------------------- */
 std::vector<double> AppAdditiveTexture::get_average_neighbor_quaternion(int site, int target_spin)
 {
+    if (smooth_orientation_copy) {   // one random neighbour of the new grain
+        int cand[27]; int nc = 0;
+        for (int j = 0; j < numneigh[site]; j++)
+            if (spin[neighbor[site][j]] == target_spin) cand[nc++] = neighbor[site][j];
+        if (nc == 0) error->all(FLERR,"get_average_neighbor_quaternion: no neighbor with target spin");
+        int k = (int)(nc * ranapp->uniform()); if (k >= nc) k = nc - 1;
+        return {q0[cand[k]], qx[cand[k]], qy[cand[k]], qz[cand[k]]};
+    }
     // Initialize storage for first quaternion as reference
     double ref_q0 = 0.0, ref_qx = 0.0, ref_qy = 0.0, ref_qz = 0.0;
     bool first_found = false;

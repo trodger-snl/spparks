@@ -292,6 +292,9 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // distinct neighbor spin, pick the bond-energy minimizer); when false, a
   // random single proposal. Matches AppAdditiveTexture::smooth_site.
   bool smooth_greedy_multiproposal_enabled = false;
+  // `smooth_orientation copy`: accepted flip takes one random neighbour's
+  // quaternion from the new grain instead of the sign-aligned average.
+  bool smooth_orientation_copy = false;
 
   // `nuclei_smooth on|off` (mirrors the CPU app). OFF (default): a nucleated
   // site and the neighbours its particle flipper claims land on a TERMINAL

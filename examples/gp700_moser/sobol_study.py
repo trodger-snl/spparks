@@ -21,6 +21,7 @@ ap.add_argument('--nx', type=int, default=200); ap.add_argument('--nh', type=int
 ap.add_argument('--layers', type=int, default=8); ap.add_argument('--dt', default='4e-6')
 ap.add_argument('--deadline', default=None, help='HH:MM local; do not START new points after this')
 ap.add_argument('--dry', action='store_true')
+ap.add_argument('--extra', default=None, help='extra deck line(s) inserted after smooth_greedy_multiproposal (use ; to separate)')
 ap.add_argument('--score-only', default=None, help='score this summary.json and exit')
 ap.add_argument('--fixed', default=None, help='JSON dict of parameters: run this single point instead of a Sobol design')
 ap.add_argument('--greedy', choices=['on','off'], default=None, help='override smooth_greedy_multiproposal')
@@ -78,6 +79,7 @@ def deck(p, n, out, st, seed):
     s = re.sub(r'^misorientation_diffusion\s+\S+', f"misorientation_diffusion {p['D_deg2_um']*1e6:.4g}", s, flags=re.M)
     if 'texture_c2' in p: s = re.sub(r'^texture_parameters\s+.*$', f"texture_parameters {p['texture_c2']:.4g} 2.5", s, flags=re.M)
     if a.greedy: s = re.sub(r'^smooth_greedy_multiproposal\s+.*$', f'smooth_greedy_multiproposal {a.greedy}', s, flags=re.M)
+    if a.extra: s = re.sub(r'^(smooth_greedy_multiproposal\s+.*)$', lambda m: m.group(1) + '\n' + a.extra.replace(';', '\n'), s, flags=re.M)
     if a.nrefine is not None: s = re.sub(r'^(app_style additive/texture/kk \S+ \S+ \S+) \d+', rf'\g<1> {a.nrefine}', s, flags=re.M)
     open(out, 'w').write(s); return t1
 def log(msg):

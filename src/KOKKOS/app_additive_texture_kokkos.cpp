@@ -1862,6 +1862,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
   double temperature_local = temperature;
   double t_inverse_local = t_inverse;
   const bool greedy_local = smooth_greedy_multiproposal_enabled;
+  const bool copy_local = smooth_orientation_copy;
 
   // Parallel sweep over ONLY smoothing sites (not all sites!)
   int naccept_local = 0;
@@ -1954,13 +1955,23 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
         rand_pool_local.free_state(generator);
 
         if (accept) {
-          // Orientation = sign-aligned average of neighbors with new_spin.
+          // Orientation = sign-aligned average of neighbors with new_spin,
+          // or (smooth_orientation copy) one random such neighbor.
+          int pick = -1;
+          if (copy_local) {
+            int nc = 0;
+            for (int n = 0; n < nn; n++) if (d_spin_local(k_neighbor_d(i, n)) == new_spin) nc++;
+            auto g2 = rand_pool_local.get_state();
+            pick = (int)(nc * g2.drand()); if (pick >= nc) pick = nc - 1;
+            rand_pool_local.free_state(g2);
+          }
           double s0 = 0.0, sx = 0.0, sy = 0.0, sz = 0.0;
           double r0 = 0.0, rx = 0.0, ry = 0.0, rz = 0.0;
-          int cq = 0; bool first = false;
+          int cq = 0; bool first = false; int seen = 0;
           for (int n = 0; n < nn; n++) {
             const int nbr = k_neighbor_d(i, n);
             if (d_spin_local(nbr) != new_spin) continue;
+            if (copy_local && seen++ != pick) continue;
             double n0 = d_q0_local(nbr), nx = d_qx_local(nbr),
                    ny = d_qy_local(nbr), nz = d_qz_local(nbr);
             if (!first) { r0 = n0; rx = nx; ry = ny; rz = nz; first = true; }
@@ -2538,6 +2549,15 @@ void AppAdditiveTextureKokkos::input_app(char *command, int narg, char **arg)
     if (domain->me == 0 && screen)
       fprintf(screen, "smooth_greedy_multiproposal %s\n",
               smooth_greedy_multiproposal_enabled ? "enabled" : "disabled");
+
+  } else if (strcmp(command, "smooth_orientation") == 0) {
+    // Usage: smooth_orientation average|copy  (mirrors the CPU app)
+    if (narg != 1) error->all(FLERR, "Illegal smooth_orientation command");
+    if (strcmp(arg[0], "copy") == 0) smooth_orientation_copy = true;
+    else if (strcmp(arg[0], "average") == 0) smooth_orientation_copy = false;
+    else error->all(FLERR, "smooth_orientation: argument must be average or copy");
+    if (domain->me == 0 && screen)
+      fprintf(screen, "smooth_orientation %s\n", smooth_orientation_copy ? "copy" : "average");
 
   } else if (strcmp(command, "nuclei_smooth") == 0) {
     // Usage: nuclei_smooth on|off  (mirrors the CPU app)

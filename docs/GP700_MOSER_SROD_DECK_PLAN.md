@@ -558,3 +558,14 @@ proxy 0.215).
 `nucleation_density 2e13` (predicted proxy fibre 0.29, SROD RMS ≈ 0.6°);
 `chain_v9.sh`, run `wide12_v9`. Note c2 9 zeroes the mobility of grains
 more than ~40° off the gradient (mobility 1 + c2·cos(2.5θ), clamped at 0).
+
+**v9 result (10:22, `docs/gp700_results_v9/`):** v8 + c2 9, nucleation 2e13.
+SROD vs Lamb: RMS 0.52°, bias +0.02°, band/mean 1.45 — unchanged from v8, as
+the Sobol predicted. <001> within 15° of BD **0.22** (v8 0.19; proxy
+prediction 0.29). 3068 grains on the crop, 97 pass Lamb's filters, ESD p50
+147 µm. Fibre vs height (central crop, 45 µm slabs): v8 saturates at
+0.19–0.20 from 150 µm up; v9 climbs 0.16 → 0.24 over the 400 µm and is
+still rising slowly at the top. So c2 9 keeps selecting with height but the
+walk (D_eff ≈ 0.4 deg²/µm → 13° RMS spread over 400 µm) erodes the 15° cone
+about as fast as selection fills it; the full-build ceiling with these
+mechanics looks like ≈0.25.

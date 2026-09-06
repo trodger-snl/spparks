@@ -455,3 +455,46 @@ v6 (nrefine 1, nucl 1.5e13, tc 15, c2 2.8, dt 4 µs).
   above the baseplate; tests whether the <001> fibre (0.16 on the random
   substrate vs 0.34 in v5 and Lamb) is a substrate-texture effect.
 Chain: `/home/tron/gp700_runs/chain_v7.{sh,log}`; analysis with `--D 8e5`.
+
+**v7 results (01:10, both `--D 8e5`):**
+
+| | v7a Voronoi substrate | v7b substrate = top of v6 | Lamb |
+|---|---|---|---|
+| SROD RMS vs Fig. 5a, 25–240 µm | **0.90°** | 3.34° | 0 |
+| mean bias | **+0.24°** | +3.08° | 0 |
+| D-fit ÷ input (floor 100, all originating) | 0.42 | 0.75 | 1 |
+| band/mean | 1.85 | 1.73 | 1.4 |
+| <001> within 15° of BD | 0.20 | 0.16 | ≈0.3 (v5: 0.34) |
+| grains on crop / Lamb filters / >300 µm tall | 2515 / 108 / 46 | 2072 / 37 / 32 | – |
+| ESD p10/p50/p90 (µm) | 70 / 150 / 169 | 146 / 171 / 196 | – |
+
+v7a is calibrated on the SROD level (D 0.80 with ~0.4× retention ≈ Lamb's
+0.42), but the *shape* still differs: RMS² vs height is 15 → 34 → 56 → 84 →
+108 → 120 deg² at 6 / 54 / 105 / 204 / 305 / 354 µm, i.e. a 3.3° offset at
+zero height (lateral lineage spread inside 100 µm-wide grains) and a local
+slope of 0.24–0.33 deg²/µm = 0.3–0.4× the input that falls with height,
+whereas Lamb keeps rising as √h. The curve crosses Lamb near 150 µm — above
+it and below it are both off by ~1°. The fibre did not come back with the
+competed substrate (0.16), so the 0.34 of v5 was the nrefine-2 greedy
+coarsening, not substrate texture.
+
+v7b's +3° bias is a reference artefact: the substrate grains carry v6's
+intragranular spread (same-grain z-neighbour disorientation median 4.0°,
+p90 13.6°), so the regrown grain differs from its single lowest reference
+voxel by 7.5° already at 6 µm; its established-class fit from floor 240 is
+1.29× input. Not a usable substrate for SROD unless the substrate
+quaternions are reset per grain (mean orientation) first.
+
+**Where the ~0.4× retention comes from (hypothesis, from the kernel):** the
+smoothing pass, on every accepted spin flip, replaces the voxel's quaternion
+with the *sign-aligned average* of its neighbours in the new grain
+(`get_average_neighbor_quaternion` on the CPU, the kk SmoothingKernel). The
+raw front is a voxel-scale mixture of grains (per-grain selection interleaves
+them), so most captured voxels are reassigned at least once and each
+reassignment averages out the fresh per-hop rotations of ~n siblings
+(variance ÷ n). The single-hatch walk deck has one grain, no flips and no
+damping (1.2×); every competing-grain build damps to 0.3–0.45× regardless of
+D, substrate or pass count. The band/mean excess may come from the same
+averaging (heterogeneous damping). Test: a `smooth_orientation copy` mode
+(take ONE random same-spin neighbour's quaternion instead of the average)
+should restore ≈1× retention at D ≈ 0.42.

@@ -22,7 +22,7 @@ ap.add_argument('--layers', type=int, default=8); ap.add_argument('--dt', defaul
 ap.add_argument('--deadline', default=None, help='HH:MM local; do not START new points after this')
 ap.add_argument('--dry', action='store_true')
 ap.add_argument('--range', nargs=3, action='append', default=[], metavar=('NAME','LO','HI'), help='override/add a design range (log for D/nucleation, lin otherwise); LO==HI fixes it')
-ap.add_argument('--seed', type=int, default=0, help='Sobol scramble seed')
+ap.add_argument('--design-seed', type=int, default=0, help='Sobol scramble seed')
 ap.add_argument('--extra', default=None, help='extra deck line(s) inserted after smooth_greedy_multiproposal (use ; to separate)')
 ap.add_argument('--score-only', default=None, help='score this summary.json and exit')
 ap.add_argument('--fixed', default=None, help='JSON dict of parameters: run this single point instead of a Sobol design')
@@ -51,7 +51,7 @@ def score(summary):
 if a.score_only:
     print(json.dumps(score(json.load(open(a.score_only))))); sys.exit(0)
 # ---- design
-sob = qmc.Sobol(d=len(RANGES), scramble=True, seed=a.seed).random(a.n)
+sob = qmc.Sobol(d=len(RANGES), scramble=True, seed=a.design_seed).random(a.n)
 if a.fixed: sob = []
 pts = []
 for u in sob:

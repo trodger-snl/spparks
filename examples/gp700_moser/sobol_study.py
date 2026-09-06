@@ -108,7 +108,7 @@ for k, p in enumerate(pts):
     crop = [a.nx*DX*1e6*0.25, a.nx*DX*1e6*0.75]*2
     an = f'{pd}/analysis'
     r = subprocess.run([PY, os.path.join(HERE, 'gp700_analysis.py'), st, '--out', an, '--floor-um', '100',
-                        '--crop', *[f'{c:.0f}' for c in (crop[0], crop[1], crop[0], crop[1])]],
+                        '--crop', *[f'{c:.0f}' for c in (crop[0], crop[1], crop[0], crop[1])], '--D', f"{p['D_deg2_um']*1e6:g}"],
                        stdout=open(f'{pd}/analysis.log', 'w'), stderr=subprocess.STDOUT)
     try:
         sc = score(json.load(open(f'{an}/summary.json')))

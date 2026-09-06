@@ -20,7 +20,7 @@ import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
 ap = argparse.ArgumentParser()
 ap.add_argument('stitch'); ap.add_argument('--out', default='analysis')
 ap.add_argument('--dx', type=float, default=3e-6); ap.add_argument('--floor-um', type=float, default=90.0)
-ap.add_argument('--D', type=float, default=4.2e5, help='input D, deg^2/m'); ap.add_argument('--time', type=float, default=None)
+ap.add_argument('--D', type=float, default=None, help='input D, deg^2/m (for the x-input ratio and the walk reference line)'); ap.add_argument('--time', type=float, default=None)
 ap.add_argument('--crop', type=float, nargs=4, metavar=('X0','X1','Y0','Y1'), default=None, help='analyse only this lateral window (um)')
 ap.add_argument('--lamb', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'docs'), help='dir with lamb2023_fig5{a,c}_srod.json')
 a = ap.parse_args(); os.makedirs(a.out, exist_ok=True); dxu = a.dx*1e6
@@ -108,13 +108,13 @@ if srod:
                 sv = srod[mm]; p5,p95 = np.percentile(sv,[5,95]); rows.append((dist[mm].mean(), sv.mean(), p5, p95, np.sqrt((sv**2).mean()), mm.sum()))
             rows = np.array(rows); res[f'{metric}_{name}'] = rows.tolist()
             Dfit = (rows[:,0]*rows[:,4]**2).sum()/(rows[:,0]**2).sum()*1e6   # RMS^2 = D d through the origin
-            print(f'{metric:6s} {name:11s}: {m.sum():8d} voxels, D_fit = {Dfit:.3g} deg^2/m = {Dfit/a.D:.2f} x input; '
+            print(f'{metric:6s} {name:11s}: {m.sum():8d} voxels, D_fit = {Dfit:.3g} deg^2/m' + (f' = {Dfit/a.D:.2f} x input' if a.D else '') + '; '
                   f'band/mean ' + ' '.join(f'{(r[3]-r[2])/r[1]:.2f}' for r in rows[::max(1,len(rows)//6)]))
             for r in rows: print(f'   d={r[0]:6.1f} um n={int(r[5]):7d} mean {r[1]:5.2f} p5 {r[2]:5.2f} p95 {r[3]:5.2f} rms {r[4]:5.2f}')
             ax_.fill_between(rows[:,0], rows[:,2], rows[:,3], color='#2a78d6', alpha=0.15, lw=0)
             ax_.plot(rows[:,0], rows[:,1], color='#2a78d6', lw=2, label='simulation mean, 5/95%')
             dd = np.linspace(1, rows[:,0].max(), 200)
-            ax_.plot(dd, 0.921*np.sqrt(a.D*1e-6*dd), color='#0b0b0b', lw=1.2, ls='--', label='random walk, input D')
+            if a.D: ax_.plot(dd, 0.921*np.sqrt(a.D*1e-6*dd), color='#0b0b0b', lw=1.2, ls='--', label='random walk, input D')
             lf = os.path.join(a.lamb, 'lamb2023_fig5%s_srod.json' % ('a' if k==0 else 'c'))
             if os.path.exists(lf):
                 L = json.load(open(lf)); ax_.plot(L['x'], L['mean'], color='#eb6834', lw=1.6, label='Lamb 2023 mean (height)')

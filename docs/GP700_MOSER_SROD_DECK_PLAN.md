@@ -533,3 +533,28 @@ Remaining gap: <001> within 15° of BD **0.19** vs Lamb ≈ 0.3.
 **Fibre calibration launched 04:40** (two Sobol studies in parallel on the
 proxy, copy mode, D 0.22 and tc 15 fixed): texture c2 2–8, nucleation
 5e12–5e13; results `/home/tron/gp700_runs/sobol_fibre{1,2}/results.jsonl`.
+
+**Fibre Sobol result (07:57, proxy, copy mode, D 0.22, tc 15):**
+
+| c2 | nucleation | <001> within 15° | SROD RMS | band/mean |
+|---|---|---|---|---|
+| 2.65 | 6.5e12 | 0.22 | 0.43° | 1.45 |
+| 3.45 | 1.9e13 | 0.22 | 0.42° | 1.45 |
+| 3.75 | 1.2e13 | 0.22 | 0.42° | 1.43 |
+| 4.85 | 3.9e13 | 0.23 | 0.48° | 1.45 |
+| 5.60 | 7.1e12 | 0.22 | 0.47° | 1.42 |
+| 5.76 | 3.7e13 | 0.27 | 0.63° | 1.45 |
+| 7.22 | 1.1e13 | 0.28 | 0.52° | 1.44 |
+| 7.66 | 2.1e13 | 0.28 | 0.59° | 1.45 |
+
+Fit: **<001> = −0.042 + 0.0125·c2 + 0.0073·ln(nucl)** (R² 0.72); SROD RMS
+= −0.91 + 0.031·c2 + 0.041·ln(nucl). The fibre is flat at 0.22 up to c2 ≈ 5
+and then rises ~0.0125 per unit c2; nucleation barely matters; the SROD
+score stays under 0.65° everywhere and the band ratio stays at Lamb's 1.4.
+The full build sits ~0.03 below the proxy at equal settings (v8 0.19 vs
+proxy 0.215).
+
+**v9 launched 08:00:** v8 settings + `texture_parameters 9 2.5`,
+`nucleation_density 2e13` (predicted proxy fibre 0.29, SROD RMS ≈ 0.6°);
+`chain_v9.sh`, run `wide12_v9`. Note c2 9 zeroes the mobility of grains
+more than ~40° off the gradient (mobility 1 + c2·cos(2.5θ), clamped at 0).

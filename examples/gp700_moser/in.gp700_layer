@@ -28,14 +28,14 @@ solid_front_vel  4 -3.6057e-7 3.68655e-4 7.7686e-3 0
 # Sobol study 2026-09-05 (docs/GP700_MOSER_SROD_DECK_PLAN.md): lower nucleation
 # strengthens the <001> fibre; 1.5e13 with critical_undercooling 15 K (selective
 # for the pool tail; tc has no effect on the SROD bias).
-nucleation_density      1.5e13
+nucleation_density      2e13
 critical_undercooling   15
 undercooling_deviation  2
 mean_nuclei_volume      8.4375e-16
 nuclei_volume_deviation 1.5625e-17
 # c2 2.8: mobility 1 + 2.8 cos(2.5 theta) (negative beyond ~40 deg => zero weight);
 # the <001> fraction rises ~0.03 per unit c2 (Sobol study 2).
-texture_parameters 2.8 2.5
+texture_parameters 9 2.5
 smooth_greedy_multiproposal on
 smooth_orientation copy
 nuclei_smooth off

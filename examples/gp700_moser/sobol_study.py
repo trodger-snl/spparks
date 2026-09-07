@@ -75,7 +75,7 @@ def deck(p, n, out, st, seed):
                        "set d8 value 0.0 if i2 != 3", "set d9 value 0.0 if i2 != 3"]))
     s = tpl
     for k, v in {'__SEED__': str(seed+n), '__ZLO__': str(zlo), '__ZHI__': str(ztop), '__INIT_OR_STITCH__': init,
-                 '__LASER__': laser, '__T0__': str(t0), '__T1__': str(t1), '__STITCH__': st, '__NX__': str(a.nx), '__DT__': a.dt}.items():
+                 '__LASER__': laser, '__T0__': str(t0), '__T1__': str(t1), '__STITCH__': st, '__NX__': str(a.nx), '__DX__': f'{DX:g}', '__DT__': a.dt}.items():
         s = s.replace(k, v)
     s = re.sub(r'^nucleation_density\s+.*$', f"nucleation_density      {p['nucleation_density']:.4g}", s, flags=re.M)
     s = re.sub(r'^critical_undercooling\s+.*$', f"critical_undercooling   {p['critical_undercooling']:.4g}", s, flags=re.M)

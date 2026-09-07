@@ -1,6 +1,6 @@
 #!/bin/bash
 # Box-per-layer driver for the GP700 Moser build.
-# usage: run_layers.sh <spparks-binary> <outdir> [nlayers=12] [seed=12345] [nx_voxels=267] [nhatch=10] [dt=2e-6] [substrate.st]
+# usage: [DX=3e-6] run_layers.sh <spparks-binary> <outdir> [nlayers=12] [seed=12345] [nx_voxels=267] [nhatch=10] [dt=2e-6] [substrate.st]
 # substrate.st (make_substrate.py): copied to <outdir>/gp700.st before box 0, which then
 # starts from it like a continuation box instead of single-voxel random grains.
 # Lateral box = nx_voxels * 3 um square; hatches at 40 um + k*80 um, lines 100 um past
@@ -18,7 +18,9 @@ BIN=$(readlink -f "$1"); OUT=$(readlink -f "$2"); NL=${3:-12}; SEED=${4:-12345};
 HERE=$(cd "$(dirname "$0")" && pwd); TPL=$HERE/in.gp700_layer
 mkdir -p "$OUT"; ST=$OUT/gp700.st
 [ -n "$SUB" ] && [ ! -f "$ST" ] && cp "$SUB" "$ST" && echo "substrate $SUB -> $ST"
-DX=3e-6; TGAP=10.0
+DX=${DX:-3e-6}; TGAP=10.0   # voxel size from the environment (DX=1.5e-6 run_layers.sh ...)
+# geometry in voxels: 150 um substrate, 30 um layers, 180 um box window
+VSUB=$(python3 -c "print(round(150e-6/$DX))"); VLAY=$(python3 -c "print(round(30e-6/$DX))"); VWIN=$(python3 -c "print(round(180e-6/$DX))")
 # Inter-hatch pause = the real 10 mm track length / speed (8.8 ms): the previous
 # track has solidified (~0.75 ms) before the next hatch overlaps it. Box time
 # covers 5 hatches + pauses + 2 ms cooling; the predictor skips the idle gaps.
@@ -30,7 +32,7 @@ for ((n=0; n<NL; n++)); do
   [ -f "$D/completion.marker" ] && { echo "box $n done, skipping"; continue; }
   # 150 um substrate (50 voxels): five overlapping hatches remelt 80-100 um below
   # the surface, so anything thinner melts through in box 0.
-  ztop=$((50 + 10*(n+1))); zlo=$((ztop-60)); [ $zlo -lt 0 ] && zlo=0
+  ztop=$((VSUB + VLAY*(n+1))); zlo=$((ztop-VWIN)); [ $zlo -lt 0 ] && zlo=0
   z0=$(python3 -c "print($ztop*$DX)")
   LEND=$(python3 -c "print($NX*$DX + 100e-6)"); YLAST=$(python3 -c "print(40e-6 + 80e-6*($NH-1))")
   if [ $((n%2)) -eq 0 ]; then
@@ -58,12 +60,12 @@ set d6 value 473
 set d8 value 0.0 if i2 != 3
 set d9 value 0.0 if i2 != 3"
   fi
-  python3 - "$TPL" "$D/in.box" "$((SEED+n))" "$zlo" "$ztop" "$INIT" "$LASER" "$T0" "$T1" "$ST" "$NX" "$DT" <<'PY'
+  python3 - "$TPL" "$D/in.box" "$((SEED+n))" "$zlo" "$ztop" "$INIT" "$LASER" "$T0" "$T1" "$ST" "$NX" "$DT" "$DX" <<'PY'
 import sys
-tpl,out,seed,zlo,zhi,init,laser,t0,t1,st,nx,dt = sys.argv[1:]
+tpl,out,seed,zlo,zhi,init,laser,t0,t1,st,nx,dt,dx = sys.argv[1:]
 s = open(tpl).read()
 for k,v in {'__SEED__':seed,'__ZLO__':zlo,'__ZHI__':zhi,'__INIT_OR_STITCH__':init,
-            '__LASER__':laser,'__T0__':t0,'__T1__':t1,'__STITCH__':st,'__NX__':nx,'__DT__':dt}.items():
+            '__LASER__':laser,'__T0__':t0,'__T1__':t1,'__STITCH__':st,'__NX__':nx,'__DT__':dt,'__DX__':dx}.items():
     s = s.replace(k, v)
 open(out,'w').write(s)
 PY

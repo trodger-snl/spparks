@@ -4,7 +4,7 @@
 # Material (Met Trans 2026 3DThesis set): k 22.5 W/mK, rho 8650, cp 600 ->
 # alpha 4.335e-6 m^2/s, absorptivity 0.9, Tl 1646 K, Ts 1592 K.
 # Placeholders (double-underscore tokens) are filled in by run_layers.sh.
-variable DX equal 3e-6
+variable DX equal __DX__
 
 app_style additive/texture/kk 1000000 ${DX} __DT__ 1
 seed             __SEED__

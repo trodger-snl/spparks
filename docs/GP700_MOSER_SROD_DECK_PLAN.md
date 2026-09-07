@@ -590,3 +590,35 @@ parent selection, nucleation 1.5e13 / tc 15 K, texture 2.8 / 2.5. Against
 Lamb 2023 Fig. 5a (all-originating SROD, height): RMS 0.49°, bias +0.17°,
 band/mean 1.41 vs 1.4; grain density and columnar morphology as before.
 Binary: `/home/tron/gp700_runs/spparks_smoothcopy` (= da2fad29 kernels).
+
+## Resolution test: dx 1.5 µm (Lamb's voxel size) vs 3 µm — 2026-09-07
+
+Same deck (v8: copy mode, D 0.22, c2 2.8, nucl 1.5e13, tc 15), same proxy
+geometry (600 µm / 7 hatches / 8 layers, 50 µm Voronoi substrate, seed
+12345), dt 2 µs at 1.5 µm vs 4 µs at 3 µm (both 2× the dx/V(Tl−Ts) guard).
+`run_layers.sh` now takes `DX=` from the environment (a3a66f41). Runs:
+`/home/tron/gp700_runs/dx1p5_v8` (47 min/box, 6.2 h) and `dx3_v8_ref`
+(6 min/box). Figures: `docs/gp700_results_dx1p5/`.
+
+| | dx 3 µm | dx 1.5 µm | Lamb |
+|---|---|---|---|
+| SROD RMS vs Fig. 5a, 25–240 µm | 0.44° | 0.49° | 0 |
+| mean bias | +0.03° | +0.41° | 0 |
+| band/mean | 1.41 | 1.43 | 1.4 |
+| retention, height / straight line | 1.83 / 1.73 | 2.17 / 2.35 | – |
+| <001> within 15° of BD | 0.21 | 0.20 | – |
+| ESD p10/p50/p90 (µm) | 68 / 123 / 159 | 66 / 122 / 150 | – |
+| grains passing Lamb's filters | 51 | 62 | – |
+| same-grain z-neighbour disorientation median | 3.8° | 3.7° | – |
+
+Bin-by-bin the mean SROD agrees to 0.1–0.4° up to 200 µm (3.5/3.6° at
+35 µm, 5.7/5.9° at 95 µm, 7.8/8.4° at 185 µm) and the finer lattice runs
+7–10 % higher by 245–275 µm (9.3/10.0°, 9.9/10.9°); the D-fit against height
+is 18 % higher. Grain size, texture, band ratio and the intragranular
+neighbour disorientation are unchanged. Conclusion: the per-hop
+formulation θ = √(D·hop) is resolution-independent to first order — the
+same deck D reproduces Lamb at both voxel sizes — with a second-order
+increase of accumulation per unit height at finer dx (the finer lattice
+resolves a slightly longer growth path per height). An exact match at
+1.5 µm would take D ≈ 0.19 deg²/µm. The 1.5 µm run resolves Lamb's first
+bins directly: 1.8° mean at 5.8 µm vs Lamb's ~1.5°.

@@ -190,7 +190,7 @@ D 0.42; scaling that curve onto Lamb gave D 0.22.
 |---|---|---|
 | SROD RMS deviation, 25–240 µm | 0.49° | – |
 | mean bias | +0.17° | – |
-| mean SROD at 54 / 204 / 402 µm | 4.4° / 8.5° / 12.3° | 4.4° / 8.3° / – |
+| mean SROD at 54 / 204 / 402 µm | 4.4° / 8.5° / 12.3° | 3.8° / 8.8° / – (ends at 262 µm) |
 | (p95 − p5)/mean | 1.41 | 1.4 |
 | D-fit vs height / straight line | 0.41 / 0.40 deg²/µm | 0.42 |
 | grains passing filters (400 µm crop) | 86 | > 600 (full volume) |

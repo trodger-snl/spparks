@@ -622,3 +622,36 @@ increase of accumulation per unit height at finer dx (the finer lattice
 resolves a slightly longer growth path per height). An exact match at
 1.5 µm would take D ≈ 0.19 deg²/µm. The 1.5 µm run resolves Lamb's first
 bins directly: 1.8° mean at 5.8 µm vs Lamb's ~1.5°.
+
+## Crop sensitivity and grain-origin audit (v8, 2026-09-07)
+
+`gp700_analysis.py --top-um` added (ceiling crop). v8 through four windows,
+floor 100 µm, D 2.2e5:
+
+| window | grains (filters) | SROD RMS / bias | band | <001> | ESD p50 |
+|---|---|---|---|---|---|
+| full 801 µm domain | 9299 (368) | 0.43° / +0.12° | 1.42 | 0.17 | 147 |
+| central 400 µm (standard) | 2496 (86) | 0.49° / +0.17° | 1.41 | 0.19 | 151 |
+| central 200 µm | 616 (24) | 0.58° / 0.00° | 1.39 | 0.06 | 140 |
+| central 400 µm, z < 420 µm (drops the never-remelted top layer) | 1818 (84) | 0.49° / +0.16° | 1.41 | 0.19 | 134 |
+
+SROD level, band and D-fit are insensitive to the crop (bias within ±0.2°,
+D-fit 1.83–1.95× everywhere); the fibre fraction is the only quantity that
+moves, and the 200 µm crop (24 grains) is too small to measure it.
+
+**Origin audit.** With the floor at 100 µm the "established" panel is empty
+because the analysis excludes the unremelted substrate (i2 = 1) and the
+solid starts at 105 µm — no grain crosses the floor, so every grain is
+classed originating, with its origin at its lowest solid voxel. Those
+origins are almost all the layer-0 remelt floor: of the 88 filtered grains
+in the standard crop, 83 originate at 105–130 µm (99 % of the filtered
+volume) and only 3 above 160 µm. I.e. the columnar grains are epitaxial
+continuations of substrate grains, and the "all-originating" SROD is in
+Lamb's terms an **established**-grain SROD referenced at the remelt floor.
+Lamb had > 500 originating vs > 100 established grains (their originating
+grains include lateral overgrowth and nucleation inside the volume); the
+simulation produces essentially none that survive the 60 µm / 40 µm
+filters at nucleation 1.5e13. Since Lamb's Fig. 5a and 5c follow the same
+√h law with the same D, the walk calibration stands, but the grain-class
+comparison does not: the model has no mechanism generating new large
+grains mid-build at these settings.

@@ -1,6 +1,6 @@
 # SROD analysis report: misorientation accumulation in GammaPrint-700 PBF-L, experiment vs SPPARKS
 
-Status: 2026-09-07. Companion documents: `MISORIENTATION_DIFFUSION_PLAN.md`
+Status: 2026-09-07. **Reference version: `SROD_ANALYSIS_REPORT.tex` (PDF alongside); this file mirrors it.** Companion documents: `MISORIENTATION_DIFFUSION_PLAN.md`
 (model changes), `GP700_MOSER_SROD_DECK_PLAN.md` (deck development log).
 Figures: `srod_experimental_analysis.png`, `srod_random_walk.png`,
 `gp700_results_v8/`, `gp700_results_v9/`, `gp700_results_dx1p5/`.

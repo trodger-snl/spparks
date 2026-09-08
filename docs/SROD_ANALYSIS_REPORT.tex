@@ -1,0 +1,205 @@
+% SROD analysis report -- reference version. Build: pdflatex SROD_ANALYSIS_REPORT.tex (twice).
+% docs/SROD_ANALYSIS_REPORT.md and the published HTML page mirror this file.
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=25mm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{siunitx}
+\usepackage{caption}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage[hidelinks]{hyperref}
+\sisetup{range-phrase=--,range-units=single,per-mode=symbol,detect-all}
+\DeclareSIUnit\voxel{voxel}
+\captionsetup{font=small,labelfont=bf}
+\lstset{basicstyle=\ttfamily\small,breaklines=true,columns=fullflexible,frame=single,framesep=4pt}
+\graphicspath{{./}}
+\setlist{nosep}
+\emergencystretch=0.15\textwidth
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\dir}[1]{$\langle #1 \rangle$}
+\newcommand{\Dunit}{\si{deg\squared\per\micro\metre}}
+
+\title{Misorientation accumulation along columnar grains in GammaPrint-700 laser powder bed fusion:\\ 3D-EBSD (Lamb et al.) versus SPPARKS}
+\author{SURGE-kokkos branch, \code{additive/texture/kk} Moser deck}
+\date{Status 2026-09-07}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Lamb et al.\ measured the starting reference orientation deviation (SROD) of columnar grains in a 3D-EBSD volume of laser powder bed fusion GammaPrint-700. Re-analysing their Fig.~5 shows that SROD is a random-axis rotation walk: $\mathrm{RMS}^2 = D h$ with $D \approx \SI{0.42}{\Dunit}$ against build height, the same $D$ for grains originating inside the volume and for established grains, and a 5/95 band of $(p_{95}-p_5)/\text{mean} \approx 1.4$, the Maxwell width of a three-dimensional walk. SPPARKS \code{additive/texture} and \code{additive/texture/kk} now implement that model (\code{misorientation\_diffusion}), and a Moser-source GP700 deck reproduces the experiment: RMS deviation from Lamb's mean \SI{0.49}{\degree} over \SIrange{25}{240}{\micro\metre}, bias \SI{+0.17}{\degree}, band/mean 1.41. Two model corrections were required (per-grain parent selection and copy-mode boundary smoothing). The deck $D$ is \SI{0.22}{\Dunit}, half Lamb's height fit, because the inheritance path is $1.8\times$ the height; the same $D$ reproduces Lamb at the experiment's own \SI{1.5}{\micro\metre} voxel. Open issues: the simulated grains are epitaxial substrate continuations, so Lamb's originating class is essentially absent, and the \dir{001} fibre has no quantitative target.
+\end{abstract}
+
+\section{Summary}
+\begin{itemize}
+\item SROD in GP700 is a random-axis rotation walk with $D \approx \SI{0.42}{\Dunit}$ against height and a Maxwell width. The authors' ``fast first \SI{30}{\micro\metre}, then constant'' reading is $\sqrt{h}$.
+\item Both SPPARKS additive apps carry the model: each captured voxel takes its parent's orientation rotated by $\theta = \sqrt{D\,\mathrm{hop}}$ about a random axis. The misorientation cap and gradient-target rotation are removed.
+\item The GP700 Moser deck (\code{examples/gp700\_moser/}) matches Lamb's SROD level, $\sqrt{h}$ shape and band width over the full \SI{400}{\micro\metre} build (Table~\ref{tab:v8}). Two corrections were needed: per-grain parent selection (mobility weighting between grains, not between the voxels of one grain, which had rotated grains toward \dir{001}) and \code{smooth\_orientation copy} (the smoothing pass averaged neighbour quaternions, cancelling \SI{60}{\percent} of the walk and widening the band to 1.8).
+\item Deck $D = \SI{0.22}{\Dunit}$ at \SI{3}{\micro\metre}; the growth path is $1.8\times$ the height. At \SI{1.5}{\micro\metre} the same $D$ stays on Lamb (bias \SI{+0.41}{\degree}) with \SIrange{10}{18}{\percent} more accumulation per height (Table~\ref{tab:dx}).
+\item Open: 83 of 88 filtered grains originate at the first remelt floor, so Lamb's originating class ($>500$ grains, 5:1 over established) is essentially absent; the \dir{001} fibre (0.19--0.24 within \SI{15}{\degree} of the build direction, twice random) has no quantitative experimental target.
+\end{itemize}
+
+\section{Experimental methods (Lamb et al.\ 2023, Met.\ Trans.\ A 2026)}
+\paragraph{Material and process.} CoNi-base superalloy GammaPrint-700, laser powder bed fusion at \SI{176}{\watt} and \SI{1137}{\milli\metre\per\second}, \SI{80}{\micro\metre} spot ($D4\sigma$), \SI{80}{\micro\metre} hatch, \SI{30}{\micro\metre} layers, \SI{90}{\degree} interlayer rotation, \SI{200}{\celsius} plate preheat. The 2026 paper supplies the thermophysical set used for its 3DThesis simulations: $k = \SI{22.5}{\watt\per\metre\per\kelvin}$, $\rho = \SI{8650}{\kilogram\per\cubic\metre}$, $c_p = \SI{600}{\joule\per\kilogram\per\kelvin}$ ($\alpha = \SI{4.335e-6}{\metre\squared\per\second}$), absorptivity 0.9, liquidus \SI{1646}{\kelvin}, solidus \SI{1592}{\kelvin}.
+
+\paragraph{3D dataset.} TriBeam tomography (femtosecond-laser serial sectioning with EBSD on each slice), \SI{1.5}{\micro\metre} in-plane step and \SI{1.5}{\micro\metre} slice thickness, 385 slices, reconstructed into one HDF5 volume and segmented into grains at a \SI{2}{\degree} misorientation threshold before any SROD calculation.
+
+\paragraph{SROD.} For each grain the reference orientation sits near the origination point, ``the lowest location of a grain's boundary along the build direction'', offset one voxel layer (\SI{1.5}{\micro\metre}) upward so the reference is not a boundary pixel with a convoluted EBSD pattern; offsets up to \SI{8}{\micro\metre} do not change the result. Two classes: \emph{originating} grains, whose lowest point lies inside the volume, and \emph{established} grains, cut by the dataset floor and referenced at the centroid of their footprint on the lowest slice. Grains shorter than \SI{60}{\micro\metre} (two layers) or under \SI{40}{\micro\metre} equivalent spherical diameter (ESD) are excluded as overtaken during competitive growth, leaving over 500 originating and over 100 established grains. Each grain is sliced along the build direction; each slice gives a SROD histogram fitted to a normal distribution and plotted against height above the origin (Fig.~5a) or above the dataset floor (Fig.~5c). The 2026 paper adds the cellular-scale finding used here: cells switch \dir{100} growth variants at fusion lines rather than rotating continuously, so no gradient-directed rotation is modelled.
+
+\section{Analysis of the experimental data}
+Fig.~5a and 5c were digitized from \SI{300}{dpi} renders of the paper (\code{docs/srod\_random\_walk.py}; curves in \code{docs/lamb2023\_fig5\{a,c\}\_srod.json}). The mean, 5th and 95th percentile curves were tested against a rotation walk: each increment is a small rotation of angle $\theta$ about a random axis; after $n$ independent increments the misorientation from the origin has
+\begin{equation}
+\mathrm{RMS}^2 = n\,\theta^2 = D\,d
+\end{equation}
+and a Maxwell distribution ($\chi$ with three degrees of freedom), for which $(p_{95}-p_5)/\text{mean} = 1.38$ at every distance. $D = \SI{0.42}{\Dunit}$ fitted on the originating grains predicts the established grains without refitting; the measured width ratio is 1.3--1.5 at every height; the apparent two-regime shape is the square root (Fig.~\ref{fig:exp}). A constant per-hop angle is not required, only independent increments with finite variance, so $D$ can carry an undercooling dependence without changing the $\sqrt{h}$ law.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{srod_experimental_analysis.png}
+\caption{Lamb 2023 Fig.~5 digitized. Left: mean SROD of originating grains with $\mathrm{RMS}^2 = D h$, $D = \SI{0.42}{\Dunit}$; the same $D$ drawn through the established grains. Right: $(p_{95}-p_5)/\text{mean}$ against height, flat at 1.3--1.5 around the Maxwell value 1.38.}
+\label{fig:exp}
+\end{figure}
+
+\section{Simulation methods}
+\paragraph{Code.} SPPARKS, branch SURGE-kokkos, app \code{additive/texture/kk} (Kokkos/HIP on an AMD gfx1151 APU), one MPI rank. The CPU app \code{additive/texture} carries the same model and is the correctness reference; the temperature field is deterministic and bit-identical between the two (\code{examples/am\_validation/}).
+
+\paragraph{Thermal source.} Moser Green's-function solution with the GP700 constants (\code{setup\_temperature\_source moser 176 0.9 22.5 4.335e-6 473 600 20e-6 20e-6 10e-6}), evaluated on the device for every site each step. Scan lines with \code{hatch 80e-6 N serpentine pause 8.8e-3}, the pause being the real \SI{10}{\milli\metre} track length over the scan speed; the fast-forward predictor skips idle gaps. Single-hatch check: pool $147 \times 69$~\si{\micro\metre}, thermal gradient \SIrange{1e7}{2.9e7}{\kelvin\per\metre} at the fusion boundary (paper: \SI{3e7}{\kelvin\per\metre}).
+
+\paragraph{Build.} Box-per-layer stitch continuation (\code{run\_layers.sh}). Domain \SI{801}{\micro\metre} square (267 voxels at \SI{3}{\micro\metre}), 10 hatches at $40 + 80k$ \si{\micro\metre} with lines \SI{100}{\micro\metre} past both edges, 12 layers of \SI{30}{\micro\metre}, \SI{90}{\degree} rotation per layer, each box a \SI{180}{\micro\metre} window below the laser plane; each layer starts from the preheat (the recoat interval). Substrate: \SI{150}{\micro\metre} of \SI{50}{\micro\metre} Voronoi grains with uniform random orientations (\code{make\_substrate.py}); five overlapping hatches remelt \SIrange{80}{100}{\micro\metre}, so the analysable volume begins at \SI{105}{\micro\metre}. Timestep \SI{4}{\micro\second}, twice the $\Delta x / V(T_l - T_s)$ guard; 2 and \SI{4}{\micro\second} agree within seed noise. The \SI{1.5}{\micro\metre} run uses 400 voxels over \SI{600}{\micro\metre}, 7 hatches, 8 layers, $\Delta t = \SI{2}{\micro\second}$.
+
+\paragraph{Solidification kinetics.} Front velocity is the 304L polynomial $\times 3.5$ (front at \SIrange{25}{35}{\kelvin} undercooling, about \SI{0.56}{\metre\per\second}, keeping up with the \SI{1.137}{\metre\per\second} scan); nucleation density \SI{1.5e13}{\per\cubic\metre}, critical undercooling \SI{15}{\kelvin}, deviation \SI{2}{\kelvin}. Parent selection per grain: candidate neighbours are grouped by grain, each grain weighted by the mobility $1 + c_2 \cos(c_3 \theta)$ of its sign-aligned mean orientation against the local thermal gradient ($c_2 = 2.8$, $c_3 = 2.5$, negative clamped to zero), then the parent voxel is drawn uniformly inside the chosen grain.
+
+\paragraph{Misorientation.} \code{misorientation\_diffusion 2.2e5 30}: every captured voxel takes its parent's orientation rotated by $\theta = \sqrt{D\,\mathrm{hop}}$ about a random axis (hop = lattice distance to the parent in \si{\metre}, $D$ in \si{deg\squared\per\metre}); nucleus shells rotate relative to the seed by the same rule; a rotation past \SI{30}{\degree} would start a new grain (never reached). No cap, no gradient target, constant $D$.
+
+\paragraph{Boundary smoothing.} One greedy steepest-descent pass per captured voxel (\code{smooth\_greedy\_multiproposal on}, nrefine 1) the step after capture, and \code{smooth\_orientation copy}: a voxel that changes grain takes one random neighbour's orientation from that grain. The default \code{average} takes the sign-aligned mean.
+
+\paragraph{Kokkos kernel corrections} made during this work, all now at CPU parity: race-free multicolour neighbour reads (they were $x$-index ordered), front advance only beside solid, nrefine passes honoured, zero-gradient mobility, and the \code{laser\_path} time anchor after \code{reset\_time}.
+
+\section{Simulation analysis methods}
+\code{gp700\_analysis.py} on the spparks-micro-analysis tools: read the last stitch frame; solid means \code{i2 == 3}, so unremelted substrate is excluded; crop to the central \SI{400}{\micro\metre} laterally (\SI{300}{\micro\metre} on the proxy), optional ceiling; relabel grains as connected components of spin; grain volume, ESD and extents; Lamb's filters (height $\geq \SI{60}{\micro\metre}$, ESD $\geq \SI{40}{\micro\metre}$); origin = the grain's lowest solid voxel, whose quaternion is the reference (exact in the simulation, so no offset); grains crossing the analysis floor are established and referenced at their floor-slice centroid. SROD is the symmetry-reduced disorientation of every voxel from its grain's reference, binned by height above the origin or floor in \SI{10}{\micro\metre} steps and, separately, by straight-line distance, with mean, $p_5$, $p_{95}$ and RMS per bin. $D$-fit: $\mathrm{RMS}^2 = D h$ through the origin, volume weighted. Score: RMS of (simulated mean $-$ Lamb Fig.~5a mean) over \SIrange{25}{240}{\micro\metre}, plus bias, $(p_{95}-p_5)/\text{mean}$, the fraction of solid within \SI{15}{\degree} of \dir{001} parallel to the build direction, and grain counts. Sobol designs (scipy \code{qmc}) on a \SI{600}{\micro\metre}, 8-layer proxy at \SI{6}{\minute} per box were used for calibration.
+
+\section{Results}
+\subsection{Calibration path}
+\begin{table}[htbp]
+\centering\small
+\caption{Full builds against Lamb Fig.~5a (all-originating SROD, central \SI{400}{\micro\metre} crop).}
+\label{tab:path}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llrrr}
+\toprule
+build & change & RMS / bias vs Lamb & band/mean & \dir{001} within \SI{15}{\degree} \\
+\midrule
+v2 & first full build, $D$ 0.42, cap removed & \SI{2.2}{\degree} / \SI{+3.6}{\degree} (linear) & 1.4--1.8 & 0.26 \\
+v4 & per-grain parent selection & \SI{2.9}{\degree} low & 1.8 & 0.11 \\
+v5 & Sobol: $D$ 1.15, nucl \num{1.5e13}, $t_c$ 15, $c_2$ 2.8 & \SI{0.59}{\degree} / \SI{-0.16}{\degree} & 1.79 & 0.34 \\
+v6 & \SI{50}{\micro\metre} Voronoi substrate, nrefine 1, $D$ 0.40 & \SI{2.2}{\degree} / \SI{-1.8}{\degree} & 1.85 & 0.16 \\
+v7a & $D$ 0.80 & \SI{0.90}{\degree} / \SI{+0.24}{\degree} & 1.85 & 0.20 \\
+\textbf{v8} & \textbf{\code{smooth\_orientation copy}, $D$ 0.22} & \textbf{\SI{0.49}{\degree} / \SI{+0.17}{\degree}} & \textbf{1.41} & 0.19 \\
+v9 & $c_2$ 9, nucl \num{2e13} & \SI{0.52}{\degree} / \SI{+0.02}{\degree} & 1.45 & 0.22 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+v2's linear growth was selection drift: mobility weighting among the randomly rotated voxels of one grain rotated grains toward \dir{001} with height, fixed by per-grain selection. v4 to v7 then retained only 0.3--0.45 of the input $D$ against height in every configuration while the single-grain walk deck retained 1.2. The smoothing pass replaced each reassigned voxel's orientation with the average of its new neighbours, cancelling the fresh rotations and narrowing the intragranular distribution (band 1.8). Copy mode restored retention to 1.6--1.9 and the band to 1.4 on the proxy at $D = 0.42$; scaling that curve onto Lamb gave $D = 0.22$.
+
+\subsection{v8 against Lamb}
+\begin{table}[htbp]
+\centering\small
+\caption{v8 (copy mode, $D$ \SI{0.22}{\Dunit}, Voronoi substrate, nrefine 1, nucleation \SI{1.5e13}{\per\cubic\metre}, $t_c$ \SI{15}{\kelvin}, $c_2$ 2.8, $\Delta t$ \SI{4}{\micro\second}).}
+\label{tab:v8}
+\begin{tabular}{lrr}
+\toprule
+ & v8 & Lamb 2023 \\
+\midrule
+SROD RMS deviation, \SIrange{25}{240}{\micro\metre} & \SI{0.49}{\degree} & -- \\
+mean bias & \SI{+0.17}{\degree} & -- \\
+mean SROD at 54 / 204 / \SI{402}{\micro\metre} & 4.4 / 8.5 / \SI{12.3}{\degree} & 3.8 / 8.8 / -- (data end at \SI{262}{\micro\metre}) \\
+$(p_{95}-p_5)/\text{mean}$ & 1.41 & 1.4 \\
+$D$-fit vs height / straight line & 0.41 / \SI{0.40}{\Dunit} & 0.42 \\
+grains passing filters & 86 (\SI{400}{\micro\metre} crop) & $>600$ (full volume) \\
+ESD $p_{10}$ / $p_{50}$ / $p_{90}$ & 73 / 151 / \SI{182}{\micro\metre} & -- \\
+lateral extents, median & $114 \times 99$~\si{\micro\metre} & -- \\
+\dir{001} within \SI{15}{\degree} of BD & 0.19 (random 0.09) & qualitative \dir{001} fibre \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.75\textwidth]{gp700_results_v8/srod_height.png}
+\caption{v8, all-originating SROD against height above the origin (central \SI{400}{\micro\metre} crop, floor \SI{100}{\micro\metre}): simulated mean with the 5/95 band (blue) against Lamb 2023 mean and percentiles (orange). The dashed line is the input $D$ drawn against height; the simulated curve runs above it by the path factor.}
+\label{fig:v8srod}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{gp700_results_v8/ipf_sections.png}
+\caption{v8 IPF-Z colouring: $xz$ and $yz$ sections through the crop centre, and the $xy$ section at \SI{492}{\micro\metre}. Dark grey is the unremelted substrate.}
+\label{fig:v8ipf}
+\end{figure}
+
+\subsection{Resolution: \SI{1.5}{\micro\metre} versus \SI{3}{\micro\metre}}
+\begin{table}[htbp]
+\centering\small
+\caption{Same deck, geometry and seed on the \SI{600}{\micro\metre} proxy.}
+\label{tab:dx}
+\begin{tabular}{lrr}
+\toprule
+ & \SI{3}{\micro\metre} & \SI{1.5}{\micro\metre} \\
+\midrule
+SROD RMS / bias vs Lamb & \SI{0.44}{\degree} / \SI{+0.03}{\degree} & \SI{0.49}{\degree} / \SI{+0.41}{\degree} \\
+band/mean & 1.41 & 1.43 \\
+retention ($D$-fit $\div$ input), height / straight line & 1.83 / 1.73 & 2.17 / 2.35 \\
+\dir{001} within \SI{15}{\degree} & 0.21 & 0.20 \\
+ESD $p_{10}$ / $p_{50}$ / $p_{90}$ (\si{\micro\metre}) & 68 / 123 / 159 & 66 / 122 / 150 \\
+wall time per box & \SI{6}{\minute} & \SI{47}{\minute} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.49\textwidth]{gp700_results_dx1p5/srod_height_dx3_reference.png}\hfill
+\includegraphics[width=0.49\textwidth]{gp700_results_dx1p5/srod_height.png}
+\caption{Left: \SI{3}{\micro\metre} reference. Right: \SI{1.5}{\micro\metre}, Lamb's voxel size. Bin-by-bin agreement of 0.1--\SI{0.4}{\degree} to \SI{200}{\micro\metre}, 7--\SI{10}{\percent} higher at \SI{1.5}{\micro\metre} beyond \SI{245}{\micro\metre}.}
+\label{fig:dx}
+\end{figure}
+
+The per-hop rule $\theta = \sqrt{D\,\mathrm{hop}}$ is resolution independent to first order; the finer lattice resolves a slightly longer growth path per unit height, and an exact match at \SI{1.5}{\micro\metre} would take $D \approx 0.19$.
+
+\subsection{Crop sensitivity and grain origins}
+Analysing v8 on the full \SI{801}{\micro\metre} domain, the central \SI{400}{\micro\metre}, the central \SI{200}{\micro\metre}, or with the never-remelted top layer removed changes the SROD bias by under \SI{0.2}{\degree} and the band by under 0.03; only the fibre fraction moves, and it cannot be measured on 24 grains. Of the 88 filtered grains in the standard crop, 83 originate at the layer-0 remelt floor (\SIrange{105}{130}{\micro\metre}, \SI{99}{\percent} of the filtered volume) and 3 above \SI{160}{\micro\metre}. The columnar grains are epitaxial continuations of substrate grains, so the simulated ``originating'' SROD is an established-grain SROD referenced at the remelt floor. Because Lamb's two classes share the same $D$, the walk comparison is unaffected, but the model does not generate Lamb's population of grains that originate mid-build.
+
+\subsection{Texture}
+A Sobol study over $c_2 \in [2,8]$ and nucleation \numrange{5e12}{5e13} with $D$ fixed gives $\langle 001\rangle = -0.042 + 0.0125\,c_2 + 0.0073 \ln(\text{nucl})$ ($R^2 = 0.72$), flat at 0.22 below $c_2 \approx 5$, with the SROD score unaffected throughout. On the full build $c_2 = 9$ gives 0.22, rising from 0.16 to 0.24 with height, while $c_2 = 2.8$ saturates at 0.19. The walk spreads orientations out of the \SI{15}{\degree} cone (\SI{13}{\degree} RMS over \SI{400}{\micro\metre}) about as fast as selection fills it. Neither paper quantifies the fibre.
+
+\section{Findings and open issues}
+\begin{enumerate}
+\item SROD in GP700 is a rotation walk with $D \approx \SI{0.42}{\Dunit}$ against height and a Maxwell width; both grain classes obey it.
+\item The model reproduces level, shape and width once orientation is inherited from one parent voxel and never averaged. Per-grain parent selection and copy-mode smoothing are both required; averaging in either place damps the walk and narrows the band.
+\item Deck $D$ is \SI{0.22}{\Dunit} at \SI{3}{\micro\metre} and about 0.19 at \SI{1.5}{\micro\metre}: the walk runs along the inheritance path, $1.8\times$ the height in this remelt geometry. Whether the real path factor is that large is an open physical question; $D$ should be read per unit path length.
+\item Grain classes do not match. No surviving grains originate mid-build at nucleation \SI{1.5e13}{\per\cubic\metre} with Lamb's filters. Lamb's 5:1 originating-to-established ratio implies nucleation or lateral overgrowth the model does not produce at these settings.
+\item The \dir{001} fibre is twice random and moves only weakly with the mobility contrast; there is no measured target.
+\item Not yet tested: the undercooling dependence of $D$ ($\alpha > 0$); the single-hatch check deck is hot enough that $\alpha$ barely acts.
+\end{enumerate}
+
+\section{Reproduction}
+\begin{lstlisting}
+. /home/tron/spack/share/spack/setup-env.sh && spack env activate spparks-dev
+# binary: build-verify/spparks (commit da2fad29 or later)
+E=examples/gp700_moser; R=/home/tron/gp700_runs
+$E/run_layers.sh build-verify/spparks $R/wide12_v8 12 12345 267 10 4e-6 $R/substrate_800um_50um.st
+/home/tron/miniconda3/envs/WORK/bin/python $E/gp700_analysis.py $R/wide12_v8/gp700.st \
+    --out $R/wide12_v8/analysis_floor100 --floor-um 100 --crop 200 600 200 600 --D 2.2e5
+DX=1.5e-6 $E/run_layers.sh build-verify/spparks $R/dx1p5_v8 8 12345 400 7 2e-6 $R/substrate_600um_50um_dx1p5.st
+\end{lstlisting}
+Runs live in \code{/home/tron/gp700\_runs/} (wide12\_v2 to v9, dx1p5\_v8, dx3\_v8\_ref, sobol1/2, sobol\_fibre1/2, smooth\_*). Key commits: 8325eb71 (cap), fa8930f3 (diffusion model), ad23c1a5 (per-grain selection), 1a9712b3 (kk kernel parity), da2fad29 (\code{smooth\_orientation}), a0fb1011 (v8 deck), a3a66f41 (voxel-size driver). This file is the reference version; \code{docs/SROD\_ANALYSIS\_REPORT.md} and the published HTML page mirror it.
+
+\paragraph{Sources.} J.~Lamb et al., Acta Materialia (2023), 3D-EBSD and SROD of PBF-L GammaPrint-700; J.~Lamb et al., Metallurgical and Materials Transactions A (2026), cellular structure and 3DThesis parameters.
+\end{document}

@@ -101,10 +101,13 @@ if srod:
     srod=np.concatenate(srod); cls=np.concatenate(cls); dist_h=np.concatenate(dist_h); dist_e=np.concatenate(dist_e)
     for metric, dist, xlabel in (('height', dist_h, 'height above origin / floor (um)'),
                                  ('euclid', dist_e, 'straight-line distance from origin / floor reference (um)')):
-        fig,ax = plt.subplots(1,2,figsize=(11,4.4),sharey=True)
-        for k,(name,ax_) in enumerate((('originating',ax[0]),('established',ax[1]))):
-            m = cls==k
-            if m.sum() < 100: print(f'{metric} {name}: too few voxels ({m.sum()})'); continue
+        present = [k for k in (0,1) if (cls==k).sum() >= 100]   # one panel per class that has data
+        for k in (0,1):
+            if k not in present: print(f'{metric} {("originating","established")[k]}: too few voxels ({(cls==k).sum()})')
+        if not present: continue
+        fig,axes = plt.subplots(1,len(present),figsize=(5.5*len(present)+0.5,4.4),sharey=True,squeeze=False); ax=list(axes[0])
+        for ax_,k in zip(ax,present):
+            name = ('originating','established')[k]; m = cls==k
             bins = np.arange(0, dist[m].max()+10, 10); rows=[]
             for lo in bins[:-1]:
                 mm = m & (dist>=lo) & (dist<lo+10) & (dist>0)

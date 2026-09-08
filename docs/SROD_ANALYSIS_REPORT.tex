@@ -6,6 +6,7 @@
 \usepackage[utf8]{inputenc}
 \usepackage{lmodern}
 \usepackage{amsmath}
+\usepackage{amssymb}
 \usepackage{booktabs}
 \usepackage{graphicx}
 \usepackage{siunitx}
@@ -218,7 +219,8 @@ All three runs sit on Lamb's population curve with the same band ratio, so the p
 \item The model reproduces level, shape and width once orientation is inherited from one parent voxel and never averaged. Per-grain parent selection and copy-mode smoothing are both required; averaging in either place damps the walk and narrows the band.
 \item Deck $D$ is \SI{0.22}{\Dunit} at \SI{3}{\micro\metre} and about 0.19 at \SI{1.5}{\micro\metre}: the walk runs along the inheritance path, $1.8\times$ the height in this remelt geometry. Whether the real path factor is that large is an open physical question; $D$ should be read per unit path length.
 \item Grain classes do not match. No surviving grains originate mid-build at nucleation \SI{1.5e13}{\per\cubic\metre} with Lamb's filters. Lamb's 5:1 originating-to-established ratio implies nucleation or lateral overgrowth the model does not produce at these settings.
-\item Individual grains in the experiment rotate coherently along a path; the per-voxel walk alone spreads without drifting. The grain-level walk (\code{misorientation\_grain\_walk}) reproduces the drift with the same population statistics, and the steady rise of Lamb's individual grains suggests persistent rather than memoryless rotation.\n\item The \dir{001} fibre is twice random and moves only weakly with the mobility contrast; there is no measured target.
+\item Individual grains in the experiment rotate coherently along a path; the per-voxel walk alone spreads without drifting. The grain-level walk (\code{misorientation\_grain\_walk}) reproduces the drift with the same population statistics, and the steady rise of Lamb's individual grains suggests persistent rather than memoryless rotation.
+\item The \dir{001} fibre is twice random and moves only weakly with the mobility contrast; there is no measured target.
 \item Not yet tested: the undercooling dependence of $D$ ($\alpha > 0$); the single-hatch check deck is hot enough that $\alpha$ barely acts.
 \end{enumerate}
 

@@ -29,15 +29,37 @@ GW_FN uint64_t gw_mix(uint64_t x) {           // splitmix64
   return x ^ (x >> 31);
 }
 
-// Rotation increment of grain g from level k to k+1 (unit quaternion, w first).
-GW_FN void gw_increment(int g, int k, double angle, double dq[4]) {
+// Uniform random unit vector hashed from (g, k).
+GW_FN void gw_random_axis(int g, int k, double a[3]) {
   uint64_t h = gw_mix(((uint64_t)(uint32_t)g << 32) ^ (uint64_t)(uint32_t)k);
   double u1 = (double)(h >> 11) * (1.0 / 9007199254740992.0);
   uint64_t h2 = gw_mix(h);
   double u2 = (double)(h2 >> 11) * (1.0 / 9007199254740992.0);
   double z = 2.0 * u1 - 1.0, r = sqrt(1.0 - z * z), phi = 6.283185307179586 * u2;
+  a[0] = r * cos(phi); a[1] = r * sin(phi); a[2] = z;
+}
+
+// Rotation increment of grain g from level k to k+1 (unit quaternion, w first).
+// rho = 0: independent axis per level (memoryless walk). rho > 0: the axis is
+// an AR(1) sequence in the level index, axis_k = norm(rho*axis_{k-1} +
+// sqrt(1-rho^2)*r_k), evaluated from level 0 so it stays a pure function of
+// (g, k): persistent rotation (lattice bending) with correlation height
+// ~ dx/(1-rho). The sign is always +angle about the axis.
+GW_FN void gw_increment(int g, int k, double angle, double rho, double dq[4]) {
+  double a[3];
+  if (rho <= 0.0 || k < 0) gw_random_axis(g, k < 0 ? 0 : k, a);
+  else {
+    gw_random_axis(g, 0, a);
+    double w = sqrt(1.0 - rho * rho);
+    for (int j = 1; j <= k; j++) {
+      double r[3]; gw_random_axis(g, j, r);
+      a[0] = rho * a[0] + w * r[0]; a[1] = rho * a[1] + w * r[1]; a[2] = rho * a[2] + w * r[2];
+      double n = sqrt(a[0]*a[0] + a[1]*a[1] + a[2]*a[2]);
+      if (n > 0.0) { a[0] /= n; a[1] /= n; a[2] /= n; }
+    }
+  }
   double s = sin(0.5 * angle);
-  dq[0] = cos(0.5 * angle); dq[1] = s * r * cos(phi); dq[2] = s * r * sin(phi); dq[3] = s * z;
+  dq[0] = cos(0.5 * angle); dq[1] = s * a[0]; dq[2] = s * a[1]; dq[3] = s * a[2];
 }
 
 // q <- dq (x) q  (rotation applied in the sample frame; conj = true applies dq^-1)
@@ -55,12 +77,12 @@ GW_FN void gw_premultiply(const double dq[4], bool conj, double q[4]) {
 
 // Move an orientation inherited at lattice height z_from (lattice units) to
 // height z_to within grain g: compose the level increments in between.
-GW_FN void grain_walk_apply(int g, double z_from, double z_to, double angle, double q[4]) {
+GW_FN void grain_walk_apply(int g, double z_from, double z_to, double angle, double rho, double q[4]) {
   int kf = (int)floor(z_from + 0.5), kt = (int)floor(z_to + 0.5);
   if (kf == kt) return;
   double dq[4];
-  if (kt > kf) { for (int k = kf; k < kt; k++) { gw_increment(g, k, angle, dq); gw_premultiply(dq, false, q); } }
-  else         { for (int k = kf - 1; k >= kt; k--) { gw_increment(g, k, angle, dq); gw_premultiply(dq, true, q); } }
+  if (kt > kf) { for (int k = kf; k < kt; k++) { gw_increment(g, k, angle, rho, dq); gw_premultiply(dq, false, q); } }
+  else         { for (int k = kf - 1; k >= kt; k--) { gw_increment(g, k, angle, rho, dq); gw_premultiply(dq, true, q); } }
 }
 
 #endif

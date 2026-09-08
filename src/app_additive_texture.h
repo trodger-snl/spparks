@@ -158,6 +158,7 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   // misorientation_grain_walk <D_deg2_per_m>: coherent per-grain rotation
   // walk in height (grain_walk.h); rad^2/m, 0 = off.
   double grain_walk_D = 0.0;
+  double grain_walk_rho = 0.0;   // axis persistence per level (0 memoryless, ->1 fixed bending axis)
   double t_cool_max;
   double mis_thresh;
   double misorient_alpha;

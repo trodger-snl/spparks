@@ -378,11 +378,16 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
   else if (strcmp(command,"misorientation_grain_walk") == 0) {
      // misorientation_grain_walk <D_deg2_per_m>: coherent rotation shared by
      // every voxel of a grain per lattice level (see grain_walk.h); 0 = off.
-     if (narg != 1) error->all(FLERR,"Illegal misorientation_grain_walk command");
+     // misorientation_grain_walk <D_deg2_per_m> [rho]: rho in [0,1) correlates the
+     // rotation axis between lattice levels (persistent bending, L_c ~ dx/(1-rho)).
+     if (narg != 1 && narg != 2) error->all(FLERR,"Illegal misorientation_grain_walk command");
      grain_walk_D = atof(arg[0]) * (MY_PI / 180.0) * (MY_PI / 180.0);
      if (grain_walk_D < 0) error->all(FLERR,"Illegal misorientation_grain_walk D: must be >= 0");
+     grain_walk_rho = (narg == 2) ? atof(arg[1]) : 0.0;
+     if (grain_walk_rho < 0.0 || grain_walk_rho >= 1.0)
+       error->all(FLERR,"Illegal misorientation_grain_walk rho: must be in [0,1)");
      if (domain->me == 0 && screen)
-       fprintf(screen,"misorientation_grain_walk D = %g deg^2/m\n", atof(arg[0]));
+       fprintf(screen,"misorientation_grain_walk D = %g deg^2/m, rho = %g\n", atof(arg[0]), grain_walk_rho);
   }
   else if (strcmp(command,"misorientation_function") == 0 ||
            strcmp(command,"misorientation_cap") == 0) {
@@ -1206,7 +1211,7 @@ double AppAdditiveTexture::diffusion_angle(double Tcool, double hop_m) const {
 void AppAdditiveTexture::apply_misorientation(int i, int parent, double Tcool, RandomPark *ranapp) {
     if (grain_walk_D > 0.0) {   // coherent grain rotation between the parent's level and this one
         double q[4] = {q0[i], qx[i], qy[i], qz[i]};
-        grain_walk_apply(spin[parent], xyz[parent][2], xyz[i][2], sqrt(grain_walk_D * dx), q);
+        grain_walk_apply(spin[parent], xyz[parent][2], xyz[i][2], sqrt(grain_walk_D * dx), grain_walk_rho, q);
         q0[i] = q[0]; qx[i] = q[1]; qy[i] = q[2]; qz[i] = q[3];
     }
     if (mis_diffusion <= 0.0) return;
@@ -1612,7 +1617,7 @@ std::vector<double> AppAdditiveTexture::get_average_neighbor_quaternion(int site
         int k = (int)(nc * ranapp->uniform()); if (k >= nc) k = nc - 1;
         double q[4] = {q0[cand[k]], qx[cand[k]], qy[cand[k]], qz[cand[k]]};
         if (grain_walk_D > 0.0)   // the copied neighbour may sit on another level
-            grain_walk_apply(target_spin, xyz[cand[k]][2], xyz[site][2], sqrt(grain_walk_D * dx), q);
+            grain_walk_apply(target_spin, xyz[cand[k]][2], xyz[site][2], sqrt(grain_walk_D * dx), grain_walk_rho, q);
         return {q[0], q[1], q[2], q[3]};
     }
     // Initialize storage for first quaternion as reference

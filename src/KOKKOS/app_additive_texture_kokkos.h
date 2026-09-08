@@ -315,6 +315,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // disorientation.
   double mis_diffusion;
   double grain_walk_D = 0.0;   // misorientation_grain_walk, rad^2/m (grain_walk.h)
+  double grain_walk_rho = 0.0; // axis persistence per level (grain_walk.h)
   double t_cool_max;   // tl - ts, set in init_app (was a hardcoded 100 K)
   double mis_thresh;
   double misorient_alpha;

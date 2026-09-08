@@ -3,8 +3,8 @@
    additive apps.
 
    Between lattice level k and k+1 every voxel of grain g receives the SAME
-   rotation increment: a fixed angle sqrt(D_g * dx) about an axis drawn from
-   a hash of (g, k). The increment is deterministic, so any inheritance path
+   rotation increment: a Gaussian rotation vector of RMS angle sqrt(D_g * dx)
+   drawn from a hash of (g, k), optionally correlated between levels (rho). The increment is deterministic, so any inheritance path
    through the grain composes the same product and the coherent rotation of
    the grain at level z is a function of (g, z) only; no per-grain state is
    stored. The per-voxel walk (misorientation_diffusion) adds intragranular
@@ -29,37 +29,42 @@ GW_FN uint64_t gw_mix(uint64_t x) {           // splitmix64
   return x ^ (x >> 31);
 }
 
-// Uniform random unit vector hashed from (g, k).
-GW_FN void gw_random_axis(int g, int k, double a[3]) {
+// Three standard Gaussians hashed from (g, k) (Box-Muller on hashed uniforms).
+GW_FN void gw_random_gauss3(int g, int k, double out[3]) {
   uint64_t h = gw_mix(((uint64_t)(uint32_t)g << 32) ^ (uint64_t)(uint32_t)k);
-  double u1 = (double)(h >> 11) * (1.0 / 9007199254740992.0);
-  uint64_t h2 = gw_mix(h);
-  double u2 = (double)(h2 >> 11) * (1.0 / 9007199254740992.0);
-  double z = 2.0 * u1 - 1.0, r = sqrt(1.0 - z * z), phi = 6.283185307179586 * u2;
-  a[0] = r * cos(phi); a[1] = r * sin(phi); a[2] = z;
+  double u[4];
+  for (int i = 0; i < 4; i++) { u[i] = ((double)(h >> 11) + 0.5) * (1.0 / 9007199254740992.0); h = gw_mix(h); }
+  double r1 = sqrt(-2.0 * log(u[0])), r2 = sqrt(-2.0 * log(u[2]));
+  out[0] = r1 * cos(6.283185307179586 * u[1]);
+  out[1] = r1 * sin(6.283185307179586 * u[1]);
+  out[2] = r2 * cos(6.283185307179586 * u[3]);
 }
 
-// Rotation increment of grain g from level k to k+1 (unit quaternion, w first).
-// rho = 0: independent axis per level (memoryless walk). rho > 0: the axis is
-// an AR(1) sequence in the level index, axis_k = norm(rho*axis_{k-1} +
-// sqrt(1-rho^2)*r_k), evaluated from level 0 so it stays a pure function of
-// (g, k): persistent rotation (lattice bending) with correlation height
-// ~ dx/(1-rho). The sign is always +angle about the axis.
-GW_FN void gw_increment(int g, int k, double angle, double rho, double dq[4]) {
-  double a[3];
-  if (rho <= 0.0 || k < 0) gw_random_axis(g, k < 0 ? 0 : k, a);
+// Rotation increment of grain g from level k to k+1 (unit quaternion, w first):
+// the rotation VECTOR v_k (angle * axis) is a 3-D Gaussian with RMS |v| = rms
+// per level. rho = 0: independent per level (memoryless walk). rho > 0: v_k is
+// an AR(1) / Ornstein-Uhlenbeck sequence in the level index,
+// v_k = rho v_{k-1} + sqrt(1-rho^2) v'_k, evaluated from level 0 so it stays a
+// pure function of (g, k): persistent rotation (lattice bending) with
+// correlation height ~ dx/(1-rho); the long-range accumulation is
+// rms^2 * (1+rho)/(1-rho) per level, and the accumulated rotation across
+// grains is Gaussian (Maxwell magnitude) in both regimes.
+GW_FN void gw_increment(int g, int k, double rms, double rho, double dq[4]) {
+  double sig = rms / 1.7320508075688772, v[3];
+  if (k < 0) k = 0;
+  if (rho <= 0.0) { gw_random_gauss3(g, k, v); v[0] *= sig; v[1] *= sig; v[2] *= sig; }
   else {
-    gw_random_axis(g, 0, a);
-    double w = sqrt(1.0 - rho * rho);
+    gw_random_gauss3(g, 0, v); v[0] *= sig; v[1] *= sig; v[2] *= sig;
+    double w = sqrt(1.0 - rho * rho) * sig;
     for (int j = 1; j <= k; j++) {
-      double r[3]; gw_random_axis(g, j, r);
-      a[0] = rho * a[0] + w * r[0]; a[1] = rho * a[1] + w * r[1]; a[2] = rho * a[2] + w * r[2];
-      double n = sqrt(a[0]*a[0] + a[1]*a[1] + a[2]*a[2]);
-      if (n > 0.0) { a[0] /= n; a[1] /= n; a[2] /= n; }
+      double r[3]; gw_random_gauss3(g, j, r);
+      v[0] = rho * v[0] + w * r[0]; v[1] = rho * v[1] + w * r[1]; v[2] = rho * v[2] + w * r[2];
     }
   }
-  double s = sin(0.5 * angle);
-  dq[0] = cos(0.5 * angle); dq[1] = s * a[0]; dq[2] = s * a[1]; dq[3] = s * a[2];
+  double ang = sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+  if (ang < 1e-300) { dq[0] = 1.0; dq[1] = dq[2] = dq[3] = 0.0; return; }
+  double s = sin(0.5 * ang) / ang;
+  dq[0] = cos(0.5 * ang); dq[1] = s * v[0]; dq[2] = s * v[1]; dq[3] = s * v[2];
 }
 
 // q <- dq (x) q  (rotation applied in the sample frame; conj = true applies dq^-1)
@@ -77,12 +82,12 @@ GW_FN void gw_premultiply(const double dq[4], bool conj, double q[4]) {
 
 // Move an orientation inherited at lattice height z_from (lattice units) to
 // height z_to within grain g: compose the level increments in between.
-GW_FN void grain_walk_apply(int g, double z_from, double z_to, double angle, double rho, double q[4]) {
+GW_FN void grain_walk_apply(int g, double z_from, double z_to, double rms, double rho, double q[4]) {
   int kf = (int)floor(z_from + 0.5), kt = (int)floor(z_to + 0.5);
   if (kf == kt) return;
   double dq[4];
-  if (kt > kf) { for (int k = kf; k < kt; k++) { gw_increment(g, k, angle, rho, dq); gw_premultiply(dq, false, q); } }
-  else         { for (int k = kf - 1; k >= kt; k--) { gw_increment(g, k, angle, rho, dq); gw_premultiply(dq, true, q); } }
+  if (kt > kf) { for (int k = kf; k < kt; k++) { gw_increment(g, k, rms, rho, dq); gw_premultiply(dq, false, q); } }
+  else         { for (int k = kf - 1; k >= kt; k--) { gw_increment(g, k, rms, rho, dq); gw_premultiply(dq, true, q); } }
 }
 
 #endif

@@ -33,6 +33,7 @@
 #include "math.h"
 #include "math_const.h"
 #include "app_additive_texture.h"
+#include "grain_walk.h"
 #include "comm_lattice.h"
 #include "lattice.h"
 #include "timer.h"
@@ -373,6 +374,15 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
      if (domain->me == 0 && screen)
        fprintf(screen,"misorientation_diffusion D = %g deg^2/m, thresh = %g deg, alpha = %g\n",
                D_deg2, atof(arg[1]), misorient_alpha);
+  }
+  else if (strcmp(command,"misorientation_grain_walk") == 0) {
+     // misorientation_grain_walk <D_deg2_per_m>: coherent rotation shared by
+     // every voxel of a grain per lattice level (see grain_walk.h); 0 = off.
+     if (narg != 1) error->all(FLERR,"Illegal misorientation_grain_walk command");
+     grain_walk_D = atof(arg[0]) * (MY_PI / 180.0) * (MY_PI / 180.0);
+     if (grain_walk_D < 0) error->all(FLERR,"Illegal misorientation_grain_walk D: must be >= 0");
+     if (domain->me == 0 && screen)
+       fprintf(screen,"misorientation_grain_walk D = %g deg^2/m\n", atof(arg[0]));
   }
   else if (strcmp(command,"misorientation_function") == 0 ||
            strcmp(command,"misorientation_cap") == 0) {
@@ -1194,6 +1204,11 @@ double AppAdditiveTexture::diffusion_angle(double Tcool, double hop_m) const {
 }
 
 void AppAdditiveTexture::apply_misorientation(int i, int parent, double Tcool, RandomPark *ranapp) {
+    if (grain_walk_D > 0.0) {   // coherent grain rotation between the parent's level and this one
+        double q[4] = {q0[i], qx[i], qy[i], qz[i]};
+        grain_walk_apply(spin[parent], xyz[parent][2], xyz[i][2], sqrt(grain_walk_D * dx), q);
+        q0[i] = q[0]; qx[i] = q[1]; qy[i] = q[2]; qz[i] = q[3];
+    }
     if (mis_diffusion <= 0.0) return;
 
     // Hop to the inheritance parent. Coordinate differences are in lattice
@@ -1595,7 +1610,10 @@ std::vector<double> AppAdditiveTexture::get_average_neighbor_quaternion(int site
             if (spin[neighbor[site][j]] == target_spin) cand[nc++] = neighbor[site][j];
         if (nc == 0) error->all(FLERR,"get_average_neighbor_quaternion: no neighbor with target spin");
         int k = (int)(nc * ranapp->uniform()); if (k >= nc) k = nc - 1;
-        return {q0[cand[k]], qx[cand[k]], qy[cand[k]], qz[cand[k]]};
+        double q[4] = {q0[cand[k]], qx[cand[k]], qy[cand[k]], qz[cand[k]]};
+        if (grain_walk_D > 0.0)   // the copied neighbour may sit on another level
+            grain_walk_apply(target_spin, xyz[cand[k]][2], xyz[site][2], sqrt(grain_walk_D * dx), q);
+        return {q[0], q[1], q[2], q[3]};
     }
     // Initialize storage for first quaternion as reference
     double ref_q0 = 0.0, ref_qx = 0.0, ref_qy = 0.0, ref_qz = 0.0;

@@ -33,6 +33,7 @@
 #include "temperature_source_moser.h"
 #include "temperature_source_hdf5_unstructured.h"
 #include "am_temp_precision.h"
+#include "grain_walk.h"
 #include <cstring>
 #include <limits>
 #include <random>
@@ -1607,6 +1608,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
 
   // Misorientation random walk parameters
   const double mis_diffusion_local = this->mis_diffusion;
+  const double gw_angle_local = (grain_walk_D > 0.0) ? sqrt(grain_walk_D * dx) : 0.0;
   const double t_cool_max_local = this->t_cool_max;
   const double mis_thresh_local = this->mis_thresh;
   const double misorient_alpha_local = this->misorient_alpha;
@@ -1806,6 +1808,11 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
             d_qy_local(i) = q_nbr_inherited[2];
             d_qz_local(i) = q_nbr_inherited[3];
           }
+          if (gw_angle_local > 0.0) {   // coherent grain rotation between the parent's level and this one
+            double qg[4] = {d_q0_local(i), d_qx_local(i), d_qy_local(i), d_qz_local(i)};
+            grain_walk_apply(d_spin_local(selected_nbr), k_xyz_d(selected_nbr, 2), k_xyz_d(i, 2), gw_angle_local, qg);
+            d_q0_local(i) = qg[0]; d_qx_local(i) = qg[1]; d_qy_local(i) = qg[2]; d_qz_local(i) = qg[3];
+          }
 
           // Assign grain ID (may be new grain if rotation exceeded threshold)
           d_spin_local(i) = new_spin;
@@ -1863,6 +1870,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
   double t_inverse_local = t_inverse;
   const bool greedy_local = smooth_greedy_multiproposal_enabled;
   const bool copy_local = smooth_orientation_copy;
+  const double gw_angle_smooth = (grain_walk_D > 0.0) ? sqrt(grain_walk_D * dx) : 0.0;
 
   // Parallel sweep over ONLY smoothing sites (not all sites!)
   int naccept_local = 0;
@@ -1967,11 +1975,12 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
           }
           double s0 = 0.0, sx = 0.0, sy = 0.0, sz = 0.0;
           double r0 = 0.0, rx = 0.0, ry = 0.0, rz = 0.0;
-          int cq = 0; bool first = false; int seen = 0;
+          int cq = 0; bool first = false; int seen = 0; int picked_nbr = -1;
           for (int n = 0; n < nn; n++) {
             const int nbr = k_neighbor_d(i, n);
             if (d_spin_local(nbr) != new_spin) continue;
             if (copy_local && seen++ != pick) continue;
+            picked_nbr = nbr;
             double n0 = d_q0_local(nbr), nx = d_qx_local(nbr),
                    ny = d_qy_local(nbr), nz = d_qz_local(nbr);
             if (!first) { r0 = n0; rx = nx; ry = ny; rz = nz; first = true; }
@@ -1984,6 +1993,11 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
             double a0 = s0/cq, ax = sx/cq, ay = sy/cq, az = sz/cq;
             const double nrm = Kokkos::sqrt(a0*a0 + ax*ax + ay*ay + az*az);
             if (nrm > 0.0) { a0/=nrm; ax/=nrm; ay/=nrm; az/=nrm; }
+            if (copy_local && gw_angle_smooth > 0.0 && picked_nbr >= 0) {   // copied neighbour may sit on another level
+              double qg[4] = {a0, ax, ay, az};
+              grain_walk_apply(new_spin, k_xyz_d(picked_nbr, 2), k_xyz_d(i, 2), gw_angle_smooth, qg);
+              a0 = qg[0]; ax = qg[1]; ay = qg[2]; az = qg[3];
+            }
             d_spin_local(i) = new_spin;
             d_q0_local(i) = a0; d_qx_local(i) = ax;
             d_qy_local(i) = ay; d_qz_local(i) = az;
@@ -2568,6 +2582,14 @@ void AppAdditiveTextureKokkos::input_app(char *command, int narg, char **arg)
     if (domain->me == 0 && screen)
       fprintf(screen, "nuclei_smooth %s\n",
               nuclei_smooth_enabled ? "enabled" : "disabled");
+
+  } else if (strcmp(command, "misorientation_grain_walk") == 0) {
+    // misorientation_grain_walk <D_deg2_per_m>  (mirrors the CPU app; grain_walk.h)
+    if (narg != 1) error->all(FLERR, "Illegal misorientation_grain_walk command");
+    grain_walk_D = atof(arg[0]) * (MY_PI / 180.0) * (MY_PI / 180.0);
+    if (grain_walk_D < 0) error->all(FLERR, "Illegal misorientation_grain_walk D: must be >= 0");
+    if (domain->me == 0 && screen)
+      fprintf(screen, "misorientation_grain_walk D = %g deg^2/m\n", atof(arg[0]));
 
   } else if (strcmp(command, "misorientation_diffusion") == 0) {
     // misorientation_diffusion <D_deg2_per_m> <thresh_deg> [alpha]

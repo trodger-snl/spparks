@@ -155,6 +155,9 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   // g(x) = (exp(alpha x)-1)/(exp(alpha)-1); 0 = constant D.
   // mis_thresh (rad): a single step at or above it starts a new grain.
   double mis_diffusion;
+  // misorientation_grain_walk <D_deg2_per_m>: coherent per-grain rotation
+  // walk in height (grain_walk.h); rad^2/m, 0 = off.
+  double grain_walk_D = 0.0;
   double t_cool_max;
   double mis_thresh;
   double misorient_alpha;

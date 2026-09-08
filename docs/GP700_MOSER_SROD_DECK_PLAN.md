@@ -655,3 +655,41 @@ filters at nucleation 1.5e13. Since Lamb's Fig. 5a and 5c follow the same
 √h law with the same D, the walk calibration stands, but the grain-class
 comparison does not: the model has no mechanism generating new large
 grains mid-build at these settings.
+
+## Grain-level (coherent) walk — 2026-09-08
+
+Lamb Fig. 4d shows each grain tracing a directed path on the build-direction
+IPF (their red arrow) and G4 splitting into two clusters; the per-voxel walk
+gives an isotropic cloud whose mean does not move (v8, four tallest grains:
+drift 3–6° vs 12° spread). `misorientation_grain_walk D_g` (b6e4ba5f,
+`src/grain_walk.h`): every voxel of grain g crossing lattice level k → k+1
+gets the same rotation, angle √(D_g·dx) about an axis hashed from (g, k) —
+path independent, no per-grain state; per-voxel walk on top. Three proxy
+runs (600 µm / 8 layers / 3 µm, v8 deck otherwise), analysed with
+`grain_paths.py` (`docs/gp700_results_grainwalk/`):
+
+| | voxel only (D_v 0.22) | mixed (D_g 0.30 + D_v 0.065) | grain only (D_g 0.42) |
+|---|---|---|---|
+| SROD RMS / bias vs Lamb | 0.44° / +0.03° | 0.54° / +0.34° | 0.47° / +0.04° |
+| band/mean (population) | 1.41 | 1.46 | 1.48 |
+| D-fit vs height (deg²/µm) | 0.40 | 0.43 | 0.38 |
+| <001> within 15° | 0.21 | 0.22 | 0.18 |
+| same-grain z-neighbour disorientation, median / p90 | 3.8° / 12.5° | 2.3° / 6.7° | 1.1° / 1.7° |
+| 4 tallest grains: drift of the mean orientation, bottom → top | 0.7–6.3° | 6.5–8.8° | 5.3–11.3° |
+| 4 tallest grains: spread about the top-slab mean (RMS) | 7.6–11.7° | 4.2–7.1° | 1.4–2.0° |
+| 4 tallest grains: max SROD | 20–28° | 16–19° | 8–12° |
+
+All three sit on Lamb's population curve with the same band ratio: the
+population SROD statistics cannot distinguish coherent from per-voxel
+accumulation (each grain's coherent walk is one realisation; the Maxwell
+width appears across grains either way). The per-grain analysis does: the
+coherent walk produces the directed IPF path and a small within-slab
+spread; the ratio D_g : D_v sets drift against spread. Two things the
+grain-only run shows that Lamb's G1–G4 do not: (1) a memoryless walk makes
+individual SROD(h) curves non-monotonic (grain 703: 8° at 150 µm, back to
+2° at 240 µm) whereas Lamb's grains rise steadily to 20–25°, which points to
+persistent (correlated-axis) rotation, i.e. lattice bending, rather than a
+memoryless walk; (2) the per-level increment (1.1° at dx 3 µm) shows as
+horizontal bands in the IPF map. Lamb's within-slice widths are not
+published numerically, so the D_g : D_v split is unconstrained beyond
+"drift ≳ spread"; the mixed run (0.30 : 0.065) is the working choice.

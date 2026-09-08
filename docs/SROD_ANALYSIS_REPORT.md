@@ -243,6 +243,43 @@ score is unaffected throughout. On the full build c2 9 gives 0.22 (rising
 orientations out of the 15° cone (13° RMS over 400 µm) about as fast as
 selection fills it. Neither paper quantifies the fibre.
 
+### 6.6 Per-grain orientation paths and the grain-level walk
+
+Lamb's Fig. 4 follows individual grains (IPF map, SROD map, mean SROD per
+layer, and every voxel on the build-direction IPF with an arrow for the
+rotation path bottom → top; G4 splits into two clusters). `grain_paths.py`
+reproduces that layout. For v8's four tallest grains the mean orientation
+drifts only 3–6° bottom → top while the voxels spread 12° RMS about the
+top-slab mean: the per-voxel walk lets the lineages of one grain diverge
+independently, so the cloud expands isotropically and its mean stays put.
+
+`misorientation_grain_walk D_g` (b6e4ba5f, `src/grain_walk.h`) adds a
+coherent walk: every voxel of grain g crossing lattice level k → k+1 gets
+the same rotation, angle √(D_g·dx) about an axis hashed from (g, k) — path
+independent, no per-grain state; the per-voxel walk adds spread on top.
+Proxy runs with the v8 deck otherwise (`gp700_results_grainwalk/`):
+
+| | voxel only (D_v 0.22) | mixed (D_g 0.30 + D_v 0.065) | grain only (D_g 0.42) |
+|---|---|---|---|
+| SROD RMS / bias vs Lamb | 0.44° / +0.03° | 0.54° / +0.34° | 0.47° / +0.04° |
+| band/mean (population) | 1.41 | 1.46 | 1.48 |
+| D-fit vs height (deg²/µm) | 0.40 | 0.43 | 0.38 |
+| same-grain z-neighbour disorientation, median / p90 | 3.8° / 12.5° | 2.3° / 6.7° | 1.1° / 1.7° |
+| 4 tallest grains: drift of the mean, bottom → top | 0.7–6.3° | 6.5–8.8° | 5.3–11.3° |
+| 4 tallest grains: spread about the top-slab mean | 7.6–11.7° | 4.2–7.1° | 1.4–2.0° |
+| 4 tallest grains: max SROD | 20–28° | 16–19° | 8–12° |
+
+All three sit on Lamb's population curve with the same band ratio, so the
+population statistics cannot distinguish coherent from per-voxel
+accumulation; the per-grain analysis can, and D_g : D_v sets drift against
+spread. The grain-only run also shows that a memoryless walk makes
+individual SROD(h) curves non-monotonic (8° at 150 µm back to 2° at
+240 µm) whereas Lamb's G1–G4 rise steadily to 20–25°, pointing to
+persistent (correlated-axis) rotation; and the per-level increment shows
+as horizontal bands. Lamb's within-slice widths are not published, so the
+split is constrained only to drift ≳ spread; the mixed setting is the
+working choice.
+
 ## 7. Findings and open issues
 
 1. SROD in GP700 is a rotation walk with D ≈ 0.42 deg²/µm against height
@@ -259,9 +296,13 @@ selection fills it. Neither paper quantifies the fibre.
    nucleation 1.5e13 with these filters. Lamb's 5:1 originating:established
    ratio implies nucleation or lateral overgrowth the model does not produce
    at these settings.
-5. The <001> fibre is 2× random and moves only weakly with the mobility
+5. Individual grains in the experiment rotate coherently along a path; the
+   per-voxel walk alone spreads without drifting. The grain-level walk
+   reproduces the drift with the same population statistics; Lamb's steady
+   per-grain rise suggests persistent rather than memoryless rotation.
+6. The <001> fibre is 2× random and moves only weakly with the mobility
    contrast; there is no measured target.
-6. Not yet tested: the undercooling dependence of D (alpha > 0); the deck
+7. Not yet tested: the undercooling dependence of D (alpha > 0); the deck
    is hot enough that alpha barely acts on the single-hatch check deck.
 
 ## 8. Reproduction
@@ -280,4 +321,4 @@ Runs: `/home/tron/gp700_runs/wide12_v{2..9}`, `dx1p5_v8`, `dx3_v8_ref`,
 `sobol{1,2}`, `sobol_fibre{1,2}`, `smooth_*`. Key commits: 8325eb71 (cap),
 fa8930f3 (diffusion model), ad23c1a5 (per-grain selection), 1a9712b3 (kk
 kernel parity), da2fad29 (`smooth_orientation`), a0fb1011 (v8 deck),
-a3a66f41 (voxel-size driver).
+a3a66f41 (voxel-size driver), b6e4ba5f (`misorientation_grain_walk`).

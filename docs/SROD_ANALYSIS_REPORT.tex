@@ -214,13 +214,37 @@ maximum SROD in the grain & 20--\SI{28}{\degree} & 16--\SI{19}{\degree} & 8--\SI
 
 All three runs sit on Lamb's population curve with the same band ratio, so the population SROD statistics cannot distinguish coherent from per-voxel accumulation: each grain's coherent walk is one realisation and the Maxwell width appears across grains either way. The per-grain analysis does distinguish them, and the ratio $D_g : D_v$ sets drift against spread. Two further observations from the grain-only run: a memoryless walk makes individual SROD($h$) curves non-monotonic (one grain reaches \SI{8}{\degree} at \SI{150}{\micro\metre} and returns to \SI{2}{\degree} at \SI{240}{\micro\metre}), whereas Lamb's G1--G4 rise steadily to 20--\SI{25}{\degree}, which points to persistent, correlated-axis rotation (lattice bending) rather than a memoryless walk; and the per-level increment (\SI{1.1}{\degree} at \SI{3}{\micro\metre}) shows as horizontal bands in the IPF map. Lamb's within-slice widths are not published numerically, so the split is constrained only to drift $\gtrsim$ spread; the mixed setting is the working choice.
 
+
+\paragraph{Persistent rotation.} With \code{misorientation\_grain\_walk} $D_g$ $\rho$ the per-level rotation vector is an Ornstein--Uhlenbeck sequence in the level index (correlation height $\approx \Delta x/(1-\rho)$), still hashed from $(g, k)$ and evaluated from level 0. A fixed per-level angle with a persistent axis made every grain rotate at the same rate and collapsed the population band (0.77 at $\rho = 0.9$), so the increment is a Gaussian rotation vector of RMS $\sqrt{D_g \Delta x}$; the accumulated rotation across grains is then Maxwell in both regimes. Table~\ref{tab:ou} gives the second round on the proxy, with $D_g$ scaled for a long-range population $D$ near 0.42 (the empirical amplification is $\approx 15\times$ at $\rho = 0.9$ and $\approx 32\times$ at $\rho = 0.97$, below the AR(1) values 19 and 66).
+
+\begin{table}[htbp]
+\centering\small
+\caption{Persistent (OU) grain walk on the \SI{3}{\micro\metre} proxy; per-grain rows for the four tallest filtered grains.}
+\label{tab:ou}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrr}
+\toprule
+ & grain only, $\rho$ 0.9 ($D_g$ 0.029) & mixed, $\rho$ 0.9 ($D_g$ 0.018 + $D_v$ 0.065) & grain only, $\rho$ 0.97 ($D_g$ 0.0115) \\
+\midrule
+SROD RMS / bias vs Lamb & \SI{0.77}{\degree} / \SI{+0.64}{\degree} & \SI{0.42}{\degree} / \SI{+0.11}{\degree} & \SI{0.59}{\degree} / \SI{-0.50}{\degree} \\
+band/mean (population) & 1.35 & 1.44 & 1.66 \\
+mean SROD at 6 / 45 / 124 / \SI{244}{\micro\metre} & 0.5 / 3.2 / 7.3 / \SI{10.9}{\degree} & 1.1 / 3.3 / 6.8 / \SI{9.3}{\degree} & 0.3 / 2.4 / 6.1 / \SI{9.4}{\degree} \\
+drift of the mean, bottom $\to$ top & 4.0--\SI{11.3}{\degree} & 1.9--\SI{8.6}{\degree} & 3.0--\SI{14.1}{\degree} \\
+spread about the top-slab mean (RMS) & 0.5--\SI{1.1}{\degree} & 5.0--\SI{6.3}{\degree} & 0.5--\SI{1.0}{\degree} \\
+maximum SROD $\div$ top-slab mean & 1.0--1.3 & $\approx 2$ & 1.0--1.2 \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
+Persistence makes individual grains rise monotonically along a directed IPF path with smooth intragranular gradients, keeps the population band at Lamb's value, and turns the population curve ballistic below the correlation height (mean SROD $\propto h$ up to $\sim$\SI{45}{\micro\metre} at $\rho = 0.9$, $\sim$\SI{100}{\micro\metre} at $\rho = 0.97$, then $\sqrt{h}$), which is the ``fast first layer'' shape Lamb describe. The mixed $\rho = 0.9$ run sits on Lamb (\SI{0.42}{\degree}, \SI{+0.11}{\degree}, band 1.44) and is the working candidate for the next full build. Two observables would fix the remaining freedom: Lamb's within-slice width sets $D_g : D_v$, and their population curve below \SI{30}{\micro\metre} sets $\rho$; neither is resolved by the published figures.
+
 \section{Findings and open issues}
 \begin{enumerate}
 \item SROD in GP700 is a rotation walk with $D \approx \SI{0.42}{\Dunit}$ against height and a Maxwell width; both grain classes obey it.
 \item The model reproduces level, shape and width once orientation is inherited from one parent voxel and never averaged. Per-grain parent selection and copy-mode smoothing are both required; averaging in either place damps the walk and narrows the band.
 \item Deck $D$ is \SI{0.22}{\Dunit} at \SI{3}{\micro\metre} and about 0.19 at \SI{1.5}{\micro\metre}: the walk runs along the inheritance path, $1.8\times$ the height in this remelt geometry. Whether the real path factor is that large is an open physical question; $D$ should be read per unit path length.
 \item Grain classes do not match. No surviving grains originate mid-build at nucleation \SI{1.5e13}{\per\cubic\metre} with Lamb's filters. Lamb's 5:1 originating-to-established ratio implies nucleation or lateral overgrowth the model does not produce at these settings.
-\item Individual grains in the experiment rotate coherently along a path; the per-voxel walk alone spreads without drifting. The grain-level walk (\code{misorientation\_grain\_walk}) reproduces the drift with the same population statistics, and the steady rise of Lamb's individual grains suggests persistent rather than memoryless rotation.
+\item Individual grains in the experiment rotate coherently along a path; the per-voxel walk alone spreads without drifting. The grain-level walk (\code{misorientation\_grain\_walk}) reproduces the drift with the same population statistics, and a persistent (Ornstein--Uhlenbeck) form of it reproduces the steady per-grain rise and the ballistic first layer while staying on the population curve.
 \item The \dir{001} fibre is twice random and moves only weakly with the mobility contrast; there is no measured target.
 \item Not yet tested: the undercooling dependence of $D$ ($\alpha > 0$); the single-hatch check deck is hot enough that $\alpha$ barely acts.
 \end{enumerate}
@@ -235,7 +259,7 @@ $E/run_layers.sh build-verify/spparks $R/wide12_v8 12 12345 267 10 4e-6 $R/subst
     --out $R/wide12_v8/analysis_floor100 --floor-um 100 --crop 200 600 200 600 --D 2.2e5
 DX=1.5e-6 $E/run_layers.sh build-verify/spparks $R/dx1p5_v8 8 12345 400 7 2e-6 $R/substrate_600um_50um_dx1p5.st
 \end{lstlisting}
-Runs live in \code{/home/tron/gp700\_runs/} (wide12\_v2 to v9, dx1p5\_v8, dx3\_v8\_ref, sobol1/2, sobol\_fibre1/2, smooth\_*). Key commits: 8325eb71 (cap), fa8930f3 (diffusion model), ad23c1a5 (per-grain selection), 1a9712b3 (kk kernel parity), da2fad29 (\code{smooth\_orientation}), a0fb1011 (v8 deck), a3a66f41 (voxel-size driver), b6e4ba5f (\code{misorientation\_grain\_walk}). This file is the reference version; \code{docs/SROD\_ANALYSIS\_REPORT.md} and the published HTML page mirror it.
+Runs live in \code{/home/tron/gp700\_runs/} (wide12\_v2 to v9, dx1p5\_v8, dx3\_v8\_ref, sobol1/2, sobol\_fibre1/2, smooth\_*). Key commits: 8325eb71 (cap), fa8930f3 (diffusion model), ad23c1a5 (per-grain selection), 1a9712b3 (kk kernel parity), da2fad29 (\code{smooth\_orientation}), a0fb1011 (v8 deck), a3a66f41 (voxel-size driver), b6e4ba5f / 47546146 (\code{misorientation\_grain\_walk}, persistence). This file is the reference version; \code{docs/SROD\_ANALYSIS\_REPORT.md} and the published HTML page mirror it.
 
 \paragraph{Sources.} J.~Lamb et al., Acta Materialia (2023), 3D-EBSD and SROD of PBF-L GammaPrint-700; J.~Lamb et al., Metallurgical and Materials Transactions A (2026), cellular structure and 3DThesis parameters.
 \end{document}

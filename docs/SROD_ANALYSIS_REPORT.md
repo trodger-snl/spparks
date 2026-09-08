@@ -280,6 +280,33 @@ as horizontal bands. Lamb's within-slice widths are not published, so the
 split is constrained only to drift ≳ spread; the mixed setting is the
 working choice.
 
+
+**Persistent rotation.** With `misorientation_grain_walk D_g rho` the
+per-level rotation vector is an Ornstein–Uhlenbeck sequence in the level
+index (correlation height ≈ dx/(1−rho)), still hashed from (g, k). A fixed
+per-level angle with a persistent axis collapsed the population band (0.77
+at rho 0.9), so the increment is a Gaussian rotation vector of RMS
+√(D_g·dx). Second round on the proxy (D_g scaled for a long-range D near
+0.42; empirical amplification ≈ 15× at rho 0.9, ≈ 32× at 0.97):
+
+| | grain only, rho 0.9 (D_g 0.029) | mixed, rho 0.9 (D_g 0.018 + D_v 0.065) | grain only, rho 0.97 (D_g 0.0115) |
+|---|---|---|---|
+| SROD RMS / bias vs Lamb | 0.77° / +0.64° | 0.42° / +0.11° | 0.59° / −0.50° |
+| band/mean (population) | 1.35 | 1.44 | 1.66 |
+| mean SROD at 6 / 45 / 124 / 244 µm | 0.5 / 3.2 / 7.3 / 10.9° | 1.1 / 3.3 / 6.8 / 9.3° | 0.3 / 2.4 / 6.1 / 9.4° |
+| drift of the mean, bottom → top | 4.0–11.3° | 1.9–8.6° | 3.0–14.1° |
+| spread about the top-slab mean (RMS) | 0.5–1.1° | 5.0–6.3° | 0.5–1.0° |
+| max SROD ÷ top-slab mean | 1.0–1.3 | ≈2 | 1.0–1.2 |
+
+Persistence makes individual grains rise monotonically along a directed
+IPF path with smooth intragranular gradients, keeps the population band at
+Lamb's value, and turns the population curve ballistic below the
+correlation height (mean ∝ h up to ~45 µm at rho 0.9, ~100 µm at 0.97,
+then √h) — the "fast first layer" shape Lamb describe. The mixed rho 0.9
+run sits on Lamb and is the working candidate for the next full build.
+Lamb's within-slice width would fix D_g : D_v and their population curve
+below 30 µm would fix rho; neither is resolved by the published figures.
+
 ## 7. Findings and open issues
 
 1. SROD in GP700 is a rotation walk with D ≈ 0.42 deg²/µm against height
@@ -298,8 +325,9 @@ working choice.
    at these settings.
 5. Individual grains in the experiment rotate coherently along a path; the
    per-voxel walk alone spreads without drifting. The grain-level walk
-   reproduces the drift with the same population statistics; Lamb's steady
-   per-grain rise suggests persistent rather than memoryless rotation.
+   reproduces the drift with the same population statistics; its persistent
+   (Ornstein–Uhlenbeck) form reproduces the steady per-grain rise and the
+   ballistic first layer while staying on the population curve.
 6. The <001> fibre is 2× random and moves only weakly with the mobility
    contrast; there is no measured target.
 7. Not yet tested: the undercooling dependence of D (alpha > 0); the deck
@@ -321,4 +349,4 @@ Runs: `/home/tron/gp700_runs/wide12_v{2..9}`, `dx1p5_v8`, `dx3_v8_ref`,
 `sobol{1,2}`, `sobol_fibre{1,2}`, `smooth_*`. Key commits: 8325eb71 (cap),
 fa8930f3 (diffusion model), ad23c1a5 (per-grain selection), 1a9712b3 (kk
 kernel parity), da2fad29 (`smooth_orientation`), a0fb1011 (v8 deck),
-a3a66f41 (voxel-size driver), b6e4ba5f (`misorientation_grain_walk`).
+a3a66f41 (voxel-size driver), b6e4ba5f / 47546146 (`misorientation_grain_walk`, persistence).

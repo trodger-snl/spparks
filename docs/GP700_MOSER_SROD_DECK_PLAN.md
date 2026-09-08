@@ -724,3 +724,24 @@ the "fast first layer" shape Lamb describe. The level came out low: the
 measured long-range amplification is ≈13× at rho 0.9 (theory 19×, 17× with
 the finite-height correction), so D_g rescaled ×1.3 (rho 0.9), ×1.8
 (rho 0.97), ×1.13 (mixed) for a second round (`gwo2_*`).
+
+**Second OU round (17:20, D_g rescaled):**
+
+| | grain only, rho 0.9 (D_g 0.029) | mixed, rho 0.9 (D_g 0.018 + D_v 0.065) | grain only, rho 0.97 (D_g 0.0115) |
+|---|---|---|---|
+| SROD RMS / bias vs Lamb | 0.77° / +0.64° | **0.42° / +0.11°** | 0.59° / −0.50° |
+| band/mean | 1.35 | 1.44 | 1.66 |
+| D-fit vs height (deg²/µm) | 0.51 | 0.40 | 0.40 |
+| mean SROD at 6 / 45 / 124 / 244 µm | 0.5 / 3.2 / 7.3 / 10.9° | 1.1 / 3.3 / 6.8 / 9.3° | 0.3 / 2.4 / 6.1 / 9.4° |
+| per-grain drift / spread about the top-slab mean | 4.0–11.3° / 0.5–1.1° | 1.9–8.6° / 5.0–6.3° | 3.0–14.1° / 0.5–1.0° |
+| per-grain max SROD ÷ top-slab mean | 1.0–1.3 | ≈2 | 1.0–1.2 |
+
+Zero-bias interpolation: grain-only rho 0.9 at D_g ≈ 0.026, rho 0.97 at
+≈ 0.013 (empirical amplification ≈ 15× and ≈ 32× against the AR(1)
+(1+rho)/(1−rho) of 19× and 66×). The mixed rho 0.9 run is on Lamb
+(0.42°, +0.11°, band 1.44) with directed per-grain paths and a 5–6°
+intragranular spread; it is the working candidate for the next full build,
+pending a measured within-slice width from the experiment to fix D_g : D_v.
+Lamb's population curve below 30 µm (the ballistic regime, mean ∝ h) is
+the observable that would fix rho; the current digitization does not
+resolve it.

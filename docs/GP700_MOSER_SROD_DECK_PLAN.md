@@ -693,3 +693,34 @@ memoryless walk; (2) the per-level increment (1.1° at dx 3 µm) shows as
 horizontal bands in the IPF map. Lamb's within-slice widths are not
 published numerically, so the D_g : D_v split is unconstrained beyond
 "drift ≳ spread"; the mixed run (0.30 : 0.065) is the working choice.
+
+## Persistent (correlated-axis) grain walk — 2026-09-08 afternoon
+
+`misorientation_grain_walk D_g [rho]` (f38c2839, 47546146): with rho > 0 the
+per-level rotation vector is an AR(1)/Ornstein–Uhlenbeck sequence in the
+level index (correlation height ≈ dx/(1−rho)), hashed and evaluated from
+level 0 so it stays a pure function of (g, z). First form (fixed angle,
+persistent axis only) made every grain rotate at the same rate and
+collapsed the population band (0.77 at rho 0.9, 0.35 at rho 0.97); replaced
+by a Gaussian rotation vector (Maxwell magnitudes). D_g was scaled by
+(1−rho)/(1+rho) for a target long-range D of 0.42. Proxy, v8 deck otherwise,
+`grain_paths` on the four tallest grains (`docs/gp700_results_grainwalk/*_ou.png`):
+
+| | grain only, rho 0.9 (D_g 0.022) | mixed, rho 0.9 (D_g 0.016 + D_v 0.065) | grain only, rho 0.97 (D_g 0.0064) |
+|---|---|---|---|
+| SROD RMS / bias vs Lamb | 1.15° / −0.94° | 0.53° / −0.40° | 1.95° / −1.90° |
+| band/mean (population) | 1.52 | 1.39 | 1.49 |
+| D-fit vs height (deg²/µm) | 0.29 | 0.36 | 0.24 |
+| mean SROD at 6 / 45 / 124 / 244 µm | 0.4 / 2.7 / 5.9 / 7.5° | 1.1 / 3.1 / 6.2 / 8.9° | 0.2 / 1.7 / 4.7 / 7.2° |
+| same-grain z-neighbour disorientation, median | 0.24° | 2.0° | 0.14° |
+| per-grain drift bottom → top / spread about the top-slab mean | 3.5–9.9° / 0.5–1.0° | 3.4–7.0° / 4.6–5.9° | 3.3–8.7° / 0.1–0.4° |
+| per-grain max SROD ÷ top-slab mean | ≈1.0–1.1 (monotonic) | ≈2 | ≈1.0 (monotonic) |
+
+Persistence does what it should for individual grains — monotonic SROD
+rise, a directed IPF path, the population band back at Lamb's 1.4–1.5 — and
+the population curve becomes ballistic below the correlation height (mean
+SROD ∝ h up to ~45 µm at rho 0.9, ~100 µm at rho 0.97, then √h), which is
+the "fast first layer" shape Lamb describe. The level came out low: the
+measured long-range amplification is ≈13× at rho 0.9 (theory 19×, 17× with
+the finite-height correction), so D_g rescaled ×1.3 (rho 0.9), ×1.8
+(rho 0.97), ×1.13 (mixed) for a second round (`gwo2_*`).

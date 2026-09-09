@@ -44,7 +44,8 @@ nuclei_smooth off
 # smoothing pass (nrefine 1, the ct15 pairing) the walk accumulates ~1.2x its input
 # against height, so the input sits near Lamb's fit (0.42). The 1.15 used in v5
 # compensated the damping of two greedy passes on a single-voxel-seeded substrate.
-misorientation_diffusion 2.2e5 30
+misorientation_diffusion 6.5e4 30
+misorientation_grain_walk 1.0e4 0.9 path
 misorientation_target random_rotation
 nucleation_misorientation_target on
 

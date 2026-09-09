@@ -1,6 +1,6 @@
 # SROD analysis report: misorientation accumulation in GammaPrint-700 PBF-L, experiment vs SPPARKS
 
-Status: 2026-09-07. **Reference version: `SROD_ANALYSIS_REPORT.tex` (PDF alongside); this file mirrors it.** Companion documents: `MISORIENTATION_DIFFUSION_PLAN.md`
+Status: 2026-09-09. **Reference version: `SROD_ANALYSIS_REPORT.tex` (PDF alongside); this file mirrors it.** Companion documents: `MISORIENTATION_DIFFUSION_PLAN.md`
 (model changes), `GP700_MOSER_SROD_DECK_PLAN.md` (deck development log).
 Figures: `srod_experimental_analysis.png`, `srod_random_walk.png`,
 `gp700_results_v8/`, `gp700_results_v9/`, `gp700_results_dx1p5/`.
@@ -322,6 +322,17 @@ D_g 0.0145) 0.58° / +0.40°, band 1.63; persistent mixed (rho 0.9, D_g 0.010
 4–6.4° spread. The persistence amplification takes its AR(1) value in path
 mode (D-fit/D_g ≈ 35 ≈ 19 × 1.8), and path dispersion inside a grain gives
 a 2–4° intragranular spread by itself.
+
+
+**Full build with the persistent path walk (v10).** v8 deck +
+`misorientation_grain_walk 1.0e4 0.9 path` (D_g 0.010, rho 0.9) + D_v 0.065,
+cached recurrence, 12 layers, central 400 µm: SROD RMS 0.34°, bias −0.28°,
+band/mean 1.50 (v8: 0.49° / +0.17° / 1.41); mean SROD 3.6 / 8.2 / 12.1° at
+54 / 204 / 402 µm; 97 grains pass Lamb's filters, ESD p50 148 µm. Four
+tallest grains: drift 8.4–9.6°, spread 6.2–7.7°, max SROD 20–24° (v8:
+drift 3–6°, spread 12°). <001> within 15° falls to 0.15 (v8 0.19) as the
+coherent rotation carries grains out of the cone. Box time 13 min vs 12 for
+v8 with the cached recurrence. Figures: `gp700_results_v10/`.
 
 ## 7. Findings and open issues
 

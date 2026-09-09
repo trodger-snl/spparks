@@ -49,8 +49,8 @@ def triangle_xy(v):
     c, aa, bb = s[:,0], s[:,1], s[:,2]
     return aa/(1+c), bb/(1+c)                       # stereographic projection from -[001]; 001->(0,0), 101->(0.414,0), 111->(0.366,0.366)
 def draw_triangle(ax):
-    tt = np.linspace(0, np.pi/4, 60)                  # 101 -> 111 edge: directions (cos t, sin t, 1)/norm
-    e = np.stack([np.cos(tt), np.sin(tt), np.ones_like(tt)], 1); e /= np.linalg.norm(e, axis=1)[:,None]
+    ss = np.linspace(0, 1, 60)                        # 101 -> 111 edge: directions (1, s, 1)/norm (x = z, the c = a boundary)
+    e = np.stack([np.ones_like(ss), ss, np.ones_like(ss)], 1); e /= np.linalg.norm(e, axis=1)[:,None]
     ex, ey = e[:,0]/(1+e[:,2]), e[:,1]/(1+e[:,2])
     ax.plot([0, ex[0]], [0, 0], color='#444', lw=1); ax.plot(ex, ey, color='#444', lw=1); ax.plot([0, ex[-1]], [0, ey[-1]], color='#444', lw=1)
     for (x_, y_, s_) in ((0, 0, '001'), (ex[0], 0, '101'), (ex[-1], ey[-1], '111')):

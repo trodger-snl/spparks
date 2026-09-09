@@ -881,3 +881,9 @@ band 1.45±0.05, filtered 52±2, fibre 0.23±0.02, drift 3.9±0.3°, spread 6.7�
 v10 settings RMS 0.35±0.05°, bias +0.05±0.11°, band 1.53±0.07, filtered 55±3, fibre 0.23±0.02,
 drift 6.6±0.5°, spread 3.9±0.4°, max SROD 13.7±0.3°. Population score differs at ~2σ; per-grain
 drift/spread at > 5σ.
+
+**B3 hatch-offset sensitivity (proxy, v10 settings, HATCH_OFFSET=random, 13:37):** SROD 0.30° / −0.14°,
+band 1.50, 55 filtered, ESD p50 120 µm (registered seed_v10_s1: 0.35°, 123 µm); autocorrelation at
+the 80 µm lag 0.34/0.48 vs 0.46/0.45 registered; power at the period 0.52/0.39 vs 0.47/0.57; widths
+27–36 vs 30–33 µm; drift/spread 5.3/3.6 vs 6.0/3.8°; <001> 0.30 vs 0.21–0.25. The pool spacing
+imprints the 80 µm period on every layer regardless of registration; SROD unaffected.

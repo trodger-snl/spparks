@@ -21,6 +21,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument('stitch'); ap.add_argument('--out', default='analysis')
 ap.add_argument('--dx', type=float, default=3e-6); ap.add_argument('--floor-um', type=float, default=90.0)
 ap.add_argument('--D', type=float, default=None, help='input D, deg^2/m (for the x-input ratio and the walk reference line)'); ap.add_argument('--time', type=float, default=None)
+ap.add_argument('--segment-deg', type=float, default=None, help='re-segment grains at this disorientation threshold (deg) instead of using the spin labels')
 ap.add_argument('--top-um', type=float, default=None, help='ignore everything above this height (um), e.g. the last never-remelted layer')
 ap.add_argument('--crop', type=float, nargs=4, metavar=('X0','X1','Y0','Y1'), default=None, help='analyse only this lateral window (um)')
 ap.add_argument('--lamb', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'docs'), help='dir with lamb2023_fig5{a,c}_srod.json')
@@ -44,7 +45,12 @@ zs = np.arange(nz); sf = solid.mean(axis=(0,1))
 print('solid fraction by z (um): ' + ' '.join(f'{z*dxu:.0f}:{v:.2f}' for z,v in zip(zs[::10], sf[::10])))
 
 # ---- grains: same-spin face-connected regions (O(N) union-find)
-lab = relabel_grains(spin)
+if a.segment_deg:
+    from spparks_micro_analysis.grain_segmentation import segment_grains
+    lab = segment_grains(q, occupied=solid, threshold_deg=a.segment_deg, crystal_structure="cubic")[0]
+    lab = np.where(solid, lab, 0).astype(np.int64); print(f'grains re-segmented at {a.segment_deg} deg: {len(np.unique(lab[solid]))} labels')
+else:
+    lab = relabel_grains(spin)
 ids, counts = np.unique(lab[lab>0], return_counts=True)
 idx = np.argsort(lab, axis=None, kind='stable'); flat = lab.ravel()[idx]; coords = np.column_stack(np.unravel_index(idx, lab.shape))
 starts = np.searchsorted(flat, ids); ends = starts + counts
@@ -74,7 +80,10 @@ def axis_angle_to_z(qq):
     return np.degrees(np.arccos(np.clip(np.abs(m).max(1), 0, 1)))
 sol_above = solid.copy(); sol_above[:,:,:int(floor)] = False
 ang = axis_angle_to_z(q[sol_above])
-print(f'texture above floor: <001> within 15 deg of BD: {np.mean(ang<15):.2f} (random ~0.09), within 10 deg: {np.mean(ang<10):.2f}')
+_rng = np.random.default_rng(0); _u = _rng.random((200000,3))
+_qr = np.column_stack([np.sqrt(1-_u[:,0])*np.sin(2*np.pi*_u[:,1]), np.sqrt(1-_u[:,0])*np.cos(2*np.pi*_u[:,1]), np.sqrt(_u[:,0])*np.sin(2*np.pi*_u[:,2]), np.sqrt(_u[:,0])*np.cos(2*np.pi*_u[:,2])])
+_ar = axis_angle_to_z(_qr); rnd15, rnd10 = float(np.mean(_ar<15)), float(np.mean(_ar<10))
+print(f'texture above floor: <001> within 15 deg of BD: {np.mean(ang<15):.2f} (random {rnd15:.3f}), within 10 deg: {np.mean(ang<10):.2f} (random {rnd10:.3f})')
 
 # ---- SROD vs distance, Lamb's conventions: distance = height along the build
 # direction; originating grains referenced to their origin voxel (lowest z),

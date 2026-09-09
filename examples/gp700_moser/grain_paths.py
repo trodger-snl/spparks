@@ -21,16 +21,24 @@ ap = argparse.ArgumentParser(); ap.add_argument('stitch'); ap.add_argument('--ou
 ap.add_argument('--dx', type=float, default=3e-6); ap.add_argument('--floor-um', type=float, default=100.0)
 ap.add_argument('--crop', type=float, nargs=4, default=None); ap.add_argument('--n', type=int, default=4)
 ap.add_argument('--slab-um', type=float, default=10.0)
+ap.add_argument('--segment-deg', type=float, default=None, help='re-segment grains at this disorientation threshold (deg)')
 ap.add_argument('--grid', type=int, default=24, help='grains in the compact IPF-path grid (tallest first)')
 a = ap.parse_args(); os.makedirs(a.out, exist_ok=True); dxu = a.dx*1e6
 with StitchReader(a.stitch) as r:
     b = r.get_global_bounds(); t = r.times[-1]
-    f = {k: r.read_field_at_time(k, t, bounds=b)[0] for k in ('i1','i2','d1','d2','d3','d4')}
+    fields = ('i1','i2','d1','d2','d3','d4') + (('d10',) if 'd10' in r.get_available_fields() else ())
+    f = {k: r.read_field_at_time(k, t, bounds=b)[0] for k in fields}
 if a.crop:
     c = [int(round(v/dxu)) for v in a.crop]; f = {k: v[c[0]:c[1], c[2]:c[3], :] for k, v in f.items()}
 solid = f['i2'] == 3
 q = np.stack([f['d1'],f['d2'],f['d3'],f['d4']], -1)
-lab = relabel_grains(np.where(solid, f['i1'], 0).astype(np.int64))
+if a.segment_deg:
+    from spparks_micro_analysis.grain_segmentation import segment_grains
+    lab = np.where(solid, segment_grains(q, occupied=solid, threshold_deg=a.segment_deg, crystal_structure='cubic')[0], 0).astype(np.int64)
+    print(f'grains re-segmented at {a.segment_deg} deg')
+else:
+    lab = relabel_grains(np.where(solid, f['i1'], 0).astype(np.int64))
+spath = f.get('d10')
 nx, ny, nz = solid.shape
 X, Y, Z = np.indices(solid.shape)
 ids, inv, vol = np.unique(lab[solid], return_inverse=True, return_counts=True)
@@ -125,13 +133,23 @@ for g in allg:
         means.append(srod[mm].mean())
         v = np.sort(np.abs(bd_in_crystal(qq[mm])), axis=1)[:, ::-1].mean(0); v /= np.linalg.norm(v); pth.append((v[1]/(1+v[0]), v[2]/(1+v[0])))
     means = np.array(means); mono = float(np.mean(np.diff(means) >= 0)) if len(means) > 1 else np.nan
-    rows.append((int(g), float(h.max()), float(esd[ids==g][0]), int(m.sum()), drift, spread, float(srod.max()), float(means[-1]), mono))
+    # Lamb-style per-layer (30 um) mean SROD at 300 um, and the path factor from d10 (path length / height)
+    l300 = (h >= 285) & (h < 315); mean300 = float(srod[l300].mean()) if l300.sum() >= 20 else np.nan
+    if spath is not None:
+        sp = spath[m] - spath[tuple(o)]; hh = h/dxu; sel = hh >= 10
+        pathf = float(np.median(sp[sel]/hh[sel])) if sel.sum() > 20 else np.nan
+    else: pathf = np.nan
+    rows.append((int(g), float(h.max()), float(esd[ids==g][0]), int(m.sum()), drift, spread, float(srod.max()), float(means[-1]), mono, mean300, pathf))
     paths[int(g)] = np.array(pth)
 import csv
 with open(f'{a.out}/grain_stats.csv', 'w', newline='') as fcsv:
-    w = csv.writer(fcsv); w.writerow(['grain','height_um','esd_um','voxels','drift_deg','spread_top_rms_deg','max_srod_deg','top_slab_mean_deg','monotonic_fraction']); w.writerows(rows)
+    w = csv.writer(fcsv); w.writerow(['grain','height_um','esd_um','voxels','drift_deg','spread_top_rms_deg','max_srod_deg','top_slab_mean_deg','monotonic_fraction','mean_srod_at_300um_deg','path_per_height']); w.writerows(rows)
 R = np.array([r[4:] for r in rows]); print(f'{len(rows)} filtered grains: drift median {np.median(R[:,0]):.1f} deg (p10/p90 {np.percentile(R[:,0],10):.1f}/{np.percentile(R[:,0],90):.1f}), '
       f'spread median {np.median(R[:,1]):.1f}, max SROD median {np.median(R[:,2]):.1f}, top-slab mean median {np.median(R[:,3]):.1f}, drift/spread median {np.median(R[:,0]/R[:,1]):.2f}, monotonic fraction median {np.nanmedian(R[:,4]):.2f}')
+Hh = np.array([r[1] for r in rows]); rate = R[:,0]/Hh*30.0
+print(f'Lamb-style: grains with max SROD > 25 deg: {np.mean(R[:,2] > 25):.2f}; max SROD p90/max {np.percentile(R[:,2],90):.1f}/{R[:,2].max():.1f} deg; '
+      f'per-layer mean SROD at 300 um (grains taller than 315 um, n={np.sum(~np.isnan(R[:,5]))}): median {np.nanmedian(R[:,5]):.1f}, p90 {np.nanpercentile(R[:,5],90):.1f}, max {np.nanmax(R[:,5]):.1f} deg; '
+      f'accumulation rate (drift per 30 um): mean {rate.mean():.2f}, max {rate.max():.2f} deg/30um; path length per height: median {np.nanmedian(R[:,6]):.2f}')
 ng = min(a.grid, len(rows)); nc = 6; nr = int(np.ceil(ng/nc))
 fig, axes = plt.subplots(nr, nc, figsize=(2.6*nc, 2.5*nr), squeeze=False)
 for k, ax in enumerate(axes.ravel()):

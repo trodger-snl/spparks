@@ -834,3 +834,44 @@ and the tall grains trace directed IPF paths; a minority still reverse
 (monotonic fraction 0.6–0.7) because the 30 µm correlation height allows
 direction changes over 100 µm scales. v8's grains spread more than they
 drift at every height.
+
+## Review response analyses — 2026-09-09 (existing data)
+
+Reviewer: `docs/SROD_REPORT_REVIEW.md`. Results in `docs/gp700_results_review/`.
+
+- **A1 path factor (M7), measured from d10:** median path length per unit height over the
+  filtered grains of v10 = **1.47** (2° segmentation: 1.54). The 1.8 quoted before was the
+  D-fit ratio; the remaining factor (1.8/1.47 ≈ 1.2) is the walk's own excess over the height
+  index (diagonal hops etc.), i.e. "retention" ≠ path factor.
+- **A2 held-out test (M1/M6): established class, floor 240 µm, vs Lamb Fig. 5c over
+  25–233 µm:** v10 RMS **0.28°**, bias −0.11°, band/mean 1.39; v8 RMS 2.99°, bias +2.98°,
+  band 1.49. The coherent model passes a target it was not tuned on; the per-voxel model fails it
+  (its floor-referenced grains start 3° too high because the lineages have already diverged).
+- **A3 2° segmentation (M3):** v10 → 411 k labels, 139 pass Lamb's filters (spin labels: 96),
+  ESD p50 29 µm, SROD RMS 0.60° / bias −0.45° / band 1.49, 2 grains span > 300 µm; per-grain drift
+  5.5°, spread 1.9°, drift/spread 2.4. v8 → 758 k labels, 54 filtered, ESD p50 8 µm, max height
+  165 µm, RMS 1.19° / −0.98°. The per-voxel walk alone (v8) does not survive a 2° segmentation as
+  columnar grains; the coherent walk (v10) keeps the SROD curve within 0.6° but the grain
+  population changes (finer, fewer tall grains): the same-grain neighbour disorientation (median
+  2.4°) sits at the threshold. A 2° segmentation of the simulation is not equivalent to Lamb's
+  because the simulated field has voxel-scale noise the EBSD does not.
+- **A4 hatch periodicity (M4):** boundary-density autocorrelation at the 80 µm lag 0.61 (x) /
+  0.70 (y) in v10, 0.58 / 0.71 in v8; 43–62 % of the spectral power at the hatch period;
+  in-plane grain width medians 30 / 39 / 51 µm at 200 / 300 / 405 µm height (p90 72–84 µm).
+  Confirmed: the structure is locked to the registered hatch pattern (layers n and n+2 identical).
+  Lamb: bidirectional, 90° rotation, repeats every 2 layers, 45° to the block edges, SLM125; the
+  layer-to-layer hatch registration is not stated. Hatch-offset sensitivity run queued (B3).
+- **A5 originating-grain census (M6):** over 26 existing runs (nucleation 6.5e12–8.5e13 m⁻³,
+  tc 3–23 K) grains originating > 60 µm above the remelt floor and passing Lamb's filters number
+  0–7 per run (0–4 % of the filtered volume); no region of the tested space approaches Lamb's
+  5:1. Nucleated grains do not survive competitive growth at these settings.
+- **A6 Lamb-style per-grain numbers (M2):** v10: grains with max SROD > 25°: 5 % (Lamb: "most");
+  max SROD p90 / max 23 / 33° (Lamb max 58.7°); per-layer mean SROD at 300 µm (grains > 315 µm,
+  n = 50): median 10.8°, p90 15.6°, max 18.0° (Lamb G1–G4: 20–25°); accumulation rate (drift per
+  30 µm) mean 0.84°, max 1.92° (2026 paper, bulk grains: average 1.7°, maximum 5.8° per 30 µm).
+  v8: 17 % > 25°, rate mean 0.57 / max 1.47. The model's per-grain accumulation is about half
+  of Lamb's and its extremes are far smaller, while the population mean matches: the
+  experimental population must contain a heavier tail (a few fast-rotating grains) than a
+  Gaussian OU walk with one D_g produces.
+- Random baseline for <001> within 15° (10°) of BD computed by Monte Carlo: **0.102 (0.045)**,
+  not 0.09.

@@ -40,31 +40,37 @@ GW_FN void gw_random_gauss3(int g, int k, double out[3]) {
   out[2] = r2 * cos(6.283185307179586 * u[3]);
 }
 
-// Rotation increment of grain g from level k to k+1 (unit quaternion, w first):
-// the rotation VECTOR v_k (angle * axis) is a 3-D Gaussian with RMS |v| = rms
-// per level. rho = 0: independent per level (memoryless walk). rho > 0: v_k is
-// an AR(1) / Ornstein-Uhlenbeck sequence in the level index,
+// Rotation VECTOR v_k (angle * axis, radians) of grain g for the increment
+// from level k to k+1: a 3-D Gaussian with RMS |v| = rms per level.
+// rho = 0: independent per level (memoryless walk). rho > 0: v_k is an
+// AR(1) / Ornstein-Uhlenbeck sequence in the level index,
 // v_k = rho v_{k-1} + sqrt(1-rho^2) v'_k, evaluated from level 0 so it stays a
 // pure function of (g, k): persistent rotation (lattice bending) with
-// correlation height ~ dx/(1-rho); the long-range accumulation is
-// rms^2 * (1+rho)/(1-rho) per level, and the accumulated rotation across
+// correlation length ~ dx/(1-rho); the long-range accumulation is
+// rms^2 (1+rho)/(1-rho) per level, and the accumulated rotation across
 // grains is Gaussian (Maxwell magnitude) in both regimes.
-GW_FN void gw_increment(int g, int k, double rms, double rho, double dq[4]) {
-  double sig = rms / 1.7320508075688772, v[3];
+GW_FN void gw_state(int g, int k, double rms, double rho, double v[3]) {
+  double sig = rms / 1.7320508075688772;
   if (k < 0) k = 0;
-  if (rho <= 0.0) { gw_random_gauss3(g, k, v); v[0] *= sig; v[1] *= sig; v[2] *= sig; }
-  else {
-    gw_random_gauss3(g, 0, v); v[0] *= sig; v[1] *= sig; v[2] *= sig;
-    double w = sqrt(1.0 - rho * rho) * sig;
-    for (int j = 1; j <= k; j++) {
-      double r[3]; gw_random_gauss3(g, j, r);
-      v[0] = rho * v[0] + w * r[0]; v[1] = rho * v[1] + w * r[1]; v[2] = rho * v[2] + w * r[2];
-    }
+  if (rho <= 0.0) { gw_random_gauss3(g, k, v); v[0] *= sig; v[1] *= sig; v[2] *= sig; return; }
+  gw_random_gauss3(g, 0, v); v[0] *= sig; v[1] *= sig; v[2] *= sig;
+  double w = sqrt(1.0 - rho * rho) * sig;
+  for (int j = 1; j <= k; j++) {
+    double r[3]; gw_random_gauss3(g, j, r);
+    v[0] = rho * v[0] + w * r[0]; v[1] = rho * v[1] + w * r[1]; v[2] = rho * v[2] + w * r[2];
   }
+}
+
+// Unit quaternion (w first) of the rotation vector v.
+GW_FN void gw_dq_from_v(const double v[3], double dq[4]) {
   double ang = sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
   if (ang < 1e-300) { dq[0] = 1.0; dq[1] = dq[2] = dq[3] = 0.0; return; }
   double s = sin(0.5 * ang) / ang;
   dq[0] = cos(0.5 * ang); dq[1] = s * v[0]; dq[2] = s * v[1]; dq[3] = s * v[2];
+}
+
+GW_FN void gw_increment(int g, int k, double rms, double rho, double dq[4]) {
+  double v[3]; gw_state(g, k, rms, rho, v); gw_dq_from_v(v, dq);
 }
 
 // q <- dq (x) q  (rotation applied in the sample frame; conj = true applies dq^-1)
@@ -80,14 +86,27 @@ GW_FN void gw_premultiply(const double dq[4], bool conj, double q[4]) {
   q[0] = r[0]; q[1] = r[1]; q[2] = r[2]; q[3] = r[3];
 }
 
-// Move an orientation inherited at lattice height z_from (lattice units) to
-// height z_to within grain g: compose the level increments in between.
-GW_FN void grain_walk_apply(int g, double z_from, double z_to, double rms, double rho, double q[4]) {
+// Move an orientation inherited at level coordinate z_from (lattice units of
+// height or path length) to z_to within grain g: compose the level increments
+// in between. `state(g, k, v)` supplies the rotation vector of level k -- the
+// direct recurrence (GwDirect) or a device cache of it (Kokkos app).
+template <class State>
+GW_FN void grain_walk_apply_f(const State &state, int g, double z_from, double z_to, double q[4]) {
   int kf = (int)floor(z_from + 0.5), kt = (int)floor(z_to + 0.5);
   if (kf == kt) return;
-  double dq[4];
-  if (kt > kf) { for (int k = kf; k < kt; k++) { gw_increment(g, k, rms, rho, dq); gw_premultiply(dq, false, q); } }
-  else         { for (int k = kf - 1; k >= kt; k--) { gw_increment(g, k, rms, rho, dq); gw_premultiply(dq, true, q); } }
+  double v[3], dq[4];
+  if (kt > kf) { for (int k = kf; k < kt; k++) { state(g, k, v); gw_dq_from_v(v, dq); gw_premultiply(dq, false, q); } }
+  else         { for (int k = kf - 1; k >= kt; k--) { state(g, k, v); gw_dq_from_v(v, dq); gw_premultiply(dq, true, q); } }
+}
+
+struct GwDirect {
+  double rms, rho;
+  GW_FN void operator()(int g, int k, double v[3]) const { gw_state(g, k, rms, rho, v); }
+};
+
+GW_FN void grain_walk_apply(int g, double z_from, double z_to, double rms, double rho, double q[4]) {
+  GwDirect d; d.rms = rms; d.rho = rho;
+  grain_walk_apply_f(d, g, z_from, z_to, q);
 }
 
 #endif

@@ -34,6 +34,46 @@
 #include "temperature_source_hdf5_unstructured.h"
 #include "am_temp_precision.h"
 #include "grain_walk.h"
+
+// Grain-walk state provider for the device kernels: cached OU recurrence
+// (see the cache views in the header); direct recurrence when rho == 0 or
+// on cache overflow.
+struct GwCached {
+  Kokkos::View<int*> gid_of_spin, ngid, nready;
+  Kokkos::View<double*[3]> tab;
+  int maxgid, maxlev;
+  double rms, rho;
+  KOKKOS_INLINE_FUNCTION void operator()(int g, int k, double v[3]) const {
+    if (rho <= 0.0 || maxgid == 0 || k < 0 || k >= maxlev) { gw_state(g, k, rms, rho, v); return; }
+    int gid = Kokkos::atomic_load(&gid_of_spin(g));
+    if (gid < 0) {
+      int mine = Kokkos::atomic_fetch_add(&ngid(0), 1);
+      if (mine >= maxgid) { gw_state(g, k, rms, rho, v); return; }
+      int old = Kokkos::atomic_compare_exchange(&gid_of_spin(g), -1, mine);
+      gid = (old == -1) ? mine : old;
+    }
+    if (gid >= maxgid) { gw_state(g, k, rms, rho, v); return; }
+    const int base = gid * maxlev;
+    int r = Kokkos::atomic_load(&nready(gid));
+    if (r > k) { Kokkos::memory_fence(); v[0] = tab(base + k, 0); v[1] = tab(base + k, 1); v[2] = tab(base + k, 2); return; }
+    const double sig = rms / 1.7320508075688772, w = sqrt(1.0 - rho * rho) * sig;
+    double cur[3]; int j0;
+    if (r == 0) {
+      gw_random_gauss3(g, 0, cur); cur[0] *= sig; cur[1] *= sig; cur[2] *= sig;
+      tab(base, 0) = cur[0]; tab(base, 1) = cur[1]; tab(base, 2) = cur[2]; j0 = 1;
+    } else {
+      Kokkos::memory_fence(); cur[0] = tab(base + r - 1, 0); cur[1] = tab(base + r - 1, 1); cur[2] = tab(base + r - 1, 2); j0 = r;
+    }
+    for (int j = j0; j <= k; j++) {
+      double rr[3]; gw_random_gauss3(g, j, rr);
+      cur[0] = rho * cur[0] + w * rr[0]; cur[1] = rho * cur[1] + w * rr[1]; cur[2] = rho * cur[2] + w * rr[2];
+      tab(base + j, 0) = cur[0]; tab(base + j, 1) = cur[1]; tab(base + j, 2) = cur[2];
+    }
+    Kokkos::memory_fence();
+    Kokkos::atomic_fetch_max(&nready(gid), k + 1);
+    v[0] = cur[0]; v[1] = cur[1]; v[2] = cur[2];
+  }
+};
 #include <cstring>
 #include <limits>
 #include <random>
@@ -252,6 +292,17 @@ void AppAdditiveTextureKokkos::init_app()
   // Call parent initialization - sets up color lists, syncs neighbors, etc.
   // Parent also initializes rand_pool with seed from MPI rank
   AppPottsQuaternionKokkos::init_app();
+
+  // Grain-walk recurrence cache (persistent walk only).
+  if (grain_walk_D > 0.0 && grain_walk_rho > 0.0 && d_gw_tab.extent(0) == 0) {
+    d_gw_gid = Kokkos::View<int*>("gw_gid", nspins + 1); Kokkos::deep_copy(d_gw_gid, -1);
+    d_gw_ngid = Kokkos::View<int*>("gw_ngid", 1);
+    d_gw_nready = Kokkos::View<int*>("gw_nready", gw_maxgid);
+    d_gw_tab = Kokkos::View<double*[3]>("gw_tab", (size_t)gw_maxgid * gw_maxlev);
+    if (domain->me == 0 && screen)
+      fprintf(screen, "grain-walk cache: %d grains x %d levels (%.0f MB)\n", gw_maxgid, gw_maxlev,
+              (double)gw_maxgid * gw_maxlev * 3 * sizeof(double) / 1e6);
+  }
 
   // Timestep guard, same formula as AppAdditiveTexture::init_app (front must
   // not advance more than one voxel per step at the full freezing range).
@@ -1625,6 +1676,8 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
   const double gw_angle_local = (grain_walk_D > 0.0) ? sqrt(grain_walk_D * dx) : 0.0;
   const double gw_rho_local = grain_walk_rho;
   const int gw_path_local = grain_walk_path;
+  GwCached gw_local; gw_local.gid_of_spin = d_gw_gid; gw_local.ngid = d_gw_ngid; gw_local.nready = d_gw_nready; gw_local.tab = d_gw_tab;
+  gw_local.maxgid = (d_gw_tab.extent(0) > 0) ? gw_maxgid : 0; gw_local.maxlev = gw_maxlev; gw_local.rms = gw_angle_local; gw_local.rho = gw_rho_local;
   const double t_cool_max_local = this->t_cool_max;
   const double mis_thresh_local = this->mis_thresh;
   const double misorient_alpha_local = this->misorient_alpha;
@@ -1827,8 +1880,8 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
           d_spath_local(i) = d_spath_local(selected_nbr) + hop_distance(k_xyz_d, i, selected_nbr);   // d10
           if (gw_angle_local > 0.0) {   // coherent grain rotation between the parent's level and this one
             double qg[4] = {d_q0_local(i), d_qx_local(i), d_qy_local(i), d_qz_local(i)};
-            if (gw_path_local) grain_walk_apply(d_spin_local(selected_nbr), d_spath_local(selected_nbr), d_spath_local(i), gw_angle_local, gw_rho_local, qg);
-            else               grain_walk_apply(d_spin_local(selected_nbr), k_xyz_d(selected_nbr, 2), k_xyz_d(i, 2), gw_angle_local, gw_rho_local, qg);
+            if (gw_path_local) grain_walk_apply_f(gw_local, d_spin_local(selected_nbr), d_spath_local(selected_nbr), d_spath_local(i), qg);
+            else               grain_walk_apply_f(gw_local, d_spin_local(selected_nbr), k_xyz_d(selected_nbr, 2), k_xyz_d(i, 2), qg);
             d_q0_local(i) = qg[0]; d_qx_local(i) = qg[1]; d_qy_local(i) = qg[2]; d_qz_local(i) = qg[3];
           }
 
@@ -1891,6 +1944,8 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
   const double gw_angle_smooth = (grain_walk_D > 0.0) ? sqrt(grain_walk_D * dx) : 0.0;
   const double gw_rho_smooth = grain_walk_rho;
   const int gw_path_smooth = grain_walk_path;
+  GwCached gw_sm; gw_sm.gid_of_spin = d_gw_gid; gw_sm.ngid = d_gw_ngid; gw_sm.nready = d_gw_nready; gw_sm.tab = d_gw_tab;
+  gw_sm.maxgid = (d_gw_tab.extent(0) > 0) ? gw_maxgid : 0; gw_sm.maxlev = gw_maxlev; gw_sm.rms = gw_angle_smooth; gw_sm.rho = gw_rho_smooth;
   auto d_spath_local = d_spath;
 
   // Parallel sweep over ONLY smoothing sites (not all sites!)
@@ -2017,7 +2072,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
             if (copy_local && picked_nbr >= 0) d_spath_local(i) = d_spath_local(picked_nbr);   // path length travels with the orientation
             if (copy_local && gw_angle_smooth > 0.0 && !gw_path_smooth && picked_nbr >= 0) {   // height mode: copied neighbour may sit on another level
               double qg[4] = {a0, ax, ay, az};
-              grain_walk_apply(new_spin, k_xyz_d(picked_nbr, 2), k_xyz_d(i, 2), gw_angle_smooth, gw_rho_smooth, qg);
+              grain_walk_apply_f(gw_sm, new_spin, k_xyz_d(picked_nbr, 2), k_xyz_d(i, 2), qg);
               a0 = qg[0]; ax = qg[1]; ay = qg[2]; az = qg[3];
             }
             d_spin_local(i) = new_spin;

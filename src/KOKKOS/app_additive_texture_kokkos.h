@@ -319,6 +319,17 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   double grain_walk_D = 0.0;   // misorientation_grain_walk, rad^2/m (grain_walk.h)
   double grain_walk_rho = 0.0; // axis persistence per level (grain_walk.h)
   int grain_walk_path = 1;     // 1: level index = path length (per hop), 0: lattice z level
+  // Device cache of the persistent (rho > 0) grain-walk recurrence: rotation
+  // vector per (compact grain id, level), filled lazily and incrementally by
+  // the capture kernels (identical values on concurrent fills, so the races
+  // are benign; fences order the table writes before the ready counter).
+  // Grains beyond gw_maxgid or levels beyond gw_maxlev fall back to the
+  // direct O(k) recurrence.
+  int gw_maxgid = 16384, gw_maxlev = 768;
+  Kokkos::View<int*> d_gw_gid;        // spin -> compact grain id (-1 unassigned), nspins+1
+  Kokkos::View<int*> d_gw_ngid;       // [1] next free id
+  Kokkos::View<int*> d_gw_nready;     // per gid: levels 0..nready-1 are in the table
+  Kokkos::View<double*[3]> d_gw_tab;  // gid*maxlev + k -> rotation vector
   double t_cool_max;   // tl - ts, set in init_app (was a hardcoded 100 K)
   double mis_thresh;
   double misorient_alpha;

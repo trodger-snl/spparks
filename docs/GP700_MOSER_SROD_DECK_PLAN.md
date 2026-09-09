@@ -793,3 +793,16 @@ with the full build); a solo cached-vs-direct pair is queued after v10
 (`chain_timing.sh`). **v10** (`wide12_v10`, launched 23:36): v8 deck +
 `misorientation_grain_walk 1.0e4 0.9 path` + `misorientation_diffusion
 6.5e4`, substrate_800um_50um_d10.st, cached binary.
+
+**v10 result (02:24, `docs/gp700_results_v10/`):** persistent path-indexed
+grain walk (D_g 0.010, rho 0.9) + per-voxel D_v 0.065, Voronoi substrate,
+nrefine 1, nucl 1.5e13, tc 15, c2 2.8, dt 4 µs, cached recurrence. Full
+12-layer build, central 400 µm: **SROD RMS 0.34°, bias −0.28°, band/mean
+1.50** (best full-build score; v8 0.49° / +0.17° / 1.41); mean SROD 3.6 /
+8.2 / 12.1° at 54 / 204 / 402 µm; D-fit vs height 0.43 (established class
+from floor 240: 0.56); 2504 grains, 97 pass Lamb's filters, ESD p50 148 µm,
+extents 102 × 105 µm; same-grain z-neighbour disorientation median 2.4°,
+p90 8.8°. Four tallest grains: drift 8.4–9.6°, spread about the top-slab
+mean 6.2–7.7°, max SROD 20–24° (v8: drift 3–6°, spread 12°, max 26–33°).
+<001> within 15° of BD 0.15 (v8 0.19): the coherent rotation carries
+grains out of the cone. Solo box time 13 min (v8 12 min) with the cache.

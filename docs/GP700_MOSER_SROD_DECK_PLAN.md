@@ -745,3 +745,37 @@ pending a measured within-slice width from the experiment to fix D_g : D_v.
 Lamb's population curve below 30 µm (the ballistic regime, mean ∝ h) is
 the observable that would fix rho; the current digitization does not
 resolve it.
+
+## Path-indexed grain walk (d10) — 2026-09-08 evening
+
+`misorientation_grain_walk D [rho] [path|height]` (60b2d711, 82afc6ba): new
+per-site double **d10** = inheritance path length in lattice units (0 at
+melt and at nuclei, parent + hop at capture, copied with the orientation on
+a smoothing flip, exchanged with ghosts, dumped and continued through the
+stitch; substrates regenerated with the field, grains identical). In `path`
+mode (default) the coherent increment index is floor(d10): one increment
+per unit of path in any growth direction, no build-direction assumption.
+`height` keeps the z-level indexing. Proxy runs, v8 deck otherwise, D_g
+÷ 1.8 from the height-mode values (`*_path.png`):
+
+| | grain only, rho 0 (D_g 0.23) | grain only, rho 0.9 (D_g 0.0145) | mixed, rho 0.9 (D_g 0.010 + D_v 0.065) |
+|---|---|---|---|
+| SROD RMS / bias vs Lamb | 0.51° / +0.28° | 0.58° / +0.40° | **0.38° / +0.28°** |
+| band/mean | 1.49 | 1.63 | 1.49 |
+| D-fit vs height (deg²/µm) | 0.45 | 0.51 | 0.50 |
+| mean SROD at 6 / 45 / 124 / 244 µm | 1.2 / 3.7 / 6.8 / 10.0° | 0.6 / 3.0 / 7.1 / 10.5° | 1.2 / 3.3 / 6.8 / 10.4° |
+| same-grain z-neighbour disorientation, median / p90 | 1.3° / 3.7° | 0.6° / 3.2° | 2.2° / 7.2° |
+| per-grain drift / spread about the top-slab mean | 4–18° / 2.1–3.8° | 7–12.5° / 1.8–4.1° | 5–10.5° / 4.3–6.4° |
+
+Path mode lands on Lamb with the 1/1.8 rescaling, so the coherent walk is
+now parameterised per unit of growth path like the per-voxel walk (deck D_g
+is per path length; the height factor is the same 1.8). The persistence
+amplification comes out at the AR(1) value in path mode (D-fit/D_g = 35 ≈
+19 × 1.8), where height mode gave 13–15 instead of 19. Path dispersion
+inside a grain now produces an intragranular spread by itself (2–4° in the
+grain-only cases vs 0.5–1° in height mode), so the per-voxel term is less
+necessary; the mixed rho 0.9 path run is the best score so far (0.38°,
+band 1.49, drift 5–10°, spread 4–6°). Cost: the persistent recurrence is
+evaluated from level 0 per capture (≤ ~250 path levels), which made the
+rho > 0 path runs ~1.4× slower than memoryless; a per-grain cache would
+remove that if it matters for full builds.

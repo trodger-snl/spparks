@@ -471,6 +471,7 @@ void AppAdditiveTextureKokkos::sync_ghost_to_host()
   Kokkos::deep_copy(Kokkos::subview(HUd(qx, nall), owned), Kokkos::subview(d_qx, owned));
   Kokkos::deep_copy(Kokkos::subview(HUd(qy, nall), owned), Kokkos::subview(d_qy, owned));
   Kokkos::deep_copy(Kokkos::subview(HUd(qz, nall), owned), Kokkos::subview(d_qz, owned));
+  Kokkos::deep_copy(Kokkos::subview(HUd(spath, nall), owned), Kokkos::subview(d_spath, owned));
 }
 
 void AppAdditiveTextureKokkos::sync_ghost_to_device()
@@ -488,6 +489,7 @@ void AppAdditiveTextureKokkos::sync_ghost_to_device()
   Kokkos::deep_copy(Kokkos::subview(d_qx, ghost), Kokkos::subview(HUd(qx, nall), ghost));
   Kokkos::deep_copy(Kokkos::subview(d_qy, ghost), Kokkos::subview(HUd(qy, nall), ghost));
   Kokkos::deep_copy(Kokkos::subview(d_qz, ghost), Kokkos::subview(HUd(qz, nall), ghost));
+  Kokkos::deep_copy(Kokkos::subview(d_spath, ghost), Kokkos::subview(HUd(spath, nall), ghost));
 }
 
 /* ----------------------------------------------------------------------
@@ -2343,12 +2345,12 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     // active_flag/q0-3 only (T lives in host T[]/k_T, handled above). all_selective
     // uses the same swap as all(), so the same ghost sites are exchanged.
     static const int sel_i[2] = {0, 1};            // spin, active_flag
-    static const int sel_d_dev[4]  = {0, 1, 2, 3};       // q0-3 (T device-resident)
-    static const int sel_d_host[5] = {0, 1, 2, 3, 5};    // q0-3 + T (host fill)
+    static const int sel_d_dev[5]  = {0, 1, 2, 3, 9};       // q0-3 + spath (T device-resident)
+    static const int sel_d_host[6] = {0, 1, 2, 3, 5, 9};    // q0-3 + T (host fill) + spath
     sync_ghost_to_host();                       // device owned -> host raw
     timer->stamp();
-    if (device_temp) comm->all_selective(sel_i, 2, sel_d_dev, 4);
-    else             comm->all_selective(sel_i, 2, sel_d_host, 5);
+    if (device_temp) comm->all_selective(sel_i, 2, sel_d_dev, 5);
+    else             comm->all_selective(sel_i, 2, sel_d_host, 6);
     timer->stamp(TIME_COMM);
     sync_ghost_to_device();                     // host ghost -> device
   }

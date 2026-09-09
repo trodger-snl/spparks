@@ -111,13 +111,14 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
     gi[1] = 1;  // active_flag
     ghost_iindices = gi;
 
-    nghost_darray = 5;
+    nghost_darray = 6;
     int *gd = new int[nghost_darray];
     gd[0] = 0;  // q0
     gd[1] = 1;  // qx
     gd[2] = 2;  // qy
     gd[3] = 3;  // qz
     gd[4] = 5;  // T (needed by normal_finder on ghost neighbors)
+    gd[5] = 9;  // spath (d10): a ghost parent's path length feeds the grain walk
     ghost_dindices = gd;
     sites = unique = NULL;
     unique_dot = NULL;

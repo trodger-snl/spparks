@@ -54,11 +54,13 @@ set d3 stitch $ST last
 set d4 stitch $ST last
 set d8 stitch $ST last
 set d9 stitch $ST last
+set d10 stitch $ST last
 set i1 range 1 1000000 if i2 < 1
 set i2 value 1 if i2 < 2
 set d6 value 473
 set d8 value 0.0 if i2 != 3
-set d9 value 0.0 if i2 != 3"
+set d9 value 0.0 if i2 != 3
+set d10 value 0.0 if i2 != 3"
   fi
   python3 - "$TPL" "$D/in.box" "$((SEED+n))" "$zlo" "$ztop" "$INIT" "$LASER" "$T0" "$T1" "$ST" "$NX" "$DT" "$DX" <<'PY'
 import sys

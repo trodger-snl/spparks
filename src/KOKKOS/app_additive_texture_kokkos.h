@@ -210,6 +210,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   Kokkos::View<double*> d_grad_y;   // Gradient y-component
   Kokkos::View<double*> d_grad_z;   // Gradient z-component
   Kokkos::View<double*> d_V;        // Solidification velocity
+  Kokkos::View<double*> d_spath;    // inheritance path length (d10)
 
   // Phase state arrays (device views - simple Views are race-safe for these kernels)
   Kokkos::View<int*> d_active_flag;      // 0=inactive, 1=active, 2=molten, 3=solidified, 5=void
@@ -262,6 +263,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   double *solid_d;
   double *G;
   double *V;
+  double *spath;   // d10: inheritance path length, lattice units
 
   // Temperature-I/O orchestration: shared with the CPU app. ThermalManager owns
   // the temperature_source, laser path, fast-forward predictors, and smoothing;
@@ -316,6 +318,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   double mis_diffusion;
   double grain_walk_D = 0.0;   // misorientation_grain_walk, rad^2/m (grain_walk.h)
   double grain_walk_rho = 0.0; // axis persistence per level (grain_walk.h)
+  int grain_walk_path = 1;     // 1: level index = path length (per hop), 0: lattice z level
   double t_cool_max;   // tl - ts, set in init_app (was a hardcoded 100 K)
   double mis_thresh;
   double misorient_alpha;

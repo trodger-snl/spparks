@@ -55,6 +55,6 @@ __LASER__
 fast_forward_search_window 1e-4
 stats            2e-4
 
-dump             dump.id.1 stitch __T1__ __STITCH__ i1 i2 d1 d2 d3 d4 d8 d9
+dump             dump.id.1 stitch __T1__ __STITCH__ i1 i2 d1 d2 d3 d4 d8 d9 d10
 dump_modify      dump.id.1 delay __T1__
 run              __T1__ upto

@@ -126,6 +126,7 @@ class AppAdditiveTexture : public AppPottsQuaternion {
 	double *T;
   double *G; //Temperature gradient at solidification
   double *V; //Solidification rate at solidification.
+  double *spath; // d10: inheritance path length from the grain origin, lattice units (grain walk 'path' mode)
 	double time_step;
 	int nrefine;
 	// Physical and simulation parameters
@@ -159,6 +160,7 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   // walk in height (grain_walk.h); rad^2/m, 0 = off.
   double grain_walk_D = 0.0;
   double grain_walk_rho = 0.0;   // axis persistence per level (0 memoryless, ->1 fixed bending axis)
+  int grain_walk_path = 1;        // 1: level index = inheritance path length (per hop); 0: lattice z level
   double t_cool_max;
   double mis_thresh;
   double misorient_alpha;

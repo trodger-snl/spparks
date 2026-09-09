@@ -70,9 +70,9 @@ def deck(p, n, out, st, seed):
     tbox = round(a.nh*(a.nx*DX+200e-6)/1.137 + (a.nh-1)*PAUSE + 2e-3, 6)
     t0 = n*TGAP; t1 = n*TGAP + tbox
     init = ("set site range 1 1000000\nset i2 value 1\nset d6 value 473" if (n == 0 and not a.substrate) else
-            "\n".join([f"set {f} stitch {st} last" for f in ('i1','i2','d1','d2','d3','d4','d8','d9')] +
+            "\n".join([f"set {f} stitch {st} last" for f in ('i1','i2','d1','d2','d3','d4','d8','d9','d10')] +
                       ["set i1 range 1 1000000 if i2 < 1", "set i2 value 1 if i2 < 2", "set d6 value 473",
-                       "set d8 value 0.0 if i2 != 3", "set d9 value 0.0 if i2 != 3"]))
+                       "set d8 value 0.0 if i2 != 3", "set d9 value 0.0 if i2 != 3", "set d10 value 0.0 if i2 != 3"]))
     s = tpl
     for k, v in {'__SEED__': str(seed+n), '__ZLO__': str(zlo), '__ZHI__': str(ztop), '__INIT_OR_STITCH__': init,
                  '__LASER__': laser, '__T0__': str(t0), '__T1__': str(t1), '__STITCH__': st, '__NX__': str(a.nx), '__DX__': f'{DX:g}', '__DT__': a.dt}.items():

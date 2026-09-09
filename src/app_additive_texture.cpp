@@ -93,7 +93,7 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
     // Integer arrays (iarray): 0=spin, 1=active_flag
     // Double arrays (darray):  0=q0, 1=qx, 2=qy, 3=qz,
     //   4=mobility_out, 5=T, 6=solid_d, 7=G, 8=V
-    ndouble = 9;
+    ndouble = 10;
     allow_app_update = 1;
     app_update_only = 1; //Skip solid-state growth for now.
     ninteger = 2;
@@ -378,16 +378,24 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
   else if (strcmp(command,"misorientation_grain_walk") == 0) {
      // misorientation_grain_walk <D_deg2_per_m>: coherent rotation shared by
      // every voxel of a grain per lattice level (see grain_walk.h); 0 = off.
-     // misorientation_grain_walk <D_deg2_per_m> [rho]: rho in [0,1) correlates the
-     // rotation axis between lattice levels (persistent bending, L_c ~ dx/(1-rho)).
-     if (narg != 1 && narg != 2) error->all(FLERR,"Illegal misorientation_grain_walk command");
+     // misorientation_grain_walk <D_deg2_per_m> [rho] [path|height]: rho in [0,1)
+     // correlates the rotation between levels (persistent bending, L_c ~ dx/(1-rho));
+     // the level index is the inheritance path length in lattice units (path,
+     // default, per hop) or the lattice z level (height).
+     if (narg < 1 || narg > 3) error->all(FLERR,"Illegal misorientation_grain_walk command");
+     if (narg == 3) {
+       if (strcmp(arg[2],"path") == 0) grain_walk_path = 1;
+       else if (strcmp(arg[2],"height") == 0) grain_walk_path = 0;
+       else error->all(FLERR,"misorientation_grain_walk: mode must be path or height");
+     }
      grain_walk_D = atof(arg[0]) * (MY_PI / 180.0) * (MY_PI / 180.0);
      if (grain_walk_D < 0) error->all(FLERR,"Illegal misorientation_grain_walk D: must be >= 0");
-     grain_walk_rho = (narg == 2) ? atof(arg[1]) : 0.0;
+     grain_walk_rho = (narg >= 2) ? atof(arg[1]) : 0.0;
      if (grain_walk_rho < 0.0 || grain_walk_rho >= 1.0)
        error->all(FLERR,"Illegal misorientation_grain_walk rho: must be in [0,1)");
      if (domain->me == 0 && screen)
-       fprintf(screen,"misorientation_grain_walk D = %g deg^2/m, rho = %g\n", atof(arg[0]), grain_walk_rho);
+       fprintf(screen,"misorientation_grain_walk D = %g deg^2/m, rho = %g, %s\n", atof(arg[0]), grain_walk_rho,
+               grain_walk_path ? "path" : "height");
   }
   else if (strcmp(command,"misorientation_function") == 0 ||
            strcmp(command,"misorientation_cap") == 0) {
@@ -618,6 +626,7 @@ void AppAdditiveTexture::app_update(double dt)
         solid_d[i] = 0;
         G[i] = 0;
         V[i] = 0;
+        spath[i] = 0;
         if (nucleation_mode == NUCLEATION_CONTINUOUS) {
           T_prev_map[i] = T[i];
         }
@@ -742,6 +751,7 @@ void AppAdditiveTexture::grow_app()
   solid_d = darray[6];
   G = darray[7];
   V = darray[8];
+  spath = darray[9];
 }
 
 
@@ -1209,13 +1219,6 @@ double AppAdditiveTexture::diffusion_angle(double Tcool, double hop_m) const {
 }
 
 void AppAdditiveTexture::apply_misorientation(int i, int parent, double Tcool, RandomPark *ranapp) {
-    if (grain_walk_D > 0.0) {   // coherent grain rotation between the parent's level and this one
-        double q[4] = {q0[i], qx[i], qy[i], qz[i]};
-        grain_walk_apply(spin[parent], xyz[parent][2], xyz[i][2], sqrt(grain_walk_D * dx), grain_walk_rho, q);
-        q0[i] = q[0]; qx[i] = q[1]; qy[i] = q[2]; qz[i] = q[3];
-    }
-    if (mis_diffusion <= 0.0) return;
-
     // Hop to the inheritance parent. Coordinate differences are in lattice
     // units; the sqrt(3) clamp guards against a periodic-wrap neighbor pair
     // reading as a box-length hop (the true SC_26N stencil distance is at
@@ -1225,6 +1228,15 @@ void AppAdditiveTexture::apply_misorientation(int i, int parent, double Tcool, R
     double ddz = xyz[i][2] - xyz[parent][2];
     double hop_lat = sqrt(ddx*ddx + ddy*ddy + ddz*ddz);
     if (hop_lat > 1.7320508076) hop_lat = 1.7320508076;
+    spath[i] = spath[parent] + hop_lat;       // inheritance path length (d10)
+
+    if (grain_walk_D > 0.0) {   // coherent grain rotation between the parent's level and this one
+        double q[4] = {q0[i], qx[i], qy[i], qz[i]};
+        if (grain_walk_path) grain_walk_apply(spin[parent], spath[parent], spath[i], sqrt(grain_walk_D * dx), grain_walk_rho, q);
+        else                 grain_walk_apply(spin[parent], xyz[parent][2], xyz[i][2], sqrt(grain_walk_D * dx), grain_walk_rho, q);
+        q0[i] = q[0]; qx[i] = q[1]; qy[i] = q[2]; qz[i] = q[3];
+    }
+    if (mis_diffusion <= 0.0) return;
 
     rotate_toward_target(i, diffusion_angle(Tcool, hop_lat * dx),
                          misorientation_target_mode, ranapp);
@@ -1337,6 +1349,7 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
                 int i_chosen = neighbor[i][j];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
+                spath[i_chosen] = 0.0;
                 rotate_flipped(i_chosen);
                 if (i_chosen < nlocal) {
                     solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
@@ -1389,6 +1402,7 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
                 int i_chosen = neighbor[i][nearest_neigh[idx]];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
+                spath[i_chosen] = 0.0;
                 rotate_flipped(i_chosen);
                 if (i_chosen < nlocal) {
                     solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
@@ -1409,6 +1423,7 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
                 int i_chosen = neighbor[i][second_nearest[idx]];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
+                spath[i_chosen] = 0.0;
                 rotate_flipped(i_chosen);
                 if (i_chosen < nlocal) {
                     solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
@@ -1429,6 +1444,7 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
                 int i_chosen = neighbor[i][third_nearest[idx]];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
+                spath[i_chosen] = 0.0;
                 rotate_flipped(i_chosen);
                 if (i_chosen < nlocal) {
                     solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
@@ -1616,7 +1632,8 @@ std::vector<double> AppAdditiveTexture::get_average_neighbor_quaternion(int site
         if (nc == 0) error->all(FLERR,"get_average_neighbor_quaternion: no neighbor with target spin");
         int k = (int)(nc * ranapp->uniform()); if (k >= nc) k = nc - 1;
         double q[4] = {q0[cand[k]], qx[cand[k]], qy[cand[k]], qz[cand[k]]};
-        if (grain_walk_D > 0.0)   // the copied neighbour may sit on another level
+        spath[site] = spath[cand[k]];   // copy the path length with the orientation
+        if (grain_walk_D > 0.0 && !grain_walk_path)   // height mode: the copied neighbour may sit on another level
             grain_walk_apply(target_spin, xyz[cand[k]][2], xyz[site][2], sqrt(grain_walk_D * dx), grain_walk_rho, q);
         return {q[0], q[1], q[2], q[3]};
     }

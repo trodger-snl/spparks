@@ -106,9 +106,9 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
   // Configure array sizes (inherit from AppPottsQuaternion)
   // Parent AppPottsQuaternionKokkos called recreate_arrays() with ndouble=4
   // We need MORE arrays, so call recreate_arrays() again with larger ndouble
-  ndouble = 9;  // q0, qx, qy, qz, mobility_out, T, solid_d, G, V
+  ndouble = 10;  // q0, qx, qy, qz, mobility_out, T, solid_d, G, V, spath
   ninteger = 2; // spin, active_flag
-  recreate_arrays();  // Reallocate iarray/darray pointers for ndouble=9
+  recreate_arrays();  // Reallocate iarray/darray pointers for ndouble=10
 
   allow_app_update = 1;
   app_update_only = 1;  // Skip solid-state growth for now
@@ -209,6 +209,7 @@ void AppAdditiveTextureKokkos::grow_app()
   solid_d = darray[6];
   G = darray[7];
   V = darray[8];
+  spath = darray[9];
 }
 
 /* ----------------------------------------------------------------------
@@ -235,6 +236,7 @@ void AppAdditiveTextureKokkos::allocate_app_views()
   d_grad_y = Kokkos::View<double*>("gradient_y", nall);
   d_grad_z = Kokkos::View<double*>("gradient_z", nall);
   d_V = Kokkos::View<double*>("solidification_velocity", nall);
+  d_spath = Kokkos::View<double*>("spath", nall);
 
   // Global parameter arrays (device-accessible constants); the per-spin
   // nucleation arrays and solid-front coefficients are uploaded at init.
@@ -334,6 +336,8 @@ void AppAdditiveTextureKokkos::sync_app_data_to_device()
                     Kokkos::subview(HostUnmanagedInt(active_flag, nall), all));
   Kokkos::deep_copy(Kokkos::subview(d_solid_d, all),
                     Kokkos::subview(HostUnmanagedDouble(solid_d, nall), all));
+  Kokkos::deep_copy(Kokkos::subview(d_spath, all),
+                    Kokkos::subview(HostUnmanagedDouble(spath, nall), all));
 
   // Note: Temperature k_T is synced separately in sync_temperature_to_device()
   // Gradients d_G and d_V are device-computed, synced to host only when needed for output
@@ -365,6 +369,8 @@ void AppAdditiveTextureKokkos::sync_app_data_to_host()
                     Kokkos::subview(d_G, owned));
   Kokkos::deep_copy(Kokkos::subview(HostUnmanagedDouble(V, nall), owned),
                     Kokkos::subview(d_V, owned));
+  Kokkos::deep_copy(Kokkos::subview(HostUnmanagedDouble(spath, nall), owned),
+                    Kokkos::subview(d_spath, owned));
 }
 
 /* ----------------------------------------------------------------------
@@ -1199,6 +1205,7 @@ int AppAdditiveTextureKokkos::melting_kernel(Kokkos::View<int*> d_active_sites, 
   auto d_solid_d_local = d_solid_d;
   auto d_G_local = d_G;
   auto d_V_local = d_V;
+  auto d_spath_local = d_spath;
 
   // Capture parameters for lambda
   double tl_local = this->tl;
@@ -1238,6 +1245,7 @@ int AppAdditiveTextureKokkos::melting_kernel(Kokkos::View<int*> d_active_sites, 
         d_solid_d_local(i) = 0.0;
         d_G_local(i) = 0.0;
         d_V_local(i) = 0.0;
+        d_spath_local(i) = 0.0;
 
         // Return RNG state to pool
         rand_pool_local.free_state(generator);
@@ -1281,6 +1289,7 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
   int solid_front_length_local = this->solid_front_length;
   auto d_G_local = this->d_G;
   auto d_V_local = this->d_V;
+  auto d_spath_local = this->d_spath;
   double dx_local = this->dx;
 
   // Nucleation kernel: parallel over all local sites with event tracking
@@ -1375,6 +1384,7 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
   auto d_grad_y_local = d_grad_y;
   auto d_grad_z_local = d_grad_z;
   auto d_V_local = d_V;
+  auto d_spath_local = d_spath;
   auto d_nucleation_sizes_local = d_nucleation_sizes;
   auto rand_pool_local = *rand_pool;
 
@@ -1525,6 +1535,7 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
           d_qz_local(nbr) = q_nbr[3];
           // active_flag already set to SOLID by CAS above
           d_solid_d_local(nbr) = nucleus_done_d;  // terminal, or -1 under nuclei_smooth
+          d_spath_local(nbr) = 0.0;
 
           // Copy thermal properties from nucleus
           d_G_local(nbr) = G_i;
@@ -1601,6 +1612,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
   auto d_texture_params_local = this->d_texture_params;
   auto d_G_local = this->d_G;
   auto d_V_local = this->d_V;
+  auto d_spath_local = this->d_spath;
   auto d_grad_x_local = this->d_grad_x;
   auto d_grad_y_local = this->d_grad_y;
   auto d_grad_z_local = this->d_grad_z;
@@ -1610,6 +1622,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
   const double mis_diffusion_local = this->mis_diffusion;
   const double gw_angle_local = (grain_walk_D > 0.0) ? sqrt(grain_walk_D * dx) : 0.0;
   const double gw_rho_local = grain_walk_rho;
+  const int gw_path_local = grain_walk_path;
   const double t_cool_max_local = this->t_cool_max;
   const double mis_thresh_local = this->mis_thresh;
   const double misorient_alpha_local = this->misorient_alpha;
@@ -1809,9 +1822,11 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
             d_qy_local(i) = q_nbr_inherited[2];
             d_qz_local(i) = q_nbr_inherited[3];
           }
+          d_spath_local(i) = d_spath_local(selected_nbr) + hop_distance(k_xyz_d, i, selected_nbr);   // d10
           if (gw_angle_local > 0.0) {   // coherent grain rotation between the parent's level and this one
             double qg[4] = {d_q0_local(i), d_qx_local(i), d_qy_local(i), d_qz_local(i)};
-            grain_walk_apply(d_spin_local(selected_nbr), k_xyz_d(selected_nbr, 2), k_xyz_d(i, 2), gw_angle_local, gw_rho_local, qg);
+            if (gw_path_local) grain_walk_apply(d_spin_local(selected_nbr), d_spath_local(selected_nbr), d_spath_local(i), gw_angle_local, gw_rho_local, qg);
+            else               grain_walk_apply(d_spin_local(selected_nbr), k_xyz_d(selected_nbr, 2), k_xyz_d(i, 2), gw_angle_local, gw_rho_local, qg);
             d_q0_local(i) = qg[0]; d_qx_local(i) = qg[1]; d_qy_local(i) = qg[2]; d_qz_local(i) = qg[3];
           }
 
@@ -1873,6 +1888,8 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
   const bool copy_local = smooth_orientation_copy;
   const double gw_angle_smooth = (grain_walk_D > 0.0) ? sqrt(grain_walk_D * dx) : 0.0;
   const double gw_rho_smooth = grain_walk_rho;
+  const int gw_path_smooth = grain_walk_path;
+  auto d_spath_local = d_spath;
 
   // Parallel sweep over ONLY smoothing sites (not all sites!)
   int naccept_local = 0;
@@ -1995,7 +2012,8 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
             double a0 = s0/cq, ax = sx/cq, ay = sy/cq, az = sz/cq;
             const double nrm = Kokkos::sqrt(a0*a0 + ax*ax + ay*ay + az*az);
             if (nrm > 0.0) { a0/=nrm; ax/=nrm; ay/=nrm; az/=nrm; }
-            if (copy_local && gw_angle_smooth > 0.0 && picked_nbr >= 0) {   // copied neighbour may sit on another level
+            if (copy_local && picked_nbr >= 0) d_spath_local(i) = d_spath_local(picked_nbr);   // path length travels with the orientation
+            if (copy_local && gw_angle_smooth > 0.0 && !gw_path_smooth && picked_nbr >= 0) {   // height mode: copied neighbour may sit on another level
               double qg[4] = {a0, ax, ay, az};
               grain_walk_apply(new_spin, k_xyz_d(picked_nbr, 2), k_xyz_d(i, 2), gw_angle_smooth, gw_rho_smooth, qg);
               a0 = qg[0]; ax = qg[1]; ay = qg[2]; az = qg[3];
@@ -2587,14 +2605,21 @@ void AppAdditiveTextureKokkos::input_app(char *command, int narg, char **arg)
 
   } else if (strcmp(command, "misorientation_grain_walk") == 0) {
     // misorientation_grain_walk <D_deg2_per_m>  (mirrors the CPU app; grain_walk.h)
-    if (narg != 1 && narg != 2) error->all(FLERR, "Illegal misorientation_grain_walk command");
+    // misorientation_grain_walk <D_deg2_per_m> [rho] [path|height]  (mirrors the CPU app)
+    if (narg < 1 || narg > 3) error->all(FLERR, "Illegal misorientation_grain_walk command");
+    if (narg == 3) {
+      if (strcmp(arg[2], "path") == 0) grain_walk_path = 1;
+      else if (strcmp(arg[2], "height") == 0) grain_walk_path = 0;
+      else error->all(FLERR, "misorientation_grain_walk: mode must be path or height");
+    }
     grain_walk_D = atof(arg[0]) * (MY_PI / 180.0) * (MY_PI / 180.0);
     if (grain_walk_D < 0) error->all(FLERR, "Illegal misorientation_grain_walk D: must be >= 0");
-    grain_walk_rho = (narg == 2) ? atof(arg[1]) : 0.0;
+    grain_walk_rho = (narg >= 2) ? atof(arg[1]) : 0.0;
     if (grain_walk_rho < 0.0 || grain_walk_rho >= 1.0)
       error->all(FLERR, "Illegal misorientation_grain_walk rho: must be in [0,1)");
     if (domain->me == 0 && screen)
-      fprintf(screen, "misorientation_grain_walk D = %g deg^2/m, rho = %g\n", atof(arg[0]), grain_walk_rho);
+      fprintf(screen, "misorientation_grain_walk D = %g deg^2/m, rho = %g, %s\n", atof(arg[0]), grain_walk_rho,
+              grain_walk_path ? "path" : "height");
 
   } else if (strcmp(command, "misorientation_diffusion") == 0) {
     // misorientation_diffusion <D_deg2_per_m> <thresh_deg> [alpha]

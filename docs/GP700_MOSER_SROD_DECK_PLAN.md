@@ -814,3 +814,23 @@ the build as the recurrence length grows with path level. v10's solo boxes
 ran at 698 s, the same as v8's 697 s. With the cache the persistent walk
 costs nothing measurable; the earlier "13 vs 12 min" was wall time under
 GPU sharing.
+
+**All-grain paths (2026-09-09, `grain_paths.py --grid`):** per-grain
+drift / spread / max SROD / monotonicity for every filtered grain
+(`grain_stats.csv`), a 30-grain IPF-path grid and a summary figure in
+`docs/gp700_results_v{8,10}/`.
+
+| | v10 (96 grains) | v8 (86 grains) |
+|---|---|---|
+| drift of the mean, median (p10 / p90) | 7.2° (1.7 / 13.5) | 4.2° (2.0 / 7.5) |
+| spread about the top-slab mean, median | 3.4° | 6.1° |
+| drift / spread, median | 1.66 | 0.60 |
+| max SROD, median | 15.0° | 16.0° |
+| top-slab mean SROD, median | 8.4° | 8.2° |
+| fraction of slabs with rising mean SROD, median | 0.79 | 0.78 |
+
+Drift scales with grain height in v10 (≈2° at 100 µm, 8–15° at 400 µm)
+and the tall grains trace directed IPF paths; a minority still reverse
+(monotonic fraction 0.6–0.7) because the 30 µm correlation height allows
+direction changes over 100 µm scales. v8's grains spread more than they
+drift at every height.

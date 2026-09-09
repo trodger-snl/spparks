@@ -23,6 +23,8 @@ ap.add_argument('--deadline', default=None, help='HH:MM local; do not START new 
 ap.add_argument('--dry', action='store_true')
 ap.add_argument('--range', nargs=3, action='append', default=[], metavar=('NAME','LO','HI'), help='override/add a design range (log for D/nucleation, lin otherwise); LO==HI fixes it')
 ap.add_argument('--design-seed', type=int, default=0, help='Sobol scramble seed')
+ap.add_argument('--hatch-offset', default='0', help="'random' (seeded per-layer shift in [-40,40) um) or metres applied on every second same-direction layer")
+ap.add_argument('--grain-walk', default=None, help="'off' removes the misorientation_grain_walk line; otherwise replaces its arguments")
 ap.add_argument('--extra', default=None, help='extra deck line(s) inserted after smooth_greedy_multiproposal (use ; to separate)')
 ap.add_argument('--score-only', default=None, help='score this summary.json and exit')
 ap.add_argument('--fixed', default=None, help='JSON dict of parameters: run this single point instead of a Sobol design')
@@ -65,8 +67,11 @@ tpl = open(os.path.join(HERE, 'in.gp700_layer')).read()
 def deck(p, n, out, st, seed):
     ztop = 50 + 10*(n+1); zlo = max(0, ztop-60); z0 = ztop*DX
     lend = a.nx*DX + 100e-6; ylast = 40e-6 + 80e-6*(a.nh-1)
-    laser = (f"laser_path start -100e-6 40e-6 {z0} end {lend} 40e-6 speed 1.137 hatch 80e-6 {a.nh} serpentine pause {PAUSE}" if n % 2 == 0 else
-             f"laser_path start {ylast} -100e-6 {z0} end {ylast} {lend} speed 1.137 hatch 80e-6 {a.nh} serpentine pause {PAUSE}")
+    import random as _r; _r.seed(seed*7919 + n)
+    off = _r.uniform(-40e-6, 40e-6) if a.hatch_offset == 'random' else float(a.hatch_offset)*((n//2) % 2)
+    y0 = 40e-6 + off; x0 = ylast + off
+    laser = (f"laser_path start -100e-6 {y0} {z0} end {lend} {y0} speed 1.137 hatch 80e-6 {a.nh} serpentine pause {PAUSE}" if n % 2 == 0 else
+             f"laser_path start {x0} -100e-6 {z0} end {x0} {lend} speed 1.137 hatch 80e-6 {a.nh} serpentine pause {PAUSE}")
     tbox = round(a.nh*(a.nx*DX+200e-6)/1.137 + (a.nh-1)*PAUSE + 2e-3, 6)
     t0 = n*TGAP; t1 = n*TGAP + tbox
     init = ("set site range 1 1000000\nset i2 value 1\nset d6 value 473" if (n == 0 and not a.substrate) else
@@ -82,6 +87,8 @@ def deck(p, n, out, st, seed):
     s = re.sub(r'^misorientation_diffusion\s+\S+', f"misorientation_diffusion {p['D_deg2_um']*1e6:.4g}", s, flags=re.M)
     if 'texture_c2' in p: s = re.sub(r'^texture_parameters\s+.*$', f"texture_parameters {p['texture_c2']:.4g} 2.5", s, flags=re.M)
     if a.greedy: s = re.sub(r'^smooth_greedy_multiproposal\s+.*$', f'smooth_greedy_multiproposal {a.greedy}', s, flags=re.M)
+    if a.grain_walk == 'off': s = re.sub(r'^misorientation_grain_walk\s+.*\n', '', s, flags=re.M)
+    elif a.grain_walk: s = re.sub(r'^misorientation_grain_walk\s+.*$', f'misorientation_grain_walk {a.grain_walk}', s, flags=re.M)
     if a.extra: s = re.sub(r'^(smooth_greedy_multiproposal\s+.*)$', lambda m: m.group(1) + '\n' + a.extra.replace(';', '\n'), s, flags=re.M)
     if a.nrefine is not None: s = re.sub(r'^(app_style additive/texture/kk \S+ \S+ \S+) \d+', rf'\g<1> {a.nrefine}', s, flags=re.M)
     open(out, 'w').write(s); return t1

@@ -15,7 +15,10 @@
 # microstructure continues through the stitch file.
 set -eu
 BIN=$(readlink -f "$1"); OUT=$(readlink -f "$2"); NL=${3:-12}; SEED=${4:-12345}; NX=${5:-267}; NH=${6:-10}; DT=${7:-2e-6}; SUB=${8:-}
-HERE=$(cd "$(dirname "$0")" && pwd); TPL=$HERE/in.gp700_layer
+HERE=$(cd "$(dirname "$0")" && pwd); TPL=${TPL:-$HERE/in.gp700_layer}   # TPL=... overrides the deck template
+# HATCH_OFFSET=random: seeded per-layer hatch shift in [-40,40) um along the hatch normal (layers n and n+2 no
+# longer register); HATCH_OFFSET=<metres>: that shift on every second same-direction layer; default 0.
+HOFF=${HATCH_OFFSET:-0}
 mkdir -p "$OUT"; ST=$OUT/gp700.st
 [ -n "$SUB" ] && [ ! -f "$ST" ] && cp "$SUB" "$ST" && echo "substrate $SUB -> $ST"
 DX=${DX:-3e-6}; TGAP=10.0   # voxel size from the environment (DX=1.5e-6 run_layers.sh ...)
@@ -35,10 +38,12 @@ for ((n=0; n<NL; n++)); do
   ztop=$((VSUB + VLAY*(n+1))); zlo=$((ztop-VWIN)); [ $zlo -lt 0 ] && zlo=0
   z0=$(python3 -c "print($ztop*$DX)")
   LEND=$(python3 -c "print($NX*$DX + 100e-6)"); YLAST=$(python3 -c "print(40e-6 + 80e-6*($NH-1))")
+  OFF=$(python3 -c "import random; random.seed($SEED*7919+$n); print(random.uniform(-40e-6,40e-6) if '$HOFF'=='random' else float('$HOFF')*(($n//2)%2))")
+  Y0=$(python3 -c "print(40e-6 + $OFF)"); X0=$(python3 -c "print($YLAST + $OFF)")
   if [ $((n%2)) -eq 0 ]; then
-    LASER="laser_path start -100e-6 40e-6 $z0 end $LEND 40e-6 speed 1.137 hatch 80e-6 $NH serpentine pause $PAUSE"
+    LASER="laser_path start -100e-6 $Y0 $z0 end $LEND $Y0 speed 1.137 hatch 80e-6 $NH serpentine pause $PAUSE"
   else
-    LASER="laser_path start $YLAST -100e-6 $z0 end $YLAST $LEND speed 1.137 hatch 80e-6 $NH serpentine pause $PAUSE"
+    LASER="laser_path start $X0 -100e-6 $z0 end $X0 $LEND speed 1.137 hatch 80e-6 $NH serpentine pause $PAUSE"
   fi
   T0=$(python3 -c "print($n*$TGAP)"); T1=$(python3 -c "print($n*$TGAP + $TBOX)")
   if [ $n -eq 0 ] && [ ! -f "$ST" ]; then

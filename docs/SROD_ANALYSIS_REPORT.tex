@@ -238,7 +238,27 @@ Of the 88 filtered grains in the v8 crop, 83 originate at the layer-0 remelt flo
 The per-voxel model (v8 deck) was run at Lamb's \SI{1.5}{\micro\metre} voxel on the proxy with the same $D_v$ and geometry: SROD RMS / bias \SI{0.49}{\degree} / \SI{+0.41}{\degree} against \SI{0.44}{\degree} / \SI{+0.03}{\degree} at \SI{3}{\micro\metre}, band 1.43 vs 1.41, same grain size and texture, with the finer lattice accumulating 10--18 \% more per unit height because it resolves a slightly longer growth path. For the coherent term, $\rho$ is per lattice level: keeping the \SI{30}{\micro\metre} correlation length at \SI{1.5}{\micro\metre} takes $\rho' = 0.95$ and, to keep the long-range accumulation, $D_g' = D_g (1+\rho)(1-\rho')/((1-\rho)(1+\rho')) = \SI{0.0049}{\Dunit}$. [B2: 1.5 µm v10 run pending.]
 
 \subsection{Seed scatter}
-[B1: pending.]
+\begin{table}[htbp]
+\centering\small
+\caption{Three seeds each of the v8 and v10 settings on the \SI{600}{\micro\metre} proxy (8 layers, central \SI{300}{\micro\metre}); mean $\pm$ standard deviation over seeds.}
+\label{tab:seeds}
+\begin{tabular}{lrr}
+\toprule
+ & v8 settings (per-voxel only) & v10 settings (coherent + per-voxel) \\
+\midrule
+SROD RMS vs Fig.~5a & $0.50 \pm 0.05$\si{\degree} & $0.35 \pm 0.05$\si{\degree} \\
+mean bias & $+0.17 \pm 0.19$\si{\degree} & $+0.05 \pm 0.11$\si{\degree} \\
+band ratio & $1.45 \pm 0.05$ & $1.53 \pm 0.07$ \\
+grains passing filters & $52 \pm 2$ & $55 \pm 3$ \\
+\dir{001} within \SI{15}{\degree} & $0.23 \pm 0.02$ & $0.23 \pm 0.02$ \\
+per-grain drift, median & $3.9 \pm 0.3$\si{\degree} & $6.6 \pm 0.5$\si{\degree} \\
+per-grain spread, median & $6.7 \pm 0.7$\si{\degree} & $3.9 \pm 0.4$\si{\degree} \\
+per-grain maximum SROD, median & $16.6 \pm 0.1$\si{\degree} & $13.7 \pm 0.3$\si{\degree} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The seed-to-seed scatter of the population score is about \SI{0.05}{\degree} RMS and \SI{0.1}{\degree} to \SI{0.2}{\degree} in bias, so the in-sample difference between the two models on the Fig.~5a curve (0.50 vs \SI{0.35}{\degree}) is at the two-sigma level and not decisive, as stated above; the band ratio, grain count and texture do not separate the models at all. The per-grain drift and spread separate them by more than five standard deviations in each direction. [B1: second full v10 build pending.]
 
 \subsection{Texture}
 Neither paper quantifies a \dir{001} fibre; the 2026 paper discusses both \dir{001}- and \dir{111}-oriented grains. A Sobol study over the mobility contrast $c_2$ and nucleation density with $D$ fixed gave the \dir{001}-within-\SI{15}{\degree} fraction flat at 0.22 below $c_2 \approx 5$ and rising by 0.0125 per unit $c_2$ above it, with the SROD score unaffected; on the full build $c_2 = 9$ gave 0.22 against 0.19 at $c_2 = 2.8$. The coherent walk lowers the fraction (v10: 0.15) because it carries grains out of the cone. Against a random baseline of 0.102, the builds sit at 1.5--2.2$\times$ random.

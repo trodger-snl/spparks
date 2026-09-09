@@ -875,3 +875,9 @@ Reviewer: `docs/SROD_REPORT_REVIEW.md`. Results in `docs/gp700_results_review/`.
   Gaussian OU walk with one D_g produces.
 - Random baseline for <001> within 15° (10°) of BD computed by Monte Carlo: **0.102 (0.045)**,
   not 0.09.
+
+**B1 seed scatter (proxy, 3 seeds each, 12:24):** v8 settings RMS 0.50±0.05°, bias +0.17±0.19°,
+band 1.45±0.05, filtered 52±2, fibre 0.23±0.02, drift 3.9±0.3°, spread 6.7±0.7°, max SROD 16.6±0.1°;
+v10 settings RMS 0.35±0.05°, bias +0.05±0.11°, band 1.53±0.07, filtered 55±3, fibre 0.23±0.02,
+drift 6.6±0.5°, spread 3.9±0.4°, max SROD 13.7±0.3°. Population score differs at ~2σ; per-grain
+drift/spread at > 5σ.

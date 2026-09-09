@@ -779,3 +779,17 @@ band 1.49, drift 5–10°, spread 4–6°). Cost: the persistent recurrence is
 evaluated from level 0 per capture (≤ ~250 path levels), which made the
 rho > 0 path runs ~1.4× slower than memoryless; a per-grain cache would
 remove that if it matters for full builds.
+
+**Recurrence cache (6a47de77) and v10 (2026-09-08/09).** Device table of the
+OU rotation vector per (compact grain id, level), 16384 × 768 doubles
+(302 MB), filled lazily in the capture/smoothing kernels; overflow falls
+back to the direct recurrence; CPU app keeps the direct form. Cached vs
+direct at the mixed rho 0.9 path settings on the proxy: RMS 0.49° /
+bias +0.36° / band 1.46 vs 0.38° / +0.28° / 1.49, D-fit 0.46 vs 0.50,
+per-grain drift 3–10.5° vs 5–10.5°, spread 5–6° vs 4–6° — seed-level
+agreement. Timing under sharing was inconclusive (direct persistent ran
+1.5× the memoryless proxy under equal 3-way sharing; the cached run shared
+with the full build); a solo cached-vs-direct pair is queued after v10
+(`chain_timing.sh`). **v10** (`wide12_v10`, launched 23:36): v8 deck +
+`misorientation_grain_walk 1.0e4 0.9 path` + `misorientation_diffusion
+6.5e4`, substrate_800um_50um_d10.st, cached binary.

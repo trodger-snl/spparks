@@ -307,6 +307,22 @@ run sits on Lamb and is the working candidate for the next full build.
 Lamb's within-slice width would fix D_g : D_v and their population curve
 below 30 µm would fix rho; neither is resolved by the published figures.
 
+
+**Path-indexed walk.** The level index was the lattice z level, which ties
+the coherent walk to the build direction. A per-site field d10 now carries
+the inheritance path length in lattice units (0 at melt and at nuclei,
+parent + hop at capture, copied with the orientation on a smoothing flip,
+exchanged with ghosts and continued through the stitch), and
+`misorientation_grain_walk D_g rho path` (default; `height` keeps the old
+indexing) fires one increment per unit of path in any growth direction.
+With D_g ÷ 1.8 the proxy lands on Lamb directly: memoryless grain-only
+(D_g 0.23) 0.51° / +0.28°, band 1.49; persistent grain-only (rho 0.9,
+D_g 0.0145) 0.58° / +0.40°, band 1.63; persistent mixed (rho 0.9, D_g 0.010
++ D_v 0.065) 0.38° / +0.28°, band 1.49, per-grain drift 5–10.5° against
+4–6.4° spread. The persistence amplification takes its AR(1) value in path
+mode (D-fit/D_g ≈ 35 ≈ 19 × 1.8), and path dispersion inside a grain gives
+a 2–4° intragranular spread by itself.
+
 ## 7. Findings and open issues
 
 1. SROD in GP700 is a rotation walk with D ≈ 0.42 deg²/µm against height
@@ -349,4 +365,4 @@ Runs: `/home/tron/gp700_runs/wide12_v{2..9}`, `dx1p5_v8`, `dx3_v8_ref`,
 `sobol{1,2}`, `sobol_fibre{1,2}`, `smooth_*`. Key commits: 8325eb71 (cap),
 fa8930f3 (diffusion model), ad23c1a5 (per-grain selection), 1a9712b3 (kk
 kernel parity), da2fad29 (`smooth_orientation`), a0fb1011 (v8 deck),
-a3a66f41 (voxel-size driver), b6e4ba5f / 47546146 (`misorientation_grain_walk`, persistence).
+a3a66f41 (voxel-size driver), b6e4ba5f / 47546146 / 60b2d711 (`misorientation_grain_walk`, persistence, path index).

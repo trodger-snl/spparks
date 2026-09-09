@@ -806,3 +806,11 @@ p90 8.8°. Four tallest grains: drift 8.4–9.6°, spread about the top-slab
 mean 6.2–7.7°, max SROD 20–24° (v8: drift 3–6°, spread 12°, max 26–33°).
 <001> within 15° of BD 0.15 (v8 0.19): the coherent rotation carries
 grains out of the cone. Solo box time 13 min (v8 12 min) with the cache.
+
+**Cache timing (solo, proxy, mixed rho 0.9 path):** loop time per box —
+cached 189–190 s flat across the 8 boxes, equal to the per-voxel-only
+reference (dx3_v8_ref, 189 s); direct recurrence 197 → 222 s, rising with
+the build as the recurrence length grows with path level. v10's solo boxes
+ran at 698 s, the same as v8's 697 s. With the cache the persistent walk
+costs nothing measurable; the earlier "13 vs 12 min" was wall time under
+GPU sharing.

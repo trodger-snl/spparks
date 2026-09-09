@@ -21,6 +21,7 @@ ap = argparse.ArgumentParser(); ap.add_argument('stitch'); ap.add_argument('--ou
 ap.add_argument('--dx', type=float, default=3e-6); ap.add_argument('--floor-um', type=float, default=100.0)
 ap.add_argument('--crop', type=float, nargs=4, default=None); ap.add_argument('--n', type=int, default=4)
 ap.add_argument('--slab-um', type=float, default=10.0)
+ap.add_argument('--grid', type=int, default=24, help='grains in the compact IPF-path grid (tallest first)')
 a = ap.parse_args(); os.makedirs(a.out, exist_ok=True); dxu = a.dx*1e6
 with StitchReader(a.stitch) as r:
     b = r.get_global_bounds(); t = r.times[-1]
@@ -104,3 +105,48 @@ for row, g in enumerate(pick):
     print(f'grain {g}: height {h.max():.0f} um, ESD {esd[ids==g][0]:.0f} um, voxels {m.sum()}, mean SROD top slab {means[-1]:.1f} deg, '
           f'max SROD {srod.max():.1f} deg; mean-orientation drift bottom->top {drift:.1f} deg; spread about the top-slab mean: RMS {np.sqrt((spread_top**2).mean()):.1f} deg')
 fig.tight_layout(); fig.savefig(f'{a.out}/grain_paths.png', dpi=140); print(f'wrote {a.out}/grain_paths.png')
+
+# ---- every filtered grain: drift / spread / max SROD / top-slab mean, a compact IPF-path grid, and a summary figure
+def mean_q(qs):
+    qs = np.where((qs @ qs[0])[:,None] < 0, -qs, qs); v = qs.mean(0); return v/np.linalg.norm(v)
+allg = ids[ok][order]; rows = []; paths = {}
+for g in allg:
+    m = lab == g; idx = np.argwhere(m); qq = q[m]; zc = idx[:,2]; o = idx[np.argmin(zc)]
+    h = (zc - o[2])*dxu; srod = disorientation_deg(np.broadcast_to(q[tuple(o)], (len(qq),4)), qq)
+    lo_m = h < 3*a.slab_um; hi_m = h >= h.max()-3*a.slab_um
+    if lo_m.sum() < 20 or hi_m.sum() < 20: continue
+    qb = mean_q(qq[lo_m]); qt = mean_q(qq[hi_m])
+    drift = disorientation_deg(qb[None,:], qt[None,:])[0]
+    spread = np.sqrt((disorientation_deg(np.broadcast_to(qt,(hi_m.sum(),4)), qq[hi_m])**2).mean())
+    edges = np.arange(0, h.max()+a.slab_um, a.slab_um); means = []; pth = []
+    for lo in edges[:-1]:
+        mm = (h >= lo) & (h < lo+a.slab_um)
+        if mm.sum() < 20: continue
+        means.append(srod[mm].mean())
+        v = np.sort(np.abs(bd_in_crystal(qq[mm])), axis=1)[:, ::-1].mean(0); v /= np.linalg.norm(v); pth.append((v[1]/(1+v[0]), v[2]/(1+v[0])))
+    means = np.array(means); mono = float(np.mean(np.diff(means) >= 0)) if len(means) > 1 else np.nan
+    rows.append((int(g), float(h.max()), float(esd[ids==g][0]), int(m.sum()), drift, spread, float(srod.max()), float(means[-1]), mono))
+    paths[int(g)] = np.array(pth)
+import csv
+with open(f'{a.out}/grain_stats.csv', 'w', newline='') as fcsv:
+    w = csv.writer(fcsv); w.writerow(['grain','height_um','esd_um','voxels','drift_deg','spread_top_rms_deg','max_srod_deg','top_slab_mean_deg','monotonic_fraction']); w.writerows(rows)
+R = np.array([r[4:] for r in rows]); print(f'{len(rows)} filtered grains: drift median {np.median(R[:,0]):.1f} deg (p10/p90 {np.percentile(R[:,0],10):.1f}/{np.percentile(R[:,0],90):.1f}), '
+      f'spread median {np.median(R[:,1]):.1f}, max SROD median {np.median(R[:,2]):.1f}, top-slab mean median {np.median(R[:,3]):.1f}, drift/spread median {np.median(R[:,0]/R[:,1]):.2f}, monotonic fraction median {np.nanmedian(R[:,4]):.2f}')
+ng = min(a.grid, len(rows)); nc = 6; nr = int(np.ceil(ng/nc))
+fig, axes = plt.subplots(nr, nc, figsize=(2.6*nc, 2.5*nr), squeeze=False)
+for k, ax in enumerate(axes.ravel()):
+    if k >= ng: ax.axis('off'); continue
+    g = rows[k][0]; draw_triangle(ax); pth = paths[g]
+    ax.scatter(pth[:,0], pth[:,1], c=np.arange(len(pth)), cmap='viridis', s=6, linewidths=0)
+    ax.plot(pth[:,0], pth[:,1], color='k', lw=0.6)
+    ax.annotate('', xy=pth[-1], xytext=pth[0], arrowprops=dict(arrowstyle='->', color='#c9552a', lw=1.2))
+    ax.set_title(f'{g}: h {rows[k][1]:.0f} um, drift {rows[k][4]:.1f}, spread {rows[k][5]:.1f}', fontsize=7.5, loc='left')
+fig.suptitle(f'per-slab mean orientation paths on the build-direction IPF, {ng} tallest filtered grains (colour: height)', fontsize=10)
+fig.tight_layout(); fig.savefig(f'{a.out}/grain_paths_grid.png', dpi=130)
+fig, ax = plt.subplots(1, 3, figsize=(14, 4.2))
+ax[0].scatter(R[:,1], R[:,0], s=14, color='#2a78d6', alpha=0.7); lim = max(R[:,0].max(), R[:,1].max())*1.05
+ax[0].plot([0,lim],[0,lim], color='#888', lw=0.8, ls='--'); ax[0].set_xlabel('spread about the top-slab mean, RMS (deg)'); ax[0].set_ylabel('drift of the mean, bottom -> top (deg)'); ax[0].set_title(f'{len(rows)} filtered grains', loc='left', fontsize=10)
+H = np.array([r[1] for r in rows]); ax[1].scatter(H, R[:,0], s=14, color='#2a78d6', alpha=0.7, label='drift'); ax[1].scatter(H, R[:,2], s=14, color='#c9552a', alpha=0.6, label='max SROD'); ax[1].set_xlabel('grain height (um)'); ax[1].set_ylabel('deg'); ax[1].legend(frameon=False); ax[1].set_title('drift and max SROD vs height', loc='left', fontsize=10)
+ax[2].hist(R[:,4][~np.isnan(R[:,4])], bins=np.linspace(0,1,11), color='#2a78d6', alpha=0.8); ax[2].set_xlabel('fraction of slabs where the mean SROD increases'); ax[2].set_ylabel('grains'); ax[2].set_title('monotonicity of SROD(h)', loc='left', fontsize=10)
+for a_ in ax: a_.grid(color='#e6e5e1', lw=0.6)
+fig.tight_layout(); fig.savefig(f'{a.out}/grain_summary.png', dpi=140); print(f'wrote {a.out}/grain_paths_grid.png, grain_summary.png, grain_stats.csv')

@@ -887,3 +887,8 @@ band 1.50, 55 filtered, ESD p50 120 µm (registered seed_v10_s1: 0.35°, 123 µm
 the 80 µm lag 0.34/0.48 vs 0.46/0.45 registered; power at the period 0.52/0.39 vs 0.47/0.57; widths
 27–36 vs 30–33 µm; drift/spread 5.3/3.6 vs 6.0/3.8°; <001> 0.30 vs 0.21–0.25. The pool spacing
 imprints the 80 µm period on every layer regardless of registration; SROD unaffected.
+
+**B1 second full v10 build (wide12_v10_s2, seed 24680, 15:11):** RMS 0.21°, bias 0.00°, band 1.46,
+97 filtered, ESD p50 156 µm, <001> 0.20; established vs Fig 5c 0.47° / +0.25°; drift 6.6°, spread 3.2°,
+max SROD median 12.7 (p90 24.5, max 49.3 — one grain at Lamb's extreme), per-layer mean at 300 µm median
+9.9°, max 18.7°; rate mean 0.83, max 5.39°/30 µm; path factor 1.49.

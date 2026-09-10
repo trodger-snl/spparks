@@ -2,8 +2,7 @@
 
 Review: `SROD_REPORT_REVIEW.md` (reviewer saw the report, its figures and the two Lamb papers only).
 Analyses added for this revision are in `gp700_results_review/`; the development log is
-`GP700_MOSER_SROD_DECK_PLAN.md`. Items marked *pending* wait for runs queued on the GPU
-(`/home/tron/gp700_runs/chain_review.sh`).
+`GP700_MOSER_SROD_DECK_PLAN.md`. All queued runs (`/home/tron/gp700_runs/chain_review.sh`) have completed.
 
 ## Major issues
 
@@ -35,10 +34,16 @@ boundary-density autocorrelation 0.6–0.7 at the 80 µm lag, 43–62 % of spect
 period, in-plane widths 30–51 µm median. Cause: the deck registers the hatches of layers n and
 n+2. The papers specify bidirectional, 90° rotation repeating every two layers, 45° to the block
 edges, but not the registration. A per-layer hatch offset was added to the deck driver
-(`HATCH_OFFSET=random`) and a sensitivity run at the v10 settings is *pending*.
+(`HATCH_OFFSET=random`) and run at the v10 settings on the proxy: the boundary autocorrelation at
+the hatch lag falls from 0.46/0.45 to 0.34/0.48, grain size, SROD score and per-grain drift/spread
+are unchanged within the seed scatter, and the <001> fraction rises to 0.30 (one realisation). The
+pool spacing imprints the 80 µm period on each layer regardless of registration (report §7.5).
 
-**M5 Seed scatter.** *Pending*: three seeds each of the v8 and v10 settings on the proxy and a
-second full v10 build are queued; tables will carry the scatter.
+**M5 Seed scatter.** Done (report §7.9): three seeds each on the proxy give a population-score
+scatter of ±0.05° RMS and ±0.1–0.2° bias (the v8/v10 difference on the calibration curve is ~2σ),
+while per-grain drift and spread separate the models by > 5σ. A second full v10 build gives
+RMS 0.21° / bias 0.00°, established-class 0.47° / +0.25°, drift 6.6°, spread 3.2°, and one grain
+reaching 49° at 5.4°/30 µm, so the per-grain extremes are seed-sensitive where the medians are not.
 
 **M6 Grain classes.** The floor-referenced (established) comparison is now shown (M1). The
 origin census over 26 existing runs (nucleation 6.5e12–8.5e13 m⁻³, t_c 3–23 K) finds 0–7 filtered
@@ -55,7 +60,10 @@ dependence on layers deposited above, and compares a 12-layer build with block-i
 
 **Claim D, resolution.** The 1.5 µm test used the per-voxel deck only; stated. The rescaling rule
 for the coherent term (rho' = 1 − (1 − rho)·dx'/dx, D_g rescaled to keep the long-range
-accumulation) is given, and a 1.5 µm run of the v10 deck with rho 0.95, D_g 0.0049 is *pending*.
+accumulation) is given, and the v10 deck was run at 1.5 µm with rho 0.95, D_g 0.0049: RMS 0.74° / bias +0.64°, band 1.42,
+drift/spread 7.8/4.4°, path factor 1.68; the mean SROD sits 5–15 % above the 3 µm value at every
+height, the same excess the per-voxel term showed alone. First-order resolution independent under
+the stated rescaling, with a ~10 % excess per halving of the voxel (report §7.8).
 
 ## Minor issues
 
@@ -87,8 +95,8 @@ accumulation) is given, and a 1.5 µm run of the v10 deck with rho 0.95, D_g 0.0
 3. With that offset the established distribution is non-central, so its width ratio falls; the
    text now says so instead of "1.3–1.5 at every height".
 4. Measured from d10: 1.47 (was inferred).
-5. Not before; the rescaling rule is stated and the run is pending.
-6. One seed each so far; the seed study is pending.
+5. Not before; the rescaling rule is stated and the run is reported (claim D above).
+6. Three proxy seeds per model and two full v10 builds now (M5).
 7. Sobol: two 16- and 8-point designs over D 0.2–2.0, nucleation 1e13–1e14, t_c 3–25 K, c2 1–4,
    objective RMS to Fig. 5a over 25–240 µm; no target withheld (hence the held-out tests added).
 8. Yes, at the hatch centrelines; widths reported; the comparison with Lamb's Fig. 2f is

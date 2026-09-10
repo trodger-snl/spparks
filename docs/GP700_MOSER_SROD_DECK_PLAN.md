@@ -892,3 +892,8 @@ imprints the 80 µm period on every layer regardless of registration; SROD unaff
 97 filtered, ESD p50 156 µm, <001> 0.20; established vs Fig 5c 0.47° / +0.25°; drift 6.6°, spread 3.2°,
 max SROD median 12.7 (p90 24.5, max 49.3 — one grain at Lamb's extreme), per-layer mean at 300 µm median
 9.9°, max 18.7°; rate mean 0.83, max 5.39°/30 µm; path factor 1.49.
+
+**B2 1.5 µm v10 (rho 0.95, D_g 0.0049, D_v 0.065; 21:40):** RMS 0.74°, bias +0.64°, band 1.42, 65 filtered,
+ESD p50 115 µm, <001> 0.18; drift 7.8°, spread 4.4°, max SROD median 15.6°, rate 1.00°/30 µm, path
+factor 1.68. Mean SROD 5–15 % above the 3 µm proxies at every height (same excess as the per-voxel-only
+test): first-order resolution independent under the rho/D_g rescaling.

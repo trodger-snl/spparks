@@ -905,3 +905,7 @@ bias −0.65 / −0.11 / +0.44°. Origin census with 2° segmentation: v10 55 of
 > 60 µm above the floor (13 % of volume), v8 0 of 54 — the coherent walk creates low-angle boundaries that a
 2° segmentation reads as mid-build origins; spin labels: 3 of 100 (v10), 3 of 94 (v8). Rescaled 1.5 µm run
 (D_v, D_g × 0.875, `dx1p5_v10r`) launched 21:53 for the path-factor attribution.
+
+**B4 rescaled 1.5 µm v10 (D_v 0.057, D_g 0.0043, rho 0.95; 04:24):** RMS 0.30°, bias +0.18° (unscaled +0.64°),
+band 1.49, drift/spread 7.1/4.4°, path factor 1.76; excess over 3 µm −4 / +7 / +12 % at 45 / 205 / 282 µm.
+The path-factor ratio accounts for most of the resolution dependence. Report revision 2b complete.

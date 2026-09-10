@@ -131,7 +131,8 @@ Second review: `SROD_REPORT_REVIEW_2.md` (minor revision). Items in the order of
    to "comparable". The "originating grains" attribution in the caption is removed.
 3. **Resolution wording and path-factor attribution.** Excess stated as 3 / 10 / 23 % growing with
    height, the path factor accounting for about a third. A 1.5 µm run with D_v and D_g additionally
-   scaled by 1.47/1.68 is running (`dx1p5_v10r`); the paragraph carries a marker until it reports.
+   scaled by 1.47/1.68 (`dx1p5_v10r`) brings the bias from +0.64° to +0.18°, within 2σ of the 3 µm
+   scatter, with a residual excess of +12 % at 282 µm; the path factor accounts for most of it (§7.8).
 4. **Origin census on the 2° volume and the §7.6/7.7 connection.** Done: on the 2° segmentation v10
    has 55 originating : 86 continuation filtered grains (13 % of the filtered volume); v8 has 0 : 54.
    The two sections now reference each other and Finding 5 gives the like-for-like ratio (55 : 86 vs

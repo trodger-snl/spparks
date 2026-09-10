@@ -112,3 +112,44 @@ the stated rescaling, with a ~10 % excess per halving of the voxel (report §7.8
 15. Census over 26 runs (M6): no.
 16. The model is a phenomenological proxy (M8); it predicts no dependence on later layers, which
     is a stated limitation.
+
+---
+
+# Response to the second review (revision 2b, 2026-09-09)
+
+Second review: `SROD_REPORT_REVIEW_2.md` (minor revision). Items in the order of its "required for acceptance" list.
+
+1. **ESD definition and filter.** Not an error: the ESD quoted for a build is the volume-weighted median
+   over all grains of the crop (the ESD of the grain holding the median voxel), so 148 µm means half the
+   crop volume lies in grains of ESD ≥ 148 µm (about 19 such grains, which fit in 6.5e7 µm³). The
+   number-weighted median ESD of the filtered grains is 75 µm (v10) and 72 µm (v8); the filtered grains
+   sum to 96 % of the crop volume. The 40 µm filter acts on each grain's own (cropped) ESD. Definition now
+   stated in §6; the 2° figures (29 and 8 µm) are the same volume-weighted statistic over all labels.
+2. **2026 held-out claim.** Rewritten to the table: mode only, with the floor-crossing explanation of the
+   flat mean, the missing digitization uncertainty, v8 closer below 60 µm, v10 meeting the mode at 115 µm,
+   and the 1.6° at 5 µm as sub-30 µm information above the single-D walk. Abstract and Finding 2 changed
+   to "comparable". The "originating grains" attribution in the caption is removed.
+3. **Resolution wording and path-factor attribution.** Excess stated as 3 / 10 / 23 % growing with
+   height, the path factor accounting for about a third. A 1.5 µm run with D_v and D_g additionally
+   scaled by 1.47/1.68 is running (`dx1p5_v10r`); the paragraph carries a marker until it reports.
+4. **Origin census on the 2° volume and the §7.6/7.7 connection.** Done: on the 2° segmentation v10
+   has 55 originating : 86 continuation filtered grains (13 % of the filtered volume); v8 has 0 : 54.
+   The two sections now reference each other and Finding 5 gives the like-for-like ratio (55 : 86 vs
+   > 500 : 100).
+5. **Both full-build seeds** are quoted in the abstract, summary and §7.2 (established 0.28 / −0.11 and
+   0.47 / +0.25).
+6. **Figure labels** regenerated (Scripta Mater. 2024; "Lamb 2024 Fig. 5a" in the heatmap); "as large
+   as 20–25°" used in §2, Table 4 and §7.4; the 1.7°/30 µm rate is used once, in Table 4, with the
+   caveat that the paper does not say how it was averaged; the 86-of-88 count replaced by the census
+   numbers with one labelling (3 of 100 v10, 3 of 94 v8 with spin labels); the established width drop
+   is at 150 µm in both places.
+
+Other points: the established-floor sensitivity is reported (200 / 240 / 300 µm → −0.65 / −0.11 /
++0.44°) and the claim scaled to 0.5°; the hatch autocorrelation's phase insensitivity is stated and the
+unchanged widths/ESD named as the evidence; the 2026 in-pool torsion mechanism is added to §2 and named
+as the at-solidification support for the proxy; the D consistency check (constants × path factor 0.37
+vs fitted 0.43 for v10) is tabulated and the ballistic-regime excess named; Sobol design details and the
+way D_v, D_g and rho were chosen are in §6; the mean-orientation, front-velocity polynomial and
+undercooling-deviation terms are defined; Lamb's mutually inconsistent per-grain numbers are noted and
+the population curves declared the target; the maximum-SROD caveat is added; the bold v10 row is
+explained as the working deck.

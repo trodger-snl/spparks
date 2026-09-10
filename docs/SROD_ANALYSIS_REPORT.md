@@ -1,6 +1,6 @@
 # Misorientation accumulation along columnar grains in GammaPrint-700 laser powder bed fusion: 3D-EBSD (Lamb et al.) versus SPPARKS
 
-Revision 2, 2026-09-09. **Reference version: `SROD_ANALYSIS_REPORT.tex` (PDF alongside); this file is generated from it with pandoc.** Figures are referenced by path under `docs/`.
+Revision 2b, 2026-09-10. **Reference version: `SROD_ANALYSIS_REPORT.tex` (PDF alongside); this file is generated from it with pandoc.** Figures are referenced by path under `docs/`.
 
 # Summary
 
@@ -23,9 +23,10 @@ Revision 2, 2026-09-09. **Reference version: `SROD_ANALYSIS_REPORT.tex` (PDF alo
 - Deck v10: $`D_v`$ 0.065 deg²/µm, $`D_g`$ 0.010 deg²/µm, $`\rho = 0.9`$
   (correlation length $`\approx \SI{30}{\micro\metre}`$ of path),
   calibrated on the 2024 originating curve (in-sample RMS 0.34 °).
-  Held-out: established curve RMS 0.28 ° / bias −0.11 ° (v8, per-voxel
-  only: 2.99 ° / 2.98 °); 2026 Fig. 7a mode 1.6 → 4.7 ° over 5–115 μm
-  against the model’s 0.8 → 4.8 °.
+  Held-out: established curve RMS / bias 0.28 / −0.11 ° and 0.47 /
+  0.25 ° in two builds (v8, per-voxel only: 2.99 / 2.98 °); 2026 Fig. 7a
+  mode 1.6 → 4.7 ° over 5–115 μm against v10’s 0.8 → 4.8 ° and v8’s 1.8
+  → 5.8 °.
 
 - Per grain (96 filtered grains): drift of the mean orientation median
   7.2 ° (v8 4.2 °), spread 3.4 ° (v8 6.1 °). Against Lamb: accumulation
@@ -37,8 +38,9 @@ Revision 2, 2026-09-09. **Reference version: `SROD_ANALYSIS_REPORT.tex` (PDF alo
   at 3 μm, 1.68 at 1.5 μm) and first-order resolution independent: with
   $`\rho`$ and $`D_g`$ rescaled for the voxel size the deck reproduces
   Lamb at the experiment’s 1.5 μm voxel with a bias of 0.64 ° (per-voxel
-  term alone: 0.41 °), a 5–15 % excess from the longer resolved growth
-  path.
+  term alone: 0.41 °); the excess over the 3 μm result grows from 3 % at
+  45 μm to 23 % at 282 μm, and rescaling the constants by the measured
+  path-factor ratio (1.47/1.68) reduces the bias to 0.18 °.
 
 - Limitations: hatch-locked grain structure (boundary autocorrelation
   0.6–0.7 at the 80 μm lag; a random per-layer hatch offset leaves the
@@ -60,8 +62,9 @@ CoNi-base superalloy GammaPrint-700 (SB-CoNi-10), laser powder bed
 fusion on an SLM Solutions SLM125 at 176 W and 1137 mm s<sup>−1</sup>,
 80 μm spot (the papers give the spot size only; the deck reads it as
 $`D4\sigma`$), 80 μm hatch, 30 μm layers, bidirectional scan with 90 °
-interlayer rotation repeating every two layers, scan directions at 45 °
-to the block edges, single 10 mm raster, 200 °C plate preheat. The hatch
+interlayer rotation (the 2024 Fig. 2c sketch shows the direction
+repeating every two layers and the scan directions at 45 ° to the block
+edges), single 10 mm raster, 200 °C plate preheat. The hatch
 registration between layers of the same direction is not stated. The
 2026 paper supplies the thermophysical set used for its 3DThesis
 simulations: $`k = \SI{22.5}{\watt\per\metre\per\kelvin}`$ (extrapolated
@@ -96,19 +99,25 @@ Each grain is sliced along the build direction; each slice gives a SROD
 histogram fitted to a normal distribution, and the mean and the 90 %
 interval of that fit are plotted against height above the origin
 (Fig. 5a) or above the dataset floor (Fig. 5c). Fig. 4 follows four
-grains (G1–G4) with IPF and SROD maps, the mean SROD per layer (20–25 °
-after $`> \SI{300}{\micro\metre}`$), and every voxel on the
-build-direction inverse pole figure with an arrow for the rotation path
-from bottom to top; G4 splits into two orientation clusters. The maximum
-SROD in any grain is 58.7 °; “most columnar grains” contain over 25 °.
-The 2026 paper’s Fig. 7a is a heatmap of SROD against distance from the
-grain start over 0–120 μm, with quoted average and maximum accumulation
-rates of 1.7 and 5.8 ° per 30 μm for bulk grains (2.5 and 7.2 ° for
-cells); it also reports that cells switch $`\langle 100 \rangle`$ growth
-variants at fusion lines rather than rotating continuously. Both papers
-attribute the misorientation to plastic deformation: solidification
-shrinkage in the mushy zone and thermomechanical cycling in the
-heat-affected zone of subsequent layers.
+grains (G1–G4) with IPF and SROD maps, the mean SROD per layer (“as
+large as 20–25 °” after $`> \SI{300}{\micro\metre}`$), and every voxel
+on the build-direction inverse pole figure with an arrow for the
+rotation path from bottom to top; G4 splits into two orientation
+clusters. The maximum SROD in any grain is 58.7 °; “most columnar
+grains” contain over 25 °. The 2026 paper’s Fig. 7a is a heatmap of SROD
+against distance from the grain start over 0–120 μm for the grains of
+that volume (the paper does not say whether grains cut by the volume
+floor are included), with quoted average and maximum accumulation rates
+of 1.7 and 5.8 ° per 30 μm for bulk grains (2.5 and 7.2 ° for cells; the
+paper does not state how the average was formed); it also reports that
+cells switch $`\langle 100 \rangle`$ growth variants at fusion lines
+rather than rotating continuously. Both papers attribute the
+misorientation to plastic deformation: solidification shrinkage in the
+mushy zone and thermomechanical cycling in the heat-affected zone of
+subsequent layers (2024), and, in the 2026 paper, torsion and deflection
+of cells by their neighbours during growth in the pool, with shear
+strains of 0.2–3 % supported by synchrotron measurements; the last is an
+at-solidification mechanism.
 
 # Analysis of the experimental data
 
@@ -203,20 +212,22 @@ size within the run-to-run scatter. Calibration used a 600 μm, 7-hatch,
 
 #### Solidification kinetics.
 
-Front velocity is the 304L polynomial of undercooling used by the
-additive app, scaled $`\times 3.5`$ (front at 25 K–35 K undercooling,
-about 0.56 m s<sup>−1</sup>, keeping up with the 1.137 m s<sup>−1</sup>
-scan); nucleation density 1.5 × 10<sup>13</sup>  m<sup>3</sup>, critical
-undercooling $`t_c = \SI{15}{\kelvin}`$, deviation 2 K. Parent selection
-per grain: candidate neighbours are grouped by grain, each grain
-weighted by the mobility $`1 + c_2 \cos(c_3 \theta)`$ of its
-sign-aligned mean orientation against the local thermal gradient
-($`\theta`$ the angle between the nearest $`\langle 100 \rangle`$ of
-that mean orientation and the gradient; $`c_2 = 2.8`$, $`c_3 = 2.5`$,
-negative clamped to zero), then the parent voxel is drawn uniformly
-inside the chosen grain. Weighting among the voxels of one grain instead
-rotated grains toward $`\langle 001 \rangle`$ with height and is not
-used.
+Front velocity is a cubic polynomial in undercooling (the 304L
+stainless-steel fit shipped with the additive app) scaled $`\times 3.5`$
+(front at 25 K–35 K undercooling, about 0.56 m s<sup>−1</sup>, keeping
+up with the 1.137 m s<sup>−1</sup> scan); nucleation density
+1.5 × 10<sup>13</sup>  m<sup>3</sup>, critical undercooling
+$`t_c = \SI{15}{\kelvin}`$ with a 2 K standard deviation across sites.
+Parent selection per grain: candidate neighbours are grouped by grain,
+each grain weighted by the mobility $`1 + c_2 \cos(c_3 \theta)`$ of its
+mean orientation (the normalised sum of the candidate voxels’
+quaternions after flipping each to the same hemisphere) against the
+local thermal gradient ($`\theta`$ the angle between the nearest
+$`\langle 100 \rangle`$ of that mean orientation and the gradient;
+$`c_2 = 2.8`$, $`c_3 = 2.5`$, negative clamped to zero), then the parent
+voxel is drawn uniformly inside the chosen grain. Weighting among the
+voxels of one grain instead rotated grains toward
+$`\langle 001 \rangle`$ with height and is not used.
 
 #### Misorientation model.
 
@@ -276,21 +287,35 @@ stitch frame; solid means `i2 == 3` (solidified; unremelted substrate,
 the proxy), grains cut by the crop faces kept with their cropped volume;
 label grains as connected components of the spin field, or optionally
 re-segment at a disorientation threshold (`--segment-deg`); grain
-volume, ESD and extents; Lamb’s filters (height
-$`\geq \SI{60}{\micro\metre}`$, ESD $`\geq \SI{40}{\micro\metre}`$);
-origin = the grain’s lowest solid voxel, whose quaternion is the
-reference (exact in the simulation, so no offset); grains crossing the
-analysis floor are established and referenced at their floor-slice
-centroid. SROD is the symmetry-reduced disorientation of every voxel
-from its grain’s reference, binned by height above the origin or floor
-in 10 μm steps with mean, $`p_5`$, $`p_{95}`$ and RMS per bin. Score:
-RMS of (simulated mean $`-`$ Lamb Fig. 5a mean) over 25 μm–240 μm, its
-bias, the band ratio $`(p_{95}-p_5)/\text{mean}`$ averaged over the same
-bins, the fraction of solid within 15 ° of $`\langle 001 \rangle`$
-parallel to the build direction (random: 0.102 by Monte Carlo), and
-grain counts. Sobol designs (scipy `qmc`) on the proxy were used for
-calibration against the Fig. 5a score; the Fig. 5c established curve and
-the 2026 Fig. 7a heatmap were not used in calibration.
+volume, equivalent spherical diameter (ESD, from the cropped volume) and
+extents; Lamb’s filters (height $`\geq \SI{60}{\micro\metre}`$, ESD
+$`\geq \SI{40}{\micro\metre}`$); origin = the grain’s lowest solid
+voxel, whose quaternion is the reference (exact in the simulation, so no
+offset); grains crossing the analysis floor are established and
+referenced at their floor-slice centroid. SROD is the symmetry-reduced
+disorientation of every voxel from its grain’s reference, binned by
+height above the origin or floor in 10 μm steps with mean, $`p_5`$,
+$`p_{95}`$ and RMS per bin. Score: RMS of (simulated mean $`-`$ Lamb
+Fig. 5a mean) over 25 μm–240 μm, its bias, the band ratio
+$`(p_{95}-p_5)/\text{mean}`$ averaged over the same bins, the fraction
+of solid within 15 ° of $`\langle 001 \rangle`$ parallel to the build
+direction (random: 0.102 by Monte Carlo), and grain counts. ESD values
+quoted for a build are volume-weighted medians over all grains of the
+crop (the ESD of the grain holding the median voxel); the
+number-weighted median ESD of the filtered grains is 75 μm in v10 and
+72 μm in v8, and the filtered grains hold 96 % of the crop volume.
+Calibration: Sobol designs (scipy `qmc`; 16 + 8 points over $`D_v`$
+0.2–2.0, nucleation 1 × 10<sup>13</sup>–1 × 10<sup>14</sup>, $`t_c`$
+3–25 K, $`c_2`$ 1–4, then 8 points over $`c_2`$ 2–8 and nucleation
+5 × 10<sup>12</sup>–5 × 10<sup>13</sup>) on the proxy against the
+Fig. 5a score fixed $`D_v`$ for the per-voxel model; for the two-term
+model $`\rho`$ was set from a target correlation length of 30 μm of path
+(the height of Lamb’s initial fast regime), $`D_g`$ from the requirement
+that the coherent term supply most of the long-range accumulation with
+the per-voxel term retained for intragranular spread
+($`D_g (1+\rho)/(1-\rho) : D_v \approx 3`$), and the sum rescaled once
+to the Fig. 5a level; the Fig. 5c established curve and the 2026 Fig. 7a
+heatmap were not consulted.
 
 `grain_paths.py` reproduces Lamb’s Fig. 4 per grain and extends it to
 every filtered grain: IPF-Z and SROD maps on the $`xz`$ slice through
@@ -314,11 +339,12 @@ floor.
 ## Calibration path
 
 The Fig. 5a score is the calibration target, so the v8 and v10 rows are
-in-sample fits, and their difference (0.49 vs 0.34 °) is within the
-digitization line width; the population curve does not choose between
-the two models. v2’s linear growth was selection drift among the voxels
-of one grain. v5 to v7 retained only 0.3–0.45 of the input $`D`$ against
-height with a 1.8 band, both from the averaging smoothing rule;
+in-sample fits (v10 is set in bold as the working deck, not as the
+better-supported model), and their difference (0.49 vs 0.34 °) is within
+the digitization line width; the population curve does not choose
+between the two models. v2’s linear growth was selection drift among the
+voxels of one grain. v5 to v7 retained only 0.3–0.45 of the input $`D`$
+against height with a 1.8 band, both from the averaging smoothing rule;
 copy-mode smoothing (v8) put the population curve, shape and band on
 Lamb. v8’s grains, however, spread without drifting, whereas Lamb’s
 grains move along a path; the coherent grain walk (v10) supplies the
@@ -334,23 +360,39 @@ diffusive regime.
 <img src="gp700_results_review/srod_heatmap_0_120um.png" />
 <figcaption>Voxel-weighted SROD against height above the grain origin
 over the first 120 μm for the filtered originating grains of v10 (left)
-and v8 (right), with the digitized mean and mode of Lamb 2026 Fig. 7a
-and the 2024 Fig. 5a mean.</figcaption>
+and v8 (right), with the digitized mode of Lamb 2026 Fig. 7a and the
+2024 Fig. 5a mean.</figcaption>
 </figure>
 
 The established class is the discriminating test. The per-voxel model’s
 floor-referenced grains start 3 ° too high because their lineages have
 already diverged across the grain by the time they cross the floor,
 whereas the coherent model, whose intragranular spread is small,
-reproduces the curve to 0.28 ° with the Maxwell band. On the 2026
-heatmap the modal trajectory of v10 follows Lamb’s from 1.6 to 4.7 °
-over 5–115 μm (the paper’s quoted average rate of 1.7 ° per 30 μm is the
-slope of that ridge near the start); the experimental mean is higher
-than either model at small distances because of a secondary population
-at 10–15 ° present from the grain start, which the model does not
-produce and which resembles the split grain G4.
+reproduces the curve to 0.28 ° in the first build and 0.47 ° (bias
+0.25 °) in the second, with the Maxwell band. The result depends on
+where the floor is placed, because the model’s intragranular spread
+grows with path from the origin: floors at 200, 240 and 300 μm give
+biases of $`-0.65`$, $`-0.11`$ and 0.44 °, so the agreement is at the
+0.5 ° level rather than the 0.1 ° the best floor suggests. The 2026
+heatmap is a weaker test. Its density-weighted mean (about 5 ° from the
+grain start) carries no stated digitization uncertainty and is flat
+because the volume contains grains that start at or below its floor, as
+the established class does in 2024; only the mode is used here. Against
+the mode, v10 runs 30–50 % low over the first 60 μm (0.8 vs 1.6 ° at
+5 μm) and meets it by 115 μm, while v8 tracks it within 0.2 ° to 60 μm
+and overshoots by 115 μm; the RMS of the modal residuals is 0.8 ° for
+v10 and 0.6 ° for v8. The 2026 mode at 5 μm (1.6 °) is the sub-30 μm
+information the 2024 curves lack; it sits above the pure $`D = 0.42`$
+walk (1.2 °) and above v10, i.e. the experiment accumulates faster than
+either over the first two voxel layers of the coarse dataset.
 
 ## v10 against Lamb Fig. 5a
+
+The fitted $`D`$ against height exceeds the deck constants times the
+measured path factor by 15 % (v10) and 28 % (v8): the walk’s own excess
+over the height index (diagonal hops, and for the coherent term the
+ballistic regime below the correlation length, where accumulation runs
+faster than the long-range rate) adds to the geometric path factor.
 
 <figure id="fig:v10srod">
 <img src="gp700_results_v10/srod_height.png" style="width:75.0%" />
@@ -395,22 +437,30 @@ requires: the mean orientation of a v10 grain drifts more than it
 spreads, the drift scales with height (about 2 ° at 100 μm, 8–15 ° at
 400 μm), and the paths are directed; v8’s grains spread more than they
 drift at every height. Against Lamb’s numbers, however, both models fall
-short. The accumulation rate of the v10 grains is half the 2026 average
-and its maximum is a third of theirs; the per-layer means at 300 μm
-reach 18 ° at most against 20–25 ° for Lamb’s example grains; and 5 % of
-the v10 grains exceed 25 ° anywhere, against “most” in the experiment.
-The population mean is matched, so the experimental population must
-carry a much heavier tail, a minority of grains rotating several times
-faster than the median, than a single Gaussian $`D_g`$ produces; the
-10–15 ° secondary band of the 2026 heatmap and the split grain G4 point
-the same way. The paths have no preferred direction on the triangle, as
-the isotropic rotation vector implies; the experimental direction is not
-reported. Monotonicity does not separate the models (0.79 vs 0.78):
-about a fifth of the grains reverse over 100 μm scales in both. The
-per-grain drift-to-spread ratio confirms the construction
-($`\sqrt{D_g(1+\rho)/(1-\rho)/D_v} = 1.7`$) rather than an experimental
-value; Lamb’s within-slice widths, which would fix it, are not
-published.
+short. The accumulation rate of the v10 grains (drift of the mean
+orientation per 30 μm of height, averaged over grains) is half the 2026
+average and its maximum is a third of theirs, if the paper’s average is
+a comparable per-grain quantity; the per-layer means at 300 μm reach
+18 ° at most against “as large as” 20–25 ° for Lamb’s four example
+grains, which were chosen as illustrations and are not a population
+statistic; and 5 % of the v10 grains exceed 25 ° anywhere, against
+“most” in the experiment (a maximum-SROD statistic that in EBSD is
+sensitive to boundary and misindexed voxels, so the experimental side is
+an upper estimate). Lamb’s own figures are not mutually consistent (a
+mean above 25 ° over 300 μm in the text against 11 ° at 260 μm in
+Fig. 5a); the population curves are taken as the target and the
+per-grain numbers as indicative. The population mean is matched, so the
+experimental population must carry a much heavier tail, a minority of
+grains rotating several times faster than the median, than a single
+Gaussian $`D_g`$ produces; the 10–15 ° secondary band of the 2026
+heatmap and the split grain G4 point the same way. The paths have no
+preferred direction on the triangle, as the isotropic rotation vector
+implies; the experimental direction is not reported. Monotonicity does
+not separate the models (0.79 vs 0.78): about a fifth of the grains
+reverse over 100 μm scales in both. The per-grain drift-to-spread ratio
+confirms the construction ($`\sqrt{D_g(1+\rho)/(1-\rho)/D_v} = 1.7`$)
+rather than an experimental value; Lamb’s within-slice widths, which
+would fix it, are not published.
 
 ## Grain structure and the hatch pattern
 
@@ -440,11 +490,14 @@ the boundary autocorrelation at the hatch lag from 0.46 / 0.45 to 0.34 /
 ($`p_{50}`$ 120 vs 123 μm), the SROD score (0.30 ° / −0.14 °, band 1.50)
 and the per-grain drift and spread (5.3 / 3.6 ° vs 6.0 / 3.8 °) are
 unchanged within the seed scatter, while the $`\langle 001 \rangle`$
-fraction rises from 0.21–0.25 to 0.30 (one realisation). The periodicity
-therefore comes only partly from the layer-to-layer registration; the
-pool spacing itself imprints an 80 μm period on each layer, and the SROD
-results do not depend on it. Whether the experimental grains carry the
-same imprint cannot be read from the published sections.
+fraction rises from 0.21–0.25 to 0.30 (one realisation). A normalised
+autocorrelation of the height-integrated boundary density is insensitive
+to phase, so it cannot separate registration from the pool spacing
+itself, which imprints an 80 μm period on every layer; the unchanged
+grain widths and ESD under the offset are the evidence that the column
+selection is not registration-driven, and the SROD results do not depend
+on it. Whether the experimental grains carry the same imprint cannot be
+read from the published sections.
 
 <figure id="fig:hatch">
 <img src="gp700_results_review/hatch_periodicity_v10.png" />
@@ -466,25 +519,38 @@ not survive a 2 ° segmentation as columnar grains; the coherent model
 keeps its SROD curve but not its grain size, because the simulated
 same-grain neighbour disorientation (median 2.4 ° in v10) sits at the
 threshold. The simulated field carries voxel-scale orientation noise
-that the EBSD does not, so the two segmentations are not equivalent; the
-spin labelling is the one used elsewhere in this report.
+that the EBSD does not (the 2.4 ° neighbour disorientation is a property
+of independent-lineage inheritance at this $`D_v`$ and would be lower
+only with a smaller per-voxel term), so the two segmentations are not
+equivalent; the spin labelling is the one used elsewhere in this report.
+The 2 ° segmentation does, however, change the grain-class picture of
+the next section: on it, 55 of the 141 filtered v10 grains (13 % of the
+filtered volume) originate more than 60 μm above the remelt floor,
+because the coherent walk builds low-angle boundaries inside columnar
+grains that a 2 ° threshold reads as new grains, as Lamb’s G4 does; v8
+gives none.
 
 ## Grain origins
 
-Of the 88 filtered grains in the v8 crop, 83 originate at the layer-0
-remelt floor (99 % of the filtered volume) and 3 above 160 μm: the
-columnar grains are epitaxial continuations of substrate grains, so the
-simulated “originating” SROD is an established-grain SROD referenced at
-the remelt floor. A census over 26 existing proxy runs spanning
-nucleation densities of 6.5 × 10<sup>12</sup>–8.5 × 10<sup>13</sup>
- m<sup>3</sup> and critical undercoolings of 3–23 K finds 0–7 filtered
-grains per run originating more than 60 μm above the floor (0–4 % of the
-filtered volume); Lamb’s volume has over 500 such grains against 100
-established. No region of the tested parameter space produces surviving
-mid-build origins; nucleated grains are overgrown. Analysing v8 on the
-full 801 μm domain, the central 400 μm, the central 200 μm, or without
-the never-remelted top layer changes the SROD bias by under 0.2 ° and
-the band by under 0.03.
+With the spin labelling, 3 of the 100 filtered v10 grains and 3 of the
+94 filtered v8 grains originate more than 60 μm above the remelt floor
+(0.5 % of the filtered volume): the columnar grains are epitaxial
+continuations of substrate grains, so the simulated “originating” SROD
+is an established-grain SROD referenced at the remelt floor. A census
+over 26 existing proxy runs spanning nucleation densities of
+6.5 × 10<sup>12</sup>–8.5 × 10<sup>13</sup>  m<sup>3</sup> and critical
+undercoolings of 3–23 K finds 0–7 filtered grains per run originating
+more than 60 μm above the floor (0–4 % of the filtered volume); Lamb’s
+volume has over 500 such grains against 100 established. No region of
+the tested parameter space produces surviving mid-build origins by
+nucleation; nucleated grains are overgrown. Lamb’s originating grains
+are products of a 2 ° segmentation, and on the same segmentation the
+coherent model does produce mid-build origins (previous section), so the
+like-for-like comparison is 55 : 86 (v10, 2 °) against Lamb’s
+$`> 500 : 100`$; the model is short by a factor of about three in the
+ratio, not absent. Analysing v8 on the full 801 μm domain, the central
+400 μm, the central 200 μm, or without the never-remelted top layer
+changes the SROD bias by under 0.2 ° and the band by under 0.03.
 
 ## Resolution
 
@@ -502,13 +568,20 @@ Fig. 5a RMS / bias 0.74 ° / 0.64 ° (3 μm, three seeds: $`0.35 \pm 0.05`$
 4.4 ° (6.6 / 3.9 °), maximum SROD median 15.6 ° (13.7), accumulation
 rate mean 1.00 ° per 30 μm (0.84), ESD $`p_{50}`$ 115 μm (123), and a
 measured path length per unit height of 1.68 (1.47–1.49). The mean SROD
-runs 5–15 % above the 3 μm value at every height (3.4 vs 3.3 ° at 45 μm,
-9.6 vs 8.7 ° at 205 μm, 12.4 vs 10.1 ° at 282 μm), the same excess the
-per-voxel term showed alone and traceable to the longer resolved growth
-path. The two-term model is therefore resolution independent to first
-order under the stated rescaling of $`\rho`$ and $`D_g`$, with a
-second-order excess of about 10 % per halving of the voxel that a fit at
-the target resolution would absorb into $`D_v`$ and $`D_g`$.
+runs above the 3 μm value by an amount that grows with height: 3 % at
+45 μm (3.4 vs 3.3 °), 10 % at 205 μm (9.6 vs 8.7) and 23 % at 282 μm
+(12.4 vs 10.1). To test whether the longer resolved growth path (1.68 vs
+1.47) is the cause, the run was repeated with $`D_v`$ and $`D_g`$
+additionally scaled by $`1.47/1.68 = 0.875`$: the bias falls from 0.64 °
+to 0.18 ° (RMS 0.30 °, band 1.49, drift / spread 7.1 / 4.4 °, path
+factor 1.76), within two standard deviations of the 3 μm seed scatter,
+and the excess over the 3 μm curve shrinks to $`-4`$ % at 45 μm, $`+7`$
+% at 205 μm and $`+12`$ % at 282 μm. The path factor therefore accounts
+for most of the resolution dependence, with a residual of order 10 % at
+the top of the build that grows with height and is not explained. The
+two-term model is resolution independent to first order once $`\rho`$,
+$`D_g`$ and the per-path constants are rescaled with the voxel size and
+the measured path factor.
 
 ## Seed scatter
 
@@ -567,30 +640,38 @@ baseline of 0.102, the builds sit at 1.5–2.2$`\times`$ random.
     rotation walk, D ≈ 0.42 deg²/µm against height with a Maxwell width;
     individual grains rotate along a path. The statistics do not
     identify the mechanism, and the published curves do not distinguish
-    $`\sqrt{h}`$ from the authors’ two-regime reading above 30 μm.
+    $`\sqrt{h}`$ from the authors’ two-regime reading above 30 μm; the
+    2026 mode of 1.6 ° at 5 μm indicates faster accumulation below 30 μm
+    than the single-$`D`$ walk gives.
 
-2.  The two-term model reproduces the calibration curve, and, without
-    further tuning, the established-grain curve and the 2026 modal
-    trajectory; the per-voxel model alone fails the established curve.
-    Per grain the model produces directed paths but accumulates at half
-    Lamb’s average rate with far smaller extremes: the experiment has a
-    heavy tail of fast-rotating grains that a single Gaussian $`D_g`$
-    does not give.
+2.  The two-term model reproduces the calibration curve and, without
+    further tuning, the established-grain curve to within 0.5 °
+    (floor-placement dependent), which the per-voxel model alone fails
+    by 3 °; against the 2026 modal trajectory the two models are
+    comparable. Per grain the model produces directed paths but
+    accumulates at half Lamb’s average rate with far smaller extremes:
+    the experiment has a heavy tail of fast-rotating grains that a
+    single Gaussian $`D_g`$ does not give.
 
 3.  Deck constants are per unit of growth path; the measured path length
     is 1.47 times the height. Both terms are resolution independent to
     first order once $`\rho`$ and $`D_g`$ are rescaled with
-    $`\Delta x`$, with a $`\sim`$<!-- -->10 % excess in accumulation per
-    halving of the voxel (measured path factor 1.68 at 1.5 μm).
+    $`\Delta x`$, with the measured path factor (1.47 at 3 μm, 1.68 at
+    1.5 μm) carrying most of the residual resolution dependence.
 
 4.  The simulated grain structure is locked to the deck’s registered
     hatch pattern; the experimental hatch registration is unknown.
 
-5.  No surviving grains originate mid-build at any tested nucleation
-    density, against Lamb’s 5:1 originating-to-established ratio.
+5.  Grain classes: with spin labels no surviving grains originate
+    mid-build at any tested nucleation density; with Lamb’s 2 °
+    segmentation the coherent model gives an originating-to-established
+    ratio of 55 : 86, against Lamb’s $`> 500 : 100`$, because its
+    intragranular boundaries read as new grains.
 
 6.  A 2 ° re-segmentation of the simulation changes its grain
-    population; the two grain definitions are not equivalent.
+    population; the two grain definitions are not equivalent, and the
+    per-voxel term sets the intragranular neighbour disorientation that
+    decides it.
 
 7.  $`D_g : D_v`$ and $`\rho`$ are fixed here by construction and by the
     held-out curves only loosely; Lamb’s within-slice widths, per-grain

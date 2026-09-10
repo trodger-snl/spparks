@@ -11,13 +11,20 @@ from spparks_micro_analysis.stitch_reader import StitchReader
 from spparks_micro_analysis.grain_size_analysis import relabel_grains
 ap = argparse.ArgumentParser(); ap.add_argument('stitch', nargs='+'); ap.add_argument('--dx', type=float, default=3e-6)
 ap.add_argument('--crop-frac', type=float, default=0.25, help='crop this fraction off each lateral side')
+ap.add_argument('--segment-deg', type=float, default=None, help='re-segment at this disorientation threshold instead of spin labels')
 a = ap.parse_args(); dxu = a.dx*1e6
 for st in a.stitch:
     with StitchReader(st) as r:
         b = r.get_global_bounds(); t = r.times[-1]
         i1 = r.read_field_at_time('i1', t, bounds=b)[0]; i2 = r.read_field_at_time('i2', t, bounds=b)[0]
+        q = np.stack([r.read_field_at_time(k, t, bounds=b)[0] for k in ('d1','d2','d3','d4')], -1) if a.segment_deg else None
     n = i1.shape[0]; c0, c1 = int(n*a.crop_frac), int(n*(1-a.crop_frac)); i1 = i1[c0:c1, c0:c1]; i2 = i2[c0:c1, c0:c1]
-    solid = i2 == 3; lab = relabel_grains(np.where(solid, i1, 0).astype(np.int64))
+    solid = i2 == 3
+    if a.segment_deg:
+        from spparks_micro_analysis.grain_segmentation import segment_grains
+        lab = np.where(solid, segment_grains(q[c0:c1, c0:c1], occupied=solid, threshold_deg=a.segment_deg, crystal_structure='cubic')[0], 0).astype(np.int64)
+    else:
+        lab = relabel_grains(np.where(solid, i1, 0).astype(np.int64))
     zfloor = np.nonzero(solid.any((0,1)))[0].min()
     ids, inv, vol = np.unique(lab[solid], return_inverse=True, return_counts=True); Z = np.indices(solid.shape)[2][solid]
     zmin = np.full(len(ids), 10**9); np.minimum.at(zmin, inv, Z); zmax = np.zeros(len(ids), int); np.maximum.at(zmax, inv, Z)

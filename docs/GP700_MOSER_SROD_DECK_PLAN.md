@@ -909,3 +909,9 @@ bias −0.65 / −0.11 / +0.44°. Origin census with 2° segmentation: v10 55 of
 **B4 rescaled 1.5 µm v10 (D_v 0.057, D_g 0.0043, rho 0.95; 04:24):** RMS 0.30°, bias +0.18° (unscaled +0.64°),
 band 1.49, drift/spread 7.1/4.4°, path factor 1.76; excess over 3 µm −4 / +7 / +12 % at 45 / 205 / 282 µm.
 The path-factor ratio accounts for most of the resolution dependence. Report revision 2b complete.
+
+**Segmentation threshold sweep (2026-09-10):** v10 spin/2°/3°/5° → filtered 97/139/97/91, >300 µm 48/2/37/39,
+ESD p50 148/29/128/144 µm, score 0.34/0.60/0.25/0.57°; v8 → 86/54/126/94, >300 µm 41/0/11/30, ESD
+151/8/16/128 µm, score 0.49/1.19/1.51/0.93°. With the simulation's voxel noise (same-grain neighbour
+disorientation median 2.4° v10, 3.8° v8) a 3° threshold on v10 is the noise-matched equivalent of Lamb's 2°;
+v8 needs 5°.

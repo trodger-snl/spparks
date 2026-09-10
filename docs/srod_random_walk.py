@@ -1,4 +1,4 @@
-"""Digitize Lamb et al. 2023 (Acta Mater., CoNi GammaPrint-700) Fig. 5a/5c SROD
+"""Digitize Lamb et al. (Scripta Mater. 239, 2024, 115770; CoNi GammaPrint-700) Fig. 5a/5c SROD
 curves and compare them with a random-axis rotation walk (RMS^2 = D*d, Maxwell).
 
 Inputs fig5a.png / fig5c.png are 300-dpi crops of page 6 of the paper's PDF:
@@ -82,8 +82,8 @@ def panel(ax, data, dmax, D, rms0, title):
     d=np.linspace(0.5,dmax,400); lo,hi=band(d,D,rms0)
     ax.fill_between(d,lo,hi,color=BLUE,alpha=0.15,lw=0,label='random-walk model, 90% band')
     ax.plot(d,mean_model(d,D,rms0),color=BLUE,lw=2,label='random-walk model, mean')
-    ax.plot(data['x'],data['mean'],color=INK,lw=1.4,label='Lamb et al. 2023, mean (digitized)')
-    ax.plot(data['x'],data['p5'],color=INK,lw=0.9,ls=(0,(3,2)),label='Lamb et al. 2023, 5% / 95%')
+    ax.plot(data['x'],data['mean'],color=INK,lw=1.4,label='Lamb et al. 2024, mean (digitized)')
+    ax.plot(data['x'],data['p5'],color=INK,lw=0.9,ls=(0,(3,2)),label='Lamb et al. 2024, 5% / 95%')
     ax.plot(data['x'],data['p95'],color=INK,lw=0.9,ls=(0,(3,2)))
     ax.set_title(title,loc='left',fontsize=11,color=INK)
     ax.grid(axis='y',color=GRID,lw=0.8); ax.set_axisbelow(True)
@@ -103,7 +103,7 @@ ax2.set_xlabel('Distance from dataset bottom (µm)')
 ax1.text(150,27.2,'fit: D = %.2f deg²/µm'%D,color=BLUE,fontsize=9)
 ax2.text(20,27.2,'prediction with the same D, plus %.1f° initial spread in quadrature'%rms0,color=BLUE,fontsize=9)
 h,l=ax1.get_legend_handles_labels(); fig.legend(h,l,loc='lower center',ncol=3,frameon=False,fontsize=8.5,bbox_to_anchor=(0.5,-0.02))
-fig.suptitle('SROD vs distance grown: Lamb et al. (Acta Mater. 2023, Fig. 5, GammaPrint-700 PBF-L) against a random-axis rotation walk',fontsize=10.5,color=INK,x=0.01,ha='left')
+fig.suptitle('SROD vs distance grown: Lamb et al. (Scripta Mater. 2024, Fig. 5, GammaPrint-700 PBF-L) against a random-axis rotation walk',fontsize=10.5,color=INK,x=0.01,ha='left')
 fig.tight_layout(rect=(0,0.08,1,0.96)); fig.savefig('srod_random_walk.png',dpi=170); plt.close(fig)
 
 # Figure 2: experimental-data analysis only. Third panel: the width/mean ratio,
@@ -124,5 +124,5 @@ ax3.set_ylim(0,3); ax3.set_xlim(0,480); ax3.set_xlabel('Distance (µm)'); ax3.se
 ax3.set_title('(c) Band width relative to the mean',loc='left',fontsize=11,color=INK)
 ax3.grid(axis='y',color=GRID,lw=0.8); ax3.set_axisbelow(True); ax3.legend(frameon=False,fontsize=8.5,loc='lower right')
 h,l=ax1.get_legend_handles_labels(); fig.legend(h,l,loc='lower center',ncol=5,frameon=False,fontsize=8.5,bbox_to_anchor=(0.42,-0.02))
-fig.suptitle('Misorientation from grain origin (SROD) in 3D EBSD of PBF-L GammaPrint-700 (Lamb et al., Acta Mater. 2023, Fig. 5): a √d, constant-relative-width signature',fontsize=10.5,color=INK,x=0.01,ha='left')
+fig.suptitle('Misorientation from grain origin (SROD) in 3D EBSD of PBF-L GammaPrint-700 (Lamb et al., Scripta Mater. 2024, Fig. 5): a √d, constant-relative-width signature',fontsize=10.5,color=INK,x=0.01,ha='left')
 fig.tight_layout(rect=(0,0.08,1,0.96)); fig.savefig('srod_experimental_analysis.png',dpi=170); print('saved both')

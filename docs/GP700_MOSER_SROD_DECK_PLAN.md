@@ -915,3 +915,8 @@ ESD p50 148/29/128/144 µm, score 0.34/0.60/0.25/0.57°; v8 → 86/54/126/94, >3
 151/8/16/128 µm, score 0.49/1.19/1.51/0.93°. With the simulation's voxel noise (same-grain neighbour
 disorientation median 2.4° v10, 3.8° v8) a 3° threshold on v10 is the noise-matched equivalent of Lamb's 2°;
 v8 needs 5°.
+
+**Segmentation vs voxel size (2026-09-10):** 1.5 µm v10 (rescaled) spin/2°/3°/5° → filtered 63/59/60/59, ESD p50
+116/79/102/115 µm, score 0.30/0.16/0.24/0.47°, neighbour disorientation median 1.9°; 3 µm proxy seed_v10_s1 →
+57/63/53/54, ESD 123/45/101/119 µm, score 0.35/0.69/0.39/0.43°, neighbour median 2.1°. The 2° threshold behaves
+at 1.5 µm as 3° does at 3 µm (per-voxel step ∝ √dx). No orientation smoothing before segmentation.

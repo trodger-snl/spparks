@@ -897,3 +897,11 @@ max SROD median 12.7 (p90 24.5, max 49.3 — one grain at Lamb's extreme), per-l
 ESD p50 115 µm, <001> 0.18; drift 7.8°, spread 4.4°, max SROD median 15.6°, rate 1.00°/30 µm, path
 factor 1.68. Mean SROD 5–15 % above the 3 µm proxies at every height (same excess as the per-voxel-only
 test): first-order resolution independent under the rho/D_g rescaling.
+
+**Review 2 (66f114c6): minor revision.** Follow-ups: ESD in the tables is the volume-weighted median over all
+grains (number-weighted median of the filtered grains: v10 75 µm, v8 72 µm; filtered grains hold 96 % of
+the crop volume) — definition, not an error. Established floor sensitivity (v10): floor 200 / 240 / 300 →
+bias −0.65 / −0.11 / +0.44°. Origin census with 2° segmentation: v10 55 of 141 filtered grains originate
+> 60 µm above the floor (13 % of volume), v8 0 of 54 — the coherent walk creates low-angle boundaries that a
+2° segmentation reads as mid-build origins; spin labels: 3 of 100 (v10), 3 of 94 (v8). Rescaled 1.5 µm run
+(D_v, D_g × 0.875, `dx1p5_v10r`) launched 21:53 for the path-factor attribution.

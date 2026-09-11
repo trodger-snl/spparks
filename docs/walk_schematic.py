@@ -76,8 +76,10 @@ IPF = {'voxel': 'IPF (same scale in every panel): voxels scatter into a cloud\nt
        'coherent': 'IPF: all voxels of a level sit at one point; the levels trace a\npersistent path (small per hop, the largest term after 300 µm)',
        'mixed': 'IPF: a cloud around each level point;\nthe cloud drifts along the coherent path and widens'}
 
-def panel(ax, mode):
-    ax.set_title(TITLES[mode], loc='left', fontsize=11, color=INK)
+def panel(ax, mode, slide=False):
+    """slide=True: no title, formulas or captions (they go on the slide), IPF moved up beside the tree."""
+    if not slide: ax.set_title(TITLES[mode], loc='left', fontsize=11, color=INK)
+    dy = 2.6 if slide else 0.0
     for L in range(NL):
         y = pos[(L, 0)][1]
         ax.axhspan(y-0.5, y+0.5, xmin=0.02, xmax=0.62, color='#eef2f7' if L % 2 else '#f7f8fa', zorder=0)
@@ -98,10 +100,11 @@ def panel(ax, mode):
     for n, (x, y) in pos.items():
         ax.add_patch(Circle((x, y), 0.17, facecolor=cmap(n[0]/(NL-1)), edgecolor=INK, lw=0.7, zorder=3))
     ax.text(pos[(0,0)][0], pos[(0,0)][1]-0.45, 'grain origin (reference orientation)', ha='center', fontsize=8.5, color=INK)
-    for y, t, fs, col in TEXT[mode]: ax.text(3.9, y, t, fontsize=fs, color=col, va='top' if y < 5.5 else 'baseline')
+    if not slide:
+        for y, t, fs, col in TEXT[mode]: ax.text(3.9, y, t, fontsize=fs, color=col, va='top' if y < 5.5 else 'baseline')
     # IPF sketch
-    tri_pts = [(4.6, -1.0), (8.4, -1.0), (7.8, 2.0)]; ax.add_patch(Polygon(tri_pts, closed=True, fill=False, edgecolor=INK, lw=0.9))
-    centre = np.array([6.75, 0.25])
+    tri_pts = [(4.6, -1.0+dy), (8.4, -1.0+dy), (7.8, 2.0+dy)]; ax.add_patch(Polygon(tri_pts, closed=True, fill=False, edgecolor=INK, lw=0.9))
+    centre = np.array([6.75, 0.25+dy])
     ori = {n: orientation(mode, n) for n in pos}
     P = np.array([ori[n] for n in pos]); Lv = np.array([n[0] for n in pos])
     scale = IPF_UNIT
@@ -114,10 +117,19 @@ def panel(ax, mode):
         if mode == 'coherent': xy = xy + rng.normal(0, 0.02, xy.shape)
     ax.scatter(xy[:,0], xy[:,1], c=Lv, cmap='viridis', s=34, edgecolor=INK, linewidths=0.4, zorder=3, alpha=0.8 if mode == 'mixed' else 1.0)
     ax.add_patch(Circle(tuple(centre), 0.06, color=INK, zorder=4))
-    ax.text(6.5, -1.2, IPF[mode], ha='center', fontsize=8.5, color=MUTED, va='top')
-    for (x_, y_, s_, va) in ((4.6, -1.05, '001', 'top'), (8.4, -1.05, '101', 'top'), (7.8, 2.05, '111', 'bottom')):
-        ax.text(x_, y_, s_, fontsize=7, color=MUTED, ha='center', va=va)
-    ax.set_xlim(-2.9, 9.4); ax.set_ylim(-1.9, 6.5); ax.set_aspect('equal'); ax.axis('off')
+    if not slide: ax.text(6.5, -1.2, IPF[mode], ha='center', fontsize=8.5, color=MUTED, va='top')
+    else: ax.text(6.5, -1.2+dy, 'build-direction IPF', ha='center', fontsize=9, color=MUTED, va='top')
+    for (x_, y_, s_, va) in ((4.6, -1.05+dy, '001', 'top'), (8.4, -1.05+dy, '101', 'top'), (7.8, 2.05+dy, '111', 'bottom')):
+        ax.text(x_, y_, s_, fontsize=7 if not slide else 9, color=MUTED, ha='center', va=va)
+    ax.set_xlim(-2.9, 9.4); ax.set_ylim(-0.1 if slide else -1.9, 6.5); ax.set_aspect('equal'); ax.axis('off')
+
+import sys
+if '--slides' in sys.argv:   # text-free panels for slides: walk_schematic.py --slides OUTDIR
+    outdir = sys.argv[sys.argv.index('--slides')+1].rstrip('/') + '/'
+    for mode in ('voxel', 'coherent', 'mixed'):
+        fig, ax = plt.subplots(figsize=(8.2, 4.4)); fig.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.01)
+        panel(ax, mode, slide=True); fig.savefig(outdir + f'walk_{mode}.png', dpi=200, bbox_inches='tight'); plt.close(fig)
+    print('slide panels ->', outdir); sys.exit(0)
 
 SUB = '(node colour = path level; grey lines = parent-child capture; arrows = rotation increment on that hop)'
 fig, axes = plt.subplots(1, 2, figsize=(16, 6.3)); fig.subplots_adjust(left=0.01, right=0.99, top=0.86, bottom=0.01, wspace=0.03)

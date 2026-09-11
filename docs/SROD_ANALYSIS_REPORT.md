@@ -310,7 +310,16 @@ class="math inline"><em>v</em><sub><em>k</em> − 1</sub></span>
 (persistence <span class="math inline"><em>ρ</em></span>), and in the
 inverse pole figure the levels trace a directed path away from the
 origin with no intragranular spread. The calibrated deck applies both at
-every hop.</figcaption>
+every hop. Arrows and inverse-pole-figure sketches are at the calibrated
+deck’s per-hop magnitudes, <span
+class="math inline"><em>D</em><sub><em>v</em></sub> = 0.065</span> and
+<span class="math inline"><em>D</em><sub><em>g</em></sub> = 0.010</span>
+deg²/µm, <span class="math inline"><em>ρ</em> = 0.9</span>, <span
+class="math inline"><em>Δ</em><em>x</em> = 3 μm</span>: 0.44 ° per hop
+for the per-voxel term against 0.17 ° per level for the coherent term,
+which is the smaller per hop but, persisting over about ten levels, the
+larger at long range (7.5 against 4.4 ° RMS after 300 μm of
+path).</figcaption>
 </figure>
 
 <figure id="fig:mixed">
@@ -325,7 +334,9 @@ figure each level is a cloud around the corresponding point of the
 coherent path, so the grain mean drifts along the path while the
 intragranular spread widens. The long-range population law is <span
 class="math inline">RMS<sup>2</sup> = (<em>D</em><sub><em>v</em></sub> + <em>D</em><sub><em>g</em></sub>(1 + <em>ρ</em>)/(1 − <em>ρ</em>))×</span>
-path.</figcaption>
+path. Increments are drawn at the calibrated deck’s per-hop magnitudes
+(0.17 ° coherent, 0.44 ° random); after 300 μm of path the coherent part
+reaches 7.5 ° RMS and the random part 4.4 °.</figcaption>
 </figure>
 
 #### Boundary smoothing.

@@ -12,7 +12,10 @@
 # substrate + 30 um layers at dx = 3 um), box spans [max(0, z_top-60), z_top].
 # Even layers hatch along x (5 lines, y = 40..360 um), odd along y, serpentine.
 # Each box is a fresh Moser history (T0 = preheat, the recoat interval); the
-# microstructure continues through the stitch file.
+# microstructure continues through the stitch file. Sites absent from it (the
+# new layer) carry the stitch sentinel -1 in d1-d4, which the app would
+# normalise to ONE cube-aligned orientation for the whole layer; zeroing them
+# makes the app draw a random orientation per voxel at init (powder).
 set -eu
 BIN=$(readlink -f "$1"); OUT=$(readlink -f "$2"); NL=${3:-12}; SEED=${4:-12345}; NX=${5:-267}; NH=${6:-10}; DT=${7:-2e-6}; SUB=${8:-}
 HERE=$(cd "$(dirname "$0")" && pwd); TPL=${TPL:-$HERE/in.gp700_layer}   # TPL=... overrides the deck template
@@ -60,6 +63,10 @@ set d4 stitch $ST last
 set d8 stitch $ST last
 set d9 stitch $ST last
 set d10 stitch $ST last
+set d1 value 0.0 if i2 < 1
+set d2 value 0.0 if i2 < 1
+set d3 value 0.0 if i2 < 1
+set d4 value 0.0 if i2 < 1
 set i1 range 1 1000000 if i2 < 1
 set i2 value 1 if i2 < 2
 set d6 value 473

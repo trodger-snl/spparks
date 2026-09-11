@@ -5,6 +5,7 @@ S=/tmp/claude-1000/-home-tron-spparks-kokkos/44fc50d7-1b89-492a-ac82-fa6c4a653ae
 P=/home/tron/spparks-kokkos/examples/gp700_moser/srod_from_ebsd.py; A=/home/tron/HPC-Calibration/ANG-Files; T=/home/tron/HPC-Calibration/analysis_outputs/rot90_square_native
 PY=/home/tron/miniconda3/envs/WORK/bin/python
 run() { $PY $P $S/out "$1" "$2" $3 > $S/out/$1.log 2>&1; }
+run P15_XZ /home/tron/HPC-Calibration/ANG-Files/P15/P15-2-side.ang --vflip
 run P04_XZ $T/P04_side_a_XZ_rot90+vflip_0p8um.ang ""
 run P04_YZ $A/P4/P4-3-side.ang --vflip
 run P13_XZ $A/P13/P13-2-side.ang ""

@@ -76,8 +76,9 @@ for lo in bins[:-1]:
     sv = srod[mm]; p5, p95 = np.percentile(sv, [5, 95])
     rows.append((float(hgt[mm].mean()), float(sv.mean()), float(p5), float(p95), float(np.sqrt((sv**2).mean())), int(mm.sum())))
 rows = np.array(rows)
-# RMS^2 = rms0^2 + D h  (established-type: intercept allowed)
-A = np.column_stack([np.ones(len(rows)), rows[:, 0]]); coef = np.linalg.lstsq(A, rows[:, 4]**2, rcond=None)[0]
+# RMS^2 = rms0^2 + D h over 5-150 um, weighted by sqrt(n) (established-type: intercept allowed; same fit as srod_from_stitch.py)
+mfit = (rows[:, 0] >= 5) & (rows[:, 0] <= 150); wfit = np.sqrt(rows[mfit, 5])
+A = np.column_stack([np.ones(mfit.sum()), rows[mfit, 0]]); coef = np.linalg.lstsq(A * wfit[:, None], (rows[mfit, 4]**2) * wfit, rcond=None)[0]
 D, rms0 = coef[1], np.sqrt(max(coef[0], 0.0))
 res = dict(label=a.label, ang=a.ang, grains=len(per_grain), seg_deg=a.seg_deg, filters=dict(min_height_um=a.min_height_um, min_width_um=a.min_width_um),
            D_deg2_per_um=float(D), rms0_deg=float(rms0), band_over_mean_median=float(np.median((rows[:, 3]-rows[:, 2])/rows[:, 1])),

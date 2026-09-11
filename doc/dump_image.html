@@ -140,8 +140,12 @@ for [011] and blue for [111] (cubic symmetry), blended toward
 white in the middle of the standard triangle.  This requires an
 application that stores a unit quaternion per site in <I>d1</I>-<I>d4</I>, such
 as <A HREF = "app_potts_quaternion.html">potts/quaternion</A> and the additive/texture
-apps.  The reference direction defaults to +z and can be changed with
-the <A HREF = "dump_modify.html">dump_modify ipf</A> command.
+apps.  Only cubic crystal symmetry is currently supported: the coloring
+folds every direction into the cubic [001]-[011]-[111]
+triangle regardless of the symmetry the application was given, so
+<I>ipf</I> images of hcp orientations are not meaningful.  The reference
+direction defaults to +z and can be changed with the <A HREF = "dump_modify.html">dump_modify
+ipf</A> command.
 </P>
 <P>If an integer attribute such as <I>site</I> or <I>i2</I> is specified for the
 <I>color</I> setting, then you must use the optional <I>crange</I> keyword to

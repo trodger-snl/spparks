@@ -43,7 +43,7 @@ using namespace MathConst;
 
 enum{PPM,JPG};
 enum{SPHERE,CUBE};
-enum{NUMERIC,IATTRIBUTE,DATTRIBUTE};
+enum{NUMERIC,IATTRIBUTE,DATTRIBUTE,IPF};
 enum{STATIC,DYNAMIC};
 enum{NO,YES};
 enum{ID,SITE,X,Y,Z,ENERGY,PROPENSITY,IARRAY,DARRAY};  // in other dump files
@@ -73,7 +73,8 @@ DumpImage::DumpImage(SPPARKS *spk, int narg, char **arg) :
 
   if (size_one != 2) error->all(FLERR,"Illegal dump image command");
 
-  if (vtype[0] == INT) scolor = IATTRIBUTE;
+  if (strcmp(arg[4],"ipf") == 0) scolor = IPF;
+  else if (vtype[0] == INT) scolor = IATTRIBUTE;
   else scolor = DATTRIBUTE;
 
   if (vtype[1] == INT) sdiam = IATTRIBUTE;
@@ -93,6 +94,7 @@ DumpImage::DumpImage(SPPARKS *spk, int narg, char **arg) :
   cx = cy = cz = 0.5;
   cxstr = cystr = czstr = NULL;
   cwrap = dwrap = 0;
+  ipfdir[0] = ipfdir[1] = 0.0; ipfdir[2] = 1.0;
 
   if (domain->dimension == 3) {
     image->up[0] = 0.0; image->up[1] = 0.0; image->up[2] = 1.0;
@@ -596,6 +598,7 @@ void DumpImage::create_image()
   int i,j,m,n,ivalue,nc,nd;
   double diameter;
   double *color;
+  double ipfrgb[3];
 
   // render my sites
 
@@ -618,6 +621,9 @@ void DumpImage::create_image()
       color = colorattribute[ivalue-clo];
     } else if (scolor == DATTRIBUTE) {
       color = image->value2color(buf[m]);
+    } else if (scolor == IPF) {
+      ipf_color(j,ipfrgb);
+      color = ipfrgb;
     }
 
     if (sdiam == NUMERIC) {
@@ -824,6 +830,17 @@ int DumpImage::modify_param(int narg, char **arg)
     return 5;
   }
 
+  if (strcmp(arg[0],"ipf") == 0) {
+    if (narg < 4) error->all(FLERR,"Illegal dump_modify command");
+    if (scolor != IPF)
+      error->all(FLERR,"Dump_modify ipf requires ipf color for dump image");
+    ipfdir[0] = atof(arg[1]); ipfdir[1] = atof(arg[2]); ipfdir[2] = atof(arg[3]);
+    double n = sqrt(ipfdir[0]*ipfdir[0]+ipfdir[1]*ipfdir[1]+ipfdir[2]*ipfdir[2]);
+    if (n == 0.0) error->all(FLERR,"Illegal dump_modify command");
+    ipfdir[0] /= n; ipfdir[1] /= n; ipfdir[2] /= n;
+    return 4;
+  }
+
   if (strcmp(arg[0],"cwrap") == 0) {
     if (narg < 2) error->all(FLERR,"Illegal dump_modify command");
     if (strcmp(arg[1],"yes") == 0) cwrap = 1;
@@ -961,4 +978,70 @@ void DumpImage::bounds(char *str, int lo, int hi, int &nlo, int &nhi)
     nlo = MAX(atoi(str),lo);
     nhi = MIN(atoi(ptr+1),hi);
   }
+}
+
+/* ----------------------------------------------------------------------
+   inverse-pole-figure colour of site i for the sample direction ipfdir
+   quaternion (w,x,y,z) = d1-d4; cubic symmetry; EBSD convention
+   [001] red, [011] green, [111] blue, blended toward white at the triangle
+   centre and gamma 0.7 (same formula as spparks-micro-analysis
+   IPF_Color_Ovito.py so images match that tooling)
+------------------------------------------------------------------------- */
+
+void DumpImage::ipf_color(int i, double *rgb)
+{
+  double **darray = app->darray;
+  double w = darray[0][i], x = darray[1][i], y = darray[2][i], z = darray[3][i];
+  double n = sqrt(w*w+x*x+y*y+z*z);
+  if (n == 0.0) { rgb[0] = rgb[1] = rgb[2] = 0.0; return; }
+  w /= n; x /= n; y /= n; z /= n;
+
+  // crystal-frame direction c = R^T d, R the rotation matrix of q
+  // (same R as crystalline_orientations/quaternion.h to_rotation_matrix)
+
+  double r[3][3] = {
+    {1.0-2.0*(y*y+z*z), 2.0*(x*y-w*z),     2.0*(x*z+w*y)},
+    {2.0*(x*y+w*z),     1.0-2.0*(x*x+z*z), 2.0*(y*z-w*x)},
+    {2.0*(x*z-w*y),     2.0*(y*z+w*x),     1.0-2.0*(x*x+y*y)}};
+  double c[3];
+  for (int k = 0; k < 3; k++)
+    c[k] = fabs(r[0][k]*ipfdir[0] + r[1][k]*ipfdir[1] + r[2][k]*ipfdir[2]);
+
+  // cubic fundamental zone: sort descending so c0 >= c1 >= c2
+
+  if (c[0] < c[1]) { double t = c[0]; c[0] = c[1]; c[1] = t; }
+  if (c[1] < c[2]) { double t = c[1]; c[1] = c[2]; c[2] = t; }
+  if (c[0] < c[1]) { double t = c[0]; c[0] = c[1]; c[1] = t; }
+  n = sqrt(c[0]*c[0]+c[1]*c[1]+c[2]*c[2]);
+  if (n == 0.0) n = 1.0;
+  c[0] /= n; c[1] /= n; c[2] /= n;
+
+  // stereographic projection and barycentric weights in the
+  // [001]-[011]-[111] triangle: v1 = (1,0), v2 = (1/sqrt2,1/sqrt2),
+  // v3 = (s,s) with s = (1/sqrt3)/(1+1/sqrt3)
+
+  double X = c[0]/(1.0+c[2]);
+  double Y = c[1]/(1.0+c[2]);
+  const double s2 = 1.0/sqrt(2.0);
+  const double s3 = (1.0/sqrt(3.0))/(1.0+1.0/sqrt(3.0));
+  double e1x = 1.0-s3, e1y = -s3, e2x = s2-s3, e2y = s2-s3;
+  double px = X-s3, py = Y-s3;
+  double det = e1x*e2y - e1y*e2x;
+  if (fabs(det) < 1e-10) det = 1e-10;
+  double a = (px*e2y - py*e2x)/det;
+  double b = (py*e1x - px*e1y)/det;
+  double cc = 1.0-a-b;
+  a = MIN(MAX(a,0.0),1.0); b = MIN(MAX(b,0.0),1.0); cc = MIN(MAX(cc,0.0),1.0);
+  double tot = a+b+cc;
+  if (tot == 0.0) tot = 1.0;
+  a /= tot; b /= tot; cc /= tot;
+
+  // red [001], green [011], blue [111]; white blend toward the centre; gamma
+
+  double d = sqrt((a-1.0/3.0)*(a-1.0/3.0) + (b-1.0/3.0)*(b-1.0/3.0) +
+                  (cc-1.0/3.0)*(cc-1.0/3.0)) / sqrt(2.0/3.0);
+  double wb = 0.5*(1.0-d);
+  rgb[0] = pow(MIN(MAX(a*(1.0-wb)+wb,0.0),1.0),0.7);
+  rgb[1] = pow(MIN(MAX(b*(1.0-wb)+wb,0.0),1.0),0.7);
+  rgb[2] = pow(MIN(MAX(cc*(1.0-wb)+wb,0.0),1.0),0.7);
 }

@@ -16,7 +16,7 @@ ID = user-assigned name for the dump :ulb,l
 image = style of dump command (other style {text} is discussed on the "dump"_dump.html doc page) :l
 delta = time increment between dumps (seconds) :l
 filename = name of file to write image to :l
-color = attribute that determines color of each site :l
+color = attribute that determines color of each site, or {ipf} :l
 diameter = attribute that determines size of each site :l
 zero or more keyword/value pairs may be appended :l
 keyword = {shape} or {sdiam} or {bdiam} or {crange} or {drange} or {size} or {view} or {center} or {up} or {zoom} or {persp} or {box} or {axes} or {shiny} or {ssao} :l
@@ -119,6 +119,16 @@ the "dump text"_dump.html command, including {site}.  Note that the
 {diameter} setting can be overridden with a numeric value by the
 optional {sdiam} keyword, in which case you can specify the {diameter}
 setting with any valid atom attribute.
+
+If {ipf} is specified for the {color} setting, each site is colored by
+the inverse pole figure (IPF) of its crystallographic orientation for a
+reference sample direction, as in EBSD maps: red for \[001\], green
+for \[011\] and blue for \[111\] (cubic symmetry), blended toward
+white in the middle of the standard triangle.  This requires an
+application that stores a unit quaternion per site in {d1}-{d4}, such
+as "potts/quaternion"_app_potts_quaternion.html and the additive/texture
+apps.  The reference direction defaults to +z and can be changed with
+the "dump_modify ipf"_dump_modify.html command.
 
 If an integer attribute such as {site} or {i2} is specified for the
 {color} setting, then you must use the optional {crange} keyword to

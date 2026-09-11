@@ -1,0 +1,20 @@
+# potts/quaternion with dump image IPF coloring (z and x reference directions)
+variable Q equal 2000
+seed		 56789
+app_style	 potts/quaternion ${Q} cubic
+dimension	 3
+lattice		 sc/26n 1.0
+region		 box block 0 40 0 40 0 40
+create_box	 box
+create_sites	 box
+set		 site range 1 ${Q}
+sweep		 random
+sector		 yes
+temperature	 0.25
+stats            0.5
+dump             1 image 1.0 ipf_z.*.jpg ipf site sdiam 1.0 shape cube size 400 400 view 60 30 zoom 1.6
+dump_modify      1 ipf 0 0 1
+dump             2 image 1.0 ipf_x.*.jpg ipf site sdiam 1.0 shape cube size 400 400 view 60 30 zoom 1.6
+dump_modify      2 ipf 1 0 0
+dump             3 image 1.0 site.*.jpg site site sdiam 1.0 shape cube size 400 400 view 60 30 zoom 1.6 crange 1 ${Q}
+run              2.0

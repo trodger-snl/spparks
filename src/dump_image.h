@@ -55,6 +55,7 @@ class DumpImage : public DumpText {
   int boxflag,axesflag;            // 0/1 for draw box and axes
   double boxdiam,axeslen,axesdiam; // params for drawing box and axes
   int cwrap,dwrap;                 // 0/1 for wrapping color/diam to c/drange
+  double ipfdir[3];                // sample direction for ipf color (unit)
 
   int viewflag;                    // overall view is static or dynamic
 
@@ -64,6 +65,7 @@ class DumpImage : public DumpText {
   double **colorattribute;
   int *color_memflag;
   double *boundcolor;
+  void ipf_color(int, double *);
 
   class Image *image;              // class that renders each image
 

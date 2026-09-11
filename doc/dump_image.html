@@ -23,7 +23,7 @@
 
 <LI>filename = name of file to write image to 
 
-<LI>color = attribute that determines color of each site 
+<LI>color = attribute that determines color of each site, or <I>ipf</I> 
 
 <LI>diameter = attribute that determines size of each site 
 
@@ -132,6 +132,16 @@ the <A HREF = "dump.html">dump text</A> command, including <I>site</I>.  Note th
 <I>diameter</I> setting can be overridden with a numeric value by the
 optional <I>sdiam</I> keyword, in which case you can specify the <I>diameter</I>
 setting with any valid atom attribute.
+</P>
+<P>If <I>ipf</I> is specified for the <I>color</I> setting, each site is colored by
+the inverse pole figure (IPF) of its crystallographic orientation for a
+reference sample direction, as in EBSD maps: red for [001], green
+for [011] and blue for [111] (cubic symmetry), blended toward
+white in the middle of the standard triangle.  This requires an
+application that stores a unit quaternion per site in <I>d1</I>-<I>d4</I>, such
+as <A HREF = "app_potts_quaternion.html">potts/quaternion</A> and the additive/texture
+apps.  The reference direction defaults to +z and can be changed with
+the <A HREF = "dump_modify.html">dump_modify ipf</A> command.
 </P>
 <P>If an integer attribute such as <I>site</I> or <I>i2</I> is specified for the
 <I>color</I> setting, then you must use the optional <I>crange</I> keyword to

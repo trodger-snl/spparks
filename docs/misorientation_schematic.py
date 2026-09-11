@@ -56,11 +56,13 @@ ax.text(4.3, 3.4, 'increments are independent along and\nbetween lineages: cousi
 ax.text(4.3, 2.55, r'$\mathrm{RMS}^2 = D_v\cdot$ path length  (Maxwell width)', fontsize=9, color=INK)
 ax.text(4.3, 2.1, 'supplies intragranular spread,\nno net drift of the grain mean', fontsize=8.5, color=MUTED, va='top')
 # small IPF cloud
-tri = Polygon([(6.0,0.2),(7.6,0.2),(7.35,1.55)], closed=True, fill=False, edgecolor=INK, lw=0.8); ax.add_patch(tri)
-pts = np.array([6.65,0.75]) + rng.normal(0, 0.18, (60,2)); pts = pts[(pts[:,1]>0.25)&(pts[:,1]<1.3)]
-ax.scatter(pts[:,0], pts[:,1], s=6, color=BLUE, alpha=0.6); ax.add_patch(Circle((6.65,0.75), 0.05, color=INK))
-ax.text(6.8, -0.15, 'IPF: cloud about a fixed mean', ha='center', fontsize=8, color=MUTED)
-ax.set_xlim(-1.2, 8.6); ax.set_ylim(-0.5, 4.8); ax.set_aspect('equal'); ax.axis('off')
+from matplotlib.path import Path as MPath
+tri_pts = [(6.0,0.2),(7.6,0.2),(7.35,1.55)]; tri = Polygon(tri_pts, closed=True, fill=False, edgecolor=INK, lw=0.8); ax.add_patch(tri)
+pts = np.array([6.9,0.6]) + rng.normal(0, 0.16, (160,2)); pts = pts[MPath(tri_pts).contains_points(pts)][:60]
+ax.scatter(pts[:,0], pts[:,1], s=6, color=BLUE, alpha=0.6); ax.add_patch(Circle((6.9,0.6), 0.05, color=INK))
+ax.text(6.0, 0.05, '001', fontsize=6.5, color=MUTED, ha='center', va='top'); ax.text(7.6, 0.05, '101', fontsize=6.5, color=MUTED, ha='center', va='top'); ax.text(7.35, 1.6, '111', fontsize=6.5, color=MUTED, ha='center', va='bottom')
+ax.text(6.8, -0.4, 'IPF: cloud about a fixed mean', ha='center', fontsize=8, color=MUTED)
+ax.set_xlim(-1.2, 8.6); ax.set_ylim(-0.7, 4.8); ax.set_aspect('equal'); ax.axis('off')
 
 # ---------------------------------------------------------------- (c) coherent grain walk by path length
 ax = axes[1, 0]; ax.set_title('(c) Coherent grain walk by inheritance path length (misorientation_grain_walk $D_g$ $\\rho$ path)', loc='left', fontsize=11, color=INK)
@@ -89,11 +91,18 @@ for k, a in enumerate(angs):
     ax.text(x0+k*0.55, y0-0.35, f'$v_{k}$', ha='center', fontsize=7.5, color=MUTED)
 ax.text(4.0, 1.95, 'the direction persists over ~1/(1−ρ) levels:\nthe grain bends coherently', fontsize=8.5, color=MUTED, va='top')
 ax.text(4.0, 1.25, 'lineages 1 and 2 reach k = 5 through the same\nincrements: the coherent part is path independent;\nthe per-voxel part (b) rides on top', fontsize=8.5, color=INK, va='top')
-tri = Polygon([(7.9,-0.6),(10.1,-0.6),(9.75,1.25)], closed=True, fill=False, edgecolor=INK, lw=0.8); ax.add_patch(tri)
-pth = np.cumsum(rng.normal(0, 0.11, (18,2))*np.array([1.2,0.8]), axis=0) + np.array([8.7,0.1]); pth[:,0]=np.clip(pth[:,0],8.0,9.9); pth[:,1]=np.clip(pth[:,1],-0.5,1.0)
+from matplotlib.path import Path as MPath
+tri_pts = [(7.9,-0.6),(10.1,-0.6),(9.75,1.25)]; tri = Polygon(tri_pts, closed=True, fill=False, edgecolor=INK, lw=0.8); ax.add_patch(tri)
+tp = MPath(tri_pts); pth = [np.array([8.45, -0.35])]; step = np.array([0.09, 0.05])
+while len(pth) < 18:
+    step = 0.85*step + rng.normal(0, 0.045, 2); cand = pth[-1] + step
+    if tp.contains_point(cand): pth.append(cand)
+    else: step = -0.5*step
+pth = np.array(pth)
+ax.text(7.9, -0.75, '001', fontsize=6.5, color=MUTED, ha='center', va='top'); ax.text(10.1, -0.75, '101', fontsize=6.5, color=MUTED, ha='center', va='top'); ax.text(9.75, 1.3, '111', fontsize=6.5, color=MUTED, ha='center', va='bottom')
 ax.plot(pth[:,0], pth[:,1], color=INK, lw=1); ax.scatter(pth[:,0], pth[:,1], c=np.arange(18), cmap='viridis', s=10, zorder=3)
 ax.annotate('', xy=pth[-1], xytext=pth[0], arrowprops=dict(arrowstyle='-|>', color=ORANGE, lw=1.5))
-ax.text(9.0, -0.95, 'IPF: directed path of the grain mean', ha='center', fontsize=8, color=MUTED)
+ax.text(9.0, -1.1, 'IPF: directed path of the grain mean', ha='center', fontsize=8, color=MUTED)
 ax.set_xlim(-0.9, 10.4); ax.set_ylim(-1.3, 6.6); ax.set_aspect('equal'); ax.axis('off')
 
 # ---------------------------------------------------------------- (d) boundary smoothing: copy vs average

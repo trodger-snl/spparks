@@ -231,13 +231,14 @@ $`\langle 001 \rangle`$ with height and is not used.
 
 #### Misorientation model.
 
-Two terms, both applied at capture in the sample frame. The model is a
-phenomenological proxy: it places at solidification the rotation that
-Lamb attribute to shrinkage in the mushy zone and to cycling in the
-heat-affected zone of later layers. It therefore cannot represent any
-dependence of a voxel’s SROD on the number of layers deposited above it,
-and a 12-layer build is compared here with material from the interior of
-a 10 mm block.
+Two terms, both applied at capture in the sample frame
+(Fig. <a href="#fig:schematic" data-reference-type="ref"
+data-reference="fig:schematic">2</a>). The model is a phenomenological
+proxy: it places at solidification the rotation that Lamb attribute to
+shrinkage in the mushy zone and to cycling in the heat-affected zone of
+later layers. It therefore cannot represent any dependence of a voxel’s
+SROD on the number of layers deposited above it, and a 12-layer build is
+compared here with material from the interior of a 10 mm block.
 
 - *Per-voxel walk*, `misorientation_diffusion` $`D_v`$ `30`: the
   captured voxel takes its parent’s orientation rotated by
@@ -267,6 +268,27 @@ a 10 mm block.
   data-reference="sec:res">6.8</a>). This term supplies the coherent
   drift. A device cache of the recurrence makes it cost nothing
   measurable.
+
+<figure id="fig:schematic">
+<img src="misorientation_schematic.png" />
+<figcaption>How orientation is assigned in the additive apps. (a) At
+capture the solid neighbours of the liquid voxel are grouped by grain, a
+grain is drawn with probability proportional to its mobility against the
+local thermal gradient, and the parent voxel is drawn uniformly within
+it. (b) The per-voxel walk rotates the inherited orientation by <span
+class="math inline">$\sqrt{D_v\,\mathrm{hop}}$</span> about a random
+axis at every hop, so lineages of one grain diverge and the grain’s mean
+does not move. (c) The coherent walk gives every voxel of a grain that
+crosses path level <span class="math inline"><em>k</em></span> the same
+rotation vector <span
+class="math inline"><em>v</em><sub><em>k</em></sub></span>, an
+Ornstein–Uhlenbeck sequence in <span
+class="math inline"><em>k</em></span> hashed from the grain and level,
+so the grain bends as a whole and the result is independent of the
+lineage path. (d) A boundary-smoothing flip copies one neighbour’s
+orientation and path length (used) rather than the neighbours’ average
+(default), which would cancel the fresh rotations.</figcaption>
+</figure>
 
 #### Boundary smoothing.
 
@@ -470,7 +492,7 @@ lag is 0.61 / 0.70 ($`x`$ / $`y`$) in v10 and 0.58 / 0.71 in v8, and
 43–62 % of the spectral power of the boundary density sits at the hatch
 period (`hatch_periodicity.py`,
 Fig. <a href="#fig:hatch" data-reference-type="ref"
-data-reference="fig:hatch">7</a>). In-plane grain widths by line
+data-reference="fig:hatch">8</a>). In-plane grain widths by line
 intercept have medians of 30, 39 and 51 μm at 200, 300 and 405 μm height
 ($`p_{90}`$ 72–84 μm). The cause is the deck’s registered hatch pattern:
 layers $`n`$ and $`n+2`$ have identical scan lines, so the pool
@@ -523,6 +545,25 @@ that the EBSD does not (the 2.4 ° neighbour disorientation is a property
 of independent-lineage inheritance at this $`D_v`$ and would be lower
 only with a smaller per-voxel term), so the two segmentations are not
 equivalent; the spin labelling is the one used elsewhere in this report.
+A threshold sweep locates the equivalence
+(Table <a href="#tab:seg" data-reference-type="ref"
+data-reference="tab:seg">[tab:seg]</a>): at 3 ° the coherent model
+recovers its columnar population (97 filtered grains, 37 taller than
+300 μm, ESD $`p_{50}`$ 128 μm) with a Fig. 5a score of 0.25 °, whereas
+the per-voxel model needs 5 °; since the EBSD orientation noise is a few
+tenths of a degree against a median same-grain neighbour disorientation
+of 2.4 ° (v10) and 3.8 ° (v8) in the simulation, a 3 ° threshold on v10
+plays the role of Lamb’s 2 °. The equivalence moves with the voxel size:
+the per-voxel step scales as $`\sqrt{\Delta x}`$, so at 1.5 μm the
+same-grain neighbour disorientation falls to 1.9 ° (2.1 ° at 3 μm on the
+same proxy) and a 2 ° segmentation of the 1.5 μm v10 run keeps its
+columnar grains (59 filtered grains, ESD $`p_{50}`$ 79 μm, tallest
+grains spanning the build, Fig. 5a RMS 0.16 °) where the 3 μm proxy at
+2 ° fragments (ESD $`p_{50}`$ 45 μm, RMS 0.69 °); at 3 ° the two
+resolutions agree (ESD $`p_{50}`$ 102 vs 101 μm). No orientation
+smoothing is applied before segmentation; the labels come from the raw
+voxel quaternions, and the only smoothing in the pipeline is the
+simulation’s boundary-smoothing pass on grain membership during the run.
 The 2 ° segmentation does, however, change the grain-class picture of
 the next section: on it, 55 of the 141 filtered v10 grains (13 % of the
 filtered volume) originate more than 60 μm above the remelt floor,

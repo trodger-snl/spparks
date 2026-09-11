@@ -64,7 +64,7 @@ for ax, title, inc_of, ori, coherent in ((axes[0], titles[0], lambda c: inc_v[c]
         col = cmap((c[0]-0.5)/(NL-1)) if coherent else ORANGE
         ax.annotate('', xy=(mx+d[0], my+d[1]), xytext=(mx, my), arrowprops=dict(arrowstyle='-|>', color=col, lw=1.6, mutation_scale=9))
     for n, (x, y) in pos.items():
-        ax.add_patch(Circle((x, y), 0.17, facecolor=cmap(n[0]/(NL-1)) if coherent else '#bcd3f2', edgecolor=INK, lw=0.7, zorder=3))
+        ax.add_patch(Circle((x, y), 0.17, facecolor=cmap(n[0]/(NL-1)), edgecolor=INK, lw=0.7, zorder=3))
     ax.text(pos[(0,0)][0], pos[(0,0)][1]-0.45, 'grain origin (reference orientation)', ha='center', fontsize=8.5, color=INK)
     # legend text on the right
     if not coherent:

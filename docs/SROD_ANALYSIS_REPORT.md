@@ -1,7 +1,3 @@
-# Misorientation accumulation along columnar grains in GammaPrint-700 laser powder bed fusion: 3D-EBSD (Lamb et al.) versus SPPARKS
-
-Revision 2b, 2026-09-10. **Reference version: `SROD_ANALYSIS_REPORT.tex` (PDF alongside); this file is generated from it with pandoc.** Figures are referenced by path under `docs/`.
-
 # Summary
 
 - Population SROD statistics in GP700 are those of a finite-variance
@@ -235,13 +231,15 @@ Two terms, both applied at capture in the sample frame
 (Fig. <a href="#fig:schematic" data-reference-type="ref"
 data-reference="fig:schematic">2</a>;
 Fig. <a href="#fig:walks" data-reference-type="ref"
-data-reference="fig:walks">3</a> contrasts them on one lineage tree).
-The model is a phenomenological proxy: it places at solidification the
-rotation that Lamb attribute to shrinkage in the mushy zone and to
-cycling in the heat-affected zone of later layers. It therefore cannot
-represent any dependence of a voxel’s SROD on the number of layers
-deposited above it, and a 12-layer build is compared here with material
-from the interior of a 10 mm block.
+data-reference="fig:walks">3</a> contrasts them on one lineage tree and
+Fig. <a href="#fig:mixed" data-reference-type="ref"
+data-reference="fig:mixed">4</a> shows their combination). The model is
+a phenomenological proxy: it places at solidification the rotation that
+Lamb attribute to shrinkage in the mushy zone and to cycling in the
+heat-affected zone of later layers. It therefore cannot represent any
+dependence of a voxel’s SROD on the number of layers deposited above it,
+and a 12-layer build is compared here with material from the interior of
+a 10 mm block.
 
 - *Per-voxel walk*, `misorientation_diffusion` $`D_v`$ `30`: the
   captured voxel takes its parent’s orientation rotated by
@@ -313,6 +311,21 @@ class="math inline"><em>v</em><sub><em>k</em> − 1</sub></span>
 inverse pole figure the levels trace a directed path away from the
 origin with no intragranular spread. The calibrated deck applies both at
 every hop.</figcaption>
+</figure>
+
+<figure id="fig:mixed">
+<img src="walk_schematic_mixed.png" style="width:62.0%" />
+<figcaption>The combined model on the same lineage tree: every hop
+applies the level rotation <span
+class="math inline"><em>v</em><sub><em>k</em></sub></span> shared by the
+grain (coloured arrow) and then its own random rotation (orange arrow
+drawn from the coloured tip). Two voxels of one level share the coherent
+part and differ only by their per-voxel parts. In the inverse pole
+figure each level is a cloud around the corresponding point of the
+coherent path, so the grain mean drifts along the path while the
+intragranular spread widens. The long-range population law is <span
+class="math inline">RMS<sup>2</sup> = (<em>D</em><sub><em>v</em></sub> + <em>D</em><sub><em>g</em></sub>(1 + <em>ρ</em>)/(1 − <em>ρ</em>))×</span>
+path.</figcaption>
 </figure>
 
 #### Boundary smoothing.
@@ -517,7 +530,7 @@ lag is 0.61 / 0.70 ($`x`$ / $`y`$) in v10 and 0.58 / 0.71 in v8, and
 43–62 % of the spectral power of the boundary density sits at the hatch
 period (`hatch_periodicity.py`,
 Fig. <a href="#fig:hatch" data-reference-type="ref"
-data-reference="fig:hatch">9</a>). In-plane grain widths by line
+data-reference="fig:hatch">10</a>). In-plane grain widths by line
 intercept have medians of 30, 39 and 51 μm at 200, 300 and 405 μm height
 ($`p_{90}`$ 72–84 μm). The cause is the deck’s registered hatch pattern:
 layers $`n`$ and $`n+2`$ have identical scan lines, so the pool

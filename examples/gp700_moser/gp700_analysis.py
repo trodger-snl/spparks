@@ -24,6 +24,7 @@ ap.add_argument('--D', type=float, default=None, help='input D, deg^2/m (for the
 ap.add_argument('--segment-deg', type=float, default=None, help='re-segment grains at this disorientation threshold (deg) instead of using the spin labels')
 ap.add_argument('--top-um', type=float, default=None, help='ignore everything above this height (um), e.g. the last never-remelted layer')
 ap.add_argument('--crop', type=float, nargs=4, metavar=('X0','X1','Y0','Y1'), default=None, help='analyse only this lateral window (um)')
+ap.add_argument('--heatmap-npz', default=None, help='save the originating-class (height, SROD) 2-D histogram over 0-120 um for heatmap_plot.py')
 ap.add_argument('--lamb', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'docs'), help='dir with lamb2023_fig5{a,c}_srod.json')
 a = ap.parse_args(); os.makedirs(a.out, exist_ok=True); dxu = a.dx*1e6
 with StitchReader(a.stitch) as r:
@@ -108,6 +109,13 @@ for gi in np.where(keep)[0]:
 res = {}
 if srod:
     srod=np.concatenate(srod); cls=np.concatenate(cls); dist_h=np.concatenate(dist_h); dist_e=np.concatenate(dist_e)
+    if a.heatmap_npz:   # originating grains, first 120 um: column-normalised density for heatmap_plot.py
+        m0 = (cls==0) & (dist_h>0) & (dist_h<=120)
+        H, xe, ye = np.histogram2d(dist_h[m0], np.clip(srod[m0], 0, 25), bins=[np.arange(0,125,5), np.arange(0,25.5,0.5)])
+        xc = 0.5*(xe[1:]+xe[:-1]); yc = 0.5*(ye[1:]+ye[:-1])
+        mean = np.array([srod[m0 & (dist_h>=lo) & (dist_h<lo+5)].mean() if (m0 & (dist_h>=lo) & (dist_h<lo+5)).sum() else np.nan for lo in xe[:-1]])
+        mode = yc[H.argmax(1)]
+        np.savez(a.heatmap_npz, H=H, xe=xe, ye=ye, xc=xc, mean=mean, mode=mode); print('heatmap data ->', a.heatmap_npz)
     for metric, dist, xlabel in (('height', dist_h, 'height above origin / floor (um)'),
                                  ('euclid', dist_e, 'straight-line distance from origin / floor reference (um)')):
         present = [k for k in (0,1) if (cls==k).sum() >= 100]   # one panel per class that has data

@@ -233,12 +233,15 @@ $`\langle 001 \rangle`$ with height and is not used.
 
 Two terms, both applied at capture in the sample frame
 (Fig. <a href="#fig:schematic" data-reference-type="ref"
-data-reference="fig:schematic">2</a>). The model is a phenomenological
-proxy: it places at solidification the rotation that Lamb attribute to
-shrinkage in the mushy zone and to cycling in the heat-affected zone of
-later layers. It therefore cannot represent any dependence of a voxel’s
-SROD on the number of layers deposited above it, and a 12-layer build is
-compared here with material from the interior of a 10 mm block.
+data-reference="fig:schematic">2</a>;
+Fig. <a href="#fig:walks" data-reference-type="ref"
+data-reference="fig:walks">3</a> contrasts them on one lineage tree).
+The model is a phenomenological proxy: it places at solidification the
+rotation that Lamb attribute to shrinkage in the mushy zone and to
+cycling in the heat-affected zone of later layers. It therefore cannot
+represent any dependence of a voxel’s SROD on the number of layers
+deposited above it, and a 12-layer build is compared here with material
+from the interior of a 10 mm block.
 
 - *Per-voxel walk*, `misorientation_diffusion` $`D_v`$ `30`: the
   captured voxel takes its parent’s orientation rotated by
@@ -288,6 +291,28 @@ so the grain bends as a whole and the result is independent of the
 lineage path. (d) A boundary-smoothing flip copies one neighbour’s
 orientation and path length (used) rather than the neighbours’ average
 (default), which would cancel the fresh rotations.</figcaption>
+</figure>
+
+<figure id="fig:walks">
+<img src="walk_schematic.png" />
+<figcaption>The two walks side by side on one lineage tree (grey lines:
+parent to child at capture; node colour: path level <span
+class="math inline"><em>k</em></span>; arrows: the rotation increment
+applied on that hop). (b) Per-voxel walk: each hop draws its own
+increment, so two voxels of the same level differ by every increment
+back to their common ancestor; in the inverse pole figure the grain
+becomes a cloud that widens with level while its mean stays at the
+origin. (c) Coherent grain walk: every hop that crosses level <span
+class="math inline"><em>k</em></span> applies the same vector <span
+class="math inline"><em>v</em><sub><em>k</em></sub></span>, whatever
+route the voxel took, so all voxels of a level share one orientation;
+<span class="math inline"><em>v</em><sub><em>k</em></sub></span> is
+correlated with <span
+class="math inline"><em>v</em><sub><em>k</em> − 1</sub></span>
+(persistence <span class="math inline"><em>ρ</em></span>), and in the
+inverse pole figure the levels trace a directed path away from the
+origin with no intragranular spread. The calibrated deck applies both at
+every hop.</figcaption>
 </figure>
 
 #### Boundary smoothing.
@@ -492,7 +517,7 @@ lag is 0.61 / 0.70 ($`x`$ / $`y`$) in v10 and 0.58 / 0.71 in v8, and
 43–62 % of the spectral power of the boundary density sits at the hatch
 period (`hatch_periodicity.py`,
 Fig. <a href="#fig:hatch" data-reference-type="ref"
-data-reference="fig:hatch">8</a>). In-plane grain widths by line
+data-reference="fig:hatch">9</a>). In-plane grain widths by line
 intercept have medians of 30, 39 and 51 μm at 200, 300 and 405 μm height
 ($`p_{90}`$ 72–84 μm). The cause is the deck’s registered hatch pattern:
 layers $`n`$ and $`n+2`$ have identical scan lines, so the pool

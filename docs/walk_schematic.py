@@ -30,12 +30,12 @@ inc_v = {c: rng.normal(0, 1, 2) for c in parents}
 # coherent: one vector per level, OU-correlated (rho = 0.8)
 inc_g = []; v = rng.normal(0, 1, 2)
 for L in range(NL-1):
-    v = 0.8*v + np.sqrt(1-0.8**2)*rng.normal(0, 1, 2); inc_g.append(v.copy())
+    v = 0.9*v + np.sqrt(1-0.9**2)*rng.normal(0, 1, 2); inc_g.append(v.copy())
 inc_g = np.array(inc_g)
 # rotate the coherent sequence so its net drift points into the IPF triangle (purely cosmetic)
-tot = inc_g.sum(0); target = np.array([0.55, 1.0]); ang = np.arctan2(target[1], target[0]) - np.arctan2(tot[1], tot[0])
+tot = inc_g.sum(0); target = np.array([0.5, 0.9]); ang = np.arctan2(target[1], target[0]) - np.arctan2(tot[1], tot[0])
 Rm = np.array([[np.cos(ang), -np.sin(ang)], [np.sin(ang), np.cos(ang)]]); inc_g = inc_g @ Rm.T
-inc_g *= 1.6/np.linalg.norm(tot)
+inc_g *= 2.4/np.linalg.norm(tot)
 # resulting "orientation" of every node (2-D, for the IPF sketch): cumulative along the lineage
 def orientation(node, per_edge):
     o = np.zeros(2); c = node
@@ -83,15 +83,19 @@ for ax, title, inc_of, ori, coherent in ((axes[0], titles[0], lambda c: inc_v[c]
         ax.text(3.9, 3.3, 'grain mean: bends along a path;  intragranular spread: none', fontsize=9, color=INK, va='top')
     # IPF sketch: triangle with the node orientations
     tri_pts = [(3.9, -0.45), (7.9, -0.45), (7.25, 2.75)]; ax.add_patch(Polygon(tri_pts, closed=True, fill=False, edgecolor=INK, lw=0.9))
-    tp = MPath(tri_pts); centre = np.array([5.6, 0.55]); scale = 0.24 if not coherent else 1.0
+    tp = MPath(tri_pts); centre = np.array([5.6, 0.3]) if coherent else np.array([5.6, 0.55]); scale = 0.24 if not coherent else 1.0
     P = np.array([ori[n] for n in pos]); Lv = np.array([n[0] for n in pos])
+    # shrink the sketch until every point (with a margin) lies inside the triangle
+    inner = MPath([tuple(centre + 0.88*(np.array(t)-centre)) for t in tri_pts])
+    inside = lambda sc: all(inner.contains_point(pt) for pt in centre + sc*P)
+    while inside(scale*1.05): scale *= 1.05      # grow to fill the triangle ...
+    while not inside(scale): scale *= 0.95        # ... then back off until every point is inside
     xy = centre + scale*P
-    xy = np.array([pt if tp.contains_point(pt) else centre + 0.5*(pt-centre) for pt in xy])
     if coherent:
         for L in range(NL-1):
             a, b = centre + scale*ori[(L,0)], centre + scale*ori[(L+1,0)]
-            ax.annotate('', xy=b, xytext=a, arrowprops=dict(arrowstyle='-|>', color=cmap((L+0.5)/(NL-1)), lw=2.2, mutation_scale=12), zorder=2)
-        jitter = rng.normal(0, 0.03, xy.shape)
+            ax.annotate('', xy=b, xytext=a, arrowprops=dict(arrowstyle='-|>', color=cmap((L+0.5)/(NL-1)), lw=2.4, mutation_scale=14, shrinkA=4, shrinkB=4), zorder=5)
+        jitter = rng.normal(0, 0.02, xy.shape)
         ax.scatter(xy[:,0]+jitter[:,0], xy[:,1]+jitter[:,1], c=Lv, cmap='viridis', s=34, edgecolor=INK, linewidths=0.4, zorder=3)
         ax.add_patch(Circle(tuple(centre), 0.06, color=INK, zorder=4))
         ax.text(5.9, -0.65, 'IPF: all voxels of a level sit at one point;\nthe levels trace a persistent path away from the origin', ha='center', fontsize=8.5, color=MUTED, va='top')

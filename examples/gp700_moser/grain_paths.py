@@ -168,3 +168,29 @@ H = np.array([r[1] for r in rows]); ax[1].scatter(H, R[:,0], s=14, color='#2a78d
 ax[2].hist(R[:,4][~np.isnan(R[:,4])], bins=np.linspace(0,1,11), color='#2a78d6', alpha=0.8); ax[2].set_xlabel('fraction of slabs where the mean SROD increases'); ax[2].set_ylabel('grains'); ax[2].set_title('monotonicity of SROD(h)', loc='left', fontsize=10)
 for a_ in ax: a_.grid(color='#e6e5e1', lw=0.6)
 fig.tight_layout(); fig.savefig(f'{a.out}/grain_summary.png', dpi=140); print(f'wrote {a.out}/grain_paths_grid.png, grain_summary.png, grain_stats.csv')
+
+# ---- Lamb 2024 Fig. 4(c,d) style for the N analysed grains: mean SROD per 30 um layer against height, and every voxel on the
+# build-direction IPF in its own IPF-Z colour with a black path (per-slab means, arrowhead at the top) -> grain_ipf_lamb.png
+LAMB_COL = ['#e6449a', '#2f5bd6', '#36b24a', '#f28c28', '#8a2b78', '#0075a9']
+picked = [g for g in allg[:a.n]]
+fig = plt.figure(figsize=(3.6 + 2.6*len(picked), 3.4)); gs = fig.add_gridspec(1, 1 + len(picked), width_ratios=[1.4] + [1]*len(picked), wspace=0.12)
+axc = fig.add_subplot(gs[0, 0]); layer = 30.0
+for k, g in enumerate(picked):
+    m = lab == g; idx = np.argwhere(m); qq = q[m]; zc = idx[:,2]; o = idx[np.argmin(zc)]
+    h = (zc - o[2])*dxu; srod = disorientation_deg(np.broadcast_to(q[tuple(o)], (len(qq),4)), qq)
+    edges = np.arange(0, h.max()+layer, layer); mids, means = [], []
+    for lo in edges[:-1]:
+        mm = (h >= lo) & (h < lo+layer)
+        if mm.sum() >= 20: mids.append(lo + layer/2); means.append(srod[mm].mean())
+    axc.plot(means, mids, color=LAMB_COL[k % len(LAMB_COL)], lw=1.6, label=f'G{k+1}')
+    axd = fig.add_subplot(gs[0, 1+k]); draw_triangle(axd)
+    sub = np.random.default_rng(0).choice(len(qq), min(len(qq), 40000), replace=False)
+    px, py = triangle_xy(bd_in_crystal(qq[sub])); rgb = generate_ipf_colors(qq[sub], 'fcc', 'z')
+    axd.scatter(px, py, c=np.clip(rgb, 0, 1), s=1.5, linewidths=0, alpha=0.6)
+    pth = np.array(paths[g]) if g in paths and len(paths[g]) > 1 else None
+    if pth is not None:
+        axd.plot(pth[:,0], pth[:,1], color='k', lw=1.3); axd.annotate('', xy=pth[-1], xytext=pth[-2], arrowprops=dict(arrowstyle='-|>', color='k', lw=1.3, mutation_scale=10))
+    axd.text(0.02, 0.36, f'G{k+1}', color=LAMB_COL[k % len(LAMB_COL)], fontsize=11, fontweight='bold')
+    axd.text(0.24, 0.36, f'max {srod.max():.0f}°', color=LAMB_COL[k % len(LAMB_COL)], fontsize=8)
+axc.set_xlabel('SROD (°), mean per 30 µm layer'); axc.set_ylabel('height above origin (µm)'); axc.grid(alpha=0.3); axc.legend(fontsize=8, frameon=False, loc='lower right')
+fig.savefig(f'{a.out}/grain_ipf_lamb.png', dpi=160, bbox_inches='tight'); print(f'wrote {a.out}/grain_ipf_lamb.png')

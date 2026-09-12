@@ -9,6 +9,7 @@ sys.path.insert(0, '/home/tron/spparks-micro-analysis/src'); sys.path.insert(0, 
 from spparks_micro_analysis.ebsd_reader import read_ang
 from spparks_micro_analysis.grain_segmentation import segment_grains_2d
 from spparks_micro_analysis.orientation_analysis import generate_ipf_colors
+IPF_CONJ = np.array([1.0, -1.0, -1.0, -1.0])   # package data (stitch and .ang) store q with R(q) columns = crystal axes; orix's key wants the inverse
 from srod_analysis import disorientation_deg, qmul, SYM
 import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
 
@@ -37,7 +38,7 @@ for g, n in zip(ids, counts):
     srod[rr, cc] = disorientation_deg(np.broadcast_to(qo, qs.shape), qs)
     height = (rr.max() - rr.min()) * dy
     if tallest is None or height > tallest[0]: tallest = (height, g, rr, cc)
-rgb = generate_ipf_colors(q.reshape(-1, 4), 'fcc', 'z').reshape(H, W, 3); rgb[~v] = 0.15
+rgb = generate_ipf_colors(q.reshape(-1, 4) * IPF_CONJ, 'fcc', 'z').reshape(H, W, 3); rgb[~v] = 0.15
 b = np.zeros((H, W), bool); b[1:, :] |= lab[1:, :] != lab[:-1, :]; b[:, 1:] |= lab[:, 1:] != lab[:, :-1]; rgb[b] = 0
 ext = [0, W*dx, 0, H*dy]
 fig = plt.figure(figsize=(13.5, 6.4)); gs = fig.add_gridspec(2, 3, height_ratios=[3.2, 1.3], hspace=0.28, wspace=0.12)

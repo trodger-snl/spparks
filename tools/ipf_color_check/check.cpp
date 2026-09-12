@@ -1,6 +1,6 @@
 // Check src/ipf_color.h against orix IPFColorKeyTSL (m-3m) reference colours.
-// Reference: 300 unit quaternions (w x y z r g b) from orix 0.13 via
-// spparks-micro-analysis generate_ipf_colors conventions, direction z / x.
+// Reference: 300 unit quaternions (w x y z r g b); r g b = orix 0.13 IPFColorKeyTSL colour of the
+// CONJUGATE quaternion (orix applies R d; SPPARKS quaternions need R^T d), direction z / x.
 // build: g++ -O2 -I ../../src -include stdlib.h -o check check.cpp
 // run:   ./check ipf_ref_z.csv 0 0 1 && ./check ipf_ref_x.csv 1 0 0
 #include "ipf_color.h"

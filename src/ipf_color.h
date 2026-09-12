@@ -4,8 +4,12 @@
    orix (IPFColorKeyTSL): red [001], green [101], blue [111], hue from the
    azimuth about the sector barycentre (corrected so each triangle edge
    spans one third of the hue circle), lightness from the distance to the
-   sector boundary. Same convention as spparks-micro-analysis
-   generate_ipf_colors: the crystal-frame direction is R(q) d.
+   sector boundary. SPPARKS convention (crystalline_orientations/quaternion.h:
+   the columns of R(q) are the crystal axes in the sample frame), so the
+   crystal-frame direction of a sample vector d is R(q)^T d. Note that
+   spparks-micro-analysis generate_ipf_colors applies orix's key, which
+   uses R(q) d; on SPPARKS quaternions that colours the inverse
+   orientation unless the conjugate is passed.
 ------------------------------------------------------------------------- */
 #ifndef SPK_IPF_COLOR_H
 #define SPK_IPF_COLOR_H
@@ -134,14 +138,14 @@ inline void direction_rgb(const double *pin, double *rgb) {
   }
 }
 
-// quaternion (w,x,y,z) and unit sample direction d -> rgb of R(q) d
+// quaternion (w,x,y,z) and unit sample direction d -> rgb of R(q)^T d
 inline void quaternion_rgb(double w, double x, double y, double z, const double *d, double *rgb) {
   double n = sqrt(w*w+x*x+y*y+z*z);
   if (n == 0.0) { rgb[0] = rgb[1] = rgb[2] = 0.0; return; }
   w /= n; x /= n; y /= n; z /= n;
-  double p[3] = {(1.0-2.0*(y*y+z*z))*d[0] + 2.0*(x*y-w*z)*d[1] + 2.0*(x*z+w*y)*d[2],
-                 2.0*(x*y+w*z)*d[0] + (1.0-2.0*(x*x+z*z))*d[1] + 2.0*(y*z-w*x)*d[2],
-                 2.0*(x*z-w*y)*d[0] + 2.0*(y*z+w*x)*d[1] + (1.0-2.0*(x*x+y*y))*d[2]};
+  double p[3] = {(1.0-2.0*(y*y+z*z))*d[0] + 2.0*(x*y+w*z)*d[1] + 2.0*(x*z-w*y)*d[2],
+                 2.0*(x*y-w*z)*d[0] + (1.0-2.0*(x*x+z*z))*d[1] + 2.0*(y*z+w*x)*d[2],
+                 2.0*(x*z+w*y)*d[0] + 2.0*(y*z-w*x)*d[1] + (1.0-2.0*(x*x+y*y))*d[2]};
   direction_rgb(p, rgb);
 }
 

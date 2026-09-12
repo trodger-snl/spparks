@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 from spparks_micro_analysis.stitch_reader import StitchReader
 from spparks_micro_analysis.grain_size_analysis import relabel_grains
 from spparks_micro_analysis.orientation_analysis import generate_ipf_colors
+IPF_CONJ = np.array([1.0, -1.0, -1.0, -1.0])   # package data (stitch and .ang) store q with R(q) columns = crystal axes; orix's key wants the inverse
 from srod_analysis import disorientation_deg
 import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
 
@@ -76,7 +77,7 @@ for row, g in enumerate(pick):
     # (a) IPF map and (b) SROD map on the xz slice through the grain centroid (grain only)
     yc = int(round(idx[:,1].mean()))
     sl = m[:, yc, :]
-    rgb = generate_ipf_colors(q[:, yc, :, :].reshape(-1,4), 'fcc', 'z').reshape(nx, nz, 3)
+    rgb = generate_ipf_colors(q[:, yc, :, :].reshape(-1,4) * IPF_CONJ, 'fcc', 'z').reshape(nx, nz, 3)
     img = np.ones((nx, nz, 3))*0.92; img[sl] = rgb[sl]
     ax = axes[row,0]; ax.imshow(np.transpose(img, (1,0,2)), origin='lower', extent=[0, nx*dxu, 0, nz*dxu]); ax.set_title(f'grain {g}: IPF-Z, xz slice at y = {yc*dxu:.0f} um', loc='left', fontsize=10)
     sm = np.full((nx, nz), np.nan); sm[sl] = disorientation_deg(np.broadcast_to(q[tuple(o)], (sl.sum(),4)), q[:, yc, :, :][sl])
@@ -173,7 +174,7 @@ fig.tight_layout(); fig.savefig(f'{a.out}/grain_summary.png', dpi=140); print(f'
 # build-direction IPF in its own IPF-Z colour with a black path (per-slab means, arrowhead at the top) -> grain_ipf_lamb.png
 picked = [g for g in allg[:a.n]]
 # curve and label colour = IPF-Z colour of the grain's mean orientation, as the clouds and maps (Lamb's labels match their grains)
-gcol = {g: tuple(np.clip(generate_ipf_colors(mean_q(q[lab == g])[None, :], 'fcc', 'z')[0], 0, 1)) for g in picked}
+gcol = {g: tuple(np.clip(generate_ipf_colors(mean_q(q[lab == g])[None, :] * IPF_CONJ, 'fcc', 'z')[0], 0, 1)) for g in picked}
 fig = plt.figure(figsize=(3.6 + 2.6*len(picked), 3.4)); gs = fig.add_gridspec(1, 1 + len(picked), width_ratios=[1.4] + [1]*len(picked), wspace=0.12)
 axc = fig.add_subplot(gs[0, 0]); layer = 30.0
 for k, g in enumerate(picked):
@@ -186,7 +187,7 @@ for k, g in enumerate(picked):
     axc.plot(means, mids, color=gcol[g], lw=2.0, label=f'G{k+1}')
     axd = fig.add_subplot(gs[0, 1+k]); draw_triangle(axd)
     sub = np.random.default_rng(0).choice(len(qq), min(len(qq), 40000), replace=False)
-    px, py = triangle_xy(bd_in_crystal(qq[sub])); rgb = generate_ipf_colors(qq[sub], 'fcc', 'z')
+    px, py = triangle_xy(bd_in_crystal(qq[sub])); rgb = generate_ipf_colors((qq[sub]) * IPF_CONJ, 'fcc', 'z')
     axd.scatter(px, py, c=np.clip(rgb, 0, 1), s=1.5, linewidths=0, alpha=0.6)
     pth = np.array(paths[g]) if g in paths and len(paths[g]) > 1 else None
     if pth is not None:

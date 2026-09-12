@@ -24,6 +24,8 @@ ap.add_argument('--crop', type=float, nargs=4, default=None); ap.add_argument('-
 ap.add_argument('--slab-um', type=float, default=10.0)
 ap.add_argument('--segment-deg', type=float, default=None, help='re-segment grains at this disorientation threshold (deg)')
 ap.add_argument('--grid', type=int, default=24, help='grains in the compact IPF-path grid (tallest first)')
+ap.add_argument('--lamb-pick', default='spread', choices=['tallest', 'spread'], help='grains for the Lamb-style figure: the N tallest, or N tall grains (>= --lamb-min-height-um) whose mean orientations are farthest apart on the IPF triangle')
+ap.add_argument('--lamb-min-height-um', type=float, default=300.0)
 a = ap.parse_args(); os.makedirs(a.out, exist_ok=True); dxu = a.dx*1e6
 with StitchReader(a.stitch) as r:
     b = r.get_global_bounds(); t = r.times[-1]
@@ -173,6 +175,15 @@ fig.tight_layout(); fig.savefig(f'{a.out}/grain_summary.png', dpi=140); print(f'
 # ---- Lamb 2024 Fig. 4(c,d) style for the N analysed grains: mean SROD per 30 um layer against height, and every voxel on the
 # build-direction IPF in its own IPF-Z colour with a black path (per-slab means, arrowhead at the top) -> grain_ipf_lamb.png
 picked = [g for g in allg[:a.n]]
+if a.lamb_pick == 'spread':      # greedy farthest-point selection on the triangle among tall grains, seeded by the tallest
+    cand = [g for g in allg if height[ids == g][0] >= a.lamb_min_height_um] or list(allg[:max(a.n, 12)])
+    pos = {}
+    for g in cand:
+        v = np.sort(np.abs(bd_in_crystal(mean_q(q[lab == g])[None, :])), axis=1)[0, ::-1]; pos[g] = np.array([v[1]/(1+v[0]), v[2]/(1+v[0])])
+    picked = [cand[0]]
+    while len(picked) < min(a.n, len(cand)):
+        picked.append(max((g for g in cand if g not in picked), key=lambda g: min(np.linalg.norm(pos[g]-pos[h]) for h in picked)))
+    print('Lamb-style figure grains (spread on the IPF):', [f'{g} h={height[ids==g][0]:.0f}um' for g in picked])
 # curve and label colour = IPF-Z colour of the grain's mean orientation, as the clouds and maps (Lamb's labels match their grains)
 gcol = {g: tuple(np.clip(generate_ipf_colors(mean_q(q[lab == g])[None, :] * IPF_CONJ, 'fcc', 'z')[0], 0, 1)) for g in picked}
 fig = plt.figure(figsize=(3.6 + 2.6*len(picked), 3.4)); gs = fig.add_gridspec(1, 1 + len(picked), width_ratios=[1.4] + [1]*len(picked), wspace=0.12)

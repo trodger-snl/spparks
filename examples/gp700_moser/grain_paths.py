@@ -171,8 +171,9 @@ fig.tight_layout(); fig.savefig(f'{a.out}/grain_summary.png', dpi=140); print(f'
 
 # ---- Lamb 2024 Fig. 4(c,d) style for the N analysed grains: mean SROD per 30 um layer against height, and every voxel on the
 # build-direction IPF in its own IPF-Z colour with a black path (per-slab means, arrowhead at the top) -> grain_ipf_lamb.png
-LAMB_COL = ['#e6449a', '#2f5bd6', '#36b24a', '#f28c28', '#8a2b78', '#0075a9']
 picked = [g for g in allg[:a.n]]
+# curve and label colour = IPF-Z colour of the grain's mean orientation, as the clouds and maps (Lamb's labels match their grains)
+gcol = {g: tuple(np.clip(generate_ipf_colors(mean_q(q[lab == g])[None, :], 'fcc', 'z')[0], 0, 1)) for g in picked}
 fig = plt.figure(figsize=(3.6 + 2.6*len(picked), 3.4)); gs = fig.add_gridspec(1, 1 + len(picked), width_ratios=[1.4] + [1]*len(picked), wspace=0.12)
 axc = fig.add_subplot(gs[0, 0]); layer = 30.0
 for k, g in enumerate(picked):
@@ -182,7 +183,7 @@ for k, g in enumerate(picked):
     for lo in edges[:-1]:
         mm = (h >= lo) & (h < lo+layer)
         if mm.sum() >= 20: mids.append(lo + layer/2); means.append(srod[mm].mean())
-    axc.plot(means, mids, color=LAMB_COL[k % len(LAMB_COL)], lw=1.6, label=f'G{k+1}')
+    axc.plot(means, mids, color=gcol[g], lw=2.0, label=f'G{k+1}')
     axd = fig.add_subplot(gs[0, 1+k]); draw_triangle(axd)
     sub = np.random.default_rng(0).choice(len(qq), min(len(qq), 40000), replace=False)
     px, py = triangle_xy(bd_in_crystal(qq[sub])); rgb = generate_ipf_colors(qq[sub], 'fcc', 'z')
@@ -190,7 +191,7 @@ for k, g in enumerate(picked):
     pth = np.array(paths[g]) if g in paths and len(paths[g]) > 1 else None
     if pth is not None:
         axd.plot(pth[:,0], pth[:,1], color='k', lw=1.3); axd.annotate('', xy=pth[-1], xytext=pth[-2], arrowprops=dict(arrowstyle='-|>', color='k', lw=1.3, mutation_scale=10))
-    axd.text(0.02, 0.36, f'G{k+1}', color=LAMB_COL[k % len(LAMB_COL)], fontsize=11, fontweight='bold')
-    axd.text(0.24, 0.36, f'max {srod.max():.0f}°', color=LAMB_COL[k % len(LAMB_COL)], fontsize=8)
+    axd.text(0.02, 0.36, f'G{k+1}', color=gcol[g], fontsize=11, fontweight='bold')
+    axd.text(0.24, 0.36, f'max {srod.max():.0f}°', color=gcol[g], fontsize=8)
 axc.set_xlabel('SROD (°), mean per 30 µm layer'); axc.set_ylabel('height above origin (µm)'); axc.grid(alpha=0.3); axc.legend(fontsize=8, frameon=False, loc='lower right')
 fig.savefig(f'{a.out}/grain_ipf_lamb.png', dpi=160, bbox_inches='tight'); print(f'wrote {a.out}/grain_ipf_lamb.png')

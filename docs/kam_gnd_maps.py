@@ -42,7 +42,9 @@ def gnd_map(q, valid, kam):
 panels = [('per-voxel model', *sim_section('/home/tron/gp700_runs/wide12_v8/gp700.st')),
           ('two-term model', *sim_section('/home/tron/gp700_runs/wide12_v10/gp700.st')),
           ('IN625 EBSD, nominal (3 um sampling)', *ebsd_section())]
-fig, axes = plt.subplots(2, 3, figsize=(13.5, 8.2)); stats = []
+for extra in sys.argv[2:]:                      # label=path.st -> extra simulation column
+    lab_, st = extra.split('='); panels.insert(len(panels) - 1, (lab_, *sim_section(st)))
+fig, axes = plt.subplots(2, len(panels), figsize=(4.5 * len(panels), 8.2)); stats = []
 for j, (name, q, valid) in enumerate(panels):
     kam = calculate_kam_2d(q, valid, threshold_deg=5.0, crystal_structure='cubic'); kam_deg = np.degrees(kam)
     gnd, gtag = gnd_map(q, valid, kam)

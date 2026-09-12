@@ -13,8 +13,7 @@ sys.path.insert(0, '/home/tron/spparks-micro-analysis/src')
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'scripts'))
 from spparks_micro_analysis.stitch_reader import StitchReader
 from spparks_micro_analysis.grain_size_analysis import relabel_grains
-from spparks_micro_analysis.orientation_analysis import generate_ipf_colors
-IPF_CONJ = np.array([1.0, -1.0, -1.0, -1.0])   # package data (stitch and .ang) store q with R(q) columns = crystal axes; orix's key wants the inverse, create_pole_density_plots_from_quaternions
+from spparks_micro_analysis.orientation_analysis import generate_ipf_colors, create_pole_density_plots_from_quaternions
 from srod_analysis import disorientation_deg
 import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
 
@@ -148,7 +147,7 @@ if srod:
         ax[0].set_ylabel('SROD (deg)'); ax[0].legend(frameon=False); fig.tight_layout(); fig.savefig(f'{a.out}/srod_{metric}.png', dpi=150)
 
 # ---- IPF cross-sections (BD = z) and pole figures
-rgb = generate_ipf_colors(q.reshape(-1, 4) * IPF_CONJ, 'fcc', 'z').reshape(nx,ny,nz,3); rgb[~solid] = 0.25
+rgb = generate_ipf_colors(q.reshape(-1, 4), 'fcc', 'z').reshape(nx,ny,nz,3); rgb[~solid] = 0.25
 fig,ax = plt.subplots(1,3,figsize=(15,5))
 ax[0].imshow(np.transpose(rgb[:,ny//2,:,:],(1,0,2)), origin='lower', extent=[0,nx*dxu,0,nz*dxu]); ax[0].set_title('xz at y = mid (IPF-z)')
 ax[1].imshow(np.transpose(rgb[nx//2,:,:,:],(1,0,2)), origin='lower', extent=[0,ny*dxu,0,nz*dxu]); ax[1].set_title('yz at x = mid')

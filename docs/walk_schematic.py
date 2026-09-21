@@ -6,6 +6,7 @@ Per-voxel: every hop gets its own random rotation, lineages diverge, the grain m
 Coherent: every hop crossing path level k gets the SAME rotation v_k, correlated between levels,
 so all voxels of a level share one orientation and the grain bends. Combined: the coherent
 path plus a cloud around it."""
+import sys
 import numpy as np
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -26,6 +27,8 @@ parents = {(L, j): (L-1, min(j, layers[L-1]-1)) for L in range(1, NL) for j in r
 DV, DG, RHO, DX = 0.065, 0.010, 0.9, 3.0
 TH_V = np.sqrt(DV*DX)            # per-voxel angle per 3 um hop: 0.44 deg
 V_G = np.sqrt(DG*DX)             # coherent RMS per level: 0.17 deg
+SLIDES = '--slides' in sys.argv
+if SLIDES: TH_V, V_G = 0.20, 0.45   # slides only: illustrative magnitudes so the shared level arrow reads beside the per-hop one (NOT the deck's 0.44 / 0.17)
 inc_v = {c: rng.normal(0, TH_V/np.sqrt(2), 2) for c in parents}   # independent per edge, |inc| ~ TH_V
 inc_g = []; v = rng.normal(0, V_G/np.sqrt(2), 2)                  # OU per level, RMS V_G, persistence RHO
 for L in range(NL-1):
@@ -33,8 +36,10 @@ for L in range(NL-1):
 inc_g = np.array(inc_g)
 tot = inc_g.sum(0); target = np.array([0.5, 0.9]); ang = np.arctan2(target[1], target[0]) - np.arctan2(tot[1], tot[0])
 Rm = np.array([[np.cos(ang), -np.sin(ang)], [np.sin(ang), np.cos(ang)]]); inc_g = inc_g @ Rm.T   # aim only, no rescale
-UNIT = 1.5     # drawing units per degree for the edge arrows
-IPF_UNIT = 0.8  # drawing units per degree in the IPF sketches (same in every panel)
+if SLIDES:      # a fixed, slowly turning sequence of constant size: what 'persistent' means, without the luck of one OU draw
+    a = np.radians(20 + 13*np.arange(NL-1)); inc_g = V_G*np.c_[np.cos(a), np.sin(a)]
+UNIT = 1.6 if SLIDES else 1.5     # drawing units per degree for the edge arrows
+IPF_UNIT = 0.9 if SLIDES else 0.8  # drawing units per degree in the IPF sketches (same in every panel)
 
 def increment(mode, c):
     if mode == 'voxel': return inc_v[c]
@@ -92,7 +97,7 @@ def panel(ax, mode, slide=False):
         lvl = cmap((c[0]-0.5)/(NL-1))
         if mode in ('coherent', 'mixed'):
             d = UNIT*inc_g[c[0]-1]
-            ax.annotate('', xy=(mx+d[0], my+d[1]), xytext=(mx, my), arrowprops=dict(arrowstyle='-|>', color=lvl, lw=1.8, mutation_scale=6))
+            ax.annotate('', xy=(mx+d[0], my+d[1]), xytext=(mx, my), arrowprops=dict(arrowstyle='-|>', color=lvl, lw=2.6 if SLIDES else 1.8, mutation_scale=11 if SLIDES else 6))
             mx, my = mx+d[0], my+d[1]
         if mode in ('voxel', 'mixed'):
             d = UNIT*inc_v[c]
@@ -104,7 +109,7 @@ def panel(ax, mode, slide=False):
         for y, t, fs, col in TEXT[mode]: ax.text(3.9, y, t, fontsize=fs, color=col, va='top' if y < 5.5 else 'baseline')
     # IPF sketch
     tri_pts = [(4.6, -1.0+dy), (8.4, -1.0+dy), (7.8, 2.0+dy)]; ax.add_patch(Polygon(tri_pts, closed=True, fill=False, edgecolor=INK, lw=0.9))
-    centre = np.array([6.75, 0.25+dy])
+    centre = np.array([6.2, -0.2+dy]) if slide else np.array([6.75, 0.25+dy])   # slides: start low-left so the enlarged path stays inside
     ori = {n: orientation(mode, n) for n in pos}
     P = np.array([ori[n] for n in pos]); Lv = np.array([n[0] for n in pos])
     scale = IPF_UNIT
@@ -115,7 +120,7 @@ def panel(ax, mode, slide=False):
         for L in range(NL-1):
             ax.annotate('', xy=mean[L+1], xytext=mean[L], arrowprops=dict(arrowstyle='-|>', color=cmap((L+0.5)/(NL-1)), lw=2.0, mutation_scale=8, shrinkA=0, shrinkB=0), zorder=5)
         if mode == 'coherent': xy = xy + rng.normal(0, 0.02, xy.shape)
-    ax.scatter(xy[:,0], xy[:,1], c=Lv, cmap='viridis', s=34, edgecolor=INK, linewidths=0.4, zorder=3, alpha=0.8 if mode == 'mixed' else 1.0)
+    ax.scatter(xy[:,0], xy[:,1], c=Lv, cmap='viridis', s=60 if slide else 34, edgecolor=INK, linewidths=0.4, zorder=3, alpha=0.8 if mode == 'mixed' else 1.0)
     ax.add_patch(Circle(tuple(centre), 0.06, color=INK, zorder=4))
     if not slide: ax.text(6.5, -1.2, IPF[mode], ha='center', fontsize=8.5, color=MUTED, va='top')
     else: ax.text(6.5, -1.2+dy, 'build-direction IPF', ha='center', fontsize=9, color=MUTED, va='top')
@@ -123,8 +128,7 @@ def panel(ax, mode, slide=False):
         ax.text(x_, y_, s_, fontsize=7 if not slide else 9, color=MUTED, ha='center', va=va)
     ax.set_xlim(-2.9, 9.4); ax.set_ylim(-0.1 if slide else -1.9, 6.5); ax.set_aspect('equal'); ax.axis('off')
 
-import sys
-if '--slides' in sys.argv:   # text-free panels for slides: walk_schematic.py --slides OUTDIR
+if SLIDES:   # text-free panels for slides: walk_schematic.py --slides OUTDIR
     outdir = sys.argv[sys.argv.index('--slides')+1].rstrip('/') + '/'
     for mode in ('voxel', 'coherent', 'mixed'):
         fig, ax = plt.subplots(figsize=(8.2, 4.4)); fig.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.01)

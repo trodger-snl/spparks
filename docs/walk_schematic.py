@@ -87,7 +87,7 @@ def panel(ax, mode, slide=False):
     dy = 2.6 if slide else 0.0
     for L in range(NL):
         y = pos[(L, 0)][1]
-        ax.axhspan(y-0.5, y+0.5, xmin=0.02, xmax=0.62, color='#eef2f7' if L % 2 else '#f7f8fa', zorder=0)
+        ax.axhspan(y-0.5, y+0.5, xmin=0.02, xmax=(4.5+2.9)/(13.5 if slide else 12.3) if slide else 0.62, color='#eef2f7' if L % 2 else '#f7f8fa', zorder=0)
         ax.text(-1.75, y, f'k = {L}', va='center', ha='right', fontsize=9, color=MUTED)
     ax.text(-1.75, pos[(0,0)][1]-0.5, 'path level\n(d10)', va='top', ha='right', fontsize=8.5, color=MUTED)
     for c, p in parents.items():
@@ -108,8 +108,9 @@ def panel(ax, mode, slide=False):
     if not slide:
         for y, t, fs, col in TEXT[mode]: ax.text(3.9, y, t, fontsize=fs, color=col, va='top' if y < 5.5 else 'baseline')
     # IPF sketch
-    tri_pts = [(4.6, -1.0+dy), (8.4, -1.0+dy), (7.8, 2.0+dy)]; ax.add_patch(Polygon(tri_pts, closed=True, fill=False, edgecolor=INK, lw=0.9))
-    centre = np.array([6.2, -0.2+dy]) if slide else np.array([6.75, 0.25+dy])   # slides: start low-left so the enlarged path stays inside
+    sx = 1.2 if slide else 0.0   # slides: IPF moved right, clear of the level bands
+    tri_pts = [(4.6+sx, -1.0+dy), (8.4+sx, -1.0+dy), (7.8+sx, 2.0+dy)]; ax.add_patch(Polygon(tri_pts, closed=True, fill=False, edgecolor=INK, lw=0.9))
+    centre = np.array([6.2+sx, -0.2+dy]) if slide else np.array([6.75, 0.25+dy])   # slides: start low-left so the enlarged path stays inside
     ori = {n: orientation(mode, n) for n in pos}
     P = np.array([ori[n] for n in pos]); Lv = np.array([n[0] for n in pos])
     scale = IPF_UNIT
@@ -123,15 +124,15 @@ def panel(ax, mode, slide=False):
     ax.scatter(xy[:,0], xy[:,1], c=Lv, cmap='viridis', s=60 if slide else 34, edgecolor=INK, linewidths=0.4, zorder=3, alpha=0.8 if mode == 'mixed' else 1.0)
     ax.add_patch(Circle(tuple(centre), 0.06, color=INK, zorder=4))
     if not slide: ax.text(6.5, -1.2, IPF[mode], ha='center', fontsize=8.5, color=MUTED, va='top')
-    else: ax.text(6.5, -1.2+dy, 'build-direction IPF', ha='center', fontsize=9, color=MUTED, va='top')
-    for (x_, y_, s_, va) in ((4.6, -1.05+dy, '001', 'top'), (8.4, -1.05+dy, '101', 'top'), (7.8, 2.05+dy, '111', 'bottom')):
+    else: ax.text(6.5+sx, -1.2+dy, 'build-direction IPF', ha='center', fontsize=9, color=MUTED, va='top')
+    for (x_, y_, s_, va) in ((4.6+sx, -1.05+dy, '001', 'top'), (8.4+sx, -1.05+dy, '101', 'top'), (7.8+sx, 2.05+dy, '111', 'bottom')):
         ax.text(x_, y_, s_, fontsize=7 if not slide else 9, color=MUTED, ha='center', va=va)
-    ax.set_xlim(-2.9, 9.4); ax.set_ylim(-0.1 if slide else -1.9, 6.5); ax.set_aspect('equal'); ax.axis('off')
+    ax.set_xlim(-2.9, 10.6 if slide else 9.4); ax.set_ylim(-0.1 if slide else -1.9, 6.5); ax.set_aspect('equal'); ax.axis('off')
 
 if SLIDES:   # text-free panels for slides: walk_schematic.py --slides OUTDIR
     outdir = sys.argv[sys.argv.index('--slides')+1].rstrip('/') + '/'
     for mode in ('voxel', 'coherent', 'mixed'):
-        fig, ax = plt.subplots(figsize=(8.2, 4.4)); fig.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.01)
+        fig, ax = plt.subplots(figsize=(9.0, 4.4)); fig.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.01)
         panel(ax, mode, slide=True); fig.savefig(outdir + f'walk_{mode}.png', dpi=200, bbox_inches='tight'); plt.close(fig)
     print('slide panels ->', outdir); sys.exit(0)
 

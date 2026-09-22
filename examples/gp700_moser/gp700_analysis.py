@@ -141,7 +141,7 @@ if srod:
             if a.D: ax_.plot(dd, 0.921*np.sqrt(a.D*1e-6*dd), color='#0b0b0b', lw=1.2, ls='--', label='random walk, input D')
             lf = os.path.join(a.lamb, 'lamb2023_fig5%s_srod.json' % ('a' if k==0 else 'c'))
             if os.path.exists(lf):
-                L = json.load(open(lf)); ax_.plot(L['x'], L['mean'], color='#eb6834', lw=1.6, label='Lamb 2023 mean (height)')
+                L = json.load(open(lf)); ax_.plot(L['x'], L['mean'], color='#eb6834', lw=1.6, label='Lamb 2024 mean (height)')
                 ax_.plot(L['x'], L['p5'], color='#eb6834', lw=0.9, ls=(0,(3,2))); ax_.plot(L['x'], L['p95'], color='#eb6834', lw=0.9, ls=(0,(3,2)))
             ax_.set_title(f'{name} ({metric})', loc='left'); ax_.set_xlabel(xlabel); ax_.grid(axis='y', color='#e6e5e1')
         ax[0].set_ylabel('SROD (deg)'); ax[0].legend(frameon=False); fig.tight_layout(); fig.savefig(f'{a.out}/srod_{metric}.png', dpi=150)

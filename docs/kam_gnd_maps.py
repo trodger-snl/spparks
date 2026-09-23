@@ -41,9 +41,9 @@ def gnd_map(q, valid, kam):
 
 panels = [('per-voxel model', *sim_section('/home/tron/gp700_runs/wide12_v8/gp700.st')),
           ('two-term model', *sim_section('/home/tron/gp700_runs/wide12_v10/gp700.st')),
-          ('IN625 EBSD, nominal (3 um sampling)', *ebsd_section())]
-for extra in sys.argv[2:]:                      # label=path.st -> extra simulation column
-    lab_, st = extra.split('='); panels.insert(len(panels) - 1, (lab_, *sim_section(st)))
+          ('IN625 EBSD, nominal build', *ebsd_section())]
+for k, extra in enumerate(sys.argv[2:]):        # label=path.st -> extra simulation column, inserted after the per-voxel model
+    lab_, st = extra.split('='); panels.insert(1 + k, (lab_, *sim_section(st)))
 fig, axes = plt.subplots(2, len(panels), figsize=(4.5 * len(panels), 8.2)); stats = []
 for j, (name, q, valid) in enumerate(panels):
     kam = calculate_kam_2d(q, valid, threshold_deg=5.0, crystal_structure='cubic'); kam_deg = np.degrees(kam)
@@ -51,13 +51,15 @@ for j, (name, q, valid) in enumerate(panels):
     H, W = valid.shape; ext = [0, W * DX, 0, H * DX]
     im0 = axes[0, j].imshow(np.where(valid, kam_deg, np.nan), origin='lower', extent=ext, cmap='viridis', vmin=0, vmax=4.0)
     im1 = axes[1, j].imshow(np.where(valid, np.log10(np.clip(gnd, 1e11, None)), np.nan), origin='lower', extent=ext, cmap='plasma', vmin=12.5, vmax=14.7)
-    axes[0, j].set_title(name, loc='left', fontsize=10); axes[1, j].set_xlabel('um')
+    axes[0, j].set_title(name, loc='left', fontsize=15); axes[1, j].set_xlabel('um', fontsize=13)
+    for ax in axes[:, j]: ax.tick_params(labelsize=11)
     for ax in axes[:, j]: ax.set_aspect('equal')
     kd = kam_deg[valid & np.isfinite(kam_deg)]; gd = gnd[valid & np.isfinite(gnd)]
     kam2 = np.degrees(calculate_kam_2d(q, valid, threshold_deg=2.0, crystal_structure='cubic')); k2 = kam2[valid & np.isfinite(kam2)]
     q10, q25, q50, q75, q90 = np.percentile(kd, [10, 25, 50, 75, 90])
     print(f'{name:36s} KAM(5 deg) mean {np.nanmean(kd):.2f}, p10/25/50/75/90 {q10:.2f}/{q25:.2f}/{q50:.2f}/{q75:.2f}/{q90:.2f} deg, < 0.5 deg {np.mean(kd < 0.5):.2f}, > 2 deg {np.mean(kd > 2):.2f}; '
           f'KAM(2 deg) mean {np.nanmean(k2):.2f} on {np.isfinite(kam2[valid]).mean():.2f} of pixels; GND median {np.nanmedian(gd):.2e} m^-2 ({gtag})')
-axes[0, 0].set_ylabel('KAM (deg)\nbuild direction (um)'); axes[1, 0].set_ylabel('log10 GND (m$^{-2}$)\nbuild direction (um)')
-fig.colorbar(im0, ax=axes[0, :].tolist(), fraction=0.02, pad=0.01, label='deg'); fig.colorbar(im1, ax=axes[1, :].tolist(), fraction=0.02, pad=0.01, label='log10 m$^{-2}$')
+axes[0, 0].set_ylabel('KAM (deg)\nbuild direction (um)', fontsize=14); axes[1, 0].set_ylabel('log10 GND (m$^{-2}$)\nbuild direction (um)', fontsize=14)
+for cb in (fig.colorbar(im0, ax=axes[0, :].tolist(), fraction=0.02, pad=0.01, label='deg'), fig.colorbar(im1, ax=axes[1, :].tolist(), fraction=0.02, pad=0.01, label='log10 m$^{-2}$')):
+    cb.ax.tick_params(labelsize=11); cb.set_label(cb.ax.get_ylabel(), fontsize=13)
 fig.savefig(sys.argv[1], dpi=150, bbox_inches='tight'); print('saved', sys.argv[1])

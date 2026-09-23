@@ -57,16 +57,16 @@ for k, gid in enumerate(a.grains):
     h = (zc.max() - zc.min() + 1) * dxu; info.append((gid, h, srod.max(), srod.mean()))
     print(f'G{k+1} id {gid}: height {h:.0f} um, {m.sum()} voxels, SROD max {srod.max():.1f} mean {srod.mean():.1f} deg', flush=True)
 # composite: row 1 IPF-Z, row 2 SROD, row labels at left, grain label + height above each column, 100 um under the bar, colour bar at right
-W, H = tiles_ipf[0].shape[1], tiles_ipf[0].shape[0]; n = len(tiles_ipf); pad = 8; barw = 130; lab = 150; top = 44
-out = Image.new('RGB', (lab + n * (W + pad) + barw, 2 * (H + top) + pad), 'white'); d = ImageDraw.Draw(out)
+W, H = tiles_ipf[0].shape[1], tiles_ipf[0].shape[0]; n = len(tiles_ipf); pad = 8; barw = 130; lab = 150; top = 44; gap = 70   # gap: extra space between the rows
+out = Image.new('RGB', (lab + n * (W + pad) + barw, 2 * (H + top) + pad + gap), 'white'); d = ImageDraw.Draw(out)
 try: font = ImageFont.truetype('/usr/share/fonts/open-sans/OpenSans-Regular.ttf', 26); big = ImageFont.truetype('/usr/share/fonts/open-sans/OpenSans-Bold.ttf', 28)
 except Exception: font = big = ImageFont.load_default()
 def vlabel(text, yc):
     bb = d.textbbox((0, 0), text, font=big); im = Image.new('RGB', (bb[2] + 4, bb[3] + 4), 'white'); ImageDraw.Draw(im).text((2, 2), text, fill='black', font=big)
     im = im.rotate(90, expand=True); out.paste(im, (18, yc - im.height // 2))
-vlabel('IPF-Z (build direction)', top + H // 2); vlabel("SROD from the grain's origin", 2 * top + H + pad + H // 2)
+vlabel('IPF-Z (build direction)', top + H // 2); vlabel("SROD from the grain's origin", 2 * top + H + pad + gap + H // 2)
 for k, (ti, ts) in enumerate(zip(tiles_ipf, tiles_srod)):
-    x = lab + k * (W + pad); y1, y2 = top, 2 * top + H + pad
+    x = lab + k * (W + pad); y1, y2 = top, 2 * top + H + pad + gap
     out.paste(Image.fromarray(ti), (x, y1)); out.paste(Image.fromarray(ts), (x, y2))
     d.text((x + 10, 6), f'G{k+1}   height {info[k][1]:.0f} µm', fill='black', font=big)
     d.text((x + 10, y2 - top + 8), f'SROD max {info[k][2]:.0f}°, mean {info[k][3]:.0f}°', fill='black', font=font)
@@ -75,5 +75,5 @@ import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
 fig, ax = plt.subplots(figsize=(barw/100, H/100)); fig.subplots_adjust(left=0.05, right=0.3, top=0.95, bottom=0.05)
 cb = plt.colorbar(plt.cm.ScalarMappable(norm=plt.Normalize(0, a.srod_max), cmap='turbo'), cax=ax); cb.set_label('SROD (°)', fontsize=16); cb.ax.tick_params(labelsize=13)
 fig.savefig('/tmp/_cbar.png', dpi=100); plt.close(fig)
-cb = Image.open('/tmp/_cbar.png').convert('RGB'); out.paste(cb, (lab + n * (W + pad), 2 * top + H + pad))
+cb = Image.open('/tmp/_cbar.png').convert('RGB'); out.paste(cb, (lab + n * (W + pad), 2 * top + H + pad + gap))
 out.save(a.out); print('saved', a.out, out.size)

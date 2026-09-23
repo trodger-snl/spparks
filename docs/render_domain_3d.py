@@ -27,4 +27,10 @@ p.camera_position = [(L/2 + 1.6*L, L/2 - 1.3*L, H + 0.9*L), (L/2, L/2, H/2), (0,
 z0 = np.argmax(solid.any((0, 1))) * dxu                                   # lowest solidified level (the remelted substrate top)
 p.add_mesh(pv.Line((0, -25, z0), (200, -25, z0)), color='black', line_width=6)   # 200 um bar along the front bottom edge
 p.add_point_labels([(100, -25, z0 - 90)], ['200 µm'], font_size=int(a.size / 45), text_color='black', shape=None, show_points=False, always_visible=True, justification_horizontal='center')
-p.screenshot(a.out); print('saved', a.out)
+img = p.screenshot(return_img=True)
+from PIL import Image, ImageChops
+im = Image.fromarray(img).convert('RGB'); g = np.asarray(im).mean(2)
+r = np.where(g.mean(1) < 5)[0]; c = np.where(g.mean(0) < 5)[0]          # off-screen buffers leave black bands at the top and right: cut them
+im = im.crop((0, r.max() + 1 if len(r) else 0, c.min() if len(c) else im.width, im.height))
+bb = ImageChops.difference(im, Image.new('RGB', im.size, 'white')).getbbox()
+im.crop((max(bb[0]-20, 0), max(bb[1]-20, 0), min(bb[2]+20, im.width), min(bb[3]+20, im.height))).save(a.out); print('saved', a.out)

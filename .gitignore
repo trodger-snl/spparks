@@ -64,3 +64,6 @@ build-*/
 
 # pi project-local package installs (ponytail)
 .pi/npm/
+
+# local tool installs
+.pi/

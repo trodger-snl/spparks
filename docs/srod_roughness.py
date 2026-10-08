@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """How rough is the SROD field inside grains? Variogram of SROD within grains on longitudinal sections at 3 um
-sampling: RMS difference of SROD between two pixels of the same grain separated by a lag, laterally (x) and along the
+sampling: RMS difference of SROD between two pixels of the same grain a given distance apart, laterally (x) and along the
 build direction (z). Smooth gradients (Lamb-like) give lateral << vertical; lineage patches give lateral ~ vertical.
 Sections: the IN625 nominal EBSD (P15 XZ, nearest-pixel resampled to 3 um) and the GP700 builds (xz through the crop
 centre). usage (WORK env): srod_roughness.py OUT.png [extra_label=stitch ...]"""
@@ -73,6 +73,6 @@ for (name, q, valid, lab, seg), c in zip(sections, cols):
     axes[1].plot(lag_um, v['lateral'] / v['lateral'][-1], 'o-', color=c, label=name)
     r = v['lateral'] / v['vertical']
     print(f'{name:36s} ' + ' '.join(f'{x:5.2f}' for x in v['lateral']) + ' | ' + ' '.join(f'{x:5.2f}' for x in v['vertical']) + f' | {r[0]:.2f} {r[2]:.2f} {r[4]:.2f} | 3um/48um {v["lateral"][0]/v["lateral"][-1]:.2f}')
-axes[0].set_xscale('log'); axes[0].set_xlabel('lag (um)'); axes[0].set_ylabel('RMS SROD difference within a grain (deg)'); axes[0].set_title('solid: lateral, dashed: along the build direction', loc='left', fontsize=9); axes[0].grid(alpha=0.3); axes[0].legend(fontsize=8)
-axes[1].set_xscale('log'); axes[1].set_xlabel('lag (um)'); axes[1].set_ylabel('lateral RMS difference / value at 48 um'); axes[1].set_title('shape: fraction of the 48 um variation already present at short range', loc='left', fontsize=9); axes[1].grid(alpha=0.3); axes[1].set_ylim(0, 1.05)
+axes[0].set_xscale('log'); axes[0].set_xlabel('pixel separation (um)'); axes[0].set_ylabel('RMS SROD difference within a grain (deg)'); axes[0].set_title('solid: lateral, dashed: along the build direction', loc='left', fontsize=9); axes[0].grid(alpha=0.3); axes[0].legend(fontsize=8)
+axes[1].set_xscale('log'); axes[1].set_xlabel('pixel separation (um)'); axes[1].set_ylabel('lateral RMS difference / value at 48 um'); axes[1].set_title('shape: fraction of the 48 um variation already present at short range', loc='left', fontsize=9); axes[1].grid(alpha=0.3); axes[1].set_ylim(0, 1.05)
 fig.tight_layout(); fig.savefig(sys.argv[1], dpi=160); print('saved', sys.argv[1])

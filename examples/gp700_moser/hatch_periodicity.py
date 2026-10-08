@@ -45,7 +45,7 @@ for frac in (0.25, 0.5, 0.75):
     W = np.array(W); widths[f'{(z+zf)*dxu:.0f}um'] = dict(median=float(np.median(W)), p10=float(np.percentile(W,10)), p90=float(np.percentile(W,90)), n=int(len(W)))
 out['width_um'] = widths
 json.dump(out, open(f'{a.out}/hatch_periodicity.json', 'w'), indent=1)
-print(f"boundary-fraction autocorrelation at the {a.hatch_um:.0f} um lag: x {out['acf_x_at_hatch']:.2f}, y {out['acf_y_at_hatch']:.2f}; "
+print(f"boundary-fraction autocorrelation at a {a.hatch_um:.0f} um shift: x {out['acf_x_at_hatch']:.2f}, y {out['acf_y_at_hatch']:.2f}; "
       f"fraction of spectral power at the hatch period: x {out['power_fraction_x_at_hatch']:.2f}, y {out['power_fraction_y_at_hatch']:.2f}")
 for k, v in widths.items(): print(f"in-plane grain width at z={k}: median {v['median']:.0f} um (p10/p90 {v['p10']:.0f}/{v['p90']:.0f}), n={v['n']}")
 fig, ax = plt.subplots(1, 3, figsize=(15, 3.8))
@@ -54,7 +54,7 @@ ax[0].plot(xs, fx, color='#2a78d6', lw=1.2, label='boundaries normal to x'); ax[
 for k in range(0, int(max(xs.max(), ys.max()))+1, int(a.hatch_um)): ax[0].axvline(k, color='#bbb', lw=0.6, ls=':')
 ax[0].set_xlabel('position in crop (um); dotted: hatch period'); ax[0].set_ylabel('boundary-voxel fraction'); ax[0].legend(frameon=False, fontsize=8); ax[0].set_title('grain-boundary density across the crop', loc='left', fontsize=10)
 lag = np.arange(len(fx))*dxu; ax[1].plot(lag[:int(200/dxu)], acf(fx)[:int(200/dxu)], color='#2a78d6', label='x'); ax[1].plot(lag[:int(200/dxu)], acf(fy)[:int(200/dxu)], color='#c9552a', label='y')
-ax[1].axvline(a.hatch_um, color='#888', lw=0.8, ls='--'); ax[1].set_xlabel('lag (um); dashed: hatch spacing'); ax[1].set_ylabel('autocorrelation'); ax[1].legend(frameon=False); ax[1].set_title('autocorrelation of boundary density', loc='left', fontsize=10)
+ax[1].axvline(a.hatch_um, color='#888', lw=0.8, ls='--'); ax[1].set_xlabel('shift (um); dashed: hatch spacing'); ax[1].set_ylabel('autocorrelation'); ax[1].legend(frameon=False); ax[1].set_title('autocorrelation of boundary density', loc='left', fontsize=10)
 for (k, v), col in zip(widths.items(), ('#2a78d6', '#7fb069', '#c9552a')):
     pass
 z = int(nz*0.5); W = []

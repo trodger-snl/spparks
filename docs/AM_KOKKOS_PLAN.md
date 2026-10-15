@@ -345,7 +345,7 @@ AppPottsQuaternionKokkos → AppAdditiveExtTempTextureKokkos
 These functions have been successfully ported to device-compatible versions:
 
 #### A. rotate_q_towards_u
-**Source:** `potts_quaternion/quaternion.h` lines 316-419
+**Source:** `crystalline_orientations/quaternion.h` lines 316-419
 **Usage:** Adds thermal gradient-driven misorientation in AM simulations
 **Called by:** `apply_misorientation()` in app_additive_ext_temp_texture.cpp:930
 
@@ -436,7 +436,7 @@ static void rotate_vector(
 ```
 
 #### D. vector_cross_product
-**Source:** `potts_quaternion/quaternion.h` lines 58-66
+**Source:** `crystalline_orientations/quaternion.h` lines 58-66
 **Usage:** Basic utility for many operations
 
 ```cpp
@@ -453,7 +453,7 @@ static void vector_cross_product(
 ```
 
 #### E. generate_random_quaternion
-**Source:** `potts_quaternion/quaternion.h` lines 262-304
+**Source:** `crystalline_orientations/quaternion.h` lines 262-304
 **Usage:** Nucleation and melting events
 **Challenge:** Requires normal distribution RNG
 
@@ -2303,7 +2303,7 @@ dt_fast / dt_slow = 100
   - `src/app_additive_texture.{h,cpp}` - `AppAdditiveTexture`, style `additive/texture` (microstructure MC)
   - `src/thermal_manager.{h,cpp}` - `ThermalManager`, all temperature I/O / fast-forward (CPU)
 - `src/app_additive_ext_temp_texture.{h,cpp}` - **superseded** pre-refactor monolith (this branch only)
-- `src/potts_quaternion/quaternion.h` - Quaternion utilities (CPU)
+- `src/crystalline_orientations/quaternion.h` - Quaternion utilities (CPU)
 - `src/crystalline_orientations/quaternion.h` - Rotation utilities (CPU)
 
 **Documentation:**

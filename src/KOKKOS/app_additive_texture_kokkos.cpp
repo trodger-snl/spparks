@@ -1431,8 +1431,8 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
   auto d_active_flag_local = d_active_flag;
   auto d_solid_d_local = d_solid_d;
 
-  auto k_neighbor_d = k_neighbor.view_device();
-  auto k_numneigh_d = k_numneigh.view_device();
+  auto k_neighbor_d = d_neighbor;
+  auto k_numneigh_d = d_numneigh;
   auto d_G_local = d_G;
   auto d_grad_x_local = d_grad_x;
   auto d_grad_y_local = d_grad_y;
@@ -1648,8 +1648,8 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
   auto d_active_flag_local = d_active_flag;
   auto d_solid_d_local = d_solid_d;
 
-  auto k_numneigh_d = k_numneigh.view_device();
-  auto k_neighbor_d = k_neighbor.view_device();
+  auto k_numneigh_d = d_numneigh;
+  auto k_neighbor_d = d_neighbor;
 
   // Cached, layout-correct device copy of site coordinates (used for on-demand
   // gradient computation in the kernel).
@@ -1934,8 +1934,8 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
   auto d_active_flag_local = d_active_flag;
   auto d_solid_d_local = d_solid_d;
 
-  auto k_neighbor_d = k_neighbor.view_device();
-  auto k_numneigh_d = k_numneigh.view_device();
+  auto k_neighbor_d = d_neighbor;
+  auto k_numneigh_d = d_numneigh;
   auto rand_pool_local = *rand_pool;
 
   double temperature_local = temperature;

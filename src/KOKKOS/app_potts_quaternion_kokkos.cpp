@@ -663,8 +663,8 @@ void AppPottsQuaternionKokkos::sweep_color_kokkos(int color, int start, int coun
   ColorSweepFunctor functor{
     d_spin,
     d_q0, d_qx, d_qy, d_qz,
-    k_numneigh.view_device(),
-    k_neighbor.view_device(),
+    d_numneigh,
+    d_neighbor,
     d_color_sites,
     d_symmetries,
     start,

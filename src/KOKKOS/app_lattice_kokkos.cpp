@@ -16,6 +16,7 @@
 ------------------------------------------------------------------------- */
 
 #include "app_lattice_kokkos.h"
+#include <algorithm>
 #include "error.h"
 #include "timer.h"
 #include "output.h"
@@ -68,15 +69,15 @@ void AppLatticeKokkos::grow_app() {}
 void AppLatticeKokkos::allocate_device_views()
 {
   int nall = nlocal + nghost;
-  if (k_numneigh.extent(0) == (size_t) nall && views_maxneigh == maxneigh) return;
+  if (d_numneigh.extent(0) == (size_t) nall && views_maxneigh == maxneigh) return;
   views_maxneigh = maxneigh;
 
   // Allocate neighbor arrays
-  k_numneigh = Kokkos::DualView<int*>("numneigh", nall);
+  d_numneigh = Kokkos::View<int*>("numneigh", nall);
   if (maxneigh > 0) {
     // No zero fill: sync_neighbors_to_device() writes every j < numneigh[i]
     // and every kernel stops at numneigh, so the padding is never read.
-    k_neighbor = Kokkos::DualView<int**>(
+    d_neighbor = Kokkos::View<int**>(
         Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighbor"), nall, maxneigh);
   }
 
@@ -150,32 +151,41 @@ void AppLatticeKokkos::setup_siteseeds_kokkos()
 
 void AppLatticeKokkos::sync_neighbors_to_device()
 {
-  int nall = nlocal + nghost;
+  const int nall = nlocal + nghost;
+  using HostUnmanaged = Kokkos::MemoryTraits<Kokkos::Unmanaged>;
 
-  auto h_numneigh = k_numneigh.view_host();
-  #pragma omp parallel for schedule(static)
-  for (int i = 0; i < nall; i++) {
-    h_numneigh(i) = numneigh[i];
-  }
-  k_numneigh.modify_host();
-  k_numneigh.sync_device();
+  Kokkos::deep_copy(d_numneigh,
+      Kokkos::View<const int*, Kokkos::HostSpace, HostUnmanaged>(numneigh, nall));
 
-  if (maxneigh > 0) {
-    // On GPU backends h_neighbor is LayoutLeft (i fastest) while neighbor[][]
-    // is row-major, so a plain i-then-j fill writes with a stride of nall ints
-    // and was most of the run setup at 256^3. Tile over i so each tile's rows
-    // stay in cache and each column write is contiguous.
-    auto h_neighbor = k_neighbor.view_host();
-    const int TILE = 256;
-    #pragma omp parallel for schedule(static)
-    for (int i0 = 0; i0 < nall; i0 += TILE) {
-      const int i1 = (i0 + TILE < nall) ? i0 + TILE : nall;
-      for (int j = 0; j < maxneigh; j++)
-        for (int i = i0; i < i1; i++)
-          if (j < numneigh[i]) h_neighbor(i, j) = neighbor[i][j];
+  if (maxneigh > 0 && nall > 0) {
+    // neighbor[][] is one row-major nall x maxneigh block (Memory::create);
+    // d_neighbor is the device layout (LayoutLeft on GPUs). Move it in row
+    // chunks through a small row-major device buffer and transpose on the
+    // device. No full-size host or device staging copy, and only plain
+    // host->device copies, so this works on discrete GPUs, APUs and OpenMP.
+    using RowMajor = Kokkos::View<int**, Kokkos::LayoutRight>;
+    const int chunk = std::min(nall, std::max(1, (1 << 26) / maxneigh));  // ~256 MB
+    RowMajor stage(Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighbor_stage"),
+                   chunk, maxneigh);
+    const Kokkos::View<const int**, Kokkos::LayoutRight, Kokkos::HostSpace, HostUnmanaged>
+        h_all(neighbor[0], nall, maxneigh);
+    auto nbr = d_neighbor;
+    auto nn = d_numneigh;
+    const int mn = maxneigh;
+    for (int r0 = 0; r0 < nall; r0 += chunk) {
+      const int n = std::min(chunk, nall - r0);
+      const auto rows = Kokkos::make_pair(r0, r0 + n);
+      const auto srows = Kokkos::make_pair(0, n);
+      Kokkos::deep_copy(Kokkos::subview(stage, srows, Kokkos::ALL),
+                        Kokkos::subview(h_all, rows, Kokkos::ALL));
+      Kokkos::parallel_for("neighbor_transpose", Kokkos::RangePolicy<>(0, n),
+        KOKKOS_LAMBDA(const int i) {
+          const int ni = nn(r0 + i);
+          for (int j = 0; j < mn; j++)
+            if (j < ni) nbr(r0 + i, j) = stage(i, j);
+        });
     }
-    k_neighbor.modify_host();
-    k_neighbor.sync_device();
+    Kokkos::fence();
   }
 }
 

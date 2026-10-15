@@ -37,8 +37,10 @@ public:
   using view_double = Kokkos::View<double*, Kokkos::DefaultExecutionSpace::memory_space>;
 
   // === Shared Kokkos data (all derived classes use these) ===
-  Kokkos::DualView<int*> k_numneigh;
-  Kokkos::DualView<int**> k_neighbor;
+  // Device-only: filled from AppLattice's numneigh/neighbor, which stay the
+  // host copy. (A DualView here kept a second 26*nall-int host array.)
+  Kokkos::View<int*> d_numneigh;
+  Kokkos::View<int**> d_neighbor;
   pool_type *rand_pool;
 
   // === Color-based site lists for GPU ===

@@ -158,31 +158,7 @@ endif()
 
 
 if(SPPARKS_ENABLE_JPEG)
-    # First try standard CMake FindJPEG
     find_package(JPEG QUIET)
-    
-    if(NOT JPEG_FOUND)
-        # Try manual detection for common paths (especially Homebrew on macOS)
-        find_path(JPEG_INCLUDE_DIR_MANUAL jpeglib.h
-            PATHS /opt/homebrew/include /usr/local/include
-            NO_DEFAULT_PATH
-        )
-        find_library(JPEG_LIBRARY_MANUAL jpeg
-            PATHS /opt/homebrew/lib /usr/local/lib
-            NO_DEFAULT_PATH
-        )
-        
-        if(JPEG_INCLUDE_DIR_MANUAL AND JPEG_LIBRARY_MANUAL)
-            set(JPEG_FOUND TRUE)
-            set(JPEG_INCLUDE_DIR ${JPEG_INCLUDE_DIR_MANUAL})
-            set(JPEG_LIBRARIES ${JPEG_LIBRARY_MANUAL})
-            message(STATUS "Found JPEG library (manual): ${JPEG_LIBRARIES}")
-            message(STATUS "JPEG include dir (manual): ${JPEG_INCLUDE_DIR}")
-        endif()
-    else()
-        message(STATUS "Found JPEG library: ${JPEG_LIBRARIES}")
-        message(STATUS "JPEG include dir: ${JPEG_INCLUDE_DIR}")
-    endif()
     
     if(JPEG_FOUND)
         add_compile_definitions(SPPARKS_JPEG)
@@ -494,34 +470,9 @@ if(SPPARKS_ENABLE_MPI)
         add_compile_definitions(SPPARKS_MPI)
     endif()
 else()
-    # Use MPI stubs for serial builds
-    set(MPI_STUB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/STUBS")
-    if(NOT EXISTS "${MPI_STUB_DIR}/libmpi.a")
-        message(STATUS "Building MPI stubs...")
-        execute_process(
-            COMMAND make clean
-            WORKING_DIRECTORY ${MPI_STUB_DIR}
-            RESULT_VARIABLE CLEAN_RESULT
-        )
-        execute_process(
-            COMMAND make
-            WORKING_DIRECTORY ${MPI_STUB_DIR}
-            RESULT_VARIABLE BUILD_RESULT
-        )
-        if(NOT BUILD_RESULT EQUAL 0)
-            message(FATAL_ERROR "Failed to build MPI stubs")
-        endif()
-    endif()
-    
-    # Create MPI stub library target
-    add_library(mpi_stubs STATIC IMPORTED)
-    set_target_properties(mpi_stubs PROPERTIES
-        IMPORTED_LOCATION "${MPI_STUB_DIR}/libmpi.a"
-        INTERFACE_INCLUDE_DIRECTORIES "${MPI_STUB_DIR}"
-    )
-    message(STATUS "Using MPI stubs from: ${MPI_STUB_DIR}/libmpi.a")
-    # Add to global include directories as fallback
-    include_directories("${MPI_STUB_DIR}")
+    # Serial builds link the MPI stubs; every source includes "mpi.h".
+    add_library(mpi_stubs STATIC STUBS/mpi.cpp)
+    include_directories("${CMAKE_CURRENT_SOURCE_DIR}/STUBS")
 endif()
 
 # STITCH package: libstitch (stitch.c + bundled sqlite3) is a plain static

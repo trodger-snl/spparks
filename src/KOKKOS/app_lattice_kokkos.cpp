@@ -118,6 +118,7 @@ void AppLatticeKokkos::setup_siteseeds_kokkos()
   // Only owned sites are swept, so only they carry a stream; ghosts never draw.
   d_siteseeds = Kokkos::View<int*>("siteseeds", nlocal > 0 ? nlocal : 1);
   auto h_seeds = Kokkos::create_mirror_view(d_siteseeds);
+  #pragma omp parallel for schedule(static)
   for (int i = 0; i < nlocal; i++) h_seeds(i) = siteseeds[i];
   Kokkos::deep_copy(d_siteseeds, h_seeds);
 }
@@ -131,6 +132,7 @@ void AppLatticeKokkos::sync_neighbors_to_device()
   int nall = nlocal + nghost;
 
   auto h_numneigh = k_numneigh.view_host();
+  #pragma omp parallel for schedule(static)
   for (int i = 0; i < nall; i++) {
     h_numneigh(i) = numneigh[i];
   }
@@ -138,11 +140,18 @@ void AppLatticeKokkos::sync_neighbors_to_device()
   k_numneigh.sync_device();
 
   if (maxneigh > 0) {
+    // On GPU backends h_neighbor is LayoutLeft (i fastest) while neighbor[][]
+    // is row-major, so a plain i-then-j fill writes with a stride of nall ints
+    // and was most of the run setup at 256^3. Tile over i so each tile's rows
+    // stay in cache and each column write is contiguous.
     auto h_neighbor = k_neighbor.view_host();
-    for (int i = 0; i < nall; i++) {
-      for (int j = 0; j < numneigh[i]; j++) {
-        h_neighbor(i, j) = neighbor[i][j];
-      }
+    const int TILE = 256;
+    #pragma omp parallel for schedule(static)
+    for (int i0 = 0; i0 < nall; i0 += TILE) {
+      const int i1 = (i0 + TILE < nall) ? i0 + TILE : nall;
+      for (int j = 0; j < maxneigh; j++)
+        for (int i = i0; i < i1; i++)
+          if (j < numneigh[i]) h_neighbor(i, j) = neighbor[i][j];
     }
     k_neighbor.modify_host();
     k_neighbor.sync_device();
@@ -184,6 +193,7 @@ void AppLatticeKokkos::setup_color_lists_kokkos()
 
     d_color_sites_vec[0] = Kokkos::View<int*>("color_sites_0", nlocal);
     auto h_sites = Kokkos::create_mirror_view(d_color_sites_vec[0]);
+    #pragma omp parallel for schedule(static)
     for (int i = 0; i < nlocal; i++) {
       h_sites(i) = i;
     }

@@ -49,16 +49,35 @@ AppLatticeKokkos::~AppLatticeKokkos()
 /* ----------------------------------------------------------------------
    grow arrays - called when lattice grows
    Note: AppLattice::grow_app() is pure virtual so we cannot call it
+
+   Device views are NOT allocated here. create_sites grows the lattice
+   DELTA sites at a time, so allocating here reallocated and zero-filled every
+   view ~nsites/DELTA times (quadratic; seconds at 256^3, worse for the
+   additive app's dozen views). allocate_device_views() sizes them once, in
+   init_app(); nothing touches them before that.
 ------------------------------------------------------------------------- */
 
-void AppLatticeKokkos::grow_app()
+void AppLatticeKokkos::grow_app() {}
+
+/* ----------------------------------------------------------------------
+   (re)allocate device views when nlocal+nghost changed since the last run.
+   Same size -> keep them: the additive app carries device-only state
+   (solid_d, spath, ...) from one run to the next.
+------------------------------------------------------------------------- */
+
+void AppLatticeKokkos::allocate_device_views()
 {
   int nall = nlocal + nghost;
+  if (k_numneigh.extent(0) == (size_t) nall && views_maxneigh == maxneigh) return;
+  views_maxneigh = maxneigh;
 
   // Allocate neighbor arrays
   k_numneigh = Kokkos::DualView<int*>("numneigh", nall);
   if (maxneigh > 0) {
-    k_neighbor = Kokkos::DualView<int**>("neighbor", nall, maxneigh);
+    // No zero fill: sync_neighbors_to_device() writes every j < numneigh[i]
+    // and every kernel stops at numneigh, so the padding is never read.
+    k_neighbor = Kokkos::DualView<int**>(
+        Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighbor"), nall, maxneigh);
   }
 
   // Derived class allocates app-specific views
@@ -73,6 +92,8 @@ void AppLatticeKokkos::init_app()
 {
   // Call parent initialization (sets up sweepflag, ncolors, sets, etc.)
   AppLattice::init_app();
+
+  allocate_device_views();
 
   // Kokkos apps require coloring for correct parallel GPU execution
   if (sweepflag != NOSWEEP && sweepflag != COLOR && sweepflag != COLOR_STRICT)

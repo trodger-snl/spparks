@@ -301,9 +301,16 @@ void AppLattice::init()
     ranstrict = new RandomPark(ranmaster->uniform());
     double seed = ranmaster->uniform();
     memory->create(siteseeds,nlocal,"app:siteseeds");
-    for (int i = 0; i < nlocal; i++) {
-      ranstrict->tagreset(seed,id[i],100);
-      siteseeds[i] = ranstrict->seed;
+    // each site's stream depends only on (seed, id), so threads give the same
+    // bits; ranstrict itself is reseeded from siteseeds before every use
+    #pragma omp parallel
+    {
+      RandomPark r(1);
+      #pragma omp for schedule(static)
+      for (int i = 0; i < nlocal; i++) {
+        r.tagreset(seed,id[i],100);
+        siteseeds[i] = r.seed;
+      }
     }
   }
 
@@ -1048,7 +1055,7 @@ void AppLattice::create_set(int iset, int isector, int icolor, Solve *oldsolve)
   // i2site = 0 to nsite-1 for owned points in set, else -1
 
   if (solve) {
-    (int *) memory->create(set[iset].i2site,nlocal+nghost,"app:i2site");
+    memory->create(set[iset].i2site,nlocal+nghost,"app:i2site");
     for (int i = 0; i < nlocal+nghost; i++) set[iset].i2site[i] = -1;
     for (int i = 0; i < set[iset].nlocal; i++) 
       set[iset].i2site[set[iset].site2i[i]] = i;

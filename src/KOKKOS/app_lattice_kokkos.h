@@ -77,6 +77,8 @@ public:
 
   // Allocate app-specific Kokkos views
   virtual void allocate_app_views() = 0;
+  void allocate_device_views();
+  int views_maxneigh = -1;
 
   // The actual sweep kernel for one color
   virtual void sweep_color_kokkos(int color, int start, int count) = 0;

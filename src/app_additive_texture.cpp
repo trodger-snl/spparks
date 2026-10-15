@@ -39,10 +39,10 @@
 #include "random_park.h"
 #include "error.h"
 #include "domain.h"
-#include "potts_quaternion/cubic_symmetries.h"
-#include "potts_quaternion/disorientation.h"
-#include "potts_quaternion/hcp_symmetries.h"
-#include "potts_quaternion/quaternion.h"
+#include "crystalline_orientations/cubic_symmetries.h"
+#include "crystalline_orientations/disorientation.h"
+#include "crystalline_orientations/hcp_symmetries.h"
+#include "crystalline_orientations/quaternion.h"
 #include "thermal_manager.h"
 
 

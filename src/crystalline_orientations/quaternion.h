@@ -359,6 +359,124 @@ get_cosine_of_minumum_angle_between_q_and_u(const vector<double> &q,
   return max;
 }
 
+inline vector<double> rotate_q_towards_u(const vector<double> &q,
+                                        const vector<double> &u,
+                                        double angle) {
+  /**
+  Rotates quaternion 'q' towards vector 'u' by the specified angle.
+  If the input angle exceeds the misorientation between the current
+  orientation and target vector, the rotation stops when they are aligned.
+  
+  arg q: array shape=(4,) unit quaternion to be rotated
+  arg u: array shape=(3,) target vector direction
+  arg angle: rotation angle in radians
+  
+  returns: array shape=(4,) rotated unit quaternion
+  */
+  if (4 != q.size() || 3 != u.size())
+    throw std::runtime_error("len(q)!=4 or len(u)!=3");
+  
+  check_validity(q);
+  
+  // Normalize the target vector
+  vector<double> n{u[0], u[1], u[2]};
+  {
+    double d = norm(n);
+    if (d < 1.0e-15)
+      throw std::runtime_error("target vector has zero magnitude");
+    double b = 1.0 / d;
+    n[0] *= b;
+    n[1] *= b;
+    n[2] *= b;
+  }
+  
+  // Get the rotation axis
+  // The rotation axis is perpendicular to both the current orientation
+  // and the target direction. We'll use the quaternion's principal axis
+  // (the vector part when angle is non-zero) and cross it with the target.
+  
+  // Find which <100> axis is closest to the target direction.
+  // For a cubic crystal, [100], [010], [001] are equivalent growth
+  // directions.  We want to rotate the nearest one toward the target,
+  // not the hardcoded [001].
+  vector<double> m = to_rotation_matrix(q);
+  // Columns of m are the lab-frame directions of [100], [010], [001].
+  // m is row-major: column 'col' has components m[col], m[col+3], m[col+6].
+  double best_dot = 0.0;
+  int best_col = 0;
+  for (int col = 0; col < 3; col++) {
+      double dot = m[col] * n[0] + m[col + 3] * n[1] + m[col + 6] * n[2];
+      if (std::fabs(dot) > std::fabs(best_dot)) {
+          best_dot = dot;
+          best_col = col;
+      }
+  }
+  // current_dir = lab-frame direction of the nearest <100>, sign-corrected
+  // so it points toward (not away from) the target.
+  double sign = (best_dot >= 0.0) ? 1.0 : -1.0;
+  vector<double> current_dir{sign * m[best_col],
+                             sign * m[best_col + 3],
+                             sign * m[best_col + 6]};
+  
+  // Calculate the current misorientation angle
+  double dot_product = current_dir[0]*n[0] + current_dir[1]*n[1] + current_dir[2]*n[2];
+  // Clamp dot product to avoid numerical issues with acos
+  dot_product = std::max(-1.0, std::min(1.0, dot_product));
+  double current_misorientation = std::acos(dot_product);
+  
+  // Check if already aligned (within tolerance)
+  if (current_misorientation < 1.0e-10) {
+    return vector<double>{q[0], q[1], q[2], q[3]};
+  }
+  
+  // Limit the rotation angle to not exceed the current misorientation
+  double actual_angle = std::min(std::fabs(angle), current_misorientation);
+  
+  // Calculate the rotation axis as the cross product
+  vector<double> rot_axis = vector_cross_product(current_dir, n);
+  
+  // Check if vectors are parallel (cross product near zero)
+  double axis_norm = norm(rot_axis);
+  if (axis_norm < 1.0e-10) {
+    // Vectors are parallel, no rotation needed or 180° rotation
+    // Check if they point in the same direction
+    if (dot_product > 0.99999) {
+      // Same direction, return original quaternion
+      return vector<double>{q[0], q[1], q[2], q[3]};
+    } else {
+      // Opposite directions (180° apart), need to find a perpendicular axis
+      // Use any perpendicular vector
+      if (std::fabs(n[0]) < 0.9) {
+        rot_axis = vector<double>{1.0, 0.0, 0.0};
+      } else {
+        rot_axis = vector<double>{0.0, 1.0, 0.0};
+      }
+      rot_axis = vector_cross_product(n, rot_axis);
+      axis_norm = norm(rot_axis);
+    }
+  }
+  
+  // Normalize the rotation axis
+  rot_axis[0] /= axis_norm;
+  rot_axis[1] /= axis_norm;
+  rot_axis[2] /= axis_norm;
+  
+  // Create the rotation quaternion for the actual angle
+  double half_angle = actual_angle * 0.5;
+  double cos_half = std::cos(half_angle);
+  double sin_half = std::sin(half_angle);
+  
+  vector<double> rot_q{cos_half, 
+                      sin_half * rot_axis[0],
+                      sin_half * rot_axis[1], 
+                      sin_half * rot_axis[2]};
+  
+  // Apply the rotation to the original quaternion
+  vector<double> result = composition(rot_q, q);
+  
+  return result;
+}
+
 } // namespace quaternion
 
 } // namespace SPPARKS_NS

@@ -24,6 +24,7 @@ AppStyle(potts/quaternion/kk,AppPottsQuaternionKokkos)
 #define SPK_APP_POTTS_QUATERNION_KOKKOS_H
 
 #include "app_lattice_kokkos.h"
+#include "quat_precision.h"
 #include <vector>
 
 namespace SPPARKS_NS {
@@ -130,9 +131,40 @@ protected:
     // unit quaternions trace(R(m)) = 4 m0^2 - 1. Its scalar part is
     // m0 = q1 . (q2 s) = (conj(q2) q1) . s, so d = conj(q2) q1 is formed once
     // and each symmetry costs a 4-term dot product instead of two products.
+    // Returns degrees; angles below ~1e-3 rad (|t-3| <= 1e-6) count as 0.
     KOKKOS_INLINE_FUNCTION
     static double compute_disorientation(const double* symmetries, int num_sym,
                                          const double* q1, const double* q2) {
+#ifdef SPK_QUAT_FP32
+      // float argmax of |m0| over symmetries, then the angle of that one
+      // misorientation from its vector part: acos near 1 would lose small
+      // angles in float, atan2 does not
+      const float ar = (float)q2[0], ax = -(float)q2[1], ay = -(float)q2[2], az = -(float)q2[3];
+      const float br = (float)q1[0], bx = (float)q1[1], by = (float)q1[2], bz = (float)q1[3];
+      const float df[4] = {ar*br - (ax*bx + ay*by + az*bz),
+                           ar*bx + br*ax + (ay*bz - az*by),
+                           ar*by + br*ay - (ax*bz - az*bx),
+                           ar*bz + br*az + (ax*by - ay*bx)};
+      float best = -1.0f;
+      int ibest = 0;
+      for (int i = 0; i < num_sym; i++) {
+        const double* s = &symmetries[4 * i];
+        float m0 = df[0]*(float)s[0] + df[1]*(float)s[1] +
+                   df[2]*(float)s[2] + df[3]*(float)s[3];
+        m0 = Kokkos::fabs(m0);
+        if (m0 > best) { best = m0; ibest = i; }
+      }
+      const double* s = &symmetries[4 * ibest];
+      const float sf[4] = {(float)s[0], (float)s[1], (float)s[2], (float)s[3]};
+      // vector part of conj(s) d (its scalar part is +-best)
+      const float vx = sf[0]*df[1] - df[0]*sf[1] - (sf[2]*df[3] - sf[3]*df[2]);
+      const float vy = sf[0]*df[2] - df[0]*sf[2] + (sf[1]*df[3] - sf[3]*df[1]);
+      const float vz = sf[0]*df[3] - df[0]*sf[3] - (sf[1]*df[2] - sf[2]*df[1]);
+      const float theta =
+        2.0f * Kokkos::atan2(Kokkos::sqrt(vx*vx + vy*vy + vz*vz), best);
+      if (theta <= 1.0e-3f) return 0.0;
+      return (double)theta * 180.0 / M_PI;
+#else
       double q2c[4], d[4];
       conjugate(q2, q2c);
       composition(q2c, q1, d);
@@ -153,6 +185,17 @@ protected:
         di = Kokkos::acos(0.5 * (t - 1.0)) * 180.0 / M_PI;
       }
       return di;
+#endif
+    }
+
+    // Read-Shockley pair energy for disorientation di (degrees), cutoff
+    // theta_cut: r (1 - ln r) for r = di/theta_cut < 1, else 1
+    KOKKOS_INLINE_FUNCTION
+    static double read_shockley(double di, double theta_cut) {
+      QReal ratio = (QReal)(di / theta_cut);
+      if (ratio <= (QReal)0) return 0.0;
+      if (ratio < (QReal)1) return (double)(ratio * ((QReal)1 - Kokkos::log(ratio)));
+      return 1.0;
     }
 
     KOKKOS_INLINE_FUNCTION

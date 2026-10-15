@@ -345,20 +345,12 @@ double AppPottsQuaternionKokkos::site_energy(int i)
         qz[nj] == qi[3]) continue;
     const double qj[4] = {q0[nj], qx[nj], qy[nj], qz[nj]};
 
-    // Same arithmetic as disorientation::compute_disorientation, without its
-    // per-call vector allocations (KMC calls this nevent+1 times per site)
+    // device formula on host too: no per-call vector allocations (KMC calls
+    // this nevent+1 times per site), and precision follows QReal
     double di = QuaternionOps::compute_disorientation(
       symmetries.data(), num_symmetries, qi, qj);
 
-    double ratio = di / theta_cut;
-
-    if (ratio <= 0.0) {
-      continue;
-    } else if (ratio < 1.0) {
-      eng += ratio * (1.0 - log(ratio));
-    } else {
-      eng += 1.0;
-    }
+    eng += QuaternionOps::read_shockley(di, theta_cut);
   }
 
   return 0.5 * eng;
@@ -564,15 +556,7 @@ struct AppPottsQuaternionKokkos::ColorSweepFunctor {
       double di = QuaternionOps::compute_disorientation(
         symmetries.data(), num_symmetries, qi, qj);
 
-      double ratio = di / theta_cut;
-
-      if (ratio <= 0.0) {
-        continue;
-      } else if (ratio < 1.0) {
-        eng += ratio * (1.0 - Kokkos::log(ratio));
-      } else {
-        eng += 1.0;
-      }
+      eng += QuaternionOps::read_shockley(di, theta_cut);
     }
 
     return 0.5 * eng;

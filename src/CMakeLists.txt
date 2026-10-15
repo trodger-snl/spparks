@@ -149,6 +149,16 @@ if(SPPARKS_AM_TEMP_FP32)
     add_compile_definitions(SPK_AM_TEMP_FP32)
 endif()
 
+# potts/quaternion/kk disorientation + Read-Shockley precision. Default OFF =>
+# FP64, unchanged arithmetic. ON => FP32 (float), a win on RDNA/consumer GPUs
+# whose FP64 rate is heavily reduced: gfx1151, 256^3 sweep color/strict, loop
+# 59.5 -> 32.4 s (cubic), 40.9 -> 21.1 s (hcp); disorientation agrees with
+# FP64 to ~2e-5 deg. See src/KOKKOS/quat_precision.h.
+option(SPPARKS_QUAT_FP32 "Use FP32 for potts/quaternion/kk disorientation and energy math" OFF)
+if(SPPARKS_QUAT_FP32)
+    add_compile_definitions(SPK_QUAT_FP32)
+endif()
+
 # Configure features
 if(SPPARKS_ENABLE_GZIP)
     add_compile_definitions(SPPARKS_GZIP)

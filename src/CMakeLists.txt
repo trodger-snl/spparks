@@ -470,10 +470,12 @@ if(SPPARKS_PACKAGE_KOKKOS)
         endif()
     endif()
 
-    # Kokkos 4.7.01 does not recognize RDNA 3.5 (gfx1150/gfx1151, e.g. AMD Strix
-    # Halo / Radeon 8050S-8060S APUs). Apply a small bundled patch that registers
-    # those archs and sets the correct 32-wide wavefront size. Idempotent: skipped
-    # if the submodule already supports gfx1151 (e.g. a newer Kokkos).
+    # Kokkos before 5.2.0 does not recognize RDNA 3.5 (gfx1150/gfx1151, e.g. AMD
+    # Strix Halo / Radeon 8050S-8060S APUs). Apply a small bundled patch that
+    # registers those archs and sets the correct 32-wide wavefront size.
+    # Idempotent: skipped if the submodule already supports gfx1151. The bundled
+    # 5.2.2 does, so this only matters for an older Kokkos (KOKKOS_DIR) -- and
+    # 5.2.2 has no gfx1150, so AMD_GFX1150 needs an older Kokkos plus this patch.
     if(SPPARKS_KOKKOS_ARCH MATCHES "^AMD_GFX115")
         file(READ "${KOKKOS_DIR}/cmake/kokkos_arch.cmake" _kokkos_arch_contents)
         if(NOT _kokkos_arch_contents MATCHES "GFX1151")

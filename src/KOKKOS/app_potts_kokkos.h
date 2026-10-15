@@ -54,12 +54,12 @@ public:
   virtual double site_propensity(int) override;
   virtual void site_event(int, class RandomPark *) override;
 
-private:
-  // Sweep functor
-  struct ColorSweepFunctor;
-
+protected:
   // Temporary arrays for KMC (allocated if allow_kmc)
   int *sites, *unique;
+
+private:
+  struct ColorSweepFunctor;
 };
 
 }

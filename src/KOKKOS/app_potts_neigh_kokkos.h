@@ -23,43 +23,22 @@ AppStyle(potts/neigh/kk,AppPottsNeighKokkos)
 #ifndef SPK_APP_POTTS_NEIGH_KOKKOS_H
 #define SPK_APP_POTTS_NEIGH_KOKKOS_H
 
-#include "app_lattice_kokkos.h"
+#include "app_potts_kokkos.h"
 
 namespace SPPARKS_NS {
 
-class AppPottsNeighKokkos : public AppLatticeKokkos {
+// potts/kk with the potts/neigh move: flip to a random unlike neighbour
+// spin, with a null bin of maxneigh. Everything else is inherited.
+class AppPottsNeighKokkos : public AppPottsKokkos {
 public:
   AppPottsNeighKokkos(class SPPARKS *, int, char **);
-  virtual ~AppPottsNeighKokkos();
 
-  // App-specific data
-  int nspins;
-  int *spin;                              // Host pointer (from iarray[0])
-  Kokkos::View<int*> d_spin;              // Device view
-
-  // Override base class methods
-  virtual void grow_app() override;
-  virtual void init_app() override;
-
-  // Implement required virtual methods from AppLatticeKokkos
-  virtual void sync_app_data_to_device() override;
-  virtual void sync_app_data_to_host() override;
-  void sync_ghosts_to_device() override;
-  virtual void allocate_app_views() override;
-  virtual void sweep_color_kokkos(int color, int start, int count) override;
-
-  // Site methods (required by AppLattice base)
-  virtual double site_energy(int) override;
-  virtual void site_event_rejection(int, class RandomPark *) override;
-  virtual double site_propensity(int) override;
-  virtual void site_event(int, class RandomPark *) override;
+  void init_app() override;
+  void site_event_rejection(int, class RandomPark *) override;
+  void sweep_color_kokkos(int color, int start, int count) override;
 
 private:
-  // Sweep functor
   struct ColorSweepFunctor;
-
-  // Temporary arrays for KMC
-  int *sites, *unique;
 };
 
 }

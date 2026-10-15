@@ -16,156 +16,22 @@
 ------------------------------------------------------------------------- */
 
 #include "math.h"
-#include "solve.h"
-#include "string.h"
-#include "stdlib.h"
 #include "app_potts_neigh_kokkos.h"
 #include "random_park.h"
-#include "error.h"
-#include "memory.h"
 
 using namespace SPPARKS_NS;
 
 /* ---------------------------------------------------------------------- */
 
 AppPottsNeighKokkos::AppPottsNeighKokkos(SPPARKS *spk, int narg, char **arg) :
-  AppLatticeKokkos(spk, narg, arg)
-{
-  // Potts/neigh setup (same as AppPotts)
-  ninteger = 1;
-  ndouble = 0;
-  delpropensity = 1;
-  delevent = 0;
-  allow_kmc = 1;
-  allow_rejection = 1;
-  allow_masking = 1;
-  numrandom = 1;
-
-  create_arrays();
-
-  // Parse arguments
-  if (narg != 2) error->all(FLERR,"Illegal app_style command");
-
-  nspins = atoi(arg[1]);
-  if (nspins <= 0) error->all(FLERR,"Illegal app_style command");
-  // dt_sweep set in init_app() when maxneigh is known
-
-  // Initialize pointers
-  spin = nullptr;
-  sites = nullptr;
-  unique = nullptr;
-}
+  AppPottsKokkos(spk, narg, arg) {}
 
 /* ---------------------------------------------------------------------- */
 
-AppPottsNeighKokkos::~AppPottsNeighKokkos()
-{
-  memory->destroy(sites);
-  memory->destroy(unique);
-}
-
-/* ----------------------------------------------------------------------
-   set site value ptrs each time iarray/darray are reallocated
-------------------------------------------------------------------------- */
-
-void AppPottsNeighKokkos::grow_app()
-{
-  // Set spin pointer to iarray[0]
-  spin = iarray[0];
-
-  // Call parent (allocates neighbors and calls allocate_app_views)
-  AppLatticeKokkos::grow_app();
-}
-
-/* ----------------------------------------------------------------------
-   allocate app-specific Kokkos views
-------------------------------------------------------------------------- */
-
-void AppPottsNeighKokkos::allocate_app_views()
-{
-  int nall = nlocal + nghost;
-  d_spin = Kokkos::View<int*>("spin", nall);
-}
-
-/* ----------------------------------------------------------------------
-   initialize before each run
-------------------------------------------------------------------------- */
-
 void AppPottsNeighKokkos::init_app()
 {
-  // Set dt_sweep now that maxneigh is known (matches CPU version)
-  dt_sweep = 1.0/maxneigh;
-
-  // Validate spin values
-  int flag = 0;
-  for (int i = 0; i < nlocal; i++)
-    if (spin[i] < 1 || spin[i] > nspins) flag = 1;
-  int flagall;
-  MPI_Allreduce(&flag, &flagall, 1, MPI_INT, MPI_SUM, world);
-  if (flagall) error->all(FLERR,"One or more sites have invalid values");
-
-  // Allocate temp arrays for KMC if needed
-  if (allow_kmc) {
-    memory->destroy(sites);
-    memory->destroy(unique);
-    memory->create(sites, 1 + maxneigh, "app:sites");
-    memory->create(unique, 1 + maxneigh, "app:unique");
-  }
-
-  // Call parent (validates coloring, sets up color lists, syncs neighbors)
-  AppLatticeKokkos::init_app();
-
-  // Initial sync of spin data to device
-  sync_app_data_to_device();
-}
-
-/* ----------------------------------------------------------------------
-   sync spin data to device
-------------------------------------------------------------------------- */
-
-void AppPottsNeighKokkos::sync_app_data_to_device()
-{
-  // Straight copy, no arithmetic: one block out of the raw host array (no
-  // per-call mirror allocation, no element loop).
-  Kokkos::deep_copy(
-      d_spin,
-      Kokkos::View<int*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>(spin, nlocal + nghost));
-}
-
-/* ----------------------------------------------------------------------
-   sync spin data to host
-------------------------------------------------------------------------- */
-
-void AppPottsNeighKokkos::sync_app_data_to_host()
-{
-  // Owned slice only: host ghosts come from the ghost exchange.
-  const auto owned = Kokkos::make_pair(0, nlocal);
-  Kokkos::deep_copy(
-      Kokkos::subview(
-          Kokkos::View<int*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>(spin, nlocal + nghost), owned),
-      Kokkos::subview(d_spin, owned));
-}
-
-/* ----------------------------------------------------------------------
-   upload the ghost range after a forward exchange
-------------------------------------------------------------------------- */
-
-void AppPottsNeighKokkos::sync_ghosts_to_device()
-{
-  upload_range(d_spin, spin, nlocal, nlocal + nghost);
-}
-
-/* ----------------------------------------------------------------------
-   compute energy of site i
-------------------------------------------------------------------------- */
-
-double AppPottsNeighKokkos::site_energy(int i)
-{
-  int isite = spin[i];
-  int eng = 0;
-  for (int j = 0; j < numneigh[i]; j++)
-    if (isite != spin[neighbor[i][j]]) eng++;
-  return (double) eng;
+  dt_sweep = 1.0/maxneigh;   // matches AppPottsNeigh
+  AppPottsKokkos::init_app();
 }
 
 /* ----------------------------------------------------------------------
@@ -210,90 +76,6 @@ void AppPottsNeighKokkos::site_event_rejection(int i, RandomPark *random)
   }
 
   if (spin[i] != oldstate) naccept++;
-}
-
-/* ----------------------------------------------------------------------
-   KMC propensity, same scheme as AppPotts::site_propensity
-   events = flips to each distinct unlike neighbour spin
-   each weighs 1 if downhill or level, exp(-dE/kT) if uphill
-------------------------------------------------------------------------- */
-
-double AppPottsNeighKokkos::site_propensity(int i)
-{
-  int oldstate = spin[i];
-  int nevent = 0;
-
-  for (int j = 0; j < numneigh[i]; j++) {
-    int value = spin[neighbor[i][j]];
-    if (value == oldstate) continue;
-    int m;
-    for (m = 0; m < nevent; m++)
-      if (value == unique[m]) break;
-    if (m < nevent) continue;
-    unique[nevent++] = value;
-  }
-
-  double einitial = site_energy(i);
-  double prob = 0.0;
-
-  for (int m = 0; m < nevent; m++) {
-    spin[i] = unique[m];
-    double efinal = site_energy(i);
-    if (efinal <= einitial) prob += 1.0;
-    else if (temperature > 0.0) prob += exp((einitial-efinal)*t_inverse);
-  }
-
-  spin[i] = oldstate;
-  return prob;
-}
-
-/* ----------------------------------------------------------------------
-   KMC event, same scheme as AppPotts::site_event
-   pick a flip in proportion to its weight, then update the propensities
-   of the site and its neighbours
-------------------------------------------------------------------------- */
-
-void AppPottsNeighKokkos::site_event(int i, RandomPark *random)
-{
-  double threshhold = random->uniform() * propensity[i2site[i]];
-
-  int oldstate = spin[i];
-  double einitial = site_energy(i);
-  double prob = 0.0;
-  int nevent = 0;
-
-  for (int j = 0; j < numneigh[i]; j++) {
-    int value = spin[neighbor[i][j]];
-    if (value == oldstate) continue;
-    int m;
-    for (m = 0; m < nevent; m++)
-      if (value == unique[m]) break;
-    if (m < nevent) continue;
-    unique[nevent++] = value;
-
-    spin[i] = value;
-    double efinal = site_energy(i);
-    if (efinal <= einitial) prob += 1.0;
-    else if (temperature > 0.0) prob += exp((einitial-efinal)*t_inverse);
-    if (prob >= threshhold) break;
-  }
-
-  // ignore neighbour sites with isite < 0 (ghosts)
-
-  int nsites = 0;
-  int isite = i2site[i];
-  sites[nsites++] = isite;
-  propensity[isite] = site_propensity(i);
-
-  for (int j = 0; j < numneigh[i]; j++) {
-    int m = neighbor[i][j];
-    isite = i2site[m];
-    if (isite < 0) continue;
-    sites[nsites++] = isite;
-    propensity[isite] = site_propensity(m);
-  }
-
-  solve->update(nsites,sites,propensity);
 }
 
 /* ----------------------------------------------------------------------

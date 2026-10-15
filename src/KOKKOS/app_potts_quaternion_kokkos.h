@@ -126,24 +126,23 @@ protected:
       return r11 + r22 + r33;
     }
 
+    // m = q1 * conj(q2 * s) is the misorientation under symmetry s, and for
+    // unit quaternions trace(R(m)) = 4 m0^2 - 1. Its scalar part is
+    // m0 = q1 . (q2 s) = (conj(q2) q1) . s, so d = conj(q2) q1 is formed once
+    // and each symmetry costs a 4-term dot product instead of two products.
     KOKKOS_INLINE_FUNCTION
     static double compute_disorientation(const double* symmetries, int num_sym,
                                          const double* q1, const double* q2) {
+      double q2c[4], d[4];
+      conjugate(q2, q2c);
+      composition(q2c, q1, d);
+
       double t = 0.0;
 
       for (int i = 0; i < num_sym; i++) {
-        const double* qr = &symmetries[4 * i];
-
-        double q[4];
-        composition(q2, qr, q);
-
-        double qc[4];
-        conjugate(q, qc);
-
-        double m[4];
-        composition(q1, qc, m);
-
-        double trace = trace_of_rotation_matrix(m);
+        const double* s = &symmetries[4 * i];
+        double m0 = d[0]*s[0] + d[1]*s[1] + d[2]*s[2] + d[3]*s[3];
+        double trace = 4.0 * m0 * m0 - 1.0;
         if (trace > t) t = trace;
       }
 

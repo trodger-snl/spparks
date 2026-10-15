@@ -40,7 +40,6 @@ struct ThermalHost {
   int nlocal = 0;                  // # owned sites
   double dx = 0.0;                 // source lattice spacing (physical m)
   double tl = 0.0;                 // liquidus temperature (K)
-  double ts = 0.0;                 // solidus temperature (K)
   double t_room = 0.0;             // ambient/room temperature (K)
   double time = 0.0;               // current simulation time (s)
   double dt = 0.0;                 // simulation timestep (s)

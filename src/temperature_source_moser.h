@@ -167,10 +167,6 @@ class MoserTemperatureSource : public TemperatureSource {
   double get_scan_pause() const { return scan_pause_between_repeats; }
   int    get_scan_repeats() const { return scan_repeats; }
   double get_scan_laser_plane_z() const { return scan_laser_plane_z; }
-  double get_scan_x0() const { return scan_x0; }
-  double get_scan_y0() const { return scan_y0; }
-  double get_scan_x1() const { return scan_x1; }
-  double get_scan_y1() const { return scan_y1; }
   // End time of the most-recently-scheduled active emission window. The
   // app's pause_below logic uses this to gate `append_pass` on "the
   // current pass has actually finished emitting" so it doesn't drain

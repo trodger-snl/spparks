@@ -121,7 +121,6 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
     gd[5] = 9;  // spath (d10): a ghost parent's path length feeds the grain walk
     ghost_dindices = gd;
     sites = unique = NULL;
-    unique_dot = NULL;
     neigh_dist = NULL;
     nucleation_flags = NULL;
     nucleation_temps = NULL;
@@ -147,7 +146,6 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
     c1 = 0.5;
     c2 = 0.5;
     c3 = 2.5;
-    time_step = dt;
     t_room = 300;
     mis_diffusion = 0.0;               // rotation off until misorientation_diffusion
     mis_thresh = 10.0 * MY_PI / 180.0; // Default 10 degrees converted to radians
@@ -192,7 +190,6 @@ AppAdditiveTexture::~AppAdditiveTexture()
 {
   // Only delete arrays that are specific to this class
   // Parent class destructors will handle sites, unique, unique_neigh
-  if (unique_dot) delete[] unique_dot;
   if (neigh_dist) delete[] neigh_dist;
   if (nucleation_flags) delete[] nucleation_flags;
   if (nucleation_temps) delete[] nucleation_temps;
@@ -217,7 +214,6 @@ void AppAdditiveTexture::refresh_thermal_host()
   thermal_host_.nlocal = nlocal;
   thermal_host_.dx = dx;
   thermal_host_.tl = tl;
-  thermal_host_.ts = ts;
   thermal_host_.t_room = t_room;
   thermal_host_.time = time;
   thermal_host_.dt = dt;
@@ -501,20 +497,10 @@ void AppAdditiveTexture::init_app()
   sites = new int[1 + maxneigh];
   unique = new int[1 + maxneigh];
   unique_neigh = new int[1 + maxneigh];
-  int invalid_count = 0;
-  
-  dt_sweep = 1.0 / maxneigh;
-  
-  // Clean up our own arrays
-  if (unique_dot) delete [] unique_dot;
   if (neigh_dist) delete [] neigh_dist;
-  
-  // Allocate our own arrays
-  unique_dot = new double[1 + maxneigh];
-  
+
   double sqrt2 = 1.4142135624;
   double sqrt3 = 1.7320508076;
-  RandomPark random(3000);
 
   dt_sweep = dt;
 
@@ -846,7 +832,7 @@ void AppAdditiveTexture::site_event_solidification(int i, double Tcool, RandomPa
     if(solidNeigh == 1) {
       int power = solid_front_length - 1;
       for(int k = 0; k < solid_front_length; k++) {
-          solid_d[i] = solid_d[i] + solid_front_coeffs[k] * pow(Tcool, power) * time_step;
+          solid_d[i] = solid_d[i] + solid_front_coeffs[k] * pow(Tcool, power) * dt;
           power--;
       }
     

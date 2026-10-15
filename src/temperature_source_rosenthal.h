@@ -101,7 +101,6 @@ class RosenthalTemperatureSource : public TemperatureSource {
   // Set by the app from its lattice spacing dx.
   void set_r_min(double r) { r_min = r; }
 
-  RosenthalMode get_mode() const { return mode; }
 
   // Export the material/source parameters needed to evaluate this source on a
   // device (mode, lambda*Q, k, alpha, r_min, eta_y/eta_z; keyhole adds

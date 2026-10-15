@@ -58,10 +58,6 @@ std::unique_ptr<TemperatureSource> SPPARKS_NS::create_temperature_source(
     return std::make_unique<HDF5UnstructuredTemperatureSource>(spk);
   } else if (type == "hdf5_csr") {
     return std::make_unique<HDF5CSRTemperatureSource>(spk);
-  } else if (type == "finitediff") {
-    // Will be implemented when FiniteDifferenceTemperatureSource is extracted
-    spk->error->all(FLERR,"Finite difference temperature source not yet implemented");
-    return nullptr;
   } else {
     std::string msg = "Unknown temperature source type: " + type;
     spk->error->all(FLERR,msg.c_str());

@@ -227,7 +227,7 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
       "source. Rosenthal is a steady-state moving-point solution; "
       "multi-pass repeats are already physically independent (no "
       "thermal history carries between passes). Use a time-resolved "
-      "source (moser, finitediff [planned]) if you need cooling "
+      "source (moser) if you need cooling "
       "between passes.");
   }
   if ((pause_constant > 0.0 || pause_below_T > 0.0) && repeats < 2) {

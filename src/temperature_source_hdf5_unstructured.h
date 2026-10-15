@@ -88,7 +88,6 @@ public:
   auto row_iterator(unsigned i) { return data.begin() + offsets[i]; }
   const auto row_iterator(unsigned i) const { return data.begin() + offsets[i]; }
 
-  size_t total_elements() const { return data.size(); }
 
   // Flat CSR accessors (for device upload of the whole array at once).
   const std::vector<T>& flat() const { return data; }

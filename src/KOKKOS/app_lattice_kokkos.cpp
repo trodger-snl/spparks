@@ -390,9 +390,13 @@ void AppLatticeKokkos::iterate_rejection(double stoptime)
 
           // CRITICAL: Fence before next color to ensure writes are visible
           Kokkos::fence();
+
+          // Count the sites this kernel actually attempted. Adding nlocal once
+          // per sector instead overcounted by nsector (each sector's lists hold
+          // only its share of the sites), inflating Nreject ~nsector-fold.
+          nattempt += color_count;
         }
       }
-      nattempt += nlocal;
 
       // Sync back for reverse communication
       timer->stamp();

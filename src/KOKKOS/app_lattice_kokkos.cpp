@@ -31,7 +31,7 @@ enum{NOSWEEP,RANDOM,RASTER,COLOR,COLOR_STRICT};
 
 AppLatticeKokkos::AppLatticeKokkos(SPPARKS *spk, int narg, char **arg) :
   AppLattice(spk, narg, arg), rand_pool(nullptr),
-  kokkos_ncolors(0), kokkos_nsectors(0), color_lists_initialized(false),
+  kokkos_ncolors(0), kokkos_nsectors(0),
   strict_rng(0)
 {
   // Initialize RNG pool with a seed using world rank
@@ -202,97 +202,38 @@ void AppLatticeKokkos::sync_neighbors_to_device()
 
 void AppLatticeKokkos::setup_color_lists_kokkos()
 {
-  // Use existing coloring from AppLattice (computed in AppLattice::init_app)
+  // ncolors <= 1: one "colour" holding every local site, one sector.
+  const bool colored = ncolors > 1;
+  kokkos_ncolors = colored ? ncolors : 1;
+  kokkos_nsectors = (colored && bothflag) ? nsector : 1;
+  color_offsets.assign(kokkos_nsectors, std::vector<int>(kokkos_ncolors + 1, 0));
+  d_color_sites_vec.assign(kokkos_nsectors, Kokkos::View<int*>());
 
-  // Clear any existing color lists
-  d_color_offsets_vec.clear();
-  d_color_sites_vec.clear();
-
-  if (ncolors <= 1) {
-    // No coloring - single color with all local sites, single "sector"
-    kokkos_ncolors = 1;
-    kokkos_nsectors = 1;
-
-    d_color_offsets_vec.resize(1);
-    d_color_sites_vec.resize(1);
-
-    d_color_offsets_vec[0] = Kokkos::View<int*>("color_offsets_0", 2);
-    auto h_offsets = Kokkos::create_mirror_view(d_color_offsets_vec[0]);
-    h_offsets(0) = 0;
-    h_offsets(1) = nlocal;
-    Kokkos::deep_copy(d_color_offsets_vec[0], h_offsets);
-
-    d_color_sites_vec[0] = Kokkos::View<int*>("color_sites_0", nlocal);
-    auto h_sites = Kokkos::create_mirror_view(d_color_sites_vec[0]);
-    #pragma omp parallel for schedule(static)
-    for (int i = 0; i < nlocal; i++) {
-      h_sites(i) = i;
-    }
-    Kokkos::deep_copy(d_color_sites_vec[0], h_sites);
-
-    color_lists_initialized = true;
-    return;
-  }
-
-  kokkos_ncolors = ncolors;
-
-  // Determine number of sectors to track
-  // When bothflag=1, we need per-sector color lists
-  // When bothflag=0, we use a single set of color lists
-  if (bothflag) {
-    kokkos_nsectors = nsector;
-  } else {
-    kokkos_nsectors = 1;
-  }
-
-  // Resize vectors to hold per-sector views
-  d_color_offsets_vec.resize(kokkos_nsectors);
-  d_color_sites_vec.resize(kokkos_nsectors);
-
-  // Build color lists for each sector
   for (int isector = 0; isector < kokkos_nsectors; isector++) {
+    // set[c] holds colour c; with sectors, set[nsector + isector*ncolors + c]
+    auto colour_set = [&](int c) -> Set & {
+      return set[bothflag ? nsector + isector * ncolors + c : c];
+    };
+    std::vector<int> &off = color_offsets[isector];
+    for (int c = 0; c < kokkos_ncolors; c++)
+      off[c + 1] = off[c] + (colored ? colour_set(c).nlocal : nlocal);
+
     char name[64];
-    snprintf(name, sizeof(name), "color_offsets_%d", isector);
-    d_color_offsets_vec[isector] = Kokkos::View<int*>(name, ncolors + 1);
-    auto h_offsets = Kokkos::create_mirror_view(d_color_offsets_vec[isector]);
-
-    // Build CSR offsets for this sector
-    h_offsets(0) = 0;
-    for (int c = 0; c < ncolors; c++) {
-      int set_idx;
-      if (bothflag) {
-        // set[nsector + isector*ncolors + icolor] has color sites for this sector
-        set_idx = nsector + isector * ncolors + c;
-      } else {
-        // set[c] has all sites of color c
-        set_idx = c;
-      }
-      h_offsets(c + 1) = h_offsets(c) + set[set_idx].nlocal;
-    }
-    Kokkos::deep_copy(d_color_offsets_vec[isector], h_offsets);
-
-    // Build flattened site list for this sector
-    int total_sites = h_offsets(ncolors);
     snprintf(name, sizeof(name), "color_sites_%d", isector);
-    d_color_sites_vec[isector] = Kokkos::View<int*>(name, total_sites > 0 ? total_sites : 1);
+    d_color_sites_vec[isector] =
+      Kokkos::View<int*>(name, std::max(off[kokkos_ncolors], 1));
     auto h_sites = Kokkos::create_mirror_view(d_color_sites_vec[isector]);
-
-    int offset = 0;
-    for (int c = 0; c < ncolors; c++) {
-      int set_idx;
-      if (bothflag) {
-        set_idx = nsector + isector * ncolors + c;
-      } else {
-        set_idx = c;
-      }
-      for (int j = 0; j < set[set_idx].nlocal; j++) {
-        h_sites(offset++) = set[set_idx].site2i[j];
-      }
+    if (colored) {
+      int offset = 0;
+      for (int c = 0; c < kokkos_ncolors; c++)
+        for (int j = 0; j < colour_set(c).nlocal; j++)
+          h_sites(offset++) = colour_set(c).site2i[j];
+    } else {
+      #pragma omp parallel for schedule(static)
+      for (int i = 0; i < nlocal; i++) h_sites(i) = i;
     }
     Kokkos::deep_copy(d_color_sites_vec[isector], h_sites);
   }
-
-  color_lists_initialized = true;
 }
 
 /* ----------------------------------------------------------------------
@@ -301,19 +242,6 @@ void AppLatticeKokkos::setup_color_lists_kokkos()
 
 void AppLatticeKokkos::iterate_rejection(double stoptime)
 {
-  // Ensure color lists are ready
-  if (!color_lists_initialized) {
-    setup_color_lists_kokkos();
-  }
-
-  // Cache color offsets on host for each sector
-  // h_offsets_vec[isector] holds the mirror view for sector isector
-  std::vector<Kokkos::View<int*>::host_mirror_type> h_offsets_vec(kokkos_nsectors);
-  for (int s = 0; s < kokkos_nsectors; s++) {
-    h_offsets_vec[s] = Kokkos::create_mirror_view(d_color_offsets_vec[s]);
-    Kokkos::deep_copy(h_offsets_vec[s], d_color_offsets_vec[s]);
-  }
-
   // The device holds the authoritative field data for the whole run. The host
   // copy is refreshed only when something on the host reads it: the ghost
   // exchange (np > 1), app_update, output, and the end of the run. At np = 1
@@ -360,7 +288,7 @@ void AppLatticeKokkos::iterate_rejection(double stoptime)
       // When bothflag=1, use iset (the current sector)
       // When bothflag=0, always use sector 0's lists
       int sector_idx = bothflag ? iset : 0;
-      auto& h_offsets = h_offsets_vec[sector_idx];
+      const std::vector<int> &h_offsets = color_offsets[sector_idx];
       // Set d_color_sites to the current sector's view - derived classes use this
       d_color_sites = d_color_sites_vec[sector_idx];
 
@@ -389,8 +317,8 @@ void AppLatticeKokkos::iterate_rejection(double stoptime)
           timer->stamp(TIME_SOLVE);
         }
 
-        int color_start = h_offsets(icolor);
-        int color_count = h_offsets(icolor + 1) - color_start;
+        int color_start = h_offsets[icolor];
+        int color_count = h_offsets[icolor + 1] - color_start;
 
         if (color_count > 0) {
           // Derived class implements the actual sweep kernel

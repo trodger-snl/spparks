@@ -388,12 +388,6 @@ if(SPPARKS_PACKAGE_KOKKOS)
     if(NOT SPPARKS_KOKKOS_BACKEND STREQUAL "SYCL")
         set(Kokkos_ENABLE_SYCL OFF CACHE BOOL "Disable SYCL backend" FORCE)
     endif()
-    # Keep Serial enabled for GPU backends (required for host execution)
-    # Only disable Serial for OpenMP backend (OpenMP provides host parallel execution)
-    if(SPPARKS_KOKKOS_BACKEND STREQUAL "OPENMP")
-        set(Kokkos_ENABLE_SERIAL OFF CACHE BOOL "Disable Serial backend" FORCE)
-    endif()
-
     # Disable Kokkos tests and examples
     set(Kokkos_ENABLE_TESTS OFF CACHE BOOL "Disable Kokkos tests" FORCE)
     set(Kokkos_ENABLE_EXAMPLES OFF CACHE BOOL "Disable Kokkos examples" FORCE)

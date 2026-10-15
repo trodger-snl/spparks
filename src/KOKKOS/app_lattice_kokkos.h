@@ -33,8 +33,6 @@ public:
 
   // === Kokkos type aliases ===
   using pool_type = Kokkos::Random_XorShift64_Pool<>;
-  using view_int = Kokkos::View<int*, Kokkos::DefaultExecutionSpace::memory_space>;
-  using view_double = Kokkos::View<double*, Kokkos::DefaultExecutionSpace::memory_space>;
 
   // === Shared Kokkos data (all derived classes use these) ===
   // Device-only: filled from AppLattice's numneigh/neighbor, which stay the
@@ -49,12 +47,11 @@ public:
   int kokkos_ncolors;                    // Number of colors (8 for 26-neighbor)
   int kokkos_nsectors;                   // Number of sectors to track (1 if !bothflag)
   // Per-sector color lists stored in vectors
-  std::vector<Kokkos::View<int*>> d_color_offsets_vec;  // CSR offsets [sector][ncolors+1]
+  std::vector<std::vector<int>> color_offsets;           // CSR offsets [sector][ncolors+1], host
   std::vector<Kokkos::View<int*>> d_color_sites_vec;    // Site indices [sector][sites_in_sector]
   // Current sector's color sites view (set in iterate_rejection before calling sweep_color_kokkos)
   // Derived classes use this in their sweep functors
   Kokkos::View<int*> d_color_sites;
-  bool color_lists_initialized;
 
   // === Per-site RNG streams for `sweep color/strict` (see random_park_kokkos.h)
   // Set iff sweepflag == COLOR_STRICT. Holds each site's Park/Miller seed,

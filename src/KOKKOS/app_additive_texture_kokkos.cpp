@@ -80,17 +80,8 @@ struct GwCached {
 using namespace SPPARKS_NS;
 using namespace MathConst;
 
-/* ----------------------------------------------------------------------
-   Unmanaged host Views wrapping SPPARKS' raw iarray/darray pointers, so a
-   deep_copy moves a whole array in one DMA straight to/from the memory the
-   comm and dump layers already read -- no per-call mirror allocation and no
-   scalar element loop. Element types match the device Views exactly
-   (int*<->int*, double*<->double*), so every copy here is a pure memcpy and
-   is bit-exact by construction.
-------------------------------------------------------------------------- */
-
-using HostUnmanagedInt =
-    Kokkos::View<int*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>;
+// Unmanaged host View over the raw T array, for the k_T DualView copies.
+// The other arrays use AppLatticeKokkos::upload_range / download_range.
 using HostUnmanagedDouble =
     Kokkos::View<double*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>;
 
@@ -271,15 +262,11 @@ void AppAdditiveTextureKokkos::allocate_app_views()
 
   // Gradient cache (device-only, computed once per timestep on device)
   d_G = Kokkos::View<double*>("gradient_magnitude", nall);
-  d_grad_x = Kokkos::View<double*>("gradient_x", nall);
-  d_grad_y = Kokkos::View<double*>("gradient_y", nall);
-  d_grad_z = Kokkos::View<double*>("gradient_z", nall);
   d_V = Kokkos::View<double*>("solidification_velocity", nall);
   d_spath = Kokkos::View<double*>("spath", nall);
 
   // Global parameter arrays (device-accessible constants); the per-spin
   // nucleation arrays and solid-front coefficients are uploaded at init.
-  d_texture_params = Kokkos::View<double[3]>("texture_params");
 }
 
 /* ----------------------------------------------------------------------
@@ -377,20 +364,12 @@ void AppAdditiveTextureKokkos::sync_app_data_to_device()
   // Call parent (syncs spin, quaternions)
   AppPottsQuaternionKokkos::sync_app_data_to_device();
 
-  int nall = nlocal + nghost;
-
-  // Sync AM-specific arrays to device over the full owned+ghost range, copying
-  // straight out of the raw host arrays (see HostUnmanaged* above).
-  const auto all = Kokkos::make_pair(0, nall);
-  Kokkos::deep_copy(Kokkos::subview(d_active_flag, all),
-                    Kokkos::subview(HostUnmanagedInt(active_flag, nall), all));
-  Kokkos::deep_copy(Kokkos::subview(d_solid_d, all),
-                    Kokkos::subview(HostUnmanagedDouble(solid_d, nall), all));
-  Kokkos::deep_copy(Kokkos::subview(d_spath, all),
-                    Kokkos::subview(HostUnmanagedDouble(spath, nall), all));
-
-  // Note: Temperature k_T is synced separately in sync_temperature_to_device()
-  // Gradients d_G and d_V are device-computed, synced to host only when needed for output
+  // AM arrays over the full owned+ghost range. T is synced separately
+  // (sync_temperature_to_device); G and V are device-computed.
+  const int nall = nlocal + nghost;
+  upload_range(d_active_flag, active_flag, 0, nall);
+  upload_range(d_solid_d, solid_d, 0, nall);
+  upload_range(d_spath, spath, 0, nall);
 }
 
 /* ----------------------------------------------------------------------
@@ -399,28 +378,16 @@ void AppAdditiveTextureKokkos::sync_app_data_to_device()
 
 void AppAdditiveTextureKokkos::sync_app_data_to_host()
 {
-  // Call parent (syncs spin, quaternions with normalization)
+  // Call parent (syncs spin, quaternions)
   AppPottsQuaternionKokkos::sync_app_data_to_host();
 
-  int nall = nlocal + nghost;
-
-  // Sync AM-specific arrays from device. Only the OWNED slice is brought back
-  // (host ghost entries are refreshed by the ghost exchange, not here) --
-  // preserving exactly the range the previous element loop covered.
-  const auto owned = Kokkos::make_pair(0, nlocal);
-  Kokkos::deep_copy(Kokkos::subview(HostUnmanagedInt(active_flag, nall), owned),
-                    Kokkos::subview(d_active_flag, owned));
-  Kokkos::deep_copy(Kokkos::subview(HostUnmanagedDouble(solid_d, nall), owned),
-                    Kokkos::subview(d_solid_d, owned));
-
-  // Sync gradient and velocity arrays for output/visualization
-  // These are device-only views that must be copied to host for STITCH dumps
-  Kokkos::deep_copy(Kokkos::subview(HostUnmanagedDouble(G, nall), owned),
-                    Kokkos::subview(d_G, owned));
-  Kokkos::deep_copy(Kokkos::subview(HostUnmanagedDouble(V, nall), owned),
-                    Kokkos::subview(d_V, owned));
-  Kokkos::deep_copy(Kokkos::subview(HostUnmanagedDouble(spath, nall), owned),
-                    Kokkos::subview(d_spath, owned));
+  // Owned slice only; host ghosts are refreshed by the ghost exchange.
+  // G and V are device-only and come back for the STITCH dumps.
+  download_range(active_flag, d_active_flag, nlocal);
+  download_range(solid_d, d_solid_d, nlocal);
+  download_range(G, d_G, nlocal);
+  download_range(V, d_V, nlocal);
+  download_range(spath, d_spath, nlocal);
 }
 
 /* ----------------------------------------------------------------------
@@ -508,38 +475,25 @@ void AppAdditiveTextureKokkos::sync_temperature_to_host()
 
 void AppAdditiveTextureKokkos::sync_ghost_to_host()
 {
-  if (nlocal == 0) return;
-  using HUi = HostUnmanagedInt;
-  using HUd = HostUnmanagedDouble;
-  const int nall = nlocal + nghost;
-  const auto owned = Kokkos::make_pair(0, nlocal);
-  Kokkos::deep_copy(Kokkos::subview(HUi(spin, nall), owned),
-                    Kokkos::subview(d_spin, owned));
-  Kokkos::deep_copy(Kokkos::subview(HUi(active_flag, nall), owned),
-                    Kokkos::subview(d_active_flag, owned));
-  Kokkos::deep_copy(Kokkos::subview(HUd(q0, nall), owned), Kokkos::subview(d_q0, owned));
-  Kokkos::deep_copy(Kokkos::subview(HUd(qx, nall), owned), Kokkos::subview(d_qx, owned));
-  Kokkos::deep_copy(Kokkos::subview(HUd(qy, nall), owned), Kokkos::subview(d_qy, owned));
-  Kokkos::deep_copy(Kokkos::subview(HUd(qz, nall), owned), Kokkos::subview(d_qz, owned));
-  Kokkos::deep_copy(Kokkos::subview(HUd(spath, nall), owned), Kokkos::subview(d_spath, owned));
+  download_range(spin, d_spin, nlocal);
+  download_range(active_flag, d_active_flag, nlocal);
+  download_range(q0, d_q0, nlocal);
+  download_range(qx, d_qx, nlocal);
+  download_range(qy, d_qy, nlocal);
+  download_range(qz, d_qz, nlocal);
+  download_range(spath, d_spath, nlocal);
 }
 
 void AppAdditiveTextureKokkos::sync_ghost_to_device()
 {
-  if (nghost == 0) return;
-  using HUi = HostUnmanagedInt;
-  using HUd = HostUnmanagedDouble;
   const int nall = nlocal + nghost;
-  const auto ghost = Kokkos::make_pair(nlocal, nall);
-  Kokkos::deep_copy(Kokkos::subview(d_spin, ghost),
-                    Kokkos::subview(HUi(spin, nall), ghost));
-  Kokkos::deep_copy(Kokkos::subview(d_active_flag, ghost),
-                    Kokkos::subview(HUi(active_flag, nall), ghost));
-  Kokkos::deep_copy(Kokkos::subview(d_q0, ghost), Kokkos::subview(HUd(q0, nall), ghost));
-  Kokkos::deep_copy(Kokkos::subview(d_qx, ghost), Kokkos::subview(HUd(qx, nall), ghost));
-  Kokkos::deep_copy(Kokkos::subview(d_qy, ghost), Kokkos::subview(HUd(qy, nall), ghost));
-  Kokkos::deep_copy(Kokkos::subview(d_qz, ghost), Kokkos::subview(HUd(qz, nall), ghost));
-  Kokkos::deep_copy(Kokkos::subview(d_spath, ghost), Kokkos::subview(HUd(spath, nall), ghost));
+  upload_range(d_spin, spin, nlocal, nall);
+  upload_range(d_active_flag, active_flag, nlocal, nall);
+  upload_range(d_q0, q0, nlocal, nall);
+  upload_range(d_qx, qx, nlocal, nall);
+  upload_range(d_qy, qy, nlocal, nall);
+  upload_range(d_qz, qz, nlocal, nall);
+  upload_range(d_spath, spath, nlocal, nall);
 }
 
 /* ----------------------------------------------------------------------
@@ -1232,11 +1186,6 @@ void AppAdditiveTextureKokkos::initialize_nucleation_parameters()
   d_solid_front_coeffs =
       upload_vec<double>("solid_front_coeffs", solid_front_coeffs, solid_front_length);
 
-  auto h_texture_params = Kokkos::create_mirror_view(d_texture_params);
-  h_texture_params(0) = c1;
-  h_texture_params(1) = c2;
-  h_texture_params(2) = c3;
-  Kokkos::deep_copy(d_texture_params, h_texture_params);
 }
 
 /* ----------------------------------------------------------------------
@@ -1332,18 +1281,13 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
 
   // Capture parameters for lambda
   double tl_local = this->tl;
-  int nspins_local = this->nspins;
   int nrefine_local = this->nrefine;
   auto rand_pool_local = *rand_pool;
   auto d_nucleation_flags_local = this->d_nucleation_flags;
   auto d_nucleation_temps_local = this->d_nucleation_temps;
-  auto d_nucleation_sizes_local = this->d_nucleation_sizes;
   auto d_solid_front_coeffs_local = this->d_solid_front_coeffs;
   int solid_front_length_local = this->solid_front_length;
-  auto d_G_local = this->d_G;
   auto d_V_local = this->d_V;
-  auto d_spath_local = this->d_spath;
-  double dx_local = this->dx;
 
   // Nucleation kernel: parallel over all local sites with event tracking
   // Race-free: each site only reads/writes itself
@@ -1433,9 +1377,6 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
   auto k_neighbor_d = d_neighbor;
   auto k_numneigh_d = d_numneigh;
   auto d_G_local = d_G;
-  auto d_grad_x_local = d_grad_x;
-  auto d_grad_y_local = d_grad_y;
-  auto d_grad_z_local = d_grad_z;
   auto d_V_local = d_V;
   auto d_spath_local = d_spath;
   auto d_nucleation_sizes_local = d_nucleation_sizes;
@@ -1593,9 +1534,6 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
           // Copy thermal properties from nucleus
           d_G_local(nbr) = G_i;
           d_V_local(nbr) = V_i;
-          d_grad_x_local(nbr) = d_grad_x_local(i);
-          d_grad_y_local(nbr) = d_grad_y_local(i);
-          d_grad_z_local(nbr) = d_grad_z_local(i);
         }
         // If old_flag != 2, another nucleus already claimed it - skip
       }
@@ -1658,17 +1596,13 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
   // Capture parameters
   double tl_local = this->tl;
   double dt_local = this->dt;
-  int nrefine_local = this->nrefine;
   double dx_local = this->dx;
   auto d_solid_front_coeffs_local = this->d_solid_front_coeffs;
   int solid_front_length_local = this->solid_front_length;
-  auto d_texture_params_local = this->d_texture_params;
+  const double c1_local = c1, c2_local = c2, c3_local = c3;
   auto d_G_local = this->d_G;
   auto d_V_local = this->d_V;
   auto d_spath_local = this->d_spath;
-  auto d_grad_x_local = this->d_grad_x;
-  auto d_grad_y_local = this->d_grad_y;
-  auto d_grad_z_local = this->d_grad_z;
   auto rand_pool_local = *rand_pool;
 
   // Misorientation random walk parameters
@@ -1758,11 +1692,8 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
                 i, d_T_local, d_active_flag_local, k_numneigh_d, k_neighbor_d, k_xyz_d, dx_local,
                 grad_dir, &grad_magnitude);
 
-              // Store gradient magnitude and components for later use
+              // Store gradient magnitude for later use
               d_G_local(i) = grad_magnitude;
-              d_grad_x_local(i) = grad_dir[0];
-              d_grad_y_local(i) = grad_dir[1];
-              d_grad_z_local(i) = grad_dir[2];
               gradient_computed = true;
             }
 
@@ -1784,9 +1715,9 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
           // of its candidate voxels against the gradient at this site (zero
           // gradient => full mobility; negative => zero weight), draw the grain,
           // then draw the parent voxel uniformly within it.
-          const double c1 = d_texture_params_local(0);
-          const double c2 = d_texture_params_local(1);
-          const double c3 = d_texture_params_local(2);
+          const double c1 = c1_local;
+          const double c2 = c2_local;
+          const double c3 = c3_local;
           int gspin[26]; double gcum[26]; int ngr = 0; double gtotal = 0.0;
           for (int k = 0; k < num_solid_neighbors; k++) {
             bool seen = false;

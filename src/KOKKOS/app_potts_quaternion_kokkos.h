@@ -80,7 +80,6 @@ protected:
   //
   struct QuaternionOps {
     // Numerical thresholds for quaternion operations
-    static constexpr double PARALLEL_VECTOR_THRESHOLD = 1.0e-10;
     static constexpr double QUATERNION_ZERO_THRESHOLD = 1.0e-15;
 
     KOKKOS_INLINE_FUNCTION
@@ -112,19 +111,6 @@ protected:
       result[1] = -q[1];
       result[2] = -q[2];
       result[3] = -q[3];
-    }
-
-    KOKKOS_INLINE_FUNCTION
-    static double trace_of_rotation_matrix(const double* q) {
-      double q0 = q[0], qx = q[1], qy = q[2], qz = q[3];
-      double q00 = q0 * q0;
-      double qxx = qx * qx;
-      double qyy = qy * qy;
-      double qzz = qz * qz;
-      double r11 = q00 + qxx - qyy - qzz;
-      double r22 = q00 - qxx + qyy - qzz;
-      double r33 = q00 - qxx - qyy + qzz;
-      return r11 + r22 + r33;
     }
 
     // m = q1 * conj(q2 * s) is the misorientation under symmetry s, and for

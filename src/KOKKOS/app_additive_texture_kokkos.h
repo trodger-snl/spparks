@@ -209,9 +209,6 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   // Gradient cache (device-only, computed once per timestep)
   // Uses simple View because computed on device, no host sync needed
   Kokkos::View<double*> d_G;        // Gradient magnitude
-  Kokkos::View<double*> d_grad_x;   // Gradient x-component
-  Kokkos::View<double*> d_grad_y;   // Gradient y-component
-  Kokkos::View<double*> d_grad_z;   // Gradient z-component
   Kokkos::View<double*> d_V;        // Solidification velocity
   Kokkos::View<double*> d_spath;    // inheritance path length (d10)
 
@@ -257,7 +254,6 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
 
   // Global parameter arrays (device-accessible constants)
   Kokkos::View<double*> d_solid_front_coeffs;  // Solidification velocity polynomial coefficients
-  Kokkos::View<double[3]> d_texture_params;    // Texture model parameters: [c1, c2, c3]
 
   // Host pointers (mapped to iarray/darray like CPU version)
   int *active_flag;
@@ -398,9 +394,6 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   }
 
   struct ThermalOps {
-    // Maximum neighbors for sc/26n lattice
-    static constexpr int MAX_NEIGHBORS_SC26N = 26;
-
     // Compute temperature gradient at site i using weighted least-squares
     //
     // Algorithm: For each of 26 cardinal neighbors, build weighted least

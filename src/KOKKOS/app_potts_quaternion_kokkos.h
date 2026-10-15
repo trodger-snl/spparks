@@ -65,6 +65,10 @@ public:
   virtual void site_event(int, class RandomPark *) override;
 
 protected:
+  // KMC helpers
+  int unique_neighbors(int);
+  void copy_state(int, int);
+
   // Device-compatible quaternion operations (accessible to derived classes)
   //
   // QUATERNION CONVENTION: Scalar-first (Hamilton notation)

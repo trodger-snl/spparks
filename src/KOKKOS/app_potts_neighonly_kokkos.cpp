@@ -16,6 +16,7 @@
 ------------------------------------------------------------------------- */
 
 #include "math.h"
+#include "solve.h"
 #include "string.h"
 #include "stdlib.h"
 #include "app_potts_neighonly_kokkos.h"
@@ -206,66 +207,87 @@ void AppPottsNeighOnlyKokkos::site_event_rejection(int i, RandomPark *random)
 }
 
 /* ----------------------------------------------------------------------
-   KMC propensity
+   KMC propensity, same scheme as AppPotts::site_propensity
+   events = flips to each distinct unlike neighbour spin
+   each weighs 1 if downhill or level, exp(-dE/kT) if uphill
 ------------------------------------------------------------------------- */
 
 double AppPottsNeighOnlyKokkos::site_propensity(int i)
 {
-  int isite = spin[i];
-  int nunique = 0;
+  int oldstate = spin[i];
+  int nevent = 0;
 
   for (int j = 0; j < numneigh[i]; j++) {
     int value = spin[neighbor[i][j]];
-    if (value == isite) continue;
-
-    bool found = false;
-    for (int m = 0; m < nunique; m++) {
-      if (value == unique[m]) {
-        found = true;
-        break;
-      }
-    }
-    if (!found) unique[nunique++] = value;
+    if (value == oldstate) continue;
+    int m;
+    for (m = 0; m < nevent; m++)
+      if (value == unique[m]) break;
+    if (m < nevent) continue;
+    unique[nevent++] = value;
   }
 
-  return (double) nunique;
+  double einitial = site_energy(i);
+  double prob = 0.0;
+
+  for (int m = 0; m < nevent; m++) {
+    spin[i] = unique[m];
+    double efinal = site_energy(i);
+    if (efinal <= einitial) prob += 1.0;
+    else if (temperature > 0.0) prob += exp((einitial-efinal)*t_inverse);
+  }
+
+  spin[i] = oldstate;
+  return prob;
 }
 
 /* ----------------------------------------------------------------------
-   KMC event
+   KMC event, same scheme as AppPotts::site_event
+   pick a flip in proportion to its weight, then update the propensities
+   of the site and its neighbours
 ------------------------------------------------------------------------- */
 
 void AppPottsNeighOnlyKokkos::site_event(int i, RandomPark *random)
 {
-  int oldstate = spin[i];
+  double threshhold = random->uniform() * propensity[i2site[i]];
 
-  // Build list of unique neighbor spins
+  int oldstate = spin[i];
+  double einitial = site_energy(i);
+  double prob = 0.0;
   int nevent = 0;
+
   for (int j = 0; j < numneigh[i]; j++) {
     int value = spin[neighbor[i][j]];
     if (value == oldstate) continue;
+    int m;
+    for (m = 0; m < nevent; m++)
+      if (value == unique[m]) break;
+    if (m < nevent) continue;
+    unique[nevent++] = value;
 
-    bool found = false;
-    for (int m = 0; m < nevent; m++) {
-      if (value == unique[m]) {
-        found = true;
-        break;
-      }
-    }
-    if (!found) unique[nevent++] = value;
+    spin[i] = value;
+    double efinal = site_energy(i);
+    if (efinal <= einitial) prob += 1.0;
+    else if (temperature > 0.0) prob += exp((einitial-efinal)*t_inverse);
+    if (prob >= threshhold) break;
   }
 
-  if (nevent == 0) return;
+  // ignore neighbour sites with isite < 0 (ghosts)
 
-  int m = (int)(nevent * random->uniform());
-  if (m >= nevent) m = nevent - 1;
-  spin[i] = unique[m];
-
-  // Update propensity list
   int nsites = 0;
-  sites[nsites++] = i;
-  for (int j = 0; j < numneigh[i]; j++)
-    sites[nsites++] = neighbor[i][j];
+  int isite = i2site[i];
+  sites[nsites++] = isite;
+  propensity[isite] = site_propensity(i);
+
+  for (int j = 0; j < numneigh[i]; j++) {
+    int m = neighbor[i][j];
+    isite = i2site[m];
+    if (isite < 0) continue;
+    sites[nsites++] = isite;
+    propensity[isite] = site_propensity(m);
+  }
+
+  solve->update(nsites,sites,propensity);
 }
 
 /* ----------------------------------------------------------------------

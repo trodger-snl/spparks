@@ -16,6 +16,7 @@
 ------------------------------------------------------------------------- */
 
 #include "math.h"
+#include "solve.h"
 #include "string.h"
 #include "stdlib.h"
 #include "app_potts_quaternion_kokkos.h"
@@ -430,73 +431,98 @@ void AppPottsQuaternionKokkos::site_event_rejection(int i, RandomPark *random)
 }
 
 /* ----------------------------------------------------------------------
-   KMC propensity
+   KMC propensity, same scheme as AppPotts::site_propensity
+   events = taking the spin and orientation of each distinct unlike
+   neighbour spin; each weighs 1 if downhill or level, exp(-dE/kT) if uphill
+   unique_neigh holds one neighbour index per distinct spin
 ------------------------------------------------------------------------- */
+
+int AppPottsQuaternionKokkos::unique_neighbors(int i)
+{
+  int nevent = 0;
+  for (int j = 0; j < numneigh[i]; j++) {
+    int nj = neighbor[i][j];
+    if (spin[nj] == spin[i]) continue;
+    int m;
+    for (m = 0; m < nevent; m++)
+      if (spin[nj] == spin[unique_neigh[m]]) break;
+    if (m < nevent) continue;
+    unique_neigh[nevent++] = nj;
+  }
+  return nevent;
+}
+
+void AppPottsQuaternionKokkos::copy_state(int i, int nj)
+{
+  spin[i] = spin[nj];
+  q0[i] = q0[nj];
+  qx[i] = qx[nj];
+  qy[i] = qy[nj];
+  qz[i] = qz[nj];
+}
 
 double AppPottsQuaternionKokkos::site_propensity(int i)
 {
-  // Count unique neighbor spins different from mine
-  int isite = spin[i];
-  int nunique = 0;
+  int nevent = unique_neighbors(i);
+  int oldstate = spin[i];
+  double q_old[4] = {q0[i], qx[i], qy[i], qz[i]};
+  double einitial = site_energy(i);
+  double prob = 0.0;
 
-  for (int j = 0; j < numneigh[i]; j++) {
-    int value = spin[neighbor[i][j]];
-    if (value == isite) continue;
-
-    bool found = false;
-    for (int m = 0; m < nunique; m++) {
-      if (value == sites[m]) {
-        found = true;
-        break;
-      }
-    }
-    if (!found) sites[nunique++] = value;
+  for (int m = 0; m < nevent; m++) {
+    copy_state(i, unique_neigh[m]);
+    double efinal = site_energy(i);
+    if (efinal <= einitial) prob += 1.0;
+    else if (temperature > 0.0) prob += exp((einitial-efinal)*t_inverse);
   }
 
-  return (double) nunique;
+  spin[i] = oldstate;
+  q0[i] = q_old[0];
+  qx[i] = q_old[1];
+  qy[i] = q_old[2];
+  qz[i] = q_old[3];
+  return prob;
 }
 
 /* ----------------------------------------------------------------------
-   KMC event - pick random neighbor orientation
+   KMC event, same scheme as AppPotts::site_event
+   pick a flip in proportion to its weight, then update the propensities
+   of the site and its neighbours
 ------------------------------------------------------------------------- */
 
 void AppPottsQuaternionKokkos::site_event(int i, RandomPark *random)
 {
-  int oldstate = spin[i];
+  double threshhold = random->uniform() * propensity[i2site[i]];
 
-  // Build list of unique neighbor spins
-  int nevent = 0;
-  for (int j = 0; j < numneigh[i]; j++) {
-    int nj = neighbor[i][j];
-    int value = spin[nj];
-    if (value == oldstate) continue;
+  // list is built before any flip, so spin[i] is still the old state
+  int nevent = unique_neighbors(i);
+  double einitial = site_energy(i);
+  double prob = 0.0;
 
-    bool found = false;
-    for (int m = 0; m < nevent; m++) {
-      if (value == sites[m]) {
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      sites[nevent] = value;
-      unique_neigh[nevent] = nj;
-      nevent++;
-    }
+  for (int m = 0; m < nevent; m++) {
+    copy_state(i, unique_neigh[m]);
+    double efinal = site_energy(i);
+    if (efinal <= einitial) prob += 1.0;
+    else if (temperature > 0.0) prob += exp((einitial-efinal)*t_inverse);
+    if (prob >= threshhold) break;
   }
 
-  if (nevent == 0) return;
+  // ignore neighbour sites with isite < 0 (ghosts)
 
-  // Pick random unique neighbor
-  int m = (int)(nevent * random->uniform());
-  if (m >= nevent) m = nevent - 1;
+  int nsites = 0;
+  int isite = i2site[i];
+  sites[nsites++] = isite;
+  propensity[isite] = site_propensity(i);
 
-  int neighran = unique_neigh[m];
-  spin[i] = sites[m];
-  q0[i] = q0[neighran];
-  qx[i] = qx[neighran];
-  qy[i] = qy[neighran];
-  qz[i] = qz[neighran];
+  for (int j = 0; j < numneigh[i]; j++) {
+    int m = neighbor[i][j];
+    isite = i2site[m];
+    if (isite < 0) continue;
+    sites[nsites++] = isite;
+    propensity[isite] = site_propensity(m);
+  }
+
+  solve->update(nsites,sites,propensity);
 }
 
 /* ----------------------------------------------------------------------

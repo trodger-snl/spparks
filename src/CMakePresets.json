@@ -63,8 +63,8 @@
     {
       "name": "strix-halo",
       "inherits": "_kokkos-hip",
-      "displayName": "AMD Strix Halo / RDNA 3.5 (gfx1150, gfx1151)",
-      "description": "Local development APU (Radeon 8050S/8060S). Physically an APU, but Kokkos classifies gfx1151 as UNABLE to access system allocations (Kokkos_HIP_IsXnack.hpp) and gives it ordinary discrete HIPSpace -- so this preset does NOT exercise the unified-memory path the mi300a preset takes. Kokkos < 5.x needs patches/kokkos-gfx1151.patch, applied automatically at configure time.",
+      "displayName": "AMD Strix Halo / RDNA 3.5 (gfx1151)",
+      "description": "Local development APU (Radeon 8050S/8060S). Physically an APU, but Kokkos classifies gfx1151 as UNABLE to access system allocations (Kokkos_HIP_IsXnack.hpp) and gives it ordinary discrete HIPSpace -- so this preset does NOT exercise the unified-memory path the mi300a preset takes.",
       "cacheVariables": {
         "CMAKE_CXX_COMPILER": "hipcc",
         "SPPARKS_KOKKOS_ARCH": "AMD_GFX1151",

@@ -2299,7 +2299,6 @@ dt_fast / dt_slow = 100
 **Existing implementations:**
 - `src/KOKKOS/app_potts_quaternion_kokkos.{h,cpp}` - Base class, quaternion ops
 - `src/KOKKOS/app_additive_ext_temp_texture_kokkos.{h,cpp}` - **Active Kokkos AM app** (all device kernels built; `.disabled` variants are the older double-buffered version)
-- `src/kokkos_double_buffer.h` - Double-buffer framework (parent uses plain Views for phase-state arrays)
 - **SURGE branch CPU reference (post-refactor):**
   - `src/app_additive_texture.{h,cpp}` - `AppAdditiveTexture`, style `additive/texture` (microstructure MC)
   - `src/thermal_manager.{h,cpp}` - `ThermalManager`, all temperature I/O / fast-forward (CPU)

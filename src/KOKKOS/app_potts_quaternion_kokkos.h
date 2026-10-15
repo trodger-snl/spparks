@@ -305,10 +305,20 @@ protected:
       n[1] *= inv_d;
       n[2] *= inv_d;
 
-      // Get reference direction from the quaternion (rotate z-axis)
-      double ref_axis[3] = {0.0, 0.0, 1.0};
-      double current_dir[3];
-      rotate_vector(q, ref_axis, current_dir);
+      // Rotate the <100> axis nearest the target (columns of R(q) are the
+      // sample-frame [100], [010], [001]), sign-corrected to point toward it.
+      // Matches the host rotate_q_towards_u (SURGE 89089f9f).
+      double m[9];
+      to_rotation_matrix(q, m);
+      double best_dot = 0.0;
+      int best_col = 0;
+      for (int col = 0; col < 3; col++) {
+        const double dot = m[col]*n[0] + m[col + 3]*n[1] + m[col + 6]*n[2];
+        if (Kokkos::fabs(dot) > Kokkos::fabs(best_dot)) { best_dot = dot; best_col = col; }
+      }
+      const double sign = (best_dot >= 0.0) ? 1.0 : -1.0;
+      double current_dir[3] = {sign * m[best_col], sign * m[best_col + 3],
+                               sign * m[best_col + 6]};
 
       // Calculate the current misorientation angle
       double dot_product = current_dir[0]*n[0] + current_dir[1]*n[1] + current_dir[2]*n[2];

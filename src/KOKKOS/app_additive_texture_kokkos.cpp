@@ -2344,9 +2344,9 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   if (host_output_imminent) sync_app_data_to_host();
 
   // Optional isotherm-compactness diagnostic on its configured cadence, matching
-  // the CPU app. A no-op unless temperature_smooth + a diag interval are set
-  // (which also force the host temperature path, so host T is current here).
-  if (host_T_stale) sync_temperature_to_host();
+  // the CPU app. A no-op unless temperature_smooth + a diag interval are set,
+  // and temperature_smooth forces the host temperature path, so host T is
+  // never stale when it runs -- no copy-back here.
   thermal->maybe_run_diagnostics(step_count);
 
   // Lazy device->host temperature copy-back: if a device fill left host T (d6)

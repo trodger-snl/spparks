@@ -38,7 +38,7 @@ mpirun -np 1 build-verify/spparks < in.somefile     # -np N for multi-rank
 ```
 
 `src/build_cmake.sh` is the convenience wrapper (`--highfive --kokkos
---kokkos-backend hip --package stitch -m mpi` etc.); the raw `cmake -S src -B`
+--kokkos-backend hip --package stitch --mpi` etc.); the raw `cmake -S src -B`
 form above is what's used day-to-day here. The Makefile build (`make mpi`) also
 exists but the CMake/HighFive path is the supported one for the additive apps.
 

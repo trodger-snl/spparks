@@ -121,14 +121,14 @@ new users.
 </P>
 <PRE>cd src
 ./build_cmake.sh                    # Auto-detect platform
-./build_cmake.sh -m mpi             # MPI build
-./build_cmake.sh -m mac_arm         # macOS Apple Silicon 
+./build_cmake.sh --mpi              # MPI build
+./build_cmake.sh --no-mpi           # macOS Apple Silicon 
 </PRE>
 <P>Or use CMake directly:
 </P>
 <PRE>cd src
 mkdir build && cd build
-cmake -DSPPARKS_MACHINE=mpi ..
+cmake ..
 cmake --build . -j12 
 </PRE>
 <P><B><I>CMake Configuration Options:</I></B>
@@ -148,8 +148,7 @@ cmake --build . -j12
 </P>
 <PRE>-DCMAKE_BUILD_TYPE=Release          # Optimized build (default)
 -DCMAKE_BUILD_TYPE=Debug            # Debug build with symbols
--DBUILD_SHARED_LIBS=ON              # Build shared library
--DSPPARKS_BUILD_LIB=ON              # Build library for coupling 
+-DBUILD_SHARED_LIBS=ON              # Build bundled libraries shared 
 </PRE>
 <P>Performance Options:
 </P>
@@ -159,17 +158,8 @@ cmake --build . -j12
 <P>WARNING: Native optimization (-march=native) produces non-portable
 binaries. Disable for cluster builds or binary distribution.
 </P>
-<P>Machine Presets:
+<P>Machine presets live in src/CMakePresets.json (<I>cmake --list-presets</I>).
 </P>
-<P>CMake includes machine-specific presets similar to Makefile.machine files:
-</P>
-<PRE>-DSPPARKS_MACHINE=mac               # macOS, no MPI
--DSPPARKS_MACHINE=mac_mpi           # macOS with MPI
--DSPPARKS_MACHINE=mac_arm           # Apple Silicon with MPI, HDF5, JPEG
--DSPPARKS_MACHINE=linux             # Generic Linux
--DSPPARKS_MACHINE=mpi               # Generic MPI build
--DSPPARKS_MACHINE=serial            # Serial (no MPI) 
-</PRE>
 <P>Package Management:
 </P>
 <P>Install optional packages via CMake:
@@ -251,7 +241,7 @@ spack install                       # Installs all dependencies
 <P>Build SPPARKS with Spack dependencies:
 </P>
 <PRE>cd src
-./build_cmake.sh -m mpi             # CMake finds Spack libs automatically 
+./build_cmake.sh --mpi              # CMake finds Spack libs automatically 
 </PRE>
 <P><B><I>Available Spack Variants:</I></B>
 </P>

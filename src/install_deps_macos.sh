@@ -37,10 +37,10 @@ brew install zlib
 echo ""
 echo "=== Installation Complete ==="
 echo "You can now build SPPARKS with:"
-echo "  ./build_cmake.sh -m mac_arm --hdf5"
+echo "  ./build_cmake.sh --no-mpi --hdf5"
 echo ""
 echo "Or for a full-featured build:"
-echo "  ./build_cmake.sh -m mac_arm --hdf5 --package stitch"
+echo "  ./build_cmake.sh --no-mpi --hdf5 --package stitch"
 echo ""
 
 # Test that key libraries can be found

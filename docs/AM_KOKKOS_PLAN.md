@@ -189,7 +189,7 @@ Executable links and both apps run.
 
 **Validation order:** Rosenthal temperature source first, then HDF5.
 
-Build/test for all of the above: `./build_cmake.sh --highfive --package stitch -m mpi`
+Build/test for all of the above: `./build_cmake.sh --highfive --package stitch`
 under the `spparks-dev` spack env (`[[feedback_spack_build]]`).
 
 ---
@@ -1986,7 +1986,7 @@ struct AppAdditiveExtTempTextureKokkos::NucleationFlipFunctor { /* ... */ };
 1. **Building with KOKKOS package:**
    ```bash
    cd src
-   ./build_cmake.sh --package kokkos --package stitch --hdf5 -m mpi
+   ./build_cmake.sh --package kokkos --package stitch --hdf5 --mpi
    ```
 
 2. **Input file syntax:**

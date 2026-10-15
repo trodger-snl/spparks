@@ -116,14 +116,14 @@ From the src directory, use the build_cmake.sh convenience script:
 
 cd src
 ./build_cmake.sh                    # Auto-detect platform
-./build_cmake.sh -m mpi             # MPI build
-./build_cmake.sh -m mac_arm         # macOS Apple Silicon :pre
+./build_cmake.sh --mpi              # MPI build
+./build_cmake.sh --no-mpi           # macOS Apple Silicon :pre
 
 Or use CMake directly:
 
 cd src
 mkdir build && cd build
-cmake -DSPPARKS_MACHINE=mpi ..
+cmake ..
 cmake --build . -j12 :pre
 
 [{CMake Configuration Options:}]
@@ -143,8 +143,7 @@ Build Type Options:
 
 -DCMAKE_BUILD_TYPE=Release          # Optimized build (default)
 -DCMAKE_BUILD_TYPE=Debug            # Debug build with symbols
--DBUILD_SHARED_LIBS=ON              # Build shared library
--DSPPARKS_BUILD_LIB=ON              # Build library for coupling :pre
+-DBUILD_SHARED_LIBS=ON              # Build bundled libraries shared :pre
 
 Performance Options:
 
@@ -154,16 +153,7 @@ Performance Options:
 WARNING: Native optimization (-march=native) produces non-portable
 binaries. Disable for cluster builds or binary distribution.
 
-Machine Presets:
-
-CMake includes machine-specific presets similar to Makefile.machine files:
-
--DSPPARKS_MACHINE=mac               # macOS, no MPI
--DSPPARKS_MACHINE=mac_mpi           # macOS with MPI
--DSPPARKS_MACHINE=mac_arm           # Apple Silicon with MPI, HDF5, JPEG
--DSPPARKS_MACHINE=linux             # Generic Linux
--DSPPARKS_MACHINE=mpi               # Generic MPI build
--DSPPARKS_MACHINE=serial            # Serial (no MPI) :pre
+Machine presets live in src/CMakePresets.json ("cmake --list-presets"). :pre
 
 Package Management:
 
@@ -251,7 +241,7 @@ spack install                       # Installs all dependencies :pre
 Build SPPARKS with Spack dependencies:
 
 cd src
-./build_cmake.sh -m mpi             # CMake finds Spack libs automatically :pre
+./build_cmake.sh --mpi              # CMake finds Spack libs automatically :pre
 
 [{Available Spack Variants:}]
 

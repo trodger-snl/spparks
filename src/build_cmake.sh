@@ -7,13 +7,11 @@ set -e
 
 # Default values
 BUILD_TYPE="Release"
-MACHINE=""
 BUILD_DIR="build"
 INSTALL_PREFIX=""
 ENABLE_MPI="AUTO"
 ENABLE_PACKAGES=""
 SHARED_LIBS="OFF"
-BUILD_LIB="OFF"
 ENABLE_HDF5="AUTO"
 ENABLE_HIGHFIVE="AUTO"
 ENABLE_JPEG="AUTO"
@@ -23,7 +21,6 @@ KOKKOS_ARCH=""
 EXTRA_CMAKE_ARGS=()
 CLEAN=false
 VERBOSE=false
-DEV_MODE=false
 PARALLEL_JOBS="AUTO"
 AGGRESSIVE_OPT="AUTO"
 NATIVE_OPT="AUTO"
@@ -36,7 +33,6 @@ SPPARKS CMake Build Script
 Usage: $0 [options]
 
 Options:
-    -m, --machine MACHINE       Machine configuration (mac, linux, mpi, serial, etc.)
     -b, --build-type TYPE       Build type (Release, Debug, RelWithDebInfo)
     -d, --build-dir DIR         Build directory (default: build)
     -p, --prefix DIR            Installation prefix
@@ -58,8 +54,7 @@ Options:
                                   AMD_GFX1151 for Strix Halo, AMPERE80)
     -DVAR=VALUE                 Passed straight through to cmake (e.g.
                                   -DHDF5_ROOT=..., -DMPI_C_COMPILER=...)
-    --shared                    Build shared libraries
-    --lib                       Build as library only
+    --shared                    Build bundled libraries (Kokkos, HighFive) shared
     --package PKG               Enable package (can be used multiple times)
                                   Available: stitch, kokkos (kokkos may not be available on all branches)
     -j, --jobs N                Number of parallel build jobs (default: auto-detect)
@@ -68,37 +63,13 @@ Options:
     --native-opt                Enable native CPU optimizations (-march=native)
     --no-native-opt             Disable native CPU optimizations
     --clean                     Clean build directory before building
-    --dev-mode                  Development mode: use symlinks instead of copies (Unix only)
     -v, --verbose               Verbose output
     -h, --help                  Show this help
 
-Package Management:
-    IMPORTANT: Package files live in two locations:
-      • src/PACKAGE/  (reference version, tracked in git) ← EDIT HERE!
-      • src/          (installed copy, ignored by git)  ← DON'T EDIT!
-
-    GOLDEN RULE: Always edit src/PACKAGE/ files, never src/ installed copies!
-    Changes to installed files will be LOST on package reinstall.
-
-    Check package sync status:
-      cmake --build build --target package-status   # Show which packages differ
-      cmake --build build --target package-diff     # Show detailed differences
-
-Machine configurations:
-    mac        macOS, no MPI, c++
-    mac_mpi    macOS with MPI, mpicxx
-    mac_arm    Apple Silicon Mac, no MPI
-    linux      Generic Linux, g++
-    mpi        Generic MPI, mpicxx
-    serial     Serial build, g++
-    debug      Debug build, g++
-    mpi_debug  MPI Debug build, mpicxx
-
 Examples:
     Basic builds:
-      $0 -m mac                           # Build for macOS (auto-optimized)
-      $0 -m mpi --package stitch          # Build with MPI and STITCH package
-      $0 -m mac_arm --hdf5                # Build for Apple Silicon with HDF5+JPEG
+      $0 --mpi --package stitch           # Build with MPI and STITCH package
+      $0 --no-mpi                         # Serial build
       $0 --no-jpeg -j 8                   # Build without JPEG using 8 parallel jobs
       $0 --clean -b Debug                 # Clean build in debug mode
 
@@ -108,19 +79,15 @@ Examples:
       $0 --kokkos --kokkos-backend hip    # Build with Kokkos HIP (AMD GPUs)
 
     Additive (additive/texture, additive/texture/kk):
-      $0 -m mpi --highfive                # with HDF5 temperature sources (parallel HDF5)
-      $0 -m mpi --no-highfive --no-hdf5   # Rosenthal/Moser only, no HDF5 dependency
+      $0 --mpi --highfive                 # with HDF5 temperature sources (parallel HDF5)
+      $0 --mpi --no-highfive --no-hdf5    # Rosenthal/Moser only, no HDF5 dependency
 
     Performance tuning:
       $0 --aggressive-opt --native-opt    # Maximum performance (O3, LTO, native CPU)
       $0 --no-aggressive-opt              # Conservative optimization (O2, no LTO)
 
-    Library builds:
-      $0 --lib --shared                   # Build shared library
-
-    Package management:
+    Packages:
       $0 --package stitch                 # Enable STITCH package
-      cmake --build build --target package-status  # Check if installed files match source
 
 EOF
 }
@@ -128,10 +95,6 @@ EOF
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        -m|--machine)
-            MACHINE="$2"
-            shift 2
-            ;;
         -b|--build-type)
             BUILD_TYPE="$2"
             shift 2
@@ -196,10 +159,6 @@ while [[ $# -gt 0 ]]; do
             SHARED_LIBS="ON"
             shift
             ;;
-        --lib)
-            BUILD_LIB="ON"
-            shift
-            ;;
         --package)
             ENABLE_PACKAGES="$ENABLE_PACKAGES $2"
             shift 2
@@ -226,10 +185,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --clean)
             CLEAN=true
-            shift
-            ;;
-        --dev-mode)
-            DEV_MODE=true
             shift
             ;;
         -v|--verbose)
@@ -264,7 +219,6 @@ echo "=== SPPARKS CMake Build ==="
 echo "Source directory: $SOURCE_DIR"
 echo "Build directory: $BUILD_DIR"
 echo "Build type: $BUILD_TYPE"
-echo "Machine: ${MACHINE:-auto-detect}"
 
 # Clean build directory if requested
 if [ "$CLEAN" = true ]; then
@@ -280,11 +234,6 @@ cd "$BUILD_DIR"
 CMAKE_ARGS=()
 CMAKE_ARGS+=("-DCMAKE_BUILD_TYPE=$BUILD_TYPE")
 CMAKE_ARGS+=("-DBUILD_SHARED_LIBS=$SHARED_LIBS")
-CMAKE_ARGS+=("-DSPPARKS_BUILD_LIB=$BUILD_LIB")
-
-if [ -n "$MACHINE" ]; then
-    CMAKE_ARGS+=("-DSPPARKS_MACHINE=$MACHINE")
-fi
 
 if [ -n "$INSTALL_PREFIX" ]; then
     CMAKE_ARGS+=("-DCMAKE_INSTALL_PREFIX=$INSTALL_PREFIX")
@@ -355,12 +304,6 @@ for PKG in $ENABLE_PACKAGES; do
     CMAKE_ARGS+=("-DSPPARKS_PACKAGE_$PKG_UPPER=ON")
 done
 
-# Development mode
-if [ "$DEV_MODE" = true ]; then
-    CMAKE_ARGS+=("-DSPPARKS_DEV_MODE=ON")
-    echo "Development mode enabled: Package files will be symlinked instead of copied"
-fi
-
 # Run CMake configuration
 echo ""
 echo "Running CMake configuration..."
@@ -423,9 +366,6 @@ cmake --build . "${MAKE_ARGS[@]}"
 echo ""
 echo "=== Build Complete ==="
 echo "Executable: $BUILD_DIR/spparks"
-if [ "$BUILD_LIB" = "ON" ]; then
-    echo "Library: $BUILD_DIR/libspparks.*"
-fi
 echo ""
 echo "To install: cmake --install $BUILD_DIR"
 echo "To run tests: ctest"

@@ -173,7 +173,25 @@ IN718 as read (large grains, inclined Σ3 lamellae):
 | Grow | 0.605 | 1.338 | 0.254 | 0.101 | 0.244 |
 | GrowD | 0.757 | 1.333 | 0.488 | 0.298 | 0.288 |
 
-(The IN718 cases with the 125-cell threshold were still running when this was written.)
+IN718, grains of 125+ cells (small grains merged into their neighbours in truth and
+fills alike):
+
+| Fill | k | density | ESD μ | b/a KS | c/a KS | axes KS |
+|---|---|---|---|---|---|---|
+| Blend | 5 | 0.146 | 0.147 | 0.122 | 0.066 | 0.080 |
+| BlendP | 5 | **0.044** | 0.122 | 0.113 | 0.066 | **0.073** |
+| BlendD | 5 | 0.059 | 0.175 | 0.134 | 0.080 | 0.093 |
+| Grow | 5 | 0.061 | **0.115** | **0.099** | 0.068 | 0.089 |
+| GrowD | 5 | 0.537 | 0.689 | 0.515 | 0.410 | 0.211 |
+| Blend | 15 | 0.321 | 0.225 | 0.156 | **0.086** | 0.225 |
+| BlendP | 15 | **0.041** | **0.157** | 0.144 | 0.203 | 0.122 |
+| BlendD | 15 | 0.065 | 0.165 | 0.157 | 0.190 | **0.121** |
+| GrowD | 15 | 0.732 | 0.668 | 0.326 | 0.358 | 0.360 |
+
+On large twinned grains, relaxing a shape fill helps either way: density error falls
+from 0.15–0.32 to about 0.05. The disorientation energy is a little behind labels here.
+Its random start (GrowD) is the worst fill by far, because at these settings it neither
+coarsens enough nor stops (400-sweep cap).
 
 What the runs show:
 

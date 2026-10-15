@@ -19,6 +19,7 @@ function(configure_conditional_sources)
         list(APPEND SPPARKS_SOURCES
             app_additive_texture.cpp
             thermal_manager.cpp
+            additive_params.cpp
             temperature_source.cpp
             temperature_source_rosenthal.cpp
             temperature_source_moser.cpp

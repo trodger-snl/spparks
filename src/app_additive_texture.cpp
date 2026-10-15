@@ -197,7 +197,6 @@ AppAdditiveTexture::~AppAdditiveTexture()
   if (nucleation_flags) delete[] nucleation_flags;
   if (nucleation_temps) delete[] nucleation_temps;
   if (nucleation_sizes) delete[] nucleation_sizes;
-  if (solid_front_coeffs) delete[] solid_front_coeffs;
   if (ghost_iindices) delete [] ghost_iindices;
   if (ghost_dindices) delete [] ghost_dindices;
 }
@@ -234,199 +233,9 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
   // Keep the thermal snapshot current before any thermal command handler
   // (e.g. laser_path reads host->time/dx when building the scan path).
   refresh_thermal_host();
-  if (strcmp(command,"liquidus") == 0) {
-    if (narg != 1) error->all(FLERR,"Illegal liquidus command");
-    tl = atof(arg[0]);
-    if (tl <= 0) 
-      error->all(FLERR,"Illegal liquidus temperature");
-  }
-  else if (strcmp(command,"solidus") == 0) {
-    if (narg != 1) error->all(FLERR,"Illegal solidus command");
-    ts = atof(arg[0]);
-    if (ts <= 0) 
-      error->all(FLERR,"Illegal solidus temperature");
-  }
-  else if (strcmp(command,"nucleation_density") == 0) {
-    if (narg != 1) error->all(FLERR,"Illegal nucleation density command");
-    no = atof(arg[0]);
-    if (no < 0) 
-      error->all(FLERR,"Illegal nucleation density");
-  }
-  else if (strcmp(command,"critical_undercooling") == 0) {
-    if (narg != 1) error->all(FLERR,"Illegal critical_undercooling command");
-    tc = atof(arg[0]);
-    if (tc < 0) 
-      error->all(FLERR,"Illegal critical undercooling");
-  }
-  else if (strcmp(command,"undercooling_deviation") == 0) {
-    if (narg != 1) error->all(FLERR,"Illegal undercooling_deviation command");
-    tsig = atof(arg[0]);
-    if (tsig < 0) 
-      error->all(FLERR,"Illegal undercooling standard deviation");
-  }
-  else if (strcmp(command,"mean_nuclei_volume") == 0) {
-    if (narg !=1) error->all(FLERR,"Illegal mean_nuclei_volume command");
-    size_norm = atof(arg[0]);
-    if (size_norm < 0) 
-      error->all(FLERR,"Illegal mean nuclei volume");
-  }
-  else if (strcmp(command,"nuclei_volume_deviation") == 0) {
-    if (narg != 1) error->all(FLERR,"Illegal nuclei_volume_deviation command");
-    size_sig = atof(arg[0]);
-    if (size_sig < 0) 
-      error->all(FLERR,"Illegal nuclei volume standard deviation");
-  }
-  else if (strcmp(command,"solid_front_vel") == 0) {
-    delete [] solid_front_coeffs;
-    if (narg < 1) error->all(FLERR,"Illegal solid_front_vel command");
-    int nVel;
-    nVel = atoi(arg[0]);
-    if (nVel <= 0) {
-      error->all(FLERR,"Illegal solidification front velocity specification");
-    }
-    solid_front_coeffs = new double [nVel];
-    int j = 0;
-    for(int i = 1; i < nVel + 1; i++) {
-        solid_front_coeffs[j] = atof(arg[i]);
-        j++;
-    }
-  }
-  else if (strcmp(command,"texture_parameters") == 0) {
-     if (narg == 3)
-       error->all(FLERR,
-         "texture_parameters now takes 2 arguments (c2 c3), not 3. "
-         "The baseline coefficient c1 has been fixed at 1.0 because "
-         "only mobility ratios affect selection. To migrate an old "
-         "input file: texture_parameters c2/c1 c3 (divide old c2 by "
-         "old c1, drop old c1)");
-     if (narg != 2) error->all(FLERR,"Illegal texture_parameters command");
+  if (parse_command(command, narg, arg, error, screen, domain->me, *thermal)) return;
 
-     // c1 is fixed at 1.0 by normalization convention. The roulette-wheel
-     // selection in site_event_solidification is invariant under uniform
-     // scaling of mobility (only ratios matter), so c1 is mathematically
-     // non-identifiable. Hardcoding it here removes the degenerate
-     // parameter and makes input files unambiguous.
-     c1 = 1.0;
-     c2 = atof(arg[0]);
-     c3 = atof(arg[1]);
-
-     // -------- Validation --------
-     // Mobility model:  mob(theta) = 1 + c2 * cos(c3 * theta)
-     // theta is the misorientation angle between the grain's <100> family
-     // and the local thermal gradient, folded into the cubic fundamental
-     // zone by get_cosine_of_minumum_angle_between_q_and_u.
-     const double theta_max = std::acos(1.0 / std::sqrt(3.0));  // ~0.9553 rad
-
-     // Rule 1: signs.  c2 < 0 reverses the physical meaning (misaligned
-     // grains preferred), which is unphysical for cubic solidification.
-     // c3 < 0 is mathematically redundant since cosine is even.
-     if (c2 < 0.0) {
-       error->all(FLERR,
-         "texture_parameters: c2 must be >= 0 (negative amplitude "
-         "would mean misaligned grains grow faster than aligned ones, "
-         "which is unphysical for cubic solidification)");
-     }
-     if (c3 < 0.0) {
-       error->all(FLERR,
-         "texture_parameters: c3 must be >= 0");
-     }
-
-     // Rule 2: monotonicity of mob(theta) on [0, theta_max].
-     //   d/dtheta mob = -c2 * c3 * sin(c3 * theta) <= 0
-     //   requires c3 * theta_max <= pi (with c2 >= 0 from Rule 1).
-     if (c3 * theta_max > MY_PI + 1.0e-12) {
-       char msg[256];
-       snprintf(msg, sizeof(msg),
-         "texture_parameters: c3 = %g exceeds monotonicity limit "
-         "pi/theta_max ~ %g; mobility would be non-monotonic in "
-         "misorientation angle",
-         c3, MY_PI / theta_max);
-       error->all(FLERR, msg);
-     }
-
-     // Rule 3: positivity of mobility at every angle in [0, theta_max].
-     //   With c2 >= 0 and c3 * theta_max <= pi, the binding angle is
-     //   theta = theta_max where cos is most negative on the interval.
-     // A negative minimum mobility is allowed: mobility_of_orientation clamps
-     // it to a zero-weight candidate (strong selection), matching the kk app.
-     double mob_min = 1.0 + c2 * std::cos(c3 * theta_max);
-     if (mob_min < 0.0 && screen && domain->me == 0)
-       fprintf(screen, "texture_parameters: minimum mobility %g < 0 at theta_max = %g rad; "
-               "such candidates get zero weight (strong selection)\n", mob_min, theta_max);
-
-     // -------- Soft warning --------
-     if (c2 == 0.0 && screen) {
-       fprintf(screen,
-         "WARNING: texture_parameters c2 = 0; mobility has no "
-         "orientation dependence\n");
-     }
-  }
-  else if (strcmp(command,"misorientation_diffusion") == 0) {
-     // misorientation_diffusion <D_deg2_per_m> <thresh_deg> [alpha]
-     if (narg != 2 && narg != 3) error->all(FLERR,"Illegal misorientation_diffusion command");
-     double D_deg2 = atof(arg[0]);
-     mis_diffusion = D_deg2 * (MY_PI / 180.0) * (MY_PI / 180.0);
-     mis_thresh = atof(arg[1]) * MY_PI / 180.0;
-     if (mis_thresh < 0)
-       error->all(FLERR,"Illegal misorientation_diffusion threshold: must be >= 0");
-     misorient_alpha = (narg == 3) ? atof(arg[2]) : 0.0;
-     if (misorient_alpha < 0)
-       error->all(FLERR,"Illegal misorientation_diffusion alpha: must be >= 0 (0 = constant D)");
-     if (domain->me == 0 && screen)
-       fprintf(screen,"misorientation_diffusion D = %g deg^2/m, thresh = %g deg, alpha = %g\n",
-               D_deg2, atof(arg[1]), misorient_alpha);
-  }
-  else if (strcmp(command,"misorientation_grain_walk") == 0) {
-     // misorientation_grain_walk <D_deg2_per_m>: coherent rotation shared by
-     // every voxel of a grain per lattice level (see grain_walk.h); 0 = off.
-     // misorientation_grain_walk <D_deg2_per_m> [rho] [path|height]: rho in [0,1)
-     // correlates the rotation between levels (persistent bending, L_c ~ dx/(1-rho));
-     // the level index is the inheritance path length in lattice units (path,
-     // default, per hop) or the lattice z level (height).
-     if (narg < 1 || narg > 3) error->all(FLERR,"Illegal misorientation_grain_walk command");
-     if (narg == 3) {
-       if (strcmp(arg[2],"path") == 0) grain_walk_path = 1;
-       else if (strcmp(arg[2],"height") == 0) grain_walk_path = 0;
-       else error->all(FLERR,"misorientation_grain_walk: mode must be path or height");
-     }
-     grain_walk_D = atof(arg[0]) * (MY_PI / 180.0) * (MY_PI / 180.0);
-     if (grain_walk_D < 0) error->all(FLERR,"Illegal misorientation_grain_walk D: must be >= 0");
-     grain_walk_rho = (narg >= 2) ? atof(arg[1]) : 0.0;
-     if (grain_walk_rho < 0.0 || grain_walk_rho >= 1.0)
-       error->all(FLERR,"Illegal misorientation_grain_walk rho: must be in [0,1)");
-     if (domain->me == 0 && screen)
-       fprintf(screen,"misorientation_grain_walk D = %g deg^2/m, rho = %g, %s\n", atof(arg[0]), grain_walk_rho,
-               grain_walk_path ? "path" : "height");
-  }
-  else if (strcmp(command,"misorientation_function") == 0 ||
-           strcmp(command,"misorientation_cap") == 0) {
-     error->all(FLERR,"misorientation_function/misorientation_cap were replaced by "
-                "'misorientation_diffusion <D_deg2_per_m> <thresh_deg> [alpha]' "
-                "(docs/MISORIENTATION_DIFFUSION_PLAN.md)");
-  }
-  else if (strcmp(command,"misorientation_target") == 0) {
-     if (narg != 1) error->all(FLERR,"Illegal misorientation_target command");
-     if (strcmp(arg[0],"random") == 0) {
-       misorientation_target_mode = MISORI_TARGET_RANDOM;
-     } else if (strcmp(arg[0],"random_rotation") == 0) {
-       misorientation_target_mode = MISORI_TARGET_RANDOM_ROTATION;
-     } else if (strcmp(arg[0],"gradient") == 0) {
-       error->all(FLERR,"misorientation_target gradient was removed (cells switch <100> "
-                  "variants at fusion lines rather than rotating toward the heat flux); "
-                  "use random_rotation");
-     } else {
-       error->all(FLERR,"Illegal misorientation_target value: use random_rotation or random");
-     }
-  }
-  else if (strcmp(command,"nucleation_misorientation_target") == 0) {
-     if (narg != 1) error->all(FLERR,"Illegal nucleation_misorientation_target command");
-     if (strcmp(arg[0],"on") == 0) nucleation_misorient_enabled = true;
-     else if (strcmp(arg[0],"off") == 0 || strcmp(arg[0],"none") == 0)
-       nucleation_misorient_enabled = false;
-     else error->all(FLERR,"Illegal nucleation_misorientation_target value: use on, off, or none "
-                     "(shells use the misorientation_target axis rule)");
-  }
-  else if (strcmp(command,"nucleation_mode") == 0) {
+  if (strcmp(command,"nucleation_mode") == 0) {
     if (narg != 1) error->all(FLERR,"Illegal nucleation_mode command");
     if (strcmp(arg[0],"threshold") == 0) {
       nucleation_mode = NUCLEATION_THRESHOLD;
@@ -436,16 +245,6 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
       error->all(FLERR,"Illegal nucleation_mode value: use threshold or continuous");
     }
   }
-  else if (strcmp(command,"fast_forward_search_window") == 0) {
-     if (narg != 1) error->all(FLERR,"Illegal fast_forward_search_window command");
-     thermal->set_fast_forward_search_window(atof(arg[0]));
-  }
-  else if (strcmp(command,"temperature_optimization") == 0) {
-     // Usage: temperature_optimization <option> <on|off>
-     // Options: spatial_grid, element_cache, nodal_precompute
-     thermal->optimization_cmd(narg, arg);
-  }
-
   // Void generation commands
   else if (strcmp(command,"void_density") == 0) {
     if (narg != 1) error->all(FLERR,"Illegal void_density command");
@@ -483,31 +282,6 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
       error->all(FLERR,"Illegal void_size_distribution: max must be > min");
   }
 
-  // Modular temperature source commands (delegated to the ThermalManager)
-  else if (strcmp(command,"setup_temperature_source") == 0) {
-    thermal->setup_cmd(narg, arg);
-  }
-  else if (strcmp(command,"laser_path") == 0) {
-    // The scan is anchored at the CURRENT sim time (so a `reset_time` issued
-    // before this command shifts the pass schedule); the ThermalHost snapshot
-    // is otherwise only refreshed at init and per step.
-    refresh_thermal_host();
-    thermal->laser_path_cmd(narg, arg);
-  }
-  else if (strcmp(command,"laser_fluctuations") == 0) {
-    thermal->laser_fluctuations_cmd(narg, arg);
-  }
-
-  else if (strcmp(command,"temperature_smooth") == 0) {
-    // Solidification-band Gaussian smoothing of T[]. See ThermalManager.
-    thermal->smooth_cmd(narg, arg);
-  }
-
-  else if (strcmp(command,"nodal_smooth") == 0) {
-    // Mesh-Laplacian smoothing forwarded to the temperature source.
-    thermal->nodal_smooth_cmd(narg, arg);
-  }
-
   else if (strcmp(command,"single_voxel_cleanup") == 0) {
     // Usage: single_voxel_cleanup on|off
     // Post-smoothing pass that flips 1-voxel grains into the
@@ -520,49 +294,6 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
     if (domain->me == 0)
       fprintf(screen,"Single-voxel grain cleanup %s\n",
               single_voxel_cleanup_enabled ? "enabled" : "disabled");
-  }
-
-  else if (strcmp(command,"smooth_greedy_multiproposal") == 0) {
-    // Usage: smooth_greedy_multiproposal on|off
-    // When on, smooth_site() picks the energy-minimizing distinct
-    // neighbor spin instead of testing one random proposal per pass.
-    // Each nrefine pass becomes a steepest-descent step. Default off
-    // (preserves the historical single-random-proposal behavior).
-    if (narg != 1)
-      error->all(FLERR,"Illegal smooth_greedy_multiproposal command");
-    if (strcmp(arg[0],"on") == 0) smooth_greedy_multiproposal_enabled = true;
-    else if (strcmp(arg[0],"off") == 0) smooth_greedy_multiproposal_enabled = false;
-    else error->all(FLERR,"smooth_greedy_multiproposal: argument must be on or off");
-    if (domain->me == 0)
-      fprintf(screen,"smooth_greedy_multiproposal %s\n",
-              smooth_greedy_multiproposal_enabled ? "enabled" : "disabled");
-  }
-  else if (strcmp(command,"smooth_orientation") == 0) {
-    // Usage: smooth_orientation average|copy
-    if (narg != 1) error->all(FLERR,"Illegal smooth_orientation command");
-    if (strcmp(arg[0],"copy") == 0) smooth_orientation_copy = true;
-    else if (strcmp(arg[0],"average") == 0) smooth_orientation_copy = false;
-    else error->all(FLERR,"smooth_orientation: argument must be average or copy");
-    if (domain->me == 0)
-      fprintf(screen,"smooth_orientation %s\n", smooth_orientation_copy ? "copy" : "average");
-  }
-
-  else if (strcmp(command,"nuclei_smooth") == 0) {
-    // Usage: nuclei_smooth on|off
-    // When on, nucleation events (both the seed and the captured shell)
-    // initialize solid_d to -1 instead of the lock-out sentinels
-    // (-nrefine-2 / -nrefine-3), making nucleated sites eligible for
-    // smooth_site() and the greedy multiproposal variant just like
-    // epitaxially solidified sites. Default off preserves the historical
-    // behavior where nuclei skip smoothing entirely.
-    if (narg != 1)
-      error->all(FLERR,"Illegal nuclei_smooth command");
-    if (strcmp(arg[0],"on") == 0) nuclei_smooth_enabled = true;
-    else if (strcmp(arg[0],"off") == 0) nuclei_smooth_enabled = false;
-    else error->all(FLERR,"nuclei_smooth: argument must be on or off");
-    if (domain->me == 0)
-      fprintf(screen,"nuclei_smooth %s\n",
-              nuclei_smooth_enabled ? "enabled" : "disabled");
   }
 
   else error->all(FLERR,"Unrecognized command");

@@ -27,6 +27,7 @@ AppStyle(additive/texture/kk,AppAdditiveTextureKokkos)
 #include "temperature_source.h"
 #include "thermal_manager.h"
 #include "thermal_host.h"
+#include "additive_params.h"
 #include "rosenthal_device.h"
 #include "moser_device.h"
 #include "hdf5_device.h"
@@ -37,7 +38,7 @@ AppStyle(additive/texture/kk,AppAdditiveTextureKokkos)
 
 namespace SPPARKS_NS {
 
-class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
+class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public AdditiveParams {
  public:
   AppAdditiveTextureKokkos(class SPPARKS *, int, char **);
   virtual ~AppAdditiveTextureKokkos();
@@ -277,50 +278,13 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // Physical parameters (same as CPU version)
   double dt;
   double dx;
-  double tl;  // Liquidus temperature
-  double ts;  // Solidus temperature
   double t_room;
 
   // Nucleation parameters
   int nrefine;
-  double no;
-  double tc;
-  double tsig;
-  double size_norm;
-  double size_sig;
-  double *solid_front_coeffs;
-  int solid_front_length;
 
-  // Boundary-smoothing proposal mode. When true, smoothing_kernel_efficient
-  // does the CPU smooth_greedy_multiproposal steepest descent (evaluate every
-  // distinct neighbor spin, pick the bond-energy minimizer); when false, a
-  // random single proposal. Matches AppAdditiveTexture::smooth_site.
-  bool smooth_greedy_multiproposal_enabled = false;
-  // `smooth_orientation copy`: accepted flip takes one random neighbour's
-  // quaternion from the new grain instead of the sign-aligned average.
-  bool smooth_orientation_copy = false;
-
-  // `nuclei_smooth on|off` (mirrors the CPU app). OFF (default): a nucleated
-  // site and the neighbours its particle flipper claims land on a TERMINAL
-  // solid_d, outside the smoothing window (solid_d < 0 && solid_d > -nrefine-1),
-  // so nuclei are never smoothed. ON: they land on solid_d = -1, i.e. INSIDE
-  // that window, so they get the ordinary smoothing pass like epitaxially
-  // solidified sites.
-  bool nuclei_smooth_enabled = false;
-
-  // Texture model parameters
-  double c1, c2, c3;
-  // Misorientation random walk (`misorientation_diffusion <D> <thresh> [alpha]`),
-  // mirrors AppAdditiveTexture. mis_diffusion: D in rad^2/m (input deg^2/m);
-  // <= 0 disables rotation. misorient_alpha > 0: D_eff = D * g(Tcool/(tl-ts))^2,
-  // g(x) = (exp(alpha x)-1)/(exp(alpha)-1); 0 = constant D. mis_thresh (rad):
-  // a single step at or above it starts a new grain. NB the new-grain test
-  // here uses the direct quaternion angle, the CPU app the symmetry-reduced
-  // disorientation.
-  double mis_diffusion;
-  double grain_walk_D = 0.0;   // misorientation_grain_walk, rad^2/m (grain_walk.h)
-  double grain_walk_rho = 0.0; // axis persistence per level (grain_walk.h)
-  int grain_walk_path = 1;     // 1: level index = path length (per hop), 0: lattice z level
+  // misorientation_diffusion: the new-grain test here uses the direct
+  // quaternion angle, the CPU app the symmetry-reduced disorientation.
   // Device cache of the persistent (rho > 0) grain-walk recurrence: rotation
   // vector per (compact grain id, level), filled lazily and incrementally by
   // the capture kernels (identical values on concurrent fills, so the races
@@ -333,24 +297,6 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   Kokkos::View<int*> d_gw_nready;     // per gid: levels 0..nready-1 are in the table
   Kokkos::View<double*[3]> d_gw_tab;  // gid*maxlev + k -> rotation vector
   double t_cool_max;   // tl - ts, set in init_app (was a hardcoded 100 K)
-  double mis_thresh;
-  double misorient_alpha;
-
-  // Rotation-axis choice (`misorientation_target`), mirrors AppAdditiveTexture:
-  // random_rotation (default) = uniformly random axis, the isotropic walk D is
-  // calibrated for; random = nearest <100> rotated toward a random direction.
-  // The gradient target was removed (cells switch <100> variants at fusion
-  // lines rather than rotating toward the heat flux -- Lamb et al. 2026).
-  enum MisoriTargetMode {
-    MISORI_TARGET_RANDOM = 1,
-    MISORI_TARGET_RANDOM_ROTATION = 2
-  };
-  int misorientation_target_mode = MISORI_TARGET_RANDOM_ROTATION;
-
-  // Nucleated shell sites (claimed in particle_flipper_kernel) take one walk
-  // step of sqrt(D_eff * distance_from_seed) relative to the seed
-  // orientation. `nucleation_misorientation_target off|none` disables.
-  bool nucleation_misorient_enabled = true;
 
   // Per-hop rotation angle of the walk: sqrt(D_eff * hop_m). The sqrt(hop)
   // scaling keeps RMS^2 = D * distance independent of lattice spacing.

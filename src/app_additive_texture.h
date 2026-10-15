@@ -25,6 +25,7 @@ AppStyle(additive_temperature_texture,AppAdditiveTextureDeprecated)
 
 #include "app_potts_quaternion.h"
 #include "thermal_host.h"
+#include "additive_params.h"
 #include <stdlib.h>
 #include <unordered_map>
 #include <vector>
@@ -35,22 +36,8 @@ namespace SPPARKS_NS {
 
 class ThermalManager;
 
-class AppAdditiveTexture : public AppPottsQuaternion {
+class AppAdditiveTexture : public AppPottsQuaternion, public AdditiveParams {
  public:
-  // Rotation-axis choice for the per-hop misorientation step. random_rotation
-  // (default) rotates about a uniformly random axis -- the isotropic random
-  // walk the diffusion coefficient is calibrated for. random rotates the
-  // nearest <100> toward a random direction (axis confined perpendicular to
-  // that <100>; still diffusive, with a geometric factor on D). The former
-  // gradient target was removed: 3D EBSD (Lamb et al. 2026) shows cells keep
-  // their lattice and switch <100> growth variants at fusion lines rather
-  // than rotating toward the heat flux; gradient dependence lives in the
-  // mobility (melt_misorientation), not in the rotation.
-  enum MisorientationTargetMode {
-    MISORI_TARGET_RANDOM = 1,
-    MISORI_TARGET_RANDOM_ROTATION = 2
-  };
-
   enum NucleationMode {
     NUCLEATION_THRESHOLD = 0,   // Existing binary threshold
     NUCLEATION_CONTINUOUS = 1   // Continuous Gaussian probability
@@ -131,45 +118,13 @@ class AppAdditiveTexture : public AppPottsQuaternion {
 	int nrefine;
 	// Physical and simulation parameters
 	double dt;
-	double no;
-	double tc;
-	double tsig;
 	double dx;
- 	double tl; // Liquidus temperature
- 	double ts; // Solidus temperature
   double t_room;
   double *unique_dot;
     
     
   // Nucleation and growth parameters
-  double size_norm;
-	double size_sig;
-	double *solid_front_coeffs;
-	int    solid_front_length;
-  // Texture model parameters
-	double c1, c2, c3;
-  // Misorientation random walk (`misorientation_diffusion <D> <thresh> [alpha]`).
-  // mis_diffusion: D in rad^2/m (input in deg^2/m); <= 0 disables rotation.
-  // Calibrated against 3D EBSD SROD data: D = 0.42 deg^2/um = 4.2e5 deg^2/m
-  // for GammaPrint-700 PBF-L (docs/MISORIENTATION_DIFFUSION_PLAN.md).
-  // misorient_alpha > 0 makes D_eff = D * g(Tcool/(tl-ts))^2 with
-  // g(x) = (exp(alpha x)-1)/(exp(alpha)-1); 0 = constant D.
-  // mis_thresh (rad): a single step at or above it starts a new grain.
-  double mis_diffusion;
-  // misorientation_grain_walk <D_deg2_per_m>: coherent per-grain rotation
-  // walk in height (grain_walk.h); rad^2/m, 0 = off.
-  double grain_walk_D = 0.0;
-  double grain_walk_rho = 0.0;   // axis persistence per level (0 memoryless, ->1 fixed bending axis)
-  int grain_walk_path = 1;        // 1: level index = inheritance path length (per hop); 0: lattice z level
   double t_cool_max;
-  double mis_thresh;
-  double misorient_alpha;
-  int misorientation_target_mode;
-  // Nucleated shell sites (all but the seed voxel) take one walk step of
-  // sqrt(D_eff * distance_from_seed) relative to the seed orientation --
-  // the walk's RMS for that growth distance. `nucleation_misorientation_target
-  // off|none` restores the uniform-orientation nucleus.
-  bool nucleation_misorient_enabled;
 
  	// Monte Carlo nucleation model parameters
 	int *nucleation_flags;
@@ -218,26 +173,6 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   bool      single_voxel_cleanup_enabled;
   long long n_single_voxel_flips;  // counter reset each app_update() call
 
-  // When true, smooth_site() evaluates every distinct neighbor spin per
-  // pass and adopts the energy-minimizing one (steepest descent), rather
-  // than the default behavior of testing a single random proposal. Tied
-  // to the input command `smooth_greedy_multiproposal on|off`. Has no
-  // effect on the Boltzmann acceptance gate, so a non-zero `temperature`
-  // setting is still respected for the uphill branch.
-  bool      smooth_greedy_multiproposal_enabled;
-  // `smooth_orientation copy`: an accepted smoothing flip takes ONE random
-  // neighbour's quaternion from the new grain instead of the sign-aligned
-  // average (averaging damps the misorientation walk). Default average.
-  bool      smooth_orientation_copy = false;
-
-  // When true, nucleation events initialize solid_d[i] = -1 for both the
-  // seed site (execute_nucleation_event) and the captured shell sites
-  // (nucleation_particle_flipper) so they enter the same smoothing window
-  // as epitaxially solidified sites. When false (default) the historical
-  // sentinel values (-nrefine-2 for the seed, -nrefine-3 for the shell)
-  // are used, which excludes nuclei from smooth_site() and the greedy
-  // variant. Tied to the input command `nuclei_smooth on|off`.
-  bool      nuclei_smooth_enabled;
 
 };
 

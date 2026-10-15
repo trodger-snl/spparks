@@ -318,16 +318,24 @@ if [ "$ENABLE_KOKKOS" = "ON" ]; then
         KOKKOS_ARCH=$(echo "$KOKKOS_ARCH" | tr '[:lower:]' '[:upper:]')
         CMAKE_ARGS+=("-DSPPARKS_KOKKOS_ARCH=$KOKKOS_ARCH")
     fi
-    # HIP needs hipcc as the C++ compiler; left alone CMake picks c++/g++, which
-    # rejects the HIP flags at Kokkos' compile-options check. An explicit
+    # GPU backends need a device-capable C++ compiler; left alone CMake picks
+    # c++/g++, which rejects the device flags at Kokkos' compile-options check.
+    # HIP -> hipcc from PATH; CUDA -> Kokkos' bundled nvcc_wrapper (host compiler
+    # via NVCC_WRAPPER_DEFAULT_COMPILER, default g++). An explicit
     # -DCMAKE_CXX_COMPILER=... or $CXX still wins.
-    if [ "$KOKKOS_BACKEND" = "HIP" ] && [ -z "${CXX:-}" ] && \
+    if [ -z "${CXX:-}" ] && \
        ! printf '%s\n' ${EXTRA_CMAKE_ARGS[@]+"${EXTRA_CMAKE_ARGS[@]}"} | grep -q '^-DCMAKE_CXX_COMPILER[:=]'; then
-        HIPCC=$(command -v hipcc || true)
-        if [ -n "$HIPCC" ]; then
-            CMAKE_ARGS+=("-DCMAKE_CXX_COMPILER=$HIPCC")
-        else
-            echo "Warning: HIP backend but no hipcc on PATH; pass -DCMAKE_CXX_COMPILER=..." >&2
+        GPU_CXX=""
+        case "$KOKKOS_BACKEND" in
+            HIP)  GPU_CXX=$(command -v hipcc || true) ;;
+            CUDA) [ -x "$SCRIPT_DIR/../lib/kokkos/bin/nvcc_wrapper" ] && \
+                      GPU_CXX="$SCRIPT_DIR/../lib/kokkos/bin/nvcc_wrapper" ;;
+        esac
+        if [ -n "$GPU_CXX" ]; then
+            CMAKE_ARGS+=("-DCMAKE_CXX_COMPILER=$GPU_CXX")
+        elif [ "$KOKKOS_BACKEND" = "HIP" ] || [ "$KOKKOS_BACKEND" = "CUDA" ]; then
+            echo "Warning: $KOKKOS_BACKEND backend but no default compiler found" \
+                 "(hipcc on PATH / lib/kokkos/bin/nvcc_wrapper); pass -DCMAKE_CXX_COMPILER=..." >&2
         fi
     fi
 fi

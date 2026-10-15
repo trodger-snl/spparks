@@ -43,8 +43,6 @@ HDF5UnstructuredTemperatureSource::HDF5UnstructuredTemperatureSource(SPPARKS *sp
   nodal_cache_valid(false),
   site_intervals_for_layer(std::numeric_limits<unsigned>::max()),
   grid_cell_size_multiplier(100.0),
-  use_spatial_grid(true),
-  use_element_cache(true),
   nodal_smooth_enabled(false),
   nodal_sigma_xy(4.0),
   nodal_sigma_z(0.3),
@@ -172,7 +170,7 @@ double HDF5UnstructuredTemperatureSource::get_temperature_at_xyz_and_time(
   // Every live path goes through the per-site element cache
   // (prepare_for_timestep + get_temperature_at_site_fast).
   error->all(FLERR, "HDF5 temperature source: point queries are not supported; "
-                    "use the site element cache (temperature_optimization element_cache on)");
+                    "use prepare_for_timestep + get_temperature_at_site_fast");
   return default_temp;
 }
 
@@ -424,17 +422,10 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   // Build element bounding boxes for spatial queries
   elem_bboxes = build_elem_bounding_boxes();
 
-  // Build spatial acceleration grid (optional, controlled by use_spatial_grid flag)
+  // Build the spatial acceleration grid used by every element lookup.
   // Larger cells = less memory but more elements per cell to search
   // Default 50x lattice spacing (~250 microns), user-configurable via grid_cell_mult parameter
-  if (use_spatial_grid) {
-    build_spatial_grid(dx * grid_cell_size_multiplier);
-  } else {
-    spatial_grid.valid = false;
-    if (universe->me == 0) {
-      fprintf(screen, "  Spatial grid: DISABLED\n");
-    }
-  }
+  build_spatial_grid(dx * grid_cell_size_multiplier);
 
   // Build node-graph adjacency for mesh-Laplacian smoothing (optional).
   // Must run AFTER elemNode + nodeCoords + dataCounts are populated for the
@@ -750,20 +741,9 @@ HDF5UnstructuredTemperatureSource::find_element_point_is_in(
     if (e >= elemBboxes.size()) return false;
     if (!point_in_bbox(pt, elemBboxes[e])) return false;
 
-    // Find which chunk this element belongs to (for node offset mapping)
-    // Use O(1) precomputed mapping when spatial grid is valid, else O(n) search
-    unsigned c;
-    if (spatial_grid.valid && e < spatial_grid.elem_to_chunk.size()) {
-      c = spatial_grid.elem_to_chunk[e];
-    } else {
-      c = 0;
-      for (unsigned i = 0; i < elemOffsets.size() - 1; i++) {
-        if (e >= elemOffsets[i] && e < elemOffsets[i + 1]) {
-          c = i;
-          break;
-        }
-      }
-    }
+    // Which chunk this element belongs to (for node offset mapping)
+    if (e >= spatial_grid.elem_to_chunk.size()) return false;
+    const unsigned c = spatial_grid.elem_to_chunk[e];
 
     // Get tetrahedron node coordinates
     bool validElement = true;
@@ -787,7 +767,7 @@ HDF5UnstructuredTemperatureSource::find_element_point_is_in(
             1.0 - parCoords[0] - parCoords[1] - parCoords[2] > -tol);
   };
 
-  // Use spatial grid if available (O(1) cell lookup vs O(n) brute force)
+  // O(1) spatial-grid cell lookup (the grid is built on every layer load)
   if (spatial_grid.valid) {
     int cell_idx = spatial_grid.point_to_cell(pt);
     if (cell_idx >= 0 && static_cast<size_t>(cell_idx) < spatial_grid.cell_offsets.size() - 1) {
@@ -798,30 +778,6 @@ HDF5UnstructuredTemperatureSource::find_element_point_is_in(
         if (test_element(*ep)) {
           return std::make_pair(nodeIds, parCoords);
         }
-      }
-    }
-    // Point not in grid or not found in cell - return not found
-    return std::make_pair(
-      std::array<unsigned, 4>{invalidId, invalidId, invalidId, invalidId},
-      std::array<double, 3>{0.0, 0.0, 0.0}
-    );
-  }
-
-  // Fallback: brute force search through chunks (used if grid not built)
-  std::vector<unsigned> possibleChunks;
-  for (unsigned c = 0; c < selectedChunks.size(); c++) {
-    if (selectedChunks[c] >= chunkBboxes.size()) continue;
-    const auto& cBbox = chunkBboxes[selectedChunks[c]];
-    if (point_in_bbox(pt, cBbox)) {
-      possibleChunks.push_back(c);
-    }
-  }
-
-  for (auto c : possibleChunks) {
-    if (c + 1 >= elemOffsets.size()) continue;
-    for (unsigned e = elemOffsets[c]; e < elemOffsets[c + 1]; e++) {
-      if (test_element(e)) {
-        return std::make_pair(nodeIds, parCoords);
       }
     }
   }
@@ -1042,17 +998,6 @@ void HDF5UnstructuredTemperatureSource::prepare_for_timestep(double time)
   // moves onto the device fill).
   if (!device_time_interp_)
     precompute_nodal_temperatures(time);
-}
-
-/* ---------------------------------------------------------------------- */
-
-double HDF5UnstructuredTemperatureSource::get_temperature_at_site(int site_index, double time)
-{
-  // Ensure caches are ready (for standalone calls)
-  prepare_for_timestep(time);
-
-  // Use fast path
-  return get_temperature_at_site_fast(site_index);
 }
 
 /* ---------------------------------------------------------------------- */

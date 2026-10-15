@@ -115,11 +115,7 @@ public:
   static constexpr unsigned DIM = 3;             // 3D space
 
   double get_fast_forward_threshold() const { return threshold_temp; }
-  double get_dx() const { return dx; }
 
-  // Optimization control flags
-  void set_use_spatial_grid(bool enable) { use_spatial_grid = enable; }
-  void set_use_element_cache(bool enable) { use_element_cache = enable; }
   
   virtual double get_next_time_with_temperature(double current_time, double threshold_temp) override;
   
@@ -131,8 +127,6 @@ public:
     ThermalInterval(double start, double end) : start_time(start), end_time(end) {}
   };
 
-  // Site-based temperature access (prepares the caches, then the fast path)
-  double get_temperature_at_site(int site_index, double time);
 
   // Enable anisotropic mesh-Laplacian smoothing of the per-node temperature
   // field. Parameters are stored and the edge-weighted node adjacency is
@@ -253,9 +247,6 @@ private:
   // load_layer() so it is emitted once per run rather than once per layer.
   mutable bool pad_vs_subdomain_warned = false;
 
-  // Optimization control flags
-  bool use_spatial_grid;   // Use spatial grid for element lookup (default: true)
-  bool use_element_cache;  // Use element cache per site (default: true)
 
   // Layer management
   std::vector<double> layerTimes;

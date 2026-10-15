@@ -71,7 +71,6 @@ class ThermalManager : protected Pointers {
   void setup_cmd(int narg, char **arg);
   void laser_path_cmd(int narg, char **arg);
   void laser_fluctuations_cmd(int narg, char **arg);
-  void optimization_cmd(int narg, char **arg);
   void smooth_cmd(int narg, char **arg);
   void nodal_smooth_cmd(int narg, char **arg);
   void set_fast_forward_search_window(double w);
@@ -214,10 +213,6 @@ class ThermalManager : protected Pointers {
   double laser_reset_temperature;  // [K], 0 = disabled
   int    pending_moser_passes;     // remaining queued Moser passes
 
-  // Temperature optimization flags (HDF5 source performance paths)
-  bool opt_use_spatial_grid;
-  bool opt_use_element_cache;
-  bool opt_use_nodal_precompute;
 
   // Solidification-band temperature smoothing (opt-in via temperature_smooth)
   bool   temperature_smooth_enabled;

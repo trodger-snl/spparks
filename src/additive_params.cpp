@@ -63,7 +63,6 @@ bool AdditiveParams::parse_command(const char *command, int narg, char **arg,
   else if (strcmp(command, "laser_fluctuations") == 0) thermal.laser_fluctuations_cmd(narg, arg);
   else if (strcmp(command, "temperature_smooth") == 0) thermal.smooth_cmd(narg, arg);
   else if (strcmp(command, "nodal_smooth") == 0) thermal.nodal_smooth_cmd(narg, arg);
-  else if (strcmp(command, "temperature_optimization") == 0) thermal.optimization_cmd(narg, arg);
   else if (strcmp(command, "fast_forward_search_window") == 0) {
     if (narg != 1) error->all(FLERR, "Illegal fast_forward_search_window command");
     thermal.set_fast_forward_search_window(atof(arg[0]));

@@ -60,10 +60,6 @@ ThermalManager::ThermalManager(SPPARKS *spk, ThermalHost *host) :
   laser_reset_temperature  = 0.0;
   pending_moser_passes     = 0;
 
-  // Temperature optimization flags (all enabled by default)
-  opt_use_spatial_grid = true;
-  opt_use_element_cache = true;
-  opt_use_nodal_precompute = true;
 
   // Solidification-band smoothing defaults (off until `temperature_smooth`)
   temperature_smooth_enabled = false;
@@ -100,13 +96,6 @@ void ThermalManager::setup_cmd(int narg, char **arg)
   temperature_source = SPPARKS_NS::create_temperature_source(source_type, spk);
   if (!temperature_source) {
     error->all(FLERR,"Failed to create temperature source");
-  }
-
-  // Pass optimization flags to temperature source before setup
-  HDF5UnstructuredTemperatureSource* hdf5_source = this->hdf5_source();
-  if (hdf5_source) {
-    hdf5_source->set_use_spatial_grid(opt_use_spatial_grid);
-    hdf5_source->set_use_element_cache(opt_use_element_cache);
   }
 
   // Setup the temperature source with provided arguments
@@ -432,38 +421,6 @@ void ThermalManager::laser_fluctuations_cmd(int narg, char **arg)
 }
 
 /* ----------------------------------------------------------------------
-   temperature_optimization command: toggle HDF5 source performance paths.
-   Usage: temperature_optimization <option> <on|off>
-------------------------------------------------------------------------- */
-
-void ThermalManager::optimization_cmd(int narg, char **arg)
-{
-  if (narg != 2) error->all(FLERR,"Illegal temperature_optimization command: requires 2 args (option on/off)");
-  bool enable = (strcmp(arg[1],"on") == 0 || strcmp(arg[1],"1") == 0 || strcmp(arg[1],"true") == 0);
-
-  // Get HDF5 source if available to pass flags
-  HDF5UnstructuredTemperatureSource* hdf5_source = this->hdf5_source();
-
-  if (strcmp(arg[0],"spatial_grid") == 0) {
-    opt_use_spatial_grid = enable;
-    if (hdf5_source) hdf5_source->set_use_spatial_grid(enable);
-    if (domain->me == 0) fprintf(screen,"Temperature optimization: spatial_grid = %s\n", enable ? "ON" : "OFF");
-  } else if (strcmp(arg[0],"element_cache") == 0) {
-    opt_use_element_cache = enable;
-    if (!enable) opt_use_nodal_precompute = false;  // nodal_precompute requires element_cache
-    if (hdf5_source) hdf5_source->set_use_element_cache(enable);
-    if (domain->me == 0) fprintf(screen,"Temperature optimization: element_cache = %s\n", enable ? "ON" : "OFF");
-  } else if (strcmp(arg[0],"nodal_precompute") == 0) {
-    if (enable && !opt_use_element_cache)
-      error->all(FLERR,"nodal_precompute requires element_cache to be enabled");
-    opt_use_nodal_precompute = enable;
-    if (domain->me == 0) fprintf(screen,"Temperature optimization: nodal_precompute = %s\n", enable ? "ON" : "OFF");
-  } else {
-    error->all(FLERR,"Unknown temperature_optimization option (use: spatial_grid, element_cache, nodal_precompute)");
-  }
-}
-
-/* ----------------------------------------------------------------------
    fast_forward_search_window command setter.
 ------------------------------------------------------------------------- */
 
@@ -568,29 +525,12 @@ void ThermalManager::update_temperatures(double simulation_time)
   RosenthalTemperatureSource* ros_source = hdf5_source ? nullptr : rosenthal_source();
 
   // -------------------------------------------------------------------
-  // HDF5 path: three optimization tiers.
+  // HDF5 path: per-site element cache + nodal precompute.
   // -------------------------------------------------------------------
-  if (hdf5_source && opt_use_element_cache && opt_use_nodal_precompute) {
-    // Path 3: Fast path with nodal precomputation
+  if (hdf5_source) {
     hdf5_source->prepare_for_timestep(simulation_time);
     for (int i = 0; i < nlocal; i++) {
       T[i] = hdf5_source->get_temperature_at_site_fast(i);
-    }
-
-  } else if (hdf5_source && opt_use_element_cache) {
-    // Path 2: Lazy per-site lookup with element cache (no nodal precomputation)
-    for (int i = 0; i < nlocal; i++) {
-      T[i] = hdf5_source->get_temperature_at_site(i, simulation_time);
-    }
-
-  } else if (hdf5_source) {
-    // Path 1: XYZ-based lookup (no element cache)
-    const double src_dx = hdf5_source->get_dx();
-    for (int i = 0; i < nlocal; i++) {
-      double x_physical = xyz[i][0] * src_dx;
-      double y_physical = xyz[i][1] * src_dx;
-      double z_physical = xyz[i][2] * src_dx;
-      T[i] = temperature_source->get_temperature_at_xyz_and_time(x_physical, y_physical, z_physical, simulation_time);
     }
 
   // -------------------------------------------------------------------

@@ -2,8 +2,8 @@
 
 Status: **Part A implemented 2026-09-04** (commits fa8930f3, 63a68bad, 74c331e1);
 Part B (the undercooling test matrix) is still to run. Evidence:
-`docs/srod_random_walk.png`, `docs/srod_experimental_analysis.png`,
-`docs/srod_random_walk.py`. Companion: `docs/GP700_MOSER_SROD_DECK_PLAN.md`
+`spparks-micro-analysis/analysis/surge_srod/srod_random_walk.png`, `spparks-micro-analysis/analysis/surge_srod/srod_experimental_analysis.png`,
+`spparks-micro-analysis/analysis/surge_srod/srod_random_walk.py`. Companion: `docs/GP700_MOSER_SROD_DECK_PLAN.md`
 (Plan 2, the validation deck).
 
 ## Implementation record (Part A)
@@ -207,7 +207,7 @@ V(ΔT) = polynomial(`solid_front_vel`), invert per voxel. Add a
 1. **SROD vs distance from origin** — mean, 5/95%, per Lamb: grains ≥ 60 µm
    tall and ESD ≥ 40 µm; originating (origin inside the analysed volume) vs
    established (present at the analysis floor). Overlay
-   `docs/srod_random_walk.py` curves.
+   `spparks-micro-analysis/analysis/surge_srod/srod_random_walk.py` curves.
 2. **Band/mean ratio vs distance** — 1.38 target, the parameter-free check.
 3. **Spatial SROD map on a melt-pool cross-section** — the discriminator
    between C0 and U5: U5 predicts SROD jumps at the centerline top, C0 a

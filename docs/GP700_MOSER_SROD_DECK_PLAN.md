@@ -21,7 +21,7 @@ Fig. 3), both on the same print of GammaPrint-700.
 | absorptivity | 0.9 (chosen by them to match pool size) | Met Trans sim |
 | their thermal sim | 3DThesis, 1 µm / 1 µs, single 10 mm raster: G_max ≈ 3e7 K/m at the fusion boundary, V slow rise from the periphery then > 1 m/s at the very end (top centerline) | Met Trans Fig. 3 |
 | EBSD volume / voxel | 1400 × 412 × 477 µm, 1.5 µm | Acta §2 |
-| SROD targets | Fig. 5a/5c digitized in `docs/srod_random_walk.py`; D = 0.42 deg²/µm | Acta |
+| SROD targets | Fig. 5a/5c digitized in `spparks-micro-analysis/analysis/surge_srod/srod_random_walk.py`; D = 0.42 deg²/µm | Acta |
 | grain filters | height ≥ 60 µm, ESD ≥ 40 µm; > 500 originating, > 100 established grains | Acta §3 |
 
 Not given: melt pool width/depth (Fig. 3 has no scale bar; only the
@@ -243,7 +243,7 @@ build `wide12_v2` launched at 4 µs on a frozen binary copy (~12 min/box).
 ## First full build: wide12_v2 (2026-09-04 18:52)
 
 800 µm square, 10 hatches, 12 layers, dt 4 µs, fixed kernels (1a9712b3),
-D = 0.42 deg²/µm, nucleation_density 1e12. Figures in `docs/gp700_results_v2/`;
+D = 0.42 deg²/µm, nucleation_density 1e12. Figures in `spparks-micro-analysis/analysis/surge_srod/gp700_results_v2/`;
 stitch file /home/tron/gp700_runs/wide12_v2/gp700.st (3 GB). Analysis on the
 central 400 µm crop with the floor at 240 µm (150 µm substrate + 3 layers).
 
@@ -289,7 +289,7 @@ and `score_sobol_runs.py` already implement a Sobol design + scoring loop
 for this kind of calibration and are the natural starting point.
 
 **All-originating analysis of wide12_v2 (floor 100 µm, below the first melt;
-189 grains, 2.2 M voxels; `docs/gp700_results_v2/srod_height_all_originating_floor100.png`).**
+189 grains, 2.2 M voxels; `spparks-micro-analysis/analysis/surge_srod/gp700_results_v2/srod_height_all_originating_floor100.png`).**
 Up to ~100 µm the simulated SROD mean sits on Lamb's curve (2.9/3.8/5.3/6.4° at
 24/45/84/105 µm vs 2.9/3.8/5.0/5.9°), i.e. the input D = 0.42 deg²/µm is
 right for the walk itself. Beyond 100 µm the simulation grows *linearly*
@@ -382,7 +382,7 @@ passes averaging neighbour quaternions — expect both to move with nrefine;
 or Voronoi seeding at ~50 µm) would let growth competition, not smoothing,
 carry the columnar selection — worth doing before the next calibration.
 
-**v5 result (10:26, `docs/gp700_results_v5/`):** D 1.15 deg²/µm, nucl 1.5e13,
+**v5 result (10:26, `spparks-micro-analysis/analysis/surge_srod/gp700_results_v5/`):** D 1.15 deg²/µm, nucl 1.5e13,
 tc 15 K, c2 2.8, greedy on / nrefine 2, dt 4 µs. All-originating SROD vs
 Lamb Fig. 5a: **RMS 0.59°, bias −0.16°** over 25–240 µm; D-fit vs height
 0.87× input; band/mean 1.79 (Lamb 1.4, open); <001> within 15° of BD **0.34**;
@@ -520,7 +520,7 @@ c2 2.8, dt 4 µs; chain `chain_v8.sh`, analysis `--D 2.2e5`. Open after
 this: the <001> fibre (0.17–0.23 vs Lamb ≈ 0.3) — c2 / nucleation are the
 levers per the Sobol surface.
 
-**v8 result (04:30, `docs/gp700_results_v8/`):** `smooth_orientation copy`,
+**v8 result (04:30, `spparks-micro-analysis/analysis/surge_srod/gp700_results_v8/`):** `smooth_orientation copy`,
 D 0.22 deg²/µm, Voronoi 50 µm substrate, greedy on / nrefine 1, nucl 1.5e13,
 tc 15, c2 2.8, dt 4 µs. All-originating SROD vs Lamb Fig. 5a: **RMS 0.49°,
 bias +0.17°, band/mean 1.41 (Lamb 1.4)**; the curve follows Lamb's √h shape
@@ -559,7 +559,7 @@ proxy 0.215).
 `chain_v9.sh`, run `wide12_v9`. Note c2 9 zeroes the mobility of grains
 more than ~40° off the gradient (mobility 1 + c2·cos(2.5θ), clamped at 0).
 
-**v9 result (10:22, `docs/gp700_results_v9/`):** v8 + c2 9, nucleation 2e13.
+**v9 result (10:22, `spparks-micro-analysis/analysis/surge_srod/gp700_results_v9/`):** v8 + c2 9, nucleation 2e13.
 SROD vs Lamb: RMS 0.52°, bias +0.02°, band/mean 1.45 — unchanged from v8, as
 the Sobol predicted. <001> within 15° of BD **0.22** (v8 0.19; proxy
 prediction 0.29). 3068 grains on the crop, 97 pass Lamb's filters, ESD p50
@@ -598,7 +598,7 @@ geometry (600 µm / 7 hatches / 8 layers, 50 µm Voronoi substrate, seed
 12345), dt 2 µs at 1.5 µm vs 4 µs at 3 µm (both 2× the dx/V(Tl−Ts) guard).
 `run_layers.sh` now takes `DX=` from the environment (a3a66f41). Runs:
 `/home/tron/gp700_runs/dx1p5_v8` (47 min/box, 6.2 h) and `dx3_v8_ref`
-(6 min/box). Figures: `docs/gp700_results_dx1p5/`.
+(6 min/box). Figures: `spparks-micro-analysis/analysis/surge_srod/gp700_results_dx1p5/`.
 
 | | dx 3 µm | dx 1.5 µm | Lamb |
 |---|---|---|---|
@@ -666,7 +666,7 @@ drift 3–6° vs 12° spread). `misorientation_grain_walk D_g` (b6e4ba5f,
 gets the same rotation, angle √(D_g·dx) about an axis hashed from (g, k) —
 path independent, no per-grain state; per-voxel walk on top. Three proxy
 runs (600 µm / 8 layers / 3 µm, v8 deck otherwise), analysed with
-`grain_paths.py` (`docs/gp700_results_grainwalk/`):
+`grain_paths.py` (`spparks-micro-analysis/analysis/surge_srod/gp700_results_grainwalk/`):
 
 | | voxel only (D_v 0.22) | mixed (D_g 0.30 + D_v 0.065) | grain only (D_g 0.42) |
 |---|---|---|---|
@@ -704,7 +704,7 @@ persistent axis only) made every grain rotate at the same rate and
 collapsed the population band (0.77 at rho 0.9, 0.35 at rho 0.97); replaced
 by a Gaussian rotation vector (Maxwell magnitudes). D_g was scaled by
 (1−rho)/(1+rho) for a target long-range D of 0.42. Proxy, v8 deck otherwise,
-`grain_paths` on the four tallest grains (`docs/gp700_results_grainwalk/*_ou.png`):
+`grain_paths` on the four tallest grains (`spparks-micro-analysis/analysis/surge_srod/gp700_results_grainwalk/*_ou.png`):
 
 | | grain only, rho 0.9 (D_g 0.022) | mixed, rho 0.9 (D_g 0.016 + D_v 0.065) | grain only, rho 0.97 (D_g 0.0064) |
 |---|---|---|---|
@@ -794,7 +794,7 @@ with the full build); a solo cached-vs-direct pair is queued after v10
 `misorientation_grain_walk 1.0e4 0.9 path` + `misorientation_diffusion
 6.5e4`, substrate_800um_50um_d10.st, cached binary.
 
-**v10 result (02:24, `docs/gp700_results_v10/`):** persistent path-indexed
+**v10 result (02:24, `spparks-micro-analysis/analysis/surge_srod/gp700_results_v10/`):** persistent path-indexed
 grain walk (D_g 0.010, rho 0.9) + per-voxel D_v 0.065, Voronoi substrate,
 nrefine 1, nucl 1.5e13, tc 15, c2 2.8, dt 4 µs, cached recurrence. Full
 12-layer build, central 400 µm: **SROD RMS 0.34°, bias −0.28°, band/mean
@@ -818,7 +818,7 @@ GPU sharing.
 **All-grain paths (2026-09-09, `grain_paths.py --grid`):** per-grain
 drift / spread / max SROD / monotonicity for every filtered grain
 (`grain_stats.csv`), a 30-grain IPF-path grid and a summary figure in
-`docs/gp700_results_v{8,10}/`.
+`spparks-micro-analysis/analysis/surge_srod/gp700_results_v{8,10}/`.
 
 | | v10 (96 grains) | v8 (86 grains) |
 |---|---|---|
@@ -837,7 +837,7 @@ drift at every height.
 
 ## Review response analyses — 2026-09-09 (existing data)
 
-Reviewer: `docs/SROD_REPORT_REVIEW.md`. Results in `docs/gp700_results_review/`.
+Reviewer: `spparks-micro-analysis/analysis/surge_srod/SROD_REPORT_REVIEW.md`. Results in `spparks-micro-analysis/analysis/surge_srod/gp700_results_review/`.
 
 - **A1 path factor (M7), measured from d10:** median path length per unit height over the
   filtered grains of v10 = **1.47** (2° segmentation: 1.54). The 1.8 quoted before was the

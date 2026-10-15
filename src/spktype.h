@@ -122,10 +122,12 @@ typedef int bigint;
 
 #endif
 
-// fastreal = precision of selected hot-kernel floating-point math, for
-//   parts whose FP64 rate is reduced (RDNA/consumer GPUs). double by
-//   default; float when built with SPPARKS_FP32 (CMake -DSPPARKS_FP32=ON),
-//   at the cost of bit-exact match against FP64 runs and the CPU apps.
+// fastreal = precision of selected hot-kernel floating-point math. double by
+//   default; float when built with SPPARKS_FP32 (CMake -DSPPARKS_FP32=ON).
+//   Production runs are always FP64. FP32 is a testing/development build
+//   for desktop GPUs with a reduced FP64 rate (RDNA/consumer parts), at the
+//   cost of bit-exact match against FP64 runs and the CPU apps. It is one
+//   switch on purpose: a dev build narrows every fastreal user together.
 //   Code using it must reproduce its previous arithmetic exactly when
 //   fastreal == double. Current users:
 //   - additive/texture/kk device temperature math: Rosenthal/Moser kernels

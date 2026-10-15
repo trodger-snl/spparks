@@ -132,9 +132,10 @@ else()
 endif()
 
 # Hot-kernel floating-point precision (fastreal, src/spktype.h). Default OFF =>
-# FP64, the HPC production precision and the bit-for-bit CPU-validation
-# reference. ON => FP32 where code opts in via fastreal, a win on RDNA/consumer
-# GPUs (gfx1151) whose FP64 rate is heavily reduced:
+# FP64: production precision (production always runs FP64) and the
+# bit-for-bit CPU-validation reference. ON => FP32 everywhere code opts in via
+# fastreal: a testing/development build for desktop GPUs (gfx1151) whose FP64
+# rate is heavily reduced. One switch on purpose. Measured gains:
 #   * additive/texture/kk Rosenthal/Moser: compute-bound transcendental kernels.
 #   * additive/texture/kk HDF5 unstructured: memory-bound gather-and-blend;
 #     halved traffic (ct15 10-layer decks: that fill is ~33% of per-box wall,

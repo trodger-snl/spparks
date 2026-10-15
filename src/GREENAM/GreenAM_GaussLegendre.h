@@ -10,7 +10,7 @@ namespace greenam {
 template <int N>
 class GaussLegendreQuadrature {
 public:
-  enum {eDEGREE = N};
+  static constexpr int eDEGREE = N;
 
   /*! Compute the integral of a functor
   *

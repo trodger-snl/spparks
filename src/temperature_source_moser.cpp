@@ -19,7 +19,6 @@
 
 #include "GREENAM/GreenAM_Constants.h"
 #include "GREENAM/GreenAM_Properties.h"
-#include "GREENAM/GreenAM_Util.h"
 #include "GREENAM/GreenAM_LaserScan.h"
 #include "GREENAM/GreenAM_ScanIntegration.h"
 
@@ -380,22 +379,22 @@ void MoserTemperatureSource::rebuild_scan_from_pass_list_()
   const int nlines = 2 * repeats;
   const int nwp    = nlines + 1;
 
-  sierra::greenam::VectorWrapper<double> ts("Time",  nwp);
-  sierra::greenam::VectorWrapper<double> xs("XLaser", nwp);
-  sierra::greenam::VectorWrapper<double> ys("YLaser", nwp);
+  std::vector<double> ts(nwp);
+  std::vector<double> xs(nwp);
+  std::vector<double> ys(nwp);
 
   int wp = 0;
   double px0 = scan_x0, py0 = scan_y0, px1 = scan_x1, py1 = scan_y1;
   for (int r = 0; r < repeats; ++r) {
     pass_geometry(r, px0, py0, px1, py1);
-    ts(wp) = pass_start_times_[r];
-    xs(wp) = px0;
-    ys(wp) = py0;
+    ts[wp] = pass_start_times_[r];
+    xs[wp] = px0;
+    ys[wp] = py0;
     ++wp;
 
-    ts(wp) = pass_start_times_[r] + dt_scan;
-    xs(wp) = px1;
-    ys(wp) = py1;
+    ts[wp] = pass_start_times_[r] + dt_scan;
+    xs[wp] = px1;
+    ys[wp] = py1;
     ++wp;
   }
 
@@ -404,18 +403,15 @@ void MoserTemperatureSource::rebuild_scan_from_pass_list_()
   // this is in a 0-power stop segment.
   const double t_end_active = pass_start_times_.back() + dt_scan;
 
-  ts(wp) = t_end_active + 1.0e6;
-  xs(wp) = px1;
-  ys(wp) = py1;
+  ts[wp] = t_end_active + 1.0e6;
+  xs[wp] = px1;
+  ys[wp] = py1;
   ++wp;
 
   if (wp != nwp) {
     error->all(FLERR,"moser rebuild_scan: internal waypoint count mismatch");
   }
 
-  ts.commit();
-  xs.commit();
-  ys.commit();
 
   sierra::greenam::ThermalProperties<double> th{k_th, rho, cp};
   const double abs_power = lambda * Q;
@@ -426,14 +422,13 @@ void MoserTemperatureSource::rebuild_scan_from_pass_list_()
     // Per-lobe waypoint power array (path geometry is shared, but power
     // is scaled by f_lobe so each LaserScan is self-describing for
     // total-absorbed-power audits).
-    sierra::greenam::VectorWrapper<double> ps("Power", nwp);
+    std::vector<double> ps(nwp);
     int wp2 = 0;
     for (int r = 0; r < repeats; ++r) {
-      ps(wp2++) = abs_power * L_ref.power_fraction;   // active scan
-      ps(wp2++) = 0.0;                                 // transit/stop
+      ps[wp2++] = abs_power * L_ref.power_fraction;   // active scan
+      ps[wp2++] = 0.0;                                 // transit/stop
     }
-    ps(wp2++) = 0.0;                                   // sentinel
-    ps.commit();
+    ps[wp2++] = 0.0;                                   // sentinel
 
     sierra::greenam::EllipsoidProperties<double> ep{L_ref.sx, L_ref.sy, L_ref.sz};
     const double zl_eff = scan_laser_plane_z - L_ref.z_offset;

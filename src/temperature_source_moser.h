@@ -29,7 +29,6 @@
 #include "GREENAM/GreenAM_Fluctuations.h"
 
 namespace sierra { namespace greenam {
-  template <typename RealType> struct VectorWrapper;
   template <typename RealType, typename ArrayType> struct LaserScan;
   template <typename RealType, typename ArrayType, unsigned MaxOrder> struct ScanIntegration;
 }}
@@ -291,7 +290,7 @@ class MoserTemperatureSource : public TemperatureSource {
   // GREENAM integrator pointers (instantiated in the cpp file via
   // forward-declared templates so the GREENAM headers are pulled into
   // exactly one translation unit).
-  using GREENAM_Array  = sierra::greenam::VectorWrapper<double>;
+  using GREENAM_Array  = std::vector<double>;
   using GREENAM_Scan   = sierra::greenam::LaserScan<double, GREENAM_Array>;
   using GREENAM_Integ  = sierra::greenam::ScanIntegration<double, GREENAM_Array, 30>;
 

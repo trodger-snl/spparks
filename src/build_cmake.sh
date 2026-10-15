@@ -44,8 +44,10 @@ Options:
     --no-mpi                    Disable MPI support
     --hdf5                      Enable HDF5 support
     --no-hdf5                   Disable HDF5 support
-    --highfive                  Enable HighFive C++ HDF5 wrapper
-    --no-highfive               Disable HighFive C++ HDF5 wrapper
+    --highfive                  Enable HighFive C++ HDF5 wrapper (adds the hdf5_unstructured /
+                                  hdf5_csr temperature sources; the additive apps themselves
+                                  need only MPI)
+    --no-highfive               Disable HighFive C++ HDF5 wrapper (default)
     --jpeg                      Enable JPEG support
     --no-jpeg                   Disable JPEG support
     --kokkos                    Enable Kokkos for GPU acceleration
@@ -104,6 +106,10 @@ Examples:
       $0 --kokkos                         # Build with Kokkos (OpenMP backend)
       $0 --kokkos --kokkos-backend cuda   # Build with Kokkos CUDA (NVIDIA GPUs)
       $0 --kokkos --kokkos-backend hip    # Build with Kokkos HIP (AMD GPUs)
+
+    Additive (additive/texture, additive/texture/kk):
+      $0 -m mpi --highfive                # with HDF5 temperature sources (parallel HDF5)
+      $0 -m mpi --no-highfive --no-hdf5   # Rosenthal/Moser only, no HDF5 dependency
 
     Performance tuning:
       $0 --aggressive-opt --native-opt    # Maximum performance (O3, LTO, native CPU)
@@ -311,6 +317,18 @@ if [ "$ENABLE_KOKKOS" = "ON" ]; then
     if [ -n "$KOKKOS_ARCH" ]; then
         KOKKOS_ARCH=$(echo "$KOKKOS_ARCH" | tr '[:lower:]' '[:upper:]')
         CMAKE_ARGS+=("-DSPPARKS_KOKKOS_ARCH=$KOKKOS_ARCH")
+    fi
+    # HIP needs hipcc as the C++ compiler; left alone CMake picks c++/g++, which
+    # rejects the HIP flags at Kokkos' compile-options check. An explicit
+    # -DCMAKE_CXX_COMPILER=... or $CXX still wins.
+    if [ "$KOKKOS_BACKEND" = "HIP" ] && [ -z "${CXX:-}" ] && \
+       ! printf '%s\n' ${EXTRA_CMAKE_ARGS[@]+"${EXTRA_CMAKE_ARGS[@]}"} | grep -q '^-DCMAKE_CXX_COMPILER[:=]'; then
+        HIPCC=$(command -v hipcc || true)
+        if [ -n "$HIPCC" ]; then
+            CMAKE_ARGS+=("-DCMAKE_CXX_COMPILER=$HIPCC")
+        else
+            echo "Warning: HIP backend but no hipcc on PATH; pass -DCMAKE_CXX_COMPILER=..." >&2
+        fi
     fi
 fi
 

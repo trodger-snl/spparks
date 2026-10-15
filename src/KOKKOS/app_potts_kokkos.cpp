@@ -124,12 +124,11 @@ void AppPottsKokkos::init_app()
 
 void AppPottsKokkos::sync_app_data_to_device()
 {
-  int nall = nlocal + nghost;
-  auto h_spin = Kokkos::create_mirror_view(d_spin);
-  for (int i = 0; i < nall; i++) {
-    h_spin(i) = spin[i];
-  }
-  Kokkos::deep_copy(d_spin, h_spin);
+  // Straight copy, no arithmetic: one block out of the raw host array (no
+  // per-call mirror allocation, no element loop).
+  Kokkos::deep_copy(
+      d_spin,
+      Kokkos::View<int*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>(spin, nlocal + nghost));
 }
 
 /* ----------------------------------------------------------------------
@@ -138,11 +137,12 @@ void AppPottsKokkos::sync_app_data_to_device()
 
 void AppPottsKokkos::sync_app_data_to_host()
 {
-  auto h_spin = Kokkos::create_mirror_view(d_spin);
-  Kokkos::deep_copy(h_spin, d_spin);
-  for (int i = 0; i < nlocal; i++) {
-    spin[i] = h_spin(i);
-  }
+  // Owned slice only: host ghosts come from the ghost exchange.
+  const auto owned = Kokkos::make_pair(0, nlocal);
+  Kokkos::deep_copy(
+      Kokkos::subview(
+          Kokkos::View<int*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>(spin, nlocal + nghost), owned),
+      Kokkos::subview(d_spin, owned));
 }
 
 /* ----------------------------------------------------------------------

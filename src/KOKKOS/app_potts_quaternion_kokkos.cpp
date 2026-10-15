@@ -336,14 +336,19 @@ void AppPottsQuaternionKokkos::normalize_quaternion_arrays(
 double AppPottsQuaternionKokkos::site_energy(int i)
 {
   double eng = 0.0;
-  std::vector<double> qi = {q0[i], qx[i], qy[i], qz[i]};
+  const double qi[4] = {q0[i], qx[i], qy[i], qz[i]};
 
   for (int j = 0; j < numneigh[i]; j++) {
     int nj = neighbor[i][j];
-    std::vector<double> qj = {q0[nj], qx[nj], qy[nj], qz[nj]};
+    // identical orientation -> di = 0 (identity symmetry), contributes 0
+    if (q0[nj] == qi[0] && qx[nj] == qi[1] && qy[nj] == qi[2] &&
+        qz[nj] == qi[3]) continue;
+    const double qj[4] = {q0[nj], qx[nj], qy[nj], qz[nj]};
 
-    // Compute disorientation using host-side quaternion library
-    double di = disorientation::compute_disorientation(symmetries, qi, qj);
+    // Same arithmetic as disorientation::compute_disorientation, without its
+    // per-call vector allocations (KMC calls this nevent+1 times per site)
+    double di = QuaternionOps::compute_disorientation(
+      symmetries.data(), num_symmetries, qi, qj);
 
     double ratio = di / theta_cut;
 
@@ -464,6 +469,7 @@ void AppPottsQuaternionKokkos::copy_state(int i, int nj)
 double AppPottsQuaternionKokkos::site_propensity(int i)
 {
   int nevent = unique_neighbors(i);
+  if (nevent == 0) return 0.0;
   int oldstate = spin[i];
   double q_old[4] = {q0[i], qx[i], qy[i], qz[i]};
   double einitial = site_energy(i);

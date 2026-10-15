@@ -188,145 +188,83 @@ void AppPottsQuaternionKokkos::init_app()
   // Call parent (validates coloring, sets up color lists, syncs neighbors)
   AppLatticeKokkos::init_app();
 
-  // Initial sync of data to device
+  // Normalise once, in place on the host, then upload an exact copy: the
+  // host and device hold the same bits from here on.
+  normalize_host(nlocal + nghost, false);
   sync_app_data_to_device();
 }
 
 /* ----------------------------------------------------------------------
-   sync spin and quaternion data to device
+   normalise host quaternions in place. off_unit_only: leave any quaternion
+   within 1e-10 of unit length untouched.
+
+   Renormalising is not idempotent in the last bit -- a value can flip between
+   two neighbours on alternate passes -- so values that came from the device
+   must never be renormalised, or the trajectory depends on how often the data
+   happened to cross the bus (rank count, number of runs). init_app does the
+   one full pass; later uploads only fix clearly non-unit input (a `set`
+   between runs). Per-element independent, so threading is bit-identical.
 ------------------------------------------------------------------------- */
+
+void AppPottsQuaternionKokkos::normalize_host(int n, bool off_unit_only)
+{
+  #pragma omp parallel for schedule(static)
+  for (int i = 0; i < n; i++) {
+    double norm = sqrt(q0[i]*q0[i] + qx[i]*qx[i] + qy[i]*qy[i] + qz[i]*qz[i]);
+    if (norm > 1.0e-15 && (!off_unit_only || fabs(norm - 1.0) > 1.0e-10)) {
+      double inv_norm = 1.0 / norm;
+      q0[i] *= inv_norm;
+      qx[i] *= inv_norm;
+      qy[i] *= inv_norm;
+      qz[i] *= inv_norm;
+    }
+  }
+}
 
 /* ----------------------------------------------------------------------
-   (Re)allocate the persistent host mirrors used by both sync paths.
+   sync spin and quaternion data to device: an exact copy, apart from
+   normalising clearly non-unit host input (see normalize_host)
 ------------------------------------------------------------------------- */
-
-void AppPottsQuaternionKokkos::ensure_sync_mirrors()
-{
-  const int nall = nlocal + nghost;
-  if (sync_mirror_n == nall) return;
-  h_q0_m = Kokkos::create_mirror_view(d_q0);
-  h_qx_m = Kokkos::create_mirror_view(d_qx);
-  h_qy_m = Kokkos::create_mirror_view(d_qy);
-  h_qz_m = Kokkos::create_mirror_view(d_qz);
-  sync_mirror_n = nall;
-}
 
 void AppPottsQuaternionKokkos::sync_app_data_to_device()
 {
-  int nall = nlocal + nghost;
-  ensure_sync_mirrors();
-
-  // Sync spin: a straight copy with no arithmetic, so move it as one contiguous
-  // block out of the raw host array rather than element by element.
-  Kokkos::deep_copy(
-      d_spin,
-      Kokkos::View<int*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>(spin, nall));
-
-  // Sync quaternions with normalization.
-  //
-  // Threaded, NOT vectorised into a bulk copy: the normalisation is real
-  // arithmetic, and its low bits are load-bearing. Renormalising an already-unit
-  // quaternion still perturbs the last ulp, and a past bug had two sync paths
-  // disagreeing there, which made the trajectory depend on rank count. Each
-  // iteration reads only element i and writes only element i, with no reduction
-  // and no reassociation, so threading is bit-identical to the serial loop --
-  // every site's four values are combined in exactly the same order as before.
-  #pragma omp parallel for schedule(static)
-  for (int i = 0; i < nall; i++) {
-    double norm = sqrt(q0[i]*q0[i] + qx[i]*qx[i] + qy[i]*qy[i] + qz[i]*qz[i]);
-    if (norm > 1.0e-15) {
-      double inv_norm = 1.0 / norm;
-      h_q0_m(i) = q0[i] * inv_norm;
-      h_qx_m(i) = qx[i] * inv_norm;
-      h_qy_m(i) = qy[i] * inv_norm;
-      h_qz_m(i) = qz[i] * inv_norm;
-    } else {
-      h_q0_m(i) = q0[i];
-      h_qx_m(i) = qx[i];
-      h_qy_m(i) = qy[i];
-      h_qz_m(i) = qz[i];
-    }
-  }
-
-  Kokkos::deep_copy(d_q0, h_q0_m);
-  Kokkos::deep_copy(d_qx, h_qx_m);
-  Kokkos::deep_copy(d_qy, h_qy_m);
-  Kokkos::deep_copy(d_qz, h_qz_m);
+  const int nall = nlocal + nghost;
+  normalize_host(nall, true);
+  upload_range(d_spin, spin, 0, nall);
+  upload_range(d_q0, q0, 0, nall);
+  upload_range(d_qx, qx, 0, nall);
+  upload_range(d_qy, qy, 0, nall);
+  upload_range(d_qz, qz, 0, nall);
 }
 
 /* ----------------------------------------------------------------------
-   sync data from device to host
+   sync owned spin and quaternion data to host: an exact copy. Host ghost
+   entries come from the ghost exchange, not from here.
 ------------------------------------------------------------------------- */
 
 void AppPottsQuaternionKokkos::sync_app_data_to_host()
 {
-  const int nall = nlocal + nghost;
-  ensure_sync_mirrors();
-
-  // Sync spin: straight copy of the OWNED slice, in one block. The range
-  // matches the previous element loop exactly (nlocal, not nall -- host ghost
-  // entries come from the ghost exchange, not from here).
-  const auto owned = Kokkos::make_pair(0, nlocal);
-  Kokkos::deep_copy(
-      Kokkos::subview(
-          Kokkos::View<int*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>(spin, nall), owned),
-      Kokkos::subview(d_spin, owned));
-
-  // Sync quaternions with normalization
-  Kokkos::deep_copy(h_q0_m, d_q0);
-  Kokkos::deep_copy(h_qx_m, d_qx);
-  Kokkos::deep_copy(h_qy_m, d_qy);
-  Kokkos::deep_copy(h_qz_m, d_qz);
-
-  // Threaded, but otherwise byte-for-byte the previous loop -- see the note in
-  // sync_app_data_to_device on why the normalisation arithmetic is left exactly
-  // as it was. Per-element independent, no reduction, so threading cannot
-  // change a single result bit.
-  #pragma omp parallel for schedule(static)
-  for (int i = 0; i < nlocal; i++) {
-    double norm = sqrt(h_q0_m(i)*h_q0_m(i) + h_qx_m(i)*h_qx_m(i) +
-                       h_qy_m(i)*h_qy_m(i) + h_qz_m(i)*h_qz_m(i));
-    if (norm > 1.0e-15) {
-      double inv_norm = 1.0 / norm;
-      q0[i] = h_q0_m(i) * inv_norm;
-      qx[i] = h_qx_m(i) * inv_norm;
-      qy[i] = h_qy_m(i) * inv_norm;
-      qz[i] = h_qz_m(i) * inv_norm;
-    } else {
-      q0[i] = h_q0_m(i);
-      qx[i] = h_qx_m(i);
-      qy[i] = h_qy_m(i);
-      qz[i] = h_qz_m(i);
-    }
-  }
+  download_range(spin, d_spin, nlocal);
+  download_range(q0, d_q0, nlocal);
+  download_range(qx, d_qx, nlocal);
+  download_range(qy, d_qy, nlocal);
+  download_range(qz, d_qz, nlocal);
 }
 
 /* ----------------------------------------------------------------------
-   normalize quaternion arrays on host
+   upload the ghost range after a forward exchange. A pure copy: ghosts are
+   another rank's owned values, which are already unit (the run-start upload
+   normalises, and sweeps only copy whole quaternions between sites).
 ------------------------------------------------------------------------- */
 
-void AppPottsQuaternionKokkos::normalize_quaternion_arrays(
-    double* q0_out, double* qx_out, double* qy_out, double* qz_out,
-    const double* q0_in, const double* qx_in,
-    const double* qy_in, const double* qz_in, int n)
+void AppPottsQuaternionKokkos::sync_ghosts_to_device()
 {
-  for (int i = 0; i < n; i++) {
-    double norm = sqrt(q0_in[i]*q0_in[i] + qx_in[i]*qx_in[i] +
-                       qy_in[i]*qy_in[i] + qz_in[i]*qz_in[i]);
-
-    if (norm > 1.0e-15) {
-      double inv_norm = 1.0 / norm;
-      q0_out[i] = q0_in[i] * inv_norm;
-      qx_out[i] = qx_in[i] * inv_norm;
-      qy_out[i] = qy_in[i] * inv_norm;
-      qz_out[i] = qz_in[i] * inv_norm;
-    } else {
-      q0_out[i] = q0_in[i];
-      qx_out[i] = qx_in[i];
-      qy_out[i] = qy_in[i];
-      qz_out[i] = qz_in[i];
-    }
-  }
+  const int first = nlocal, last = nlocal + nghost;
+  upload_range(d_spin, spin, first, last);
+  upload_range(d_q0, q0, first, last);
+  upload_range(d_qx, qx, first, last);
+  upload_range(d_qy, qy, first, last);
+  upload_range(d_qz, qz, first, last);
 }
 
 /* ----------------------------------------------------------------------

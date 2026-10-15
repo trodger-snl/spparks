@@ -32,6 +32,7 @@ class CommLattice : protected Pointers {
   void all_reverse();
   void sector(int);
   void reverse_sector(int);
+  int reverse_needed() const { return delreverse; }  // 0: reverse calls no-op
 
  private:
   int me,nprocs;

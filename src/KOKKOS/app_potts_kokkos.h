@@ -44,6 +44,7 @@ public:
   // Implement required virtual methods from AppLatticeKokkos
   virtual void sync_app_data_to_device() override;
   virtual void sync_app_data_to_host() override;
+  void sync_ghosts_to_device() override;
   virtual void allocate_app_views() override;
   virtual void sweep_color_kokkos(int color, int start, int count) override;
 

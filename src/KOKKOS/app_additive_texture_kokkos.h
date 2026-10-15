@@ -52,6 +52,9 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos {
   // Override required virtual methods from AppLatticeKokkos
   virtual void sync_app_data_to_device() override;
   virtual void sync_app_data_to_host() override;
+  // Back to the full upload: the quaternion parent's ghost-range version
+  // moves only spin/quaternions and would drop the AM arrays.
+  void sync_ghosts_to_device() override { sync_app_data_to_device(); }
   virtual void allocate_app_views() override;
 
   // Temperature field management

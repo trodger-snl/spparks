@@ -76,6 +76,28 @@ public:
   // Sync app-specific data (spin, quaternions, etc.)
   virtual void sync_app_data_to_device() = 0;
   virtual void sync_app_data_to_host() = 0;
+  // Upload only the ghost range [nlocal,nall) after a forward exchange.
+  // Default is the full upload; apps whose sync is a pure copy override it.
+  virtual void sync_ghosts_to_device() { sync_app_data_to_device(); }
+  void ensure_host_data_current();
+  // Copy d[0,n) into host[0,n): a straight download.
+  template <class T>
+  static void download_range(T* host, const Kokkos::View<T*>& d, int n) {
+    if (n <= 0) return;
+    Kokkos::deep_copy(
+        Kokkos::View<T*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(host, n),
+        Kokkos::subview(d, Kokkos::make_pair(0, n)));
+  }
+  // Copy host[first,last) into d[first,last): a straight range upload.
+  template <class T>
+  static void upload_range(const Kokkos::View<T*>& d, const T* host, int first, int last) {
+    if (last <= first) return;
+    const auto r = Kokkos::make_pair(first, last);
+    Kokkos::deep_copy(Kokkos::subview(d, r),
+        Kokkos::View<const T*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>(
+            host + first, last - first));
+  }
+  bool host_data_stale = false;
 
   // Allocate app-specific Kokkos views
   virtual void allocate_app_views() = 0;

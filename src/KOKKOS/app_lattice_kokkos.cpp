@@ -314,6 +314,22 @@ void AppLatticeKokkos::iterate_rejection(double stoptime)
     Kokkos::deep_copy(h_offsets_vec[s], d_color_offsets_vec[s]);
   }
 
+  // The device holds the authoritative field data for the whole run. The host
+  // copy is refreshed only when something on the host reads it: the ghost
+  // exchange (np > 1), app_update, output, and the end of the run. At np = 1
+  // that removes a full device->host->device round trip per sector per sweep.
+  //
+  // Seed the device once here: App::run() calls init() only on the first run
+  // (or `pre yes`), so host-side changes between runs (`set`, `run ... pre
+  // no`) must be pushed now that there is no per-sector upload.
+  // The upload may change the data (potts/quaternion/kk normalises), so the
+  // host is stale from here on: the first exchange must ship what the device
+  // holds, or other ranks' ghosts differ in the low bits from the owner's.
+  timer->stamp();
+  sync_app_data_to_device();
+  host_data_stale = true;
+  timer->stamp(TIME_SOLVE);
+
   int done = 0;
   while (!done) {
     // For each sector (or single pass if no sectors)
@@ -321,24 +337,24 @@ void AppLatticeKokkos::iterate_rejection(double stoptime)
 
     for (int iset = 0; iset < nset_loop; iset++) {
 
-      // MPI communication
+      // Ghost exchange: owned sites to host, swap, received ghosts (the
+      // contiguous range [nlocal,nall)) back to the device.
       if (nprocs > 1) {
         timer->stamp();
-        sync_app_data_to_host();  // Virtual - derived class implements
+        ensure_host_data_current();
         timer->stamp(TIME_SOLVE);
 
         timer->stamp();
         if (sectorflag) comm->sector(iset);
         else comm->all();
         timer->stamp(TIME_COMM);
+
+        timer->stamp();
+        sync_ghosts_to_device();
+        timer->stamp(TIME_SOLVE);
       }
 
       if (Lmask) boundary_clear_mask(iset);
-
-      // Sync to device after MPI
-      timer->stamp();
-      sync_app_data_to_device();  // Virtual - derived class implements
-      timer->stamp(TIME_SOLVE);
 
       // Determine which sector's color lists to use
       // When bothflag=1, use iset (the current sector)
@@ -353,23 +369,15 @@ void AppLatticeKokkos::iterate_rejection(double stoptime)
 
         // Colors WITHOUT sectors need a ghost refresh BETWEEN colors at np > 1:
         // color c-1 writes owned sites that are color c's neighbors on another
-        // rank, and those updates have to cross before c is swept. With one
-        // exchange per sweep the ghosts went stale between colors, which is
-        // silently decomposition-dependent rather than a crash -- and it defeats
-        // the entire point of `sweep color/strict`, whose guarantee is that the
-        // answer does not depend on the decomposition. This mirrors what
-        // AppLattice does for the same combination (nset == ncolors, one
-        // comm->all() per set, app_lattice.cpp:660-667).
-        //
-        // icolor == 0 is already covered by the exchange above. Skipped entirely
-        // at np == 1 (no ghosts) and when sectoring (one exchange per sector is
-        // sufficient there) -- so neither of those paths changes at all. The
-        // np == 1 skip is load-bearing, not just an optimization:
-        // sync_app_data_to_device() would copy the stale host arrays back over
-        // the previous color's device results.
+        // rank, and those updates have to cross before c is swept. Without it
+        // the ghosts go stale between colors, which silently makes the result
+        // decomposition-dependent and defeats `sweep color/strict`. This
+        // mirrors AppLattice (nset == ncolors, one comm->all() per set,
+        // app_lattice.cpp:660-667). icolor == 0 is covered by the exchange
+        // above; sectoring needs only one exchange per sector.
         if (nprocs > 1 && !sectorflag && icolor > 0) {
           timer->stamp();
-          sync_app_data_to_host();
+          ensure_host_data_current();
           timer->stamp(TIME_SOLVE);
 
           timer->stamp();
@@ -377,7 +385,7 @@ void AppLatticeKokkos::iterate_rejection(double stoptime)
           timer->stamp(TIME_COMM);
 
           timer->stamp();
-          sync_app_data_to_device();
+          sync_ghosts_to_device();
           timer->stamp(TIME_SOLVE);
         }
 
@@ -390,6 +398,7 @@ void AppLatticeKokkos::iterate_rejection(double stoptime)
 
           // CRITICAL: Fence before next color to ensure writes are visible
           Kokkos::fence();
+          host_data_stale = true;
 
           // Count the sites this kernel actually attempted. Adding nlocal once
           // per sector instead overcounted by nsector (each sector's lists hold
@@ -398,26 +407,56 @@ void AppLatticeKokkos::iterate_rejection(double stoptime)
         }
       }
 
-      // Sync back for reverse communication
-      timer->stamp();
-      sync_app_data_to_host();
-      timer->stamp(TIME_SOLVE);
+      // Reverse comm writes owned host sites, so the device needs them back.
+      // Every Potts app has delevent = 0, which makes it a no-op (skipped).
+      if (nprocs > 1 && comm->reverse_needed()) {
+        timer->stamp();
+        ensure_host_data_current();
+        timer->stamp(TIME_SOLVE);
 
-      if (nprocs > 1) {
         timer->stamp();
         if (sectorflag) comm->reverse_sector(iset);
         else comm->all_reverse();
         timer->stamp(TIME_COMM);
+
+        timer->stamp();
+        sync_app_data_to_device();
+        host_data_stale = true;
+        timer->stamp(TIME_SOLVE);
       }
     }
 
-    // Time advancement
-    if (allow_app_update) app_update(dt_rkmc);
+    // Time advancement. app_update runs on the host arrays.
+    if (allow_app_update) {
+      ensure_host_data_current();
+      app_update(dt_rkmc);
+      sync_app_data_to_device();
+      host_data_stale = true;
+    }
     nsweeps++;
     time += dt_rkmc;
 
     if (time >= stoptime) done = 1;
-    if (done || time >= nextoutput) nextoutput = output->compute(time, done);
+    if (done || time >= nextoutput) {
+      timer->stamp();
+      ensure_host_data_current();
+      timer->stamp(TIME_SOLVE);
+      nextoutput = output->compute(time, done);
+    }
     timer->stamp(TIME_OUTPUT);
   }
+
+  // Leave the host current for whatever runs after (next command, dumps).
+  ensure_host_data_current();
+}
+
+/* ----------------------------------------------------------------------
+   device -> host copy of the owned field data, only if a sweep ran since
+------------------------------------------------------------------------- */
+
+void AppLatticeKokkos::ensure_host_data_current()
+{
+  if (!host_data_stale) return;
+  sync_app_data_to_host();
+  host_data_stale = false;
 }

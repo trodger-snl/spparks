@@ -146,6 +146,15 @@ void AppPottsKokkos::sync_app_data_to_host()
 }
 
 /* ----------------------------------------------------------------------
+   upload the ghost range after a forward exchange
+------------------------------------------------------------------------- */
+
+void AppPottsKokkos::sync_ghosts_to_device()
+{
+  upload_range(d_spin, spin, nlocal, nlocal + nghost);
+}
+
+/* ----------------------------------------------------------------------
    compute energy of site i
 ------------------------------------------------------------------------- */
 

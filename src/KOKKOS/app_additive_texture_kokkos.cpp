@@ -570,8 +570,9 @@ double AppAdditiveTextureKokkos::global_max_temperature_from_fill()
    no MPI -- so single-rank runs keep byte-for-byte the behaviour every GPU
    result to date was validated against.
 
-   Before the first result has landed the reported value is +infinity
-   ("assume hot"), which suppresses a fast-forward rather than inventing one.
+   Before the first result has landed the reported value is DBL_MAX ("assume
+   hot"), which suppresses a fast-forward rather than inventing one. Not
+   +infinity: Release builds use -ffast-math, under which infinity is UB.
 ------------------------------------------------------------------------- */
 
 double AppAdditiveTextureKokkos::global_max_temperature_from_fill_stale()
@@ -592,7 +593,7 @@ double AppAdditiveTextureKokkos::global_max_temperature_from_fill_stale()
   ff_ia_active = true;
 
   return ff_gmax_primed ? ff_gmax_prev
-                        : std::numeric_limits<double>::infinity();
+                        : std::numeric_limits<double>::max();
 }
 
 /* ----------------------------------------------------------------------

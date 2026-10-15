@@ -46,7 +46,8 @@ namespace SPPARKS_NS {
 
 struct RandomParkDevice {
   // Park/Miller constants, as in src/random_park.cpp
-  enum : int { PM_IA = 16807, PM_IM = 2147483647, PM_IQ = 127773, PM_IR = 2836 };
+  static constexpr int PM_IA = 16807, PM_IM = 2147483647, PM_IQ = 127773,
+                       PM_IR = 2836;
 
   int seed;
 

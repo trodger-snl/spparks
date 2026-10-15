@@ -88,7 +88,6 @@ option(SPPARKS_ENABLE_PNG "Enable PNG support" OFF)
 option(SPPARKS_ENABLE_HDF5 "Enable HDF5 support" OFF)
 option(SPPARKS_ENABLE_HIGHFIVE "Enable HighFive C++ HDF5 wrapper" OFF)
 option(SPPARKS_USE_EXTERNAL_HIGHFIVE "Use system-provided HighFive instead of FetchContent" OFF)
-option(SPPARKS_UNORDERED_MAP "Use unordered_map" OFF)
 
 # Packages: optional components whose sources live in src/KOKKOS/ and src/STITCH/
 # and compile from there (no copying into src/).
@@ -157,9 +156,6 @@ if(SPPARKS_ENABLE_GZIP)
     add_compile_definitions(SPPARKS_GZIP)
 endif()
 
-if(SPPARKS_UNORDERED_MAP)
-    add_compile_definitions(SPPARKS_UNORDERED_MAP)
-endif()
 
 if(SPPARKS_ENABLE_JPEG)
     # First try standard CMake FindJPEG

@@ -152,6 +152,7 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
 
   allow_app_update = 1;
   app_update_only = 1;  // Skip solid-state growth for now
+  allow_kmc = 0;        // all physics is in app_update; no KMC path
 
   // Initialize pointers
   active_flag = nullptr;

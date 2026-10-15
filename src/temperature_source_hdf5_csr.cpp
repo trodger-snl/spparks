@@ -14,7 +14,9 @@
 #include "temperature_source_hdf5_csr.h"
 #include "universe.h"
 #include "error.h"
+#ifdef SPPARKS_HIGHFIVE
 #include "highfive/highfive.hpp"
+#endif
 #include <numeric>
 
 using namespace SPPARKS_NS;
@@ -32,6 +34,11 @@ void HDF5CSRTemperatureSource::read_time_temperature_data(
   HighFive::Group& grp,
   const std::vector<std::array<size_t, 2>>& nodeSlices)
 {
+#ifndef SPPARKS_HIGHFIVE
+  (void)grp;
+  (void)nodeSlices;
+  error->all(FLERR, "HDF5 temperature sources need a build with HighFive (-DSPPARKS_ENABLE_HIGHFIVE=ON)");
+#else
   // ------------------------------------------------------------------
   // 1. Build offset slices from nodeSlices.  Each node slice [a,b)
   //    needs nodeOffsets[a..b] (inclusive), i.e. range [a, b+1).
@@ -122,4 +129,5 @@ void HDF5CSRTemperatureSource::read_time_temperature_data(
   std::vector<size_t> localOffsets2 = localOffsets;
   times = CompressedArray2D<double>(std::move(timesFlat), std::move(localOffsets));
   temperatures = CompressedArray2D<double>(std::move(tempsFlat), std::move(localOffsets2));
+#endif
 }

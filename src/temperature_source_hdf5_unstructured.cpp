@@ -16,7 +16,9 @@
 #include "error.h"
 #include "universe.h"
 #include "app.h"
+#ifdef SPPARKS_HIGHFIVE
 #include "highfive/highfive.hpp"
+#endif
 #include <algorithm>
 #include <functional>
 #include <numeric>
@@ -67,6 +69,10 @@ HDF5UnstructuredTemperatureSource::~HDF5UnstructuredTemperatureSource()
 
 void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vector<std::string> &args)
 {
+#ifndef SPPARKS_HIGHFIVE
+  (void)args;
+  error->all(FLERR, "HDF5 temperature sources need a build with HighFive (-DSPPARKS_ENABLE_HIGHFIVE=ON)");
+#else
   // Parse arguments: filename dx threshold_temp default_temp [ignored] [grid_cell_mult]
   // (args[4] was a bounds_check_mode that nothing ever read; the slot is kept
   // so existing decks that pass grid_cell_mult in position 5 keep working.)
@@ -155,6 +161,7 @@ void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vect
   if (universe->me == 0) {
     print_source_info();
   }
+#endif
 }
 
 /* ---------------------------------------------------------------------- */
@@ -200,6 +207,10 @@ void HDF5UnstructuredTemperatureSource::print_source_info() const
 
 void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
 {
+#ifndef SPPARKS_HIGHFIVE
+  (void)layerIdx;
+  error->all(FLERR, "HDF5 temperature sources need a build with HighFive (-DSPPARKS_ENABLE_HIGHFIVE=ON)");
+#else
   auto load_start = std::chrono::high_resolution_clock::now();
 
   if (universe->me == 0) {
@@ -448,6 +459,7 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
     fprintf(screen, "  Layer load time: %.3f s (avg: %.3f s over %d loads)\n",
             load_time, total_layer_load_time / layer_load_count, layer_load_count);
   }
+#endif
 }
 
 /* ---------------------------------------------------------------------- */
@@ -488,6 +500,7 @@ void HDF5UnstructuredTemperatureSource::clear_layer_data()
 
 /* ---------------------------------------------------------------------- */
 
+#ifdef SPPARKS_HIGHFIVE
 HighFive::HyperSlab HDF5UnstructuredTemperatureSource::build_hyperslab(
   const std::vector<std::array<size_t, 2>>& slices,
   const std::array<size_t, 2>& cols)
@@ -522,6 +535,7 @@ HighFive::HyperSlab HDF5UnstructuredTemperatureSource::build_hyperslab_1d(
   }
   return result;
 }
+#endif // SPPARKS_HIGHFIVE
 
 /* ---------------------------------------------------------------------- */
 
@@ -529,6 +543,11 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
   HighFive::Group& grp,
   const std::vector<std::array<size_t, 2>>& nodeSlices)
 {
+#ifndef SPPARKS_HIGHFIVE
+  (void)grp;
+  (void)nodeSlices;
+  error->all(FLERR, "HDF5 temperature sources need a build with HighFive (-DSPPARKS_ENABLE_HIGHFIVE=ON)");
+#else
   // Streaming implementation: read one chunk at a time from the padded 2D
   // datasets, stripping padding on the fly into pre-allocated CSR arrays.
   // Peak temporary buffer = max_chunk_rows × readCols × 8 bytes.
@@ -598,6 +617,7 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
   auto offsets2 = offsets;  // copy before first move
   times = CompressedArray2D<double>(std::move(timesFlat), std::move(offsets));
   temperatures = CompressedArray2D<double>(std::move(tempsFlat), std::move(offsets2));
+#endif
 }
 
 /* ---------------------------------------------------------------------- */

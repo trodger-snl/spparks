@@ -57,8 +57,10 @@ list and the style headers are built at configure time.
 
 `style_*.h` headers are auto-generated (`src/cmake/generate_styles.cmake`) and
 register app/command/etc. classes via `AppStyle(...)` macros in the headers.
-The `additive/texture*` styles are gated on **HighFive + MPI**
-(`src/cmake/ConditionalSources.cmake`). If a style is "not recognized" at
+The `additive/texture*` styles are gated on **MPI** only
+(`src/cmake/ConditionalSources.cmake`); HighFive (`--highfive`) adds the
+`hdf5_*` temperature sources, which otherwise error at input time
+(`#ifdef SPPARKS_HIGHFIVE` in `temperature_source_hdf5_*.cpp`). If a style is "not recognized" at
 runtime, the style header generation skipped it — check that gating, not the
 C++. Any `cmake -S src -B <dir>` rewrites the shared `src/style_*.h`, so a
 scratch configure with fewer features can deregister styles for a working

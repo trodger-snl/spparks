@@ -32,7 +32,6 @@
 #include "temperature_source_rosenthal.h"
 #include "temperature_source_moser.h"
 #include "temperature_source_hdf5_unstructured.h"
-#include "am_temp_precision.h"
 #include "grain_walk.h"
 
 // Grain-walk state provider for the device kernels: cached OU recurrence
@@ -688,7 +687,7 @@ void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
   Kokkos::parallel_reduce("RosenthalFill", nall, KOKKOS_LAMBDA(const int i, double &m) {
     // Site physical coordinates (meters). The site-minus-laser differences are
     // computed in double: (site - laser) is cancellation-prone (both operands
-    // are ~domain-scale) and cheap, so it stays FP64 regardless of AMReal.
+    // are ~domain-scale) and cheap, so it stays FP64 regardless of fastreal.
     const double x = d_xyz_local(i,0) * dx_l;
     const double y = d_xyz_local(i,1) * dx_l;
     const double z = d_xyz_local(i,2) * dx_l;
@@ -705,40 +704,40 @@ void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
     double Tval = p.T0;
     // Free-surface cutoff: vacuum above the laser plane. Inactive path -> p.T0.
     if (p.scan_active && z_rel_d <= 0.0) {
-      // Cast the (small, pool-local) coordinates and material params to AMReal.
-      // The transcendental kernel math below runs in AMReal -- FP32 when built
-      // -DSPK_AM_TEMP_FP32, otherwise identical FP64 to the original path.
-      const AMReal xi = (AMReal)xi_d;
-      const AMReal y_rel = (AMReal)y_rel_d;
-      const AMReal z_rel = (AMReal)z_rel_d;
-      const AMReal rv = (AMReal)p.v, rr_min = (AMReal)p.r_min;
-      const AMReal rk_cond = (AMReal)p.k_cond, ralpha = (AMReal)p.alpha;
-      const AMReal rtwo_pi = (AMReal)two_pi;
+      // Cast the (small, pool-local) coordinates and material params to fastreal.
+      // The transcendental kernel math below runs in fastreal -- FP32 when built
+      // -DSPPARKS_FP32, otherwise identical FP64 to the original path.
+      const fastreal xi = (fastreal)xi_d;
+      const fastreal y_rel = (fastreal)y_rel_d;
+      const fastreal z_rel = (fastreal)z_rel_d;
+      const fastreal rv = (fastreal)p.v, rr_min = (fastreal)p.r_min;
+      const fastreal rk_cond = (fastreal)p.k_cond, ralpha = (fastreal)p.alpha;
+      const fastreal rtwo_pi = (fastreal)two_pi;
       if (p.mode == 2) {
         // KEYHOLE: image-doubled surface point source + buried line source
         // integrated over the Gauss-Legendre nodes (image-doubled per node).
-        const AMReal R = Kokkos::sqrt(xi*xi + y_rel*y_rel + z_rel*z_rel);
-        AMReal T_rise = (AMReal)2 * rosenthal_device_kernel<AMReal>(
-                            (AMReal)p.lambda_pQ, rv, xi, R, rr_min, rk_cond, ralpha, rtwo_pi);
+        const fastreal R = Kokkos::sqrt(xi*xi + y_rel*y_rel + z_rel*z_rel);
+        fastreal T_rise = (fastreal)2 * rosenthal_device_kernel<fastreal>(
+                            (fastreal)p.lambda_pQ, rv, xi, R, rr_min, rk_cond, ralpha, rtwo_pi);
         for (int q = 0; q < p.n_quad; q++) {
-          const AMReal zarg = (AMReal)qnodes(q) + z_rel;
-          const AMReal Rp = Kokkos::sqrt(xi*xi + y_rel*y_rel + zarg*zarg);
-          T_rise += (AMReal)2 * (AMReal)qweights(q) *
-                    rosenthal_device_kernel<AMReal>(
-                        (AMReal)p.lambda_lQ, rv, xi, Rp, rr_min, rk_cond, ralpha, rtwo_pi);
+          const fastreal zarg = (fastreal)qnodes(q) + z_rel;
+          const fastreal Rp = Kokkos::sqrt(xi*xi + y_rel*y_rel + zarg*zarg);
+          T_rise += (fastreal)2 * (fastreal)qweights(q) *
+                    rosenthal_device_kernel<fastreal>(
+                        (fastreal)p.lambda_lQ, rv, xi, Rp, rr_min, rk_cond, ralpha, rtwo_pi);
         }
         Tval = p.T0 + (double)T_rise;
       } else {
-        AMReal R;
+        fastreal R;
         if (p.mode == 1) {                            // ANISOTROPIC
-          const AMReal yy = (AMReal)p.eta_y * y_rel;
-          const AMReal zz = (AMReal)p.eta_z * z_rel;
+          const fastreal yy = (fastreal)p.eta_y * y_rel;
+          const fastreal zz = (fastreal)p.eta_z * z_rel;
           R = Kokkos::sqrt(xi*xi + yy*yy + zz*zz);
         } else {                                    // STANDARD
           R = Kokkos::sqrt(xi*xi + y_rel*y_rel + z_rel*z_rel);
         }
-        Tval = p.T0 + 2.0 * (double)rosenthal_device_kernel<AMReal>(
-                              (AMReal)p.lambdaQ, rv, xi, R, rr_min, rk_cond, ralpha, rtwo_pi);
+        Tval = p.T0 + 2.0 * (double)rosenthal_device_kernel<fastreal>(
+                              (fastreal)p.lambdaQ, rv, xi, R, rr_min, rk_cond, ralpha, rtwo_pi);
       }
     }
     d_T(i) = Tval;
@@ -955,18 +954,18 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
             const double yt = -cx*ny_i + cy*nx_i;
             const double zt = z - zl;
             const double xeff_d = xt - sp_i*(s - t0_i);
-            // Per-node Gaussian in AMReal (float exp/sqrt/reciprocals when built
-            // -DSPK_AM_TEMP_FP32; identical FP64 to the original otherwise). The
+            // Per-node Gaussian in fastreal (float exp/sqrt/reciprocals when built
+            // -DSPPARKS_FP32; identical FP64 to the original otherwise). The
             // differenced coordinates above are already small, so the cast is safe.
-            const AMReal sxu = (AMReal)sx*(AMReal)fW, syu = (AMReal)sy*(AMReal)fW;
-            const AMReal szu = (AMReal)sz*(AMReal)fD, pu = (AMReal)p_i*(AMReal)fP;
-            const AMReal st = (AMReal)st_d;
-            const AMReal xeff = (AMReal)xeff_d, ytr = (AMReal)yt, ztr = (AMReal)zt;
-            const AMReal vx = (AMReal)1/(sxu*sxu+st), vy = (AMReal)1/(syu*syu+st),
-                         vz = (AMReal)1/(szu*szu+st);
-            const AMReal e = Kokkos::exp(-xeff*xeff*vx - ytr*ytr*vy - ztr*ztr*vz);
-            const AMReal term = ((AMReal)2*pu/(AMReal)p.c*(AMReal)invPi3_2 * e *
-                                 Kokkos::sqrt(vx*vy*vz)) * (AMReal)w;
+            const fastreal sxu = (fastreal)sx*(fastreal)fW, syu = (fastreal)sy*(fastreal)fW;
+            const fastreal szu = (fastreal)sz*(fastreal)fD, pu = (fastreal)p_i*(fastreal)fP;
+            const fastreal st = (fastreal)st_d;
+            const fastreal xeff = (fastreal)xeff_d, ytr = (fastreal)yt, ztr = (fastreal)zt;
+            const fastreal vx = (fastreal)1/(sxu*sxu+st), vy = (fastreal)1/(syu*syu+st),
+                         vz = (fastreal)1/(szu*szu+st);
+            const fastreal e = Kokkos::exp(-xeff*xeff*vx - ytr*ytr*vy - ztr*ztr*vz);
+            const fastreal term = ((fastreal)2*pu/(fastreal)p.c*(fastreal)invPi3_2 * e *
+                                 Kokkos::sqrt(vx*vy*vz)) * (fastreal)w;
             sum += (double)term;
           }
           // GL needs the *pmid scale; the midpoint rule already used (bb-a) as w.
@@ -1018,7 +1017,7 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
     thermal->hdf5_source()->copy_device_cache(node_idx, weights, valid);
 
     d_hdf5_node_idx = Kokkos::View<int*[4]>("hdf5_node_idx", n);
-    d_hdf5_weights  = Kokkos::View<AMReal*[3]>("hdf5_weights", n);
+    d_hdf5_weights  = Kokkos::View<fastreal*[3]>("hdf5_weights", n);
     d_hdf5_valid    = Kokkos::View<int*>("hdf5_valid", n);
     auto h_idx = Kokkos::create_mirror_view(d_hdf5_node_idx);
     auto h_w   = Kokkos::create_mirror_view(d_hdf5_weights);
@@ -1027,9 +1026,9 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
       h_v(i) = valid[i];
       const size_t i4 = (size_t)i * 4, i3 = (size_t)i * 3;  // avoid int overflow
       for (int j = 0; j < 4; j++) h_idx(i, j) = node_idx[i4 + j];
-      // Narrowed to AMReal under FP32 (weights are barycentric, in [0,1]);
+      // Narrowed to fastreal under FP32 (weights are barycentric, in [0,1]);
       // a no-op cast in the default FP64 build.
-      for (int j = 0; j < 3; j++) h_w(i, j) = (AMReal) weights[i3 + j];
+      for (int j = 0; j < 3; j++) h_w(i, j) = (fastreal) weights[i3 + j];
     }
     Kokkos::deep_copy(d_hdf5_node_idx, h_idx);
     Kokkos::deep_copy(d_hdf5_weights, h_w);
@@ -1048,7 +1047,7 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
   const HDF5UnstructuredTemperatureSource *hdf5 = thermal->hdf5_source();
   const bool dti = hdf5->device_time_interp_active();
   if ((int) d_hdf5_nodal_temps.extent(0) != nnodes)
-    d_hdf5_nodal_temps = Kokkos::View<AMReal*>("hdf5_nodal_temps", nnodes);
+    d_hdf5_nodal_temps = Kokkos::View<fastreal*>("hdf5_nodal_temps", nnodes);
 
   if (dti) {
     // (Re)upload the per-node raw time-series CSR + active-node list ONCE per
@@ -1064,9 +1063,9 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
       const int n_off = (int) ts_o.size();   // == n_nodes + 1
       if (n_samp > 0 && n_off > 1) {
         // Times ALWAYS stay FP64 (absolute sim times ~3.9e4 s on a 3e-6 s step)
-        // -- see am_temp_precision.h. Only the temperatures are narrowable.
+        // -- see fastreal in spktype.h. Only the temperatures are narrowable.
         d_ts_times   = upload_vec<double>("ts_times", ts_t);
-        d_ts_temps   = upload_vec<AMReal>("ts_temps", ts_T);
+        d_ts_temps   = upload_vec<fastreal>("ts_temps", ts_T);
         d_ts_offsets = upload_vec<int>("ts_offsets", ts_o);
 
         const std::vector<unsigned> &an = hdf5->timeseries_active_nodes();
@@ -1100,7 +1099,7 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
       const int start = tso(nd);
       const int count = tso(nd + 1) - start;
       const double tfirst = tst(start), tlast = tst(start + count - 1);
-      if (simtn < tfirst || simtn > tlast) { nt_out(nd) = (AMReal) defn; return; }
+      if (simtn < tfirst || simtn > tlast) { nt_out(nd) = (fastreal) defn; return; }
       int lo = 0, hi = count;                  // first idx with tst >= simtn
       while (lo < hi) {
         const int mid = (lo + hi) >> 1;
@@ -1112,14 +1111,14 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
       // expression to before; under FP32 the time math is still exact and only
       // the interpolated result is stored narrowed.
       const double ti0 = tst(start + idx - 1), ti1 = tst(start + idx);
-      const AMReal te0 = tsT(start + idx - 1), te1 = tsT(start + idx);
+      const fastreal te0 = tsT(start + idx - 1), te1 = tsT(start + idx);
       nt_out(nd) = te0 + (te1 - te0) / (ti1 - ti0) * (simtn - ti0);
     });
     }
   } else if (nnodes > 0) {
     // Fallback: the host precompute filled the slice; upload it per step.
     const std::vector<double> &nt = hdf5->nodal_temps();
-    d_hdf5_nodal_temps = upload_vec<AMReal>("hdf5_nodal_temps", nt.data(), nnodes);
+    d_hdf5_nodal_temps = upload_vec<fastreal>("hdf5_nodal_temps", nt.data(), nnodes);
   }
 
   auto d_T = k_T.view_device();
@@ -1149,17 +1148,17 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
   // here; this replaced a separate per-step Tmax pass over nlocal).
   double local_max = 0.0;
   Kokkos::parallel_reduce("HDF5Fill", n, KOKKOS_LAMBDA(const int i, double &m) {
-    // The gather-and-blend runs in AMReal. Under FP64 this is the identical
+    // The gather-and-blend runs in fastreal. Under FP64 this is the identical
     // expression (and the identical operation order) the host fast path is
     // validated against; under FP32 the four nodal reads and three weights are
     // half-width, which is the whole point -- this kernel streams them over
     // nall sites every step. The RESULT is always stored to the FP64 k_T field.
-    AMReal Ti;
+    fastreal Ti;
     if (!vld(i)) {
-      Ti = (AMReal) def;
+      Ti = (fastreal) def;
     } else {
       const int i0 = nidx(i, 0), i1 = nidx(i, 1), i2 = nidx(i, 2), i3 = nidx(i, 3);
-      const AMReal t0 = nt(i0);
+      const fastreal t0 = nt(i0);
       Ti = t0 + wts(i, 0) * (nt(i1) - t0)
               + wts(i, 1) * (nt(i2) - t0)
               + wts(i, 2) * (nt(i3) - t0);

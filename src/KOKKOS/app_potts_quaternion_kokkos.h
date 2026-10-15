@@ -24,7 +24,6 @@ AppStyle(potts/quaternion/kk,AppPottsQuaternionKokkos)
 #define SPK_APP_POTTS_QUATERNION_KOKKOS_H
 
 #include "app_lattice_kokkos.h"
-#include "quat_precision.h"
 #include <vector>
 
 namespace SPPARKS_NS {
@@ -135,7 +134,7 @@ protected:
     KOKKOS_INLINE_FUNCTION
     static double compute_disorientation(const double* symmetries, int num_sym,
                                          const double* q1, const double* q2) {
-#ifdef SPK_QUAT_FP32
+#ifdef SPPARKS_FP32
       // float argmax of |m0| over symmetries, then the angle of that one
       // misorientation from its vector part: acos near 1 would lose small
       // angles in float, atan2 does not
@@ -192,9 +191,9 @@ protected:
     // theta_cut: r (1 - ln r) for r = di/theta_cut < 1, else 1
     KOKKOS_INLINE_FUNCTION
     static double read_shockley(double di, double theta_cut) {
-      QReal ratio = (QReal)(di / theta_cut);
-      if (ratio <= (QReal)0) return 0.0;
-      if (ratio < (QReal)1) return (double)(ratio * ((QReal)1 - Kokkos::log(ratio)));
+      fastreal ratio = (fastreal)(di / theta_cut);
+      if (ratio <= (fastreal)0) return 0.0;
+      if (ratio < (fastreal)1) return (double)(ratio * ((fastreal)1 - Kokkos::log(ratio)));
       return 1.0;
     }
 

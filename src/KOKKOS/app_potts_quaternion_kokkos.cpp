@@ -346,7 +346,7 @@ double AppPottsQuaternionKokkos::site_energy(int i)
     const double qj[4] = {q0[nj], qx[nj], qy[nj], qz[nj]};
 
     // device formula on host too: no per-call vector allocations (KMC calls
-    // this nevent+1 times per site), and precision follows QReal
+    // this nevent+1 times per site), and precision follows fastreal
     double di = QuaternionOps::compute_disorientation(
       symmetries.data(), num_symmetries, qi, qj);
 

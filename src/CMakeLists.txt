@@ -131,32 +131,24 @@ else()
     add_compile_definitions(SPPARKS_SMALLBIG)
 endif()
 
-# Additive/texture device temperature-eval precision. Default OFF => FP64
-# (double), the HPC production precision and bit-for-bit CPU-validation
-# reference. ON => FP32 (float) for the additive/texture device temperature
-# work, at the cost of bit-exact validation. Two distinct wins, per source:
-#   * Rosenthal/Moser: compute-bound transcendental kernels, where
-#     RDNA/consumer GPUs (gfx1151) run FP64 at heavily reduced rate.
-#   * HDF5 unstructured: a gather-and-blend fill that is MEMORY-bound,
-#     so the win is halved traffic on the per-node temperature slice, the
-#     barycentric weights and the raw sample temperatures. Measured on the ct15
-#     10-layer decks, that fill is ~33% of per-box wall and is provably not
-#     host-threading-bound (flat across OMP_NUM_THREADS 1/4/16).
-# Absolute simulation times and the k_T field stay FP64 in both cases --
-# see src/KOKKOS/am_temp_precision.h for why narrowing them is not safe.
-option(SPPARKS_AM_TEMP_FP32 "Use FP32 for additive/texture device temperature kernels (Rosenthal/Moser + HDF5)" OFF)
-if(SPPARKS_AM_TEMP_FP32)
-    add_compile_definitions(SPK_AM_TEMP_FP32)
-endif()
-
-# potts/quaternion/kk disorientation + Read-Shockley precision. Default OFF =>
-# FP64, unchanged arithmetic. ON => FP32 (float), a win on RDNA/consumer GPUs
-# whose FP64 rate is heavily reduced: gfx1151, 256^3 sweep color/strict, loop
-# 59.5 -> 32.4 s (cubic), 40.9 -> 21.1 s (hcp); disorientation agrees with
-# FP64 to ~2e-5 deg. See src/KOKKOS/quat_precision.h.
-option(SPPARKS_QUAT_FP32 "Use FP32 for potts/quaternion/kk disorientation and energy math" OFF)
-if(SPPARKS_QUAT_FP32)
-    add_compile_definitions(SPK_QUAT_FP32)
+# Hot-kernel floating-point precision (fastreal, src/spktype.h). Default OFF =>
+# FP64, the HPC production precision and the bit-for-bit CPU-validation
+# reference. ON => FP32 where code opts in via fastreal, a win on RDNA/consumer
+# GPUs (gfx1151) whose FP64 rate is heavily reduced:
+#   * additive/texture/kk Rosenthal/Moser: compute-bound transcendental kernels.
+#   * additive/texture/kk HDF5 unstructured: memory-bound gather-and-blend;
+#     halved traffic (ct15 10-layer decks: that fill is ~33% of per-box wall,
+#     flat across OMP_NUM_THREADS 1/4/16).
+#   * potts/quaternion/kk: 256^3 sweep color/strict loop 59.5 -> 32.4 s
+#     (cubic), 40.9 -> 21.1 s (hcp); disorientation within ~2e-5 deg of FP64.
+option(SPPARKS_FP32 "Use FP32 for hot-kernel math that opts in via fastreal (additive/texture/kk temperature, potts/quaternion/kk disorientation)" OFF)
+foreach(_old SPPARKS_AM_TEMP_FP32 SPPARKS_QUAT_FP32)
+    if(${_old})
+        message(FATAL_ERROR "${_old} was replaced by SPPARKS_FP32 (one switch for all fastreal code)")
+    endif()
+endforeach()
+if(SPPARKS_FP32)
+    add_compile_definitions(SPPARKS_FP32)
 endif()
 
 # Configure features

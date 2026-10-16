@@ -1526,6 +1526,9 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
         const int before = remaining;
         for (int j = 0; j < nn && remaining > 0; j++) {
           const int nbr = k_neighbor_d(center, order[j]);
+          // Owned sites only, as on the CPU: a claimed ghost never reaches its
+          // owner and is overwritten by the next exchange.
+          if (nbr >= nlocal_local) continue;
           if (Kokkos::atomic_compare_exchange(&d_active_flag_local(nbr), 2, 3) != 2) continue;
           remaining--;
 

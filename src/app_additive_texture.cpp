@@ -1057,23 +1057,27 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
     };
 
 
+    // Only OWNED sites are claimed: a ghost flipped here would never reach its
+    // owning rank (the next ghost exchange overwrites it), yet this rank's
+    // sites would see it as solid in the meantime.
+    // ponytail: a nucleus at a rank boundary stops at it; growing across needs
+    // a reverse comm of claimed ghosts.
+
     //Its hard to go through shells iteravely if the number of neighbors isn't the full 26.
     //Check if this is the case and just loop through the neihgbor list if so
     if(numneigh[i] != 26) {
 
         
         for(int j = 0; j < numneigh[i]; j++) {
-            if(active_flag[neighbor[i][j]] == 2) {
+            if(neighbor[i][j] < nlocal && active_flag[neighbor[i][j]] == 2) {
                 int i_chosen = neighbor[i][j];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
                 spath[i_chosen] = 0.0;
                 rotate_flipped(i_chosen);
-                if (i_chosen < nlocal) {
-                    solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
-                    G[i_chosen] = G[i];
-                    V[i_chosen] = V[i];
-                }
+                solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
+                G[i_chosen] = G[i];
+                V[i_chosen] = V[i];
                 nSites--;
                 naccept++;
             }
@@ -1116,17 +1120,15 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
         //Do 1st shell in randomized order
         for(int j = 0; j < 6; j++) {
             int idx = shell1_indices[j];
-            if(active_flag[neighbor[i][nearest_neigh[idx]]] == 2) {
+            if(neighbor[i][nearest_neigh[idx]] < nlocal && active_flag[neighbor[i][nearest_neigh[idx]]] == 2) {
                 int i_chosen = neighbor[i][nearest_neigh[idx]];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
                 spath[i_chosen] = 0.0;
                 rotate_flipped(i_chosen);
-                if (i_chosen < nlocal) {
-                    solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
-                    G[i_chosen] = G[i];
-                    V[i_chosen] = V[i];
-                }
+                solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
+                G[i_chosen] = G[i];
+                V[i_chosen] = V[i];
                 nSites--;
                 naccept++;
             }
@@ -1137,17 +1139,15 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
         //Do 2nd shell in randomized order
         for(int j = 0; j < 12; j++) {
             int idx = shell2_indices[j];
-            if(active_flag[neighbor[i][second_nearest[idx]]] == 2) {
+            if(neighbor[i][second_nearest[idx]] < nlocal && active_flag[neighbor[i][second_nearest[idx]]] == 2) {
                 int i_chosen = neighbor[i][second_nearest[idx]];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
                 spath[i_chosen] = 0.0;
                 rotate_flipped(i_chosen);
-                if (i_chosen < nlocal) {
-                    solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
-                    G[i_chosen] = G[i];
-                    V[i_chosen] = V[i];
-                }
+                solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
+                G[i_chosen] = G[i];
+                V[i_chosen] = V[i];
                 nSites--;
                 naccept++;
             }
@@ -1158,17 +1158,15 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
         //Do 3rd shell in randomized order   
         for(int j = 0; j < 8; j++) {
             int idx = shell3_indices[j];
-            if(active_flag[neighbor[i][third_nearest[idx]]] ==2) {
+            if(neighbor[i][third_nearest[idx]] < nlocal && active_flag[neighbor[i][third_nearest[idx]]] == 2) {
                 int i_chosen = neighbor[i][third_nearest[idx]];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
                 spath[i_chosen] = 0.0;
                 rotate_flipped(i_chosen);
-                if (i_chosen < nlocal) {
-                    solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
-                    G[i_chosen] = G[i];
-                    V[i_chosen] = V[i];
-                }
+                solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
+                G[i_chosen] = G[i];
+                V[i_chosen] = V[i];
                 nSites--;
                 naccept++;
             }

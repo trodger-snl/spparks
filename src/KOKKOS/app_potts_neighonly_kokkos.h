@@ -54,10 +54,11 @@ public:
   virtual double site_propensity(int) override;
   virtual void site_event(int, class RandomPark *) override;
 
-private:
-  // Sweep functor
+public:
+  // Public for nvcc: a __global__ kernel's template argument must be accessible.
   struct ColorSweepFunctor;
 
+private:
   // Temporary arrays for KMC
   int *sites, *unique;
 };

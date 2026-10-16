@@ -58,7 +58,8 @@ protected:
   // Temporary arrays for KMC (allocated if allow_kmc)
   int *sites, *unique;
 
-private:
+public:
+  // Public for nvcc: a __global__ kernel's template argument must be accessible.
   struct ColorSweepFunctor;
 };
 

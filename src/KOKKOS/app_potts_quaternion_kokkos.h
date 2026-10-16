@@ -381,10 +381,11 @@ protected:
     }
   };
 
-private:
-  // Sweep functor
+public:
+  // Public for nvcc: a __global__ kernel's template argument must be accessible.
   struct ColorSweepFunctor;
 
+private:
   // Temporary arrays for KMC
   int *sites, *unique_neigh;
 

@@ -37,7 +37,8 @@ public:
   void site_event_rejection(int, class RandomPark *) override;
   void sweep_color_kokkos(int color, int start, int count) override;
 
-private:
+public:
+  // Public for nvcc: a __global__ kernel's template argument must be accessible.
   struct ColorSweepFunctor;
 };
 

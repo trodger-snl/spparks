@@ -16,6 +16,9 @@ if(NOT DEFINED SPK_BINARY_DIR)
     set(SPK_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}")
 endif()
 if(CMAKE_SCRIPT_MODE_FILE)
+    # -P runs with no policies set; on CMake 3.x that leaves CMP0007 OLD and
+    # list() drops the empty prefix of the command rule below.
+    cmake_minimum_required(VERSION 3.22)
     include("${SPK_BINARY_DIR}/feature_status.cmake")
     include("${SPK_SOURCE_DIR}/cmake/ConditionalSources.cmake")
 endif()

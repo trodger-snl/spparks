@@ -140,5 +140,6 @@ current session.
 
 ## Reference docs
 
-`docs/AM_KOKKOS_PLAN.md` (the additive Kokkos plan/status), plus
+`docs/AM_KOKKOS_PLAN.md` (the additive Kokkos plan/status),
+`docs/CONDUCTION_SOURCE.md` (the nonlinear conduction temperature source), plus
 `docs/KOKKOS_HOT_LOOP_OPTIMIZATION.md`, `docs/KOKKOS_MULTI_GPU.md`, `docs/EL_CAPITAN_BUILD.md`.

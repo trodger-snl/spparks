@@ -96,6 +96,7 @@ void ConductionTemperatureSource::setup_temperature_source(
   if (!cfg.part_region.empty() &&
       domain->find_region((char *) cfg.part_region.c_str()) < 0)
     error->all(FLERR,"setup_temperature_source conduction: part region ID does not exist");
+  configured = true;
   print_source_info();
 }
 
@@ -110,7 +111,7 @@ double ConductionTemperatureSource::get_temperature_at_xyz_and_time(
 void ConductionTemperatureSource::print_source_info() const
 {
   // Moser's setup prints through this before the defaults below are set.
-  if (domain->me != 0 || cfg.k_T.empty()) return;
+  if (domain->me != 0 || !configured) return;
   std::cout << "conduction: absorbed P=" << lambda * Q << " W, rho=" << rho
             << ", k_powder=" << cfg.k_powder << ", " << cfg.k_T.size()
             << "-point k table, " << cfg.cp_T.size() << "-point cp table, latent="

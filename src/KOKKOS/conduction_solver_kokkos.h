@@ -29,6 +29,12 @@ namespace SPPARKS_NS {
    MPI: x/y follow the lattice procgrid (z is not split); each rank owns the
    cells over its own sites, and edge ranks also own the margin cells. A
    1-cell halo of T and phase is exchanged in x then y every sub-step.
+
+   ponytail: edge ranks carry all margin cells; rebalance by cell count if
+   margin-heavy decks show the imbalance.
+   ponytail: explicit step is bound by the finest cell, so pauses cost
+   pause/dt_fd sub-steps; RKL2 super-time-stepping keeps the same halo'd
+   stencil if that dominates.
 ------------------------------------------------------------------------- */
 
 class ConductionSolverKokkos : protected Pointers {

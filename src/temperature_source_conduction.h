@@ -91,6 +91,7 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
 
  private:
   Config cfg;
+  bool configured = false;   // set once the keyword defaults are filled in
   bool reset_pending = false;
   double reset_T = 0.0;
 };

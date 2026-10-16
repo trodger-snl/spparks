@@ -436,12 +436,13 @@ void AppAdditiveTextureKokkos::refresh_thermal_host()
   thermal_host_.time = time;
   thermal_host_.dt = dt;
   thermal_host_.comm = comm;
-  // No index-selective host ghost comm here: device buffers carry the KMC
-  // ghost exchange, so the manager's host smoothing paths see an empty list.
+  // The manager's host ghost comm moves T only (darray[5]): its smoothing
+  // passes read neighbour T. The device buffers carry the rest.
+  static const int T_index[1] = {5};
   thermal_host_.ghost_iindices = nullptr;
   thermal_host_.nghost_iarray = 0;
-  thermal_host_.ghost_dindices = nullptr;
-  thermal_host_.nghost_darray = 0;
+  thermal_host_.ghost_dindices = T_index;
+  thermal_host_.nghost_darray = 1;
 }
 
 /* ----------------------------------------------------------------------
@@ -2171,8 +2172,16 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   }
 
   // 2. Sync temperature to device (host path only; the device path already
-  //    wrote k_T on the GPU).
-  if (!device_temp) sync_temperature_to_device();
+  //    wrote k_T on the GPU). The host fill covers owned sites only, so ghost
+  //    T is exchanged first: this step's kernels read the neighbour T of this
+  //    step, as on the CPU.
+  if (!device_temp) {
+    timer->stamp();
+    comm->all_selective(thermal_host_.ghost_iindices, thermal_host_.nghost_iarray,
+                        thermal_host_.ghost_dindices, thermal_host_.nghost_darray);
+    timer->stamp(TIME_COMM);
+    sync_temperature_to_device();
+  }
 
   // 3. Gradient computation moved to on-demand inside solidification kernel
   // (Removed global compute_gradients_kernel() - gradients now computed only when needed)
@@ -2350,23 +2359,19 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     // gradient, neighbor temperature T (darray[5]). mobility/solid_d/G/V are
     // never read as neighbors, so they are dropped (full-synced only at output).
     //
-    // T is included ONLY on the host-temperature path (device_temp == false:
-    // Rosenthal keyhole / generic xyz / temperature_smooth). There the host fill
-    // covers nlocal only, so ghost T must be exchanged (host owned T is current
-    // from the fill; comm writes host ghost T, picked up by next step's
-    // sync_temperature_to_device). On a device-temp path the fill already wrote
-    // k_T over all nall positionally, so ghost T needs no comm.
+    // T is not exchanged here: on the host-temperature path (Rosenthal keyhole /
+    // generic xyz / temperature_smooth) ghost T was exchanged right after the
+    // fill, before the kernels; on a device-temp path the fill already wrote
+    // k_T over all nall positionally.
     //
     // sync_ghost_to_host/device move the OWNED out / ghost in for spin/
     // active_flag/q0-3 only (T lives in host T[]/k_T, handled above). all_selective
     // uses the same swap as all(), so the same ghost sites are exchanged.
     static const int sel_i[2] = {0, 1};            // spin, active_flag
-    static const int sel_d_dev[5]  = {0, 1, 2, 3, 9};       // q0-3 + spath (T device-resident)
-    static const int sel_d_host[6] = {0, 1, 2, 3, 5, 9};    // q0-3 + T (host fill) + spath
+    static const int sel_d[5] = {0, 1, 2, 3, 9};             // q0-3 + spath
     sync_ghost_to_host();                       // device owned -> host raw
     timer->stamp();
-    if (device_temp) comm->all_selective(sel_i, 2, sel_d_dev, 5);
-    else             comm->all_selective(sel_i, 2, sel_d_host, 6);
+    comm->all_selective(sel_i, 2, sel_d, 5);
     timer->stamp(TIME_COMM);
     sync_ghost_to_device();                     // host ghost -> device
   }

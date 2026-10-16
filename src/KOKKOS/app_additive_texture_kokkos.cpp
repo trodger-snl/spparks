@@ -347,10 +347,12 @@ void AppAdditiveTextureKokkos::init_app()
   // Sync initial data to device (including new arrays)
   sync_app_data_to_device();
 
-  // Initialize temperature field at t=0 via the ThermalManager (fills host T[]).
+  // Temperature field at the run's start time via the ThermalManager (fills
+  // host T[]), as the CPU app's app_update(0.0) does. Not t=0: on a second run
+  // that rewound the scan clock, and the next step moved the laser off the path.
   if (thermal->enabled()) {
     refresh_thermal_host();
-    thermal->update_temperatures(0.0);
+    thermal->update_temperatures(time);
   }
 
   // Note: Powder activation happens after meltpool appears, not during init

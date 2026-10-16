@@ -265,6 +265,7 @@ void AppAdditiveTextureKokkos::allocate_app_views()
   d_G = Kokkos::View<double*>("gradient_magnitude", nall);
   d_V = Kokkos::View<double*>("solidification_velocity", nall);
   d_spath = Kokkos::View<double*>("spath", nall);
+  d_mobility_out = Kokkos::View<double*>("mobility_out", nall);
 
   // Global parameter arrays (device-accessible constants); the per-spin
   // nucleation arrays and solid-front coefficients are uploaded at init.
@@ -394,6 +395,7 @@ void AppAdditiveTextureKokkos::sync_app_data_to_device()
   upload_range(d_active_flag, active_flag, 0, nall);
   upload_range(d_solid_d, solid_d, 0, nall);
   upload_range(d_spath, spath, 0, nall);
+  upload_range(d_mobility_out, mobility_out, 0, nall);
 }
 
 /* ----------------------------------------------------------------------
@@ -412,6 +414,7 @@ void AppAdditiveTextureKokkos::sync_app_data_to_host()
   download_range(G, d_G, nlocal);
   download_range(V, d_V, nlocal);
   download_range(spath, d_spath, nlocal);
+  download_range(mobility_out, d_mobility_out, nlocal);
 }
 
 /* ----------------------------------------------------------------------
@@ -1319,6 +1322,12 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
   auto d_solid_front_coeffs_local = this->d_solid_front_coeffs;
   int solid_front_length_local = this->solid_front_length;
   auto d_V_local = this->d_V;
+  auto d_G_local = this->d_G;
+  auto k_numneigh_d = d_numneigh;
+  auto k_neighbor_d = d_neighbor;
+  ensure_device_xyz();
+  auto k_xyz_d = d_xyz;
+  const double dx_local = dx;
 
   // Nucleation kernel: parallel over all local sites with event tracking
   // Race-free: each site only reads/writes itself
@@ -1363,6 +1372,15 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
 
             d_V_local(i) = solid_front_velocity(d_solid_front_coeffs_local,
                                                 solid_front_length_local, Tcool);
+
+            // Gradient magnitude, as the CPU's normal_finder in
+            // execute_nucleation_event; the flipper copies it to the nucleus.
+            double grad_dir[3];
+            double grad_magnitude = 0.0;
+            ThermalOps::compute_temperature_gradient(
+              i, d_T_local, d_active_flag_local, k_numneigh_d, k_neighbor_d, k_xyz_d, dx_local,
+              grad_dir, &grad_magnitude);
+            d_G_local(i) = grad_magnitude;
           }
           // No else branch - site keeps current values if not nucleating
         }
@@ -1906,6 +1924,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
   GwCached gw_sm; gw_sm.gid_of_spin = d_gw_gid; gw_sm.ngid = d_gw_ngid; gw_sm.nready = d_gw_nready; gw_sm.tab = d_gw_tab;
   gw_sm.maxgid = (d_gw_tab.extent(0) > 0) ? gw_maxgid : 0; gw_sm.maxlev = gw_maxlev; gw_sm.rms = gw_angle_smooth; gw_sm.rho = gw_rho_smooth;
   auto d_spath_local = d_spath;
+  auto d_mobility_out_local = d_mobility_out;
 
   // Parallel sweep over ONLY smoothing sites (not all sites!)
   int naccept_local = 0;
@@ -1919,6 +1938,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
       int i = d_smoothing_sites(idx);
       if (((static_cast<int>(k_xyz_d(i,0)) & 1) | ((static_cast<int>(k_xyz_d(i,1)) & 1) << 1) |
            ((static_cast<int>(k_xyz_d(i,2)) & 1) << 2)) != color_local) return;
+      d_mobility_out_local(i) = 1.0;   // the CPU marks every site it smooths
 
       // All sites in this list need smoothing - no branching needed!
       const int active_flag_i = d_active_flag_local(i);

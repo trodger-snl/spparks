@@ -211,6 +211,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   Kokkos::View<double*> d_G;        // Gradient magnitude
   Kokkos::View<double*> d_V;        // Solidification velocity
   Kokkos::View<double*> d_spath;    // inheritance path length (d10)
+  Kokkos::View<double*> d_mobility_out; // 1 once a site has been smoothed (d5), as on the CPU
 
   // Phase state arrays (device views - simple Views are race-safe for these kernels)
   Kokkos::View<int*> d_active_flag;      // 0=inactive, 1=active, 2=molten, 3=solidified, 5=void

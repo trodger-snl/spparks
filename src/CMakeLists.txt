@@ -45,8 +45,13 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
         message(STATUS "Enabled native CPU optimizations (-march=native)")
     endif()
     
-    # Add Link Time Optimization (LTO) for better performance
-    if(SPPARKS_AGGRESSIVE_OPTIMIZATION)
+    # Add Link Time Optimization (LTO) for better performance. An explicit
+    # -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON/OFF takes over (CMake's own IPO).
+    # Not for CUDA: nvcc_wrapper reports as GNU but nvcc rejects -flto.
+    # Not CMake IPO by default: its Clang rule archives with llvm-ar from the
+    # compiler's dir, which ROCm's hipcc does not have, and libspparks.a fails.
+    if(SPPARKS_AGGRESSIVE_OPTIMIZATION AND NOT DEFINED CMAKE_INTERPROCEDURAL_OPTIMIZATION
+       AND NOT (SPPARKS_PACKAGE_KOKKOS AND SPPARKS_KOKKOS_BACKEND STREQUAL "CUDA"))
         if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
             # Apple Silicon specific LTO
             set(OPT_FLAGS "${OPT_FLAGS} -flto=thin")

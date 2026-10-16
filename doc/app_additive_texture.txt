@@ -111,10 +111,10 @@ Texture and misorientation:
 misorientation between the grain's 100 family and the local thermal
 gradient.  {c2 >= 0} and {c3 * acos(1/sqrt(3)) <= pi} are enforced
 for monotonicity. :ulb,l
-{misorientation_function} {max_misorient mis_thresh} optionally
-followed by {alpha} : parameters of the per-event misorientation
-envelope; {mis_thresh} is supplied in degrees and converted to
-radians. :l
+{misorientation_function} {max_misorient} optionally followed by
+{mis_thresh} and {alpha} : parameters of the per-event misorientation
+envelope; {mis_thresh} is supplied in degrees (default 2) and
+converted to radians. :l
 {misorientation_target} {gradient|random} : selects whether
 misorientation is computed against the local thermal gradient
 (default) or a fixed random target axis. :l,ule

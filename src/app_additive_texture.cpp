@@ -147,7 +147,7 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
     time_step = dt;
     t_room = 300;
     max_misorient = 0;
-    mis_thresh = 10.0 * MY_PI / 180.0; // Default 10 degrees converted to radians
+    mis_thresh = 2.0 * MY_PI / 180.0; // Default 2 degrees converted to radians
     misorient_alpha = 5.0; // Default exponential steepness parameter
     misorientation_target_mode = MISORI_TARGET_GRADIENT;
     nucleation_mode = NUCLEATION_THRESHOLD;
@@ -336,9 +336,9 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
      }
   }
   else if (strcmp(command,"misorientation_function") == 0) {
-     if (narg != 2 && narg != 3) error->all(FLERR,"Illegal misorientation_function command");
+     if (narg < 1 || narg > 3) error->all(FLERR,"Illegal misorientation_function command");
      max_misorient = atof(arg[0]);
-     mis_thresh = atof(arg[1]) * MY_PI / 180.0; // Convert from degrees to radians
+     if (narg >= 2) mis_thresh = atof(arg[1]) * MY_PI / 180.0; // Convert from degrees to radians
      if (narg == 3) {
        misorient_alpha = atof(arg[2]);
        if (misorient_alpha <= 0)
@@ -879,6 +879,22 @@ void AppAdditiveTexture::init_app()
 	neigh_dist[25] = sqrt3 * dx;
 
   t_cool_max = tl - ts;
+
+  // Warn when the misorientation step reaches mis_thresh over most of the
+  // undercooling range: nearly every solidifying site then starts a new grain.
+  // The step is max_misorient * (exp(alpha*x) - 1) / (exp(alpha) - 1), x = Tcool/t_cool_max.
+  if (domain->me == 0 && max_misorient > 0) {
+    double r = mis_thresh * 180.0 / MY_PI / max_misorient;
+    double xstar = log(1.0 + r * (exp(misorient_alpha) - 1.0)) / misorient_alpha;
+    if (r < 1.0 && xstar <= 0.5) {
+      char msg[256];
+      snprintf(msg, sizeof msg,
+               "misorientation_function step reaches the %g deg new-grain threshold "
+               "for undercooling above %g of t_cool_max: nearly every solidifying "
+               "site will start a new grain", mis_thresh * 180.0 / MY_PI, xstar);
+      error->warning(FLERR, msg);
+    }
+  }
 
   //Check that our timestep is small enough	
   double max_front_vel = 0;

@@ -1405,31 +1405,21 @@ std::vector<double> AppAdditiveTexture::normal_finder(int site)
 	// Initialize gradient components
 	double grad_x = 0, grad_y = 0, grad_z = 0;
 	
-	// Set up neighbor offset mapping for 3D cubic lattice (SC_26N)
-	// Order: i,j,k from -1 to 1 (excluding center at 0,0,0)
-	int offset_map[26][3] = {
-		{-1,-1,-1}, {-1,-1, 0}, {-1,-1, 1},  // i=-1, j=-1
-		{-1, 0,-1}, {-1, 0, 0}, {-1, 0, 1},  // i=-1, j=0 
-		{-1, 1,-1}, {-1, 1, 0}, {-1, 1, 1},  // i=-1, j=1
-		{ 0,-1,-1}, { 0,-1, 0}, { 0,-1, 1},  // i=0, j=-1
-		{ 0, 0,-1},             { 0, 0, 1},  // i=0, j=0 (skip center)
-		{ 0, 1,-1}, { 0, 1, 0}, { 0, 1, 1},  // i=0, j=1
-		{ 1,-1,-1}, { 1,-1, 0}, { 1,-1, 1},  // i=1, j=-1
-		{ 1, 0,-1}, { 1, 0, 0}, { 1, 0, 1},  // i=1, j=0
-		{ 1, 1,-1}, { 1, 1, 0}, { 1, 1, 1}   // i=1, j=1
-	};
-
-	// Special case: top of melt pool where some neighbors are inactive
-	// Use only neighbors at or below current site's z-coordinate.
-	//
-	// Slot 13 in the SC_26N offset_map is the +z neighbor ({0,0,1}). Low-
-	// coordination global-boundary sites (the corner/edge sites with <14
-	// neighbors) have no valid slot 13: neighbor[site][13] reads an
-	// uninitialized neighbor entry, and active_flag[] of that garbage index
-	// then reads out of bounds (segfault). Such sites are missing the
-	// neighbor directly above, so treat them as melt-surface.
-	bool is_melt_surface = (numneigh[site] <= 13) ||
-	                       (active_flag[neighbor[site][13]] <= 1);
+	// Special case: top of melt pool. If the neighbour directly above (+z) is
+	// missing (a top-boundary site) or not melted/solid (active_flag <= 1),
+	// use only neighbours at or below the site's z. The +z neighbour is found
+	// by its coordinates, not by slot 13: a boundary site's neighbour list is
+	// compacted, so slot n is the n-th existing neighbour, not the n-th
+	// SC_26N stencil position. For the same reason each neighbour's offset
+	// comes from the coordinates, not a fixed stencil table (identical for
+	// interior sites).
+	int above = -1;
+	for (int n = 0; n < numneigh[site]; n++) {
+		const int nb = neighbor[site][n];
+		if (xyz[nb][0] == xyz[site][0] && xyz[nb][1] == xyz[site][1] &&
+		    xyz[nb][2] == xyz[site][2] + 1.0) { above = nb; break; }
+	}
+	bool is_melt_surface = (above < 0) || (active_flag[above] <= 1);
 
 	if (is_melt_surface) {
 		// Filter neighbors to only include those at or below current z-level
@@ -1451,9 +1441,9 @@ std::vector<double> AppAdditiveTexture::normal_finder(int site)
 			if (xyz[neighbor_site][2] > site_z) continue;
 			
 			// Get neighbor offset coordinates
-			double dx_n = offset_map[n][0] * dx;
-			double dy_n = offset_map[n][1] * dx;
-			double dz_n = offset_map[n][2] * dx;
+			double dx_n = (xyz[neighbor_site][0] - xyz[site][0]) * dx;
+			double dy_n = (xyz[neighbor_site][1] - xyz[site][1]) * dx;
+			double dz_n = (xyz[neighbor_site][2] - xyz[site][2]) * dx;
 			
 			// Temperature difference
 			double dT = T[neighbor_site] - T_center;
@@ -1529,9 +1519,9 @@ std::vector<double> AppAdditiveTexture::normal_finder(int site)
 		if (neighbor_site < 0 || neighbor_site >= app->nlocal + app->nghost) continue;
 		
 		// Get neighbor offset coordinates
-		double dx_n = offset_map[n][0] * dx;  // x offset in physical units
-		double dy_n = offset_map[n][1] * dx;  // y offset 
-		double dz_n = offset_map[n][2] * dx;  // z offset
+		double dx_n = (xyz[neighbor_site][0] - xyz[site][0]) * dx;
+		double dy_n = (xyz[neighbor_site][1] - xyz[site][1]) * dx;
+		double dz_n = (xyz[neighbor_site][2] - xyz[site][2]) * dx;
 		
 		// Temperature difference
 		double dT = T[neighbor_site] - T_center;

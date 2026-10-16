@@ -50,11 +50,11 @@ struct AdditiveParams {
   // Texture model: mobility = c1 + c2*cos(c3*theta), c1 fixed at 1.0.
   double c1, c2, c3;
 
-  // Misorientation random walk (`misorientation_diffusion <D> <thresh> [alpha]`).
+  // Misorientation random walk (`misorientation_diffusion <D> [thresh] [alpha]`).
   // mis_diffusion: D in rad^2/m (input in deg^2/m); <= 0 disables rotation.
   // misorient_alpha > 0 makes D_eff = D * g(Tcool/(tl-ts))^2 with
   // g(x) = (exp(alpha x)-1)/(exp(alpha)-1); 0 = constant D.
-  // mis_thresh (rad): a single step at or above it starts a new grain.
+  // mis_thresh (rad): a single step at or above it starts a new grain (default 2 deg).
   double mis_diffusion;
   double mis_thresh;
   double misorient_alpha;

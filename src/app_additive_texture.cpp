@@ -148,7 +148,7 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
     c3 = 2.5;
     t_room = 300;
     mis_diffusion = 0.0;               // rotation off until misorientation_diffusion
-    mis_thresh = 10.0 * MY_PI / 180.0; // Default 10 degrees converted to radians
+    mis_thresh = 2.0 * MY_PI / 180.0;  // Default 2 degrees converted to radians
     misorient_alpha = 0.0;             // constant D
     misorientation_target_mode = MISORI_TARGET_RANDOM_ROTATION;
     nucleation_misorient_enabled = true;

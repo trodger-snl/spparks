@@ -185,7 +185,7 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
   // ~286 deg, above the pi upper bound of that angle, so the test could never
   // fire and a deck relying on the default silently never created new grains
   // through the misorientation path.
-  mis_thresh = 10.0 * MY_PI / 180.0;
+  mis_thresh = 2.0 * MY_PI / 180.0;
   misorient_alpha = 0.0;   // constant D (matches AppAdditiveTexture)
 
   // Solidification velocity polynomial (default: V = -1.0302e-7*dT^3 + 1.0533e-4*dT^2 + 2.2196e-3*dT)

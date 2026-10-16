@@ -123,11 +123,12 @@ bool AdditiveParams::parse_command(const char *command, int narg, char **arg,
               "orientation dependence\n");
 
   } else if (strcmp(command, "misorientation_diffusion") == 0) {
-    // misorientation_diffusion <D_deg2_per_m> <thresh_deg> [alpha]
-    if (narg != 2 && narg != 3) error->all(FLERR, "Illegal misorientation_diffusion command");
+    // misorientation_diffusion <D_deg2_per_m> [thresh_deg] [alpha]
+    // thresh_deg left out keeps the app's default (2 deg)
+    if (narg < 1 || narg > 3) error->all(FLERR, "Illegal misorientation_diffusion command");
     double D_deg2 = atof(arg[0]);
     mis_diffusion = D_deg2 * (MY_PI / 180.0) * (MY_PI / 180.0);
-    mis_thresh = atof(arg[1]) * MY_PI / 180.0;
+    if (narg >= 2) mis_thresh = atof(arg[1]) * MY_PI / 180.0;
     if (mis_thresh < 0)
       error->all(FLERR, "Illegal misorientation_diffusion threshold: must be >= 0");
     misorient_alpha = (narg == 3) ? atof(arg[2]) : 0.0;
@@ -135,7 +136,7 @@ bool AdditiveParams::parse_command(const char *command, int narg, char **arg,
       error->all(FLERR, "Illegal misorientation_diffusion alpha: must be >= 0 (0 = constant D)");
     if (screen)
       fprintf(screen, "misorientation_diffusion D = %g deg^2/m, thresh = %g deg, alpha = %g\n",
-              D_deg2, atof(arg[1]), misorient_alpha);
+              D_deg2, mis_thresh * 180.0 / MY_PI, misorient_alpha);
 
   } else if (strcmp(command, "misorientation_grain_walk") == 0) {
     // misorientation_grain_walk <D_deg2_per_m> [rho] [path|height]: rho in [0,1)
@@ -160,7 +161,7 @@ bool AdditiveParams::parse_command(const char *command, int narg, char **arg,
   } else if (strcmp(command, "misorientation_function") == 0 ||
              strcmp(command, "misorientation_cap") == 0) {
     error->all(FLERR, "misorientation_function/misorientation_cap were replaced by "
-               "'misorientation_diffusion <D_deg2_per_m> <thresh_deg> [alpha]' "
+               "'misorientation_diffusion <D_deg2_per_m> [thresh_deg] [alpha]' "
                "(docs/MISORIENTATION_DIFFUSION_PLAN.md)");
 
   } else if (strcmp(command, "misorientation_target") == 0) {

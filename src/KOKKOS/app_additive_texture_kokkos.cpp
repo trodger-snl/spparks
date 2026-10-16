@@ -2130,7 +2130,10 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     // Apply the manager's decision. The Moser/HDF5 fillers already refilled the
     // device field at s.new_time; the Rosenthal path refills here.
     if (s.end_run) {
+      // The run ends here, and its final output reads the host arrays
+      // (diagnostics run before stats(), the other sync), so bring all back.
       time = s.new_time;
+      sync_app_data_to_host();
       if (host_T_stale) sync_temperature_to_host();
       return;
     }

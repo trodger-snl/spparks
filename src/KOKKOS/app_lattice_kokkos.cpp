@@ -22,6 +22,7 @@
 #include "output.h"
 #include "comm_lattice.h"
 #include "domain.h"
+#include "random_mars.h"
 
 using namespace SPPARKS_NS;
 
@@ -34,10 +35,6 @@ AppLatticeKokkos::AppLatticeKokkos(SPPARKS *spk, int narg, char **arg) :
   kokkos_ncolors(0), kokkos_nsectors(0),
   strict_rng(0)
 {
-  // Initialize RNG pool with a seed using world rank
-  int me;
-  MPI_Comm_rank(world, &me);
-  rand_pool = new pool_type(12345 + me);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -93,6 +90,14 @@ void AppLatticeKokkos::init_app()
 {
   // Call parent initialization (sets up sweepflag, ncolors, sets, etc.)
   AppLattice::init_app();
+
+  // Device RNG pool, from the deck seed (unknown at construction) and the
+  // rank. Made once, so a second run continues the stream, not repeats it.
+  if (!rand_pool) {
+    int me;
+    MPI_Comm_rank(world, &me);
+    rand_pool = new pool_type((uint64_t) ranmaster->initial_seed() * 65536 + me);
+  }
 
   allocate_device_views();
 

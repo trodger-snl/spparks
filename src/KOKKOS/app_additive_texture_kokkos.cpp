@@ -1159,26 +1159,33 @@ void AppAdditiveTextureKokkos::initialize_nucleation_parameters()
     fprintf(screen, "Nucleation fraction is %g (>= 1). All spins can nucleate.\n", nucleationFraction);
   }
 
-  // Assign nucleation flags randomly based on nucleation density
-  for (int i = 0; i < nspins; i++) {
-    if (nucleationFraction >= 1.0) {
-      nucleation_flags[i] = 1;  // All spins can nucleate
-    } else {
-      nucleation_flags[i] = (ranapp->uniform() <= nucleationFraction) ? 1 : 0;
+  // Rank 0 draws the tables and broadcasts them, as the CPU app does: drawn
+  // on every rank, a spin would nucleate differently on each.
+  if (domain->me == 0) {
+    // Assign nucleation flags randomly based on nucleation density
+    for (int i = 0; i < nspins; i++) {
+      if (nucleationFraction >= 1.0) {
+        nucleation_flags[i] = 1;  // All spins can nucleate
+      } else {
+        nucleation_flags[i] = (ranapp->uniform() <= nucleationFraction) ? 1 : 0;
+      }
+    }
+
+    // Initialize nucleation_temps and nucleation_sizes using Gaussian distributions
+    // Use C++ standard library random (consistent with CPU version)
+    std::random_device rd{};
+    std::mt19937 gen{rd()};
+    std::normal_distribution<> dist_T{tc, tsig};       // Critical undercooling (K)
+    std::normal_distribution<> dist_S{size_norm, size_sig};  // Nucleus volume (m^3)
+
+    for (int i = 0; i < nspins; i++) {
+      nucleation_temps[i] = dist_T(gen);
+      nucleation_sizes[i] = dist_S(gen);
     }
   }
-
-  // Initialize nucleation_temps and nucleation_sizes using Gaussian distributions
-  // Use C++ standard library random (consistent with CPU version)
-  std::random_device rd{};
-  std::mt19937 gen{rd()};
-  std::normal_distribution<> dist_T{tc, tsig};       // Critical undercooling (K)
-  std::normal_distribution<> dist_S{size_norm, size_sig};  // Nucleus volume (m^3)
-
-  for (int i = 0; i < nspins; i++) {
-    nucleation_temps[i] = dist_T(gen);
-    nucleation_sizes[i] = dist_S(gen);
-  }
+  MPI_Bcast(nucleation_flags, nspins, MPI_INT, 0, world);
+  MPI_Bcast(nucleation_temps, nspins, MPI_DOUBLE, 0, world);
+  MPI_Bcast(nucleation_sizes, nspins, MPI_DOUBLE, 0, world);
 
   d_nucleation_flags = upload_vec<int>("nucleation_flags", nucleation_flags, nspins);
   d_nucleation_temps = upload_vec<double>("nucleation_temps", nucleation_temps, nspins);

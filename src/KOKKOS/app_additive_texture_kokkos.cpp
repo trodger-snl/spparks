@@ -280,6 +280,27 @@ void AppAdditiveTextureKokkos::init_app()
   // Parent also initializes rand_pool with seed from MPI rank
   AppPottsQuaternionKokkos::init_app();
 
+  // The neighbour-reading kernels colour sites by coordinate parity (see
+  // shuffled_colors), which is race-free only if no two owned neighbours share
+  // a colour, i.e. on a unit-spaced lattice. Check that directly rather than
+  // race silently. (An odd periodic length is already refused by
+  // Lattice::ncolors, "Color stencil is incommensurate".)
+  {
+    auto colour = [this](int i) {
+      return (static_cast<int>(xyz[i][0]) & 1) | ((static_cast<int>(xyz[i][1]) & 1) << 1) |
+             ((static_cast<int>(xyz[i][2]) & 1) << 2);
+    };
+    int flag = 0;
+    for (int i = 0; i < nlocal && !flag; i++)
+      for (int j = 0; j < numneigh[i]; j++)
+        if (neighbor[i][j] < nlocal && colour(neighbor[i][j]) == colour(i)) flag = 1;
+    int flagall;
+    MPI_Allreduce(&flag, &flagall, 1, MPI_INT, MPI_MAX, world);
+    if (flagall)
+      error->all(FLERR, "additive/texture/kk needs a unit-spaced lattice (sc/26n 1.0): "
+                 "its kernels colour sites by coordinate parity");
+  }
+
   // Grain-walk recurrence cache (persistent walk only).
   if (grain_walk_D > 0.0 && grain_walk_rho > 0.0 && d_gw_tab.extent(0) == 0) {
     d_gw_gid = Kokkos::View<int*>("gw_gid", nspins + 1); Kokkos::deep_copy(d_gw_gid, -1);

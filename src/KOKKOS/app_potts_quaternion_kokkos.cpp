@@ -151,7 +151,7 @@ void AppPottsQuaternionKokkos::init_app()
   // Validate spin values
   int flag = 0;
   for (int i = 0; i < nlocal; i++)
-    if (spin[i] < 1 || spin[i] > nspins) flag = 1;
+    if (spin[i] < spin_lo || spin[i] > nspins) flag = 1;
   int flagall;
   MPI_Allreduce(&flag, &flagall, 1, MPI_INT, MPI_SUM, world);
   if (flagall) error->all(FLERR,"One or more sites have invalid values");

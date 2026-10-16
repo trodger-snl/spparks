@@ -129,6 +129,7 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
     error->all(FLERR,"Illegal app_style command");
 
   nspins = atoi(arg[1]);
+  spin_lo = 0;           // kernels draw (int)(nspins*drand()); CPU app accepts 0..nspins too
   dx = atof(arg[2]);     // Lattice spacing (meters)
   dt = atof(arg[3]);     // Timestep (seconds)
   nrefine = atoi(arg[4]); // Refinement MC steps after solidification

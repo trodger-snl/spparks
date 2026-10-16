@@ -35,6 +35,7 @@ public:
 
   // App-specific data
   int nspins;
+  int spin_lo = 1;                        // lowest valid spin (highest is nspins)
   int *spin;                              // Host pointer (from iarray[0])
   double *q0, *qx, *qy, *qz;              // Host pointers (from darray[])
 

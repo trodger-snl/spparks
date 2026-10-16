@@ -291,6 +291,8 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3]> d_xyz,
   for (double v : cfg.cp_v) cmin = std::min(cmin, v);
   cmin *= src->density();
   const double hsurf = cfg.h + 4.0 * cfg.emissivity * SIGMA_SB * 4000.0 * 4000.0 * 4000.0;
+  // an adiabatic far face carries no flux, so it does not limit the step
+  const double farG = cfg.far_bc == ConductionTemperatureSource::FAR_FIXED ? kmax : 0.0;
   double dtl = 1e300;
   auto W = [](const Axis &a, int c) { return a.hi[c] - a.lo[c]; };
   for (int i = 0; i < nxo; i++)
@@ -302,11 +304,11 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3]> d_xyz,
         for (int d = 0; d < 2; d++) {
           const int nx = cx + (d ? 1 : -1), ny = cy + (d ? 1 : -1), nk = k + (d ? 1 : -1);
           const double ax_ = wyc * wzc, ay_ = wxc * wzc, az_ = wxc * wyc;
-          G += (nx < 0 || nx >= NX) ? ax_ * kmax / (0.5 * wxc)
+          G += (nx < 0 || nx >= NX) ? farG * ax_ / (0.5 * wxc)
                                     : ax_ * kmax / (0.5 * (wxc + W(ax, nx)));
-          G += (ny < 0 || ny >= NY) ? ay_ * kmax / (0.5 * wyc)
+          G += (ny < 0 || ny >= NY) ? farG * ay_ / (0.5 * wyc)
                                     : ay_ * kmax / (0.5 * (wyc + W(ay, ny)));
-          G += (nk < 0) ? az_ * kmax / (0.5 * wzc)
+          G += (nk < 0) ? farG * az_ / (0.5 * wzc)
              : (nk >= nz) ? az_ * hsurf : az_ * kmax / (0.5 * (wzc + W(az, nk)));
         }
         dtl = std::min(dtl, cmin * wxc * wyc * wzc / G);

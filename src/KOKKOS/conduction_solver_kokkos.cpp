@@ -170,6 +170,10 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3]> d_xyz,
   const Axis az = make_axis(glo[2], gz_top, dx, cfg.plate, 0.0, r, cap);
   const int NX = (int) ax.lo.size(), NY = (int) ay.lo.size();
   nz = (int) az.lo.size();
+  // A laser plane above the top face (e.g. at ztop*dx, half a cell up) would
+  // put the upper tail of the Gaussian outside the grid; anchor it at the
+  // free surface instead so the absorbed power is all deposited.
+  zsrc = std::min(zl, az.hi.back());
 
   const int *pg = domain->procgrid, *ml = domain->myloc;
   edge[0] = ml[0] == 0;  edge[1] = ml[0] == pg[0] - 1;
@@ -208,6 +212,9 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3]> d_xyz,
   fylo = axis_view("cond_fylo", ay, cy0 - 1, NYL, 1);
   fyhi = axis_view("cond_fyhi", ay, cy0 - 1, NYL, 2);
   wz = axis_view("cond_wz", az, 0, nz, 0);
+  Ex = Kokkos::View<double*>("cond_Ex", NXL);
+  Ey = Kokkos::View<double*>("cond_Ey", NYL);
+  Ez = Kokkos::View<double*>("cond_Ez", nz);
   fzlo = axis_view("cond_fzlo", az, 0, nz, 1);
   fzhi = axis_view("cond_fzhi", az, 0, nz, 2);
 
@@ -257,7 +264,13 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3]> d_xyz,
     hsc(s, 0) = i; hsc(s, 1) = j; hsc(s, 2) = k;
     if (s < nlocal) {
       const int af = haf(s);
-      hP(i, j, k) = (af == 2 || af == 3) ? DENSE : (af == 1) ? POWDER : GAS;
+      // i2 = 1 is "not yet melted": with layer_thickness set, only the
+      // current layer is powder and the material below it (e.g. a
+      // substrate loaded with i2 = 1) is dense.
+      const bool deep = cfg.layer_thickness > 0.0 &&
+                        g[3*s+2] * dx <= zl - cfg.layer_thickness;
+      hP(i, j, k) = (af == 2 || af == 3) ? DENSE
+                  : (af == 1) ? (deep ? DENSE : POWDER) : GAS;
     }
   }
   if (out) error->one(FLERR,"conduction: a ghost site lies outside the 1-cell halo");
@@ -329,8 +342,8 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3]> d_xyz,
   if (domain->me == 0) {
     char msg[256];
     snprintf(msg, sizeof(msg), "conduction: grid %d x %d x %d = %lld cells, "
-             "dt_fd = %g s, top face z = %g m (laser plane %g m)\n",
-             NX, NY, nz, ntot, dt_fd, az.hi.back(), zl);
+             "dt_fd = %g s, top face z = %g m (laser plane %g m, source plane %g m)\n",
+             NX, NY, nz, ntot, dt_fd, az.hi.back(), zl, zsrc);
     if (screen) fputs(msg, screen);
     if (logfile) fputs(msg, logfile);
   }
@@ -365,7 +378,7 @@ void ConductionSolverKokkos::step(double h, double t0)
   const double frac = src->laser_window(t0, t0 + h, xl, yl);
   const double Pq = 0.25 * frac * src->absorbed_power();   // P/4 * prod(d erf)
   const double sx = src->sigma_x(), sy = src->sigma_y(), sz = src->sigma_z();
-  const double zl_ = zl;
+  const double zs = zsrc;
 
   auto H_ = H; auto T_ = T; auto Tn_ = Tn; auto P_ = P; auto Pn_ = Pn;
   auto wx_ = wx, wy_ = wy, wz_ = wz;
@@ -380,6 +393,23 @@ void ConductionSolverKokkos::step(double h, double t0)
   const bool exlo = edge[0], exhi = edge[1], eylo = edge[2], eyhi = edge[3];
   const int nxo_ = nxo, nyo_ = nyo, nz_ = nz;
   const double tl_ = tl;
+
+  // The Gaussian separates: integrate it over each cell's extent per axis.
+  auto Ex_ = Ex, Ey_ = Ey, Ez_ = Ez;
+  if (Pq > 0.0) {
+    const int nmax = std::max(std::max((int) Ex.extent(0), (int) Ey.extent(0)), nz_);
+    Kokkos::parallel_for("ConductionSource", nmax, KOKKOS_LAMBDA(const int n) {
+      if (n < (int) Ex_.extent(0))
+        Ex_(n) = Kokkos::erf((fxhi_(n) - xl) / sx) - Kokkos::erf((fxlo_(n) - xl) / sx);
+      if (n < (int) Ey_.extent(0))
+        Ey_(n) = Kokkos::erf((fyhi_(n) - yl) / sy) - Kokkos::erf((fylo_(n) - yl) / sy);
+      if (n < nz_) {
+        const double zt = fzhi_(n) < zs ? fzhi_(n) : zs;   // half space z <= zs
+        Ez_(n) = zt > fzlo_(n) ? Kokkos::erf((zt - zs) / sz) - Kokkos::erf((fzlo_(n) - zs) / sz)
+                               : 0.0;
+      }
+    });
+  }
 
   Kokkos::parallel_for("ConductionStep",
     Kokkos::MDRangePolicy<Kokkos::Rank<3>>({1, 1, 0}, {nxo_ + 1, nyo_ + 1, nz_}),
@@ -416,15 +446,7 @@ void ConductionSolverKokkos::step(double h, double t0)
       q += (k == 0) ? far(Az, 0.5*dzc) : face(Az, 0.5*dzc, i, j, k-1, 0.5*wz_(k-1));
       q += (k == nz_ - 1) ? surf(Az) : face(Az, 0.5*dzc, i, j, k+1, 0.5*wz_(k+1));
 
-      // Gaussian integrated over the cell, half space z <= zl.
-      if (Pq > 0.0) {
-        const double zt = fzhi_(k) < zl_ ? fzhi_(k) : zl_;
-        if (zt > fzlo_(k)) {
-          q += Pq * (Kokkos::erf((fxhi_(i) - xl) / sx) - Kokkos::erf((fxlo_(i) - xl) / sx))
-                  * (Kokkos::erf((fyhi_(j) - yl) / sy) - Kokkos::erf((fylo_(j) - yl) / sy))
-                  * (Kokkos::erf((zt - zl_) / sz) - Kokkos::erf((fzlo_(k) - zl_) / sz));
-        }
-      }
+      if (Pq > 0.0) q += Pq * Ex_(i) * Ey_(j) * Ez_(k);
 
       const double Hn = H_(i, j, k) + h * q / (dxc * dyc * dzc);
       H_(i, j, k) = Hn;

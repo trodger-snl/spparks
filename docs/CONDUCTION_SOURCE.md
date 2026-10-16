@@ -51,17 +51,22 @@ in `processors`.
   per cell out to `margin`/`plate`. Example: a 1×0.2×0.15 mm box at 5 µm with
   1 mm margins and plate is 262×102×61 cells (1.6 M), against 61 M uniform.
 - **Top.** The grid's top face is half a cell above the highest site layer at
-  or below the laser plane. Sites above it read `T0`. Put the laser plane on
-  that face (z = (top layer + 0.5)·dx) to match Moser's surface exactly.
+  or below the laser plane. Sites above it read `T0`. A laser plane above that
+  face (e.g. GP700's `ztop·dx`, half a cell up) is moved down onto it for the
+  source, so all absorbed power is deposited; put the plane on the face
+  (z = (top layer + 0.5)·dx) to match Moser's surface exactly.
 - **Phase per cell.** GAS / POWDER / DENSE. Inside the box it is taken from
   `i2` once (0 → gas, 1 → powder, 2/3 → dense, 5 → gas), so stitch-loaded
-  powder is kept. After that the solver tracks it itself: powder becomes dense
+  powder is kept. `i2 = 1` means "not yet melted", which substrates also use:
+  with `layer_thickness` set, only sites within it of the laser plane count as
+  powder and deeper `i2 = 1` sites are dense. After that the solver tracks it itself: powder becomes dense
   the first time it reaches the liquidus.
 - **Fluxes.** Between two cells, a harmonic mean of k over the centre distance.
   A face next to gas, and the top face, get convection plus radiation. Far
   faces are fixed or adiabatic.
-- **Source.** The Gaussian is integrated over each cell (erf products), so the
-  energy is right on coarse cells too. Power is scaled by the fraction of the
+- **Source.** The Gaussian is integrated over each cell (it separates into
+  per-axis erf differences, computed once per sub-step), so the energy is
+  right on coarse cells too. Power is scaled by the fraction of the
   sub-step the laser is on.
 - **Time.** Explicit, sub-cycled at 0.9× the global stable step: the minimum
   over cells of ρ·cp_min·V / Σ conductance at k_max. The step is the same on

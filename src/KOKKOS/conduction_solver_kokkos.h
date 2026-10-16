@@ -70,6 +70,8 @@ class ConductionSolverKokkos : protected Pointers {
   Kokkos::View<unsigned char***> P, Pn;
   // per local cell: width and lower/upper face per axis (halo included)
   Kokkos::View<double*> wx, wy, wz, fxlo, fxhi, fylo, fyhi, fzlo, fzhi;
+  Kokkos::View<double*> Ex, Ey, Ez;   // per-axis Gaussian integrals, per sub-step
+  double zsrc = 0.0;                  // source plane: laser plane, capped at the top face
   Kokkos::View<double*> Htab, kT, kV;
   double Htab_T0 = 0.0, Htab_dT = 1.0;
   Kokkos::View<int*[3]> site_cell;   // local (i,j,k) per site, i<0 = above grid

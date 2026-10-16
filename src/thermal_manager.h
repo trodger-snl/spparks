@@ -30,6 +30,7 @@ namespace SPPARKS_NS {
 class RosenthalTemperatureSource;
 class MoserTemperatureSource;
 class HDF5UnstructuredTemperatureSource;
+class ConductionTemperatureSource;
 
 /* ----------------------------------------------------------------------
    ThermalManager owns the temperature-I/O orchestration that was formerly
@@ -163,6 +164,7 @@ class ThermalManager : protected Pointers {
   RosenthalTemperatureSource *rosenthal_source() const;
   MoserTemperatureSource *moser_source() const;
   HDF5UnstructuredTemperatureSource *hdf5_source() const;
+  ConductionTemperatureSource *conduction_source() const;
 
   // Register the device temperature filler used by hdf5_advance_device(): given a
   // simulation time it fills k_T[0,nlocal) on the device and returns the global

@@ -154,7 +154,8 @@ class MoserTemperatureSource : public TemperatureSource {
   // passes). After this call, get_temperature_at_xyz_and_time(...)
   // integrates only over the new pass (no contribution from earlier
   // passes), and the prefactor ambient is `new_ambient`.
-  void reset_history_and_start(double t_start, double new_ambient);
+  // Virtual: the conduction source also reinitialises its solver state.
+  virtual void reset_history_and_start(double t_start, double new_ambient);
 
   bool has_scan() const { return scan_built; }
 
@@ -248,7 +249,7 @@ class MoserTemperatureSource : public TemperatureSource {
   static constexpr int LOBE_TOP = 0;
   static constexpr int LOBE_BOT = 1;
 
- private:
+ protected:   // the conduction source reuses the material, lobe and pass state
   // Material / source parameters
   double Q;          // total laser power [W]
   double lambda;     // absorption efficiency

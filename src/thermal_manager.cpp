@@ -21,6 +21,7 @@
 #include "thermal_host.h"
 #include "temperature_source_rosenthal.h"
 #include "temperature_source_moser.h"
+#include "temperature_source_conduction.h"
 #include "temperature_source_hdf5_unstructured.h"
 #include "comm_lattice.h"
 #include "domain.h"
@@ -805,6 +806,8 @@ ThermalManager::moser_advance_device(double current_time, double stoptime)
 {
   if (!moser_source() || !moser_device_filler_)
     return ThermalStep{current_time, false, false};
+  if (temperature_smooth_enabled && conduction_source())
+    error->all(FLERR,"temperature_smooth is not supported with the conduction source");
   return moser_advance(current_time, stoptime, moser_device_filler_);
 }
 
@@ -884,7 +887,9 @@ ThermalManager::moser_advance(double current_time, double stoptime,
     }
 
     // Fast-forward predict-skip (also the sole behavior in the static case).
-    if (!dynamic_fire &&
+    // Not for the conduction source: its state must be integrated through
+    // the gap, and the predictor would call its (absent) point query.
+    if (!dynamic_fire && !conduction_source() &&
         predict_skip(moser_next_active_time(current_time, fast_forward_threshold),
                      current_time, stoptime, fast_forward_threshold, "Moser", step))
       refill(step.new_time);   // refill at the advanced time
@@ -945,6 +950,11 @@ MoserTemperatureSource *ThermalManager::moser_source() const
 HDF5UnstructuredTemperatureSource *ThermalManager::hdf5_source() const
 {
   return dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+}
+
+ConductionTemperatureSource *ThermalManager::conduction_source() const
+{
+  return dynamic_cast<ConductionTemperatureSource*>(temperature_source.get());
 }
 
 /* ----------------------------------------------------------------------

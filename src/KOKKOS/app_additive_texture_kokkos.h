@@ -31,6 +31,7 @@ AppStyle(additive/texture/kk,AppAdditiveTextureKokkos)
 #include "rosenthal_device.h"
 #include "moser_device.h"
 #include "hdf5_device.h"
+#include "conduction_solver_kokkos.h"
 #include "math_const.h"
 #include <Kokkos_Core.hpp>
 #include <Kokkos_DualView.hpp>
@@ -270,6 +271,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   // it reads/writes the lattice state through the ThermalHost snapshot, which
   // refresh_thermal_host() populates each step. See thermal_manager.h.
   std::unique_ptr<ThermalManager> thermal;
+  std::unique_ptr<ConductionSolverKokkos> cond;   // conduction source state
   ThermalHost thermal_host_;
 
   // Physical parameters (same as CPU version)

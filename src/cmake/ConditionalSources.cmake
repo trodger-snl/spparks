@@ -23,6 +23,7 @@ function(configure_conditional_sources)
             temperature_source.cpp
             temperature_source_rosenthal.cpp
             temperature_source_moser.cpp
+            temperature_source_conduction.cpp
             temperature_source_hdf5_unstructured.cpp
             temperature_source_hdf5_csr.cpp
         )
@@ -52,7 +53,8 @@ function(configure_conditional_sources)
         # The Kokkos additive/texture app shares the CPU app's temperature
         # sources, so it has the same MPI-only gate.
         if(SPPARKS_ENABLE_MPI)
-            list(APPEND SPPARKS_SOURCES KOKKOS/app_additive_texture_kokkos.cpp)
+            list(APPEND SPPARKS_SOURCES KOKKOS/app_additive_texture_kokkos.cpp
+                                        KOKKOS/conduction_solver_kokkos.cpp)
         endif()
         message(STATUS "Added KOKKOS package sources")
     endif()

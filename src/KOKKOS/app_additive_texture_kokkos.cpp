@@ -31,6 +31,7 @@
 #include "math_const.h"
 #include "temperature_source_rosenthal.h"
 #include "temperature_source_moser.h"
+#include "temperature_source_conduction.h"
 #include "temperature_source_hdf5_unstructured.h"
 #include "grain_walk.h"
 
@@ -375,7 +376,12 @@ void AppAdditiveTextureKokkos::init_app()
   // that rewound the scan clock, and the next step moved the laser off the path.
   if (thermal->enabled()) {
     refresh_thermal_host();
-    thermal->update_temperatures(time);
+    // The conduction source has no point query; its first device fill (step
+    // 1) builds the grid. Until then host T is the ambient.
+    if (ConductionTemperatureSource *c = thermal->conduction_source())
+      for (int i = 0; i < nlocal + nghost; i++) T[i] = c->ambient();
+    else
+      thermal->update_temperatures(time);
   }
 
   // Note: Powder activation happens after meltpool appears, not during init
@@ -2117,7 +2123,24 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     // at an output step (end of app_update). The global peak temperature for the
     // fast-forward decision is reduced on the device, so no host T is needed.
     ThermalManager::ThermalStep s{time, false, false};
-    if (rplan.valid) {
+    if (ConductionTemperatureSource *csrc = thermal->conduction_source()) {
+      // ---- DEVICE conduction path ----
+      // Stateful: the filler advances the enthalpy field to t (sub-cycled) and
+      // samples it into k_T for all nall sites. Moser's pass scheduling runs
+      // unchanged around it; the fast-forward predictor is skipped for it.
+      device_temp = true;
+      if (!cond) cond = std::make_unique<ConductionSolverKokkos>(spk, csrc);
+      thermal->set_moser_device_filler([this](double t) -> double {
+        ensure_device_xyz();
+        fill_maxT_local = cond->fill(t, k_T.view_device(), d_xyz, d_active_flag,
+                                     nlocal, nlocal + nghost, dx, ts, tl);
+        Kokkos::fence();
+        k_T.modify_device();
+        host_T_stale = true;
+        return global_max_temperature_from_fill();
+      });
+      s = thermal->moser_advance_device(time, stoptime);
+    } else if (rplan.valid) {
       // ---- DEVICE Rosenthal path ----
       device_temp = true;
       fill_temperature_rosenthal_device(rplan);

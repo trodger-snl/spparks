@@ -39,6 +39,7 @@ thermal field to that temperature (phases are kept).
 | `layer_thickness t` | outside the box: powder within `t` of the laser plane | 0 |
 | `plate_top z` | everything below `z` (m) is dense | box bottom face |
 | `far_bc fixed\|adiabatic` | outer faces of the thermal domain | fixed at `T0` |
+| `sts s` | RKL2 stages per laser-off super-step; 0 = explicit only | 32 |
 
 Not supported (errors): the CPU app (`additive/texture`), `keyhole`,
 `laser_fluctuations`, `temperature_smooth`, periodic boundaries, splitting z
@@ -74,9 +75,16 @@ in `processors`.
 - **MPI.** x/y follow the lattice processor grid, with a 1-cell halo of T and
   phase exchanged in x then y every sub-step. Edge ranks also own the margin
   cells; that load imbalance is not rebalanced.
-- **Fast-forward** is off for this source. It integrates through pauses. With
-  `pause`/`pause_below` and no `reset_temperature`, an inter-pass pause costs
-  pause/dt_fd sub-steps.
+- **Laser-off intervals: RKL2 super-time-stepping** (Meyer, Balsara & Aslam
+  2014). An interval with the laser off for its whole length is advanced in
+  super-steps of up to `sts` stages, each stable for
+  τ ≤ dt_fd·(s² + s − 2)/4 and second order, whenever that takes fewer stage
+  evaluations than explicit steps. The phase updates once per super-step.
+- **Fast-forward.** Once max T drops below the liquidus with no pass active,
+  the app jumps to the next pass start (Moser's predictor role, with
+  `next_laser_on` instead of the Green's-function estimate). The jump itself
+  is integrated with RKL2, so an inter-hatch pause costs about
+  pause / (dt_fd·sts²/4) super-steps instead of pause / dt_fd steps.
 
 ## Validation (2026-10-16, gfx1151 + OpenMP backend)
 
@@ -89,13 +97,18 @@ in `processors`.
 | HIP vs OpenMP (including all-features deck at np = 2) | per-site d6 identical |
 | `pause_below` + `reset_temperature`, `pause` + `reset_temperature` | fire and reset as with Moser |
 
-Identity is checked on `%g` text dumps (6 significant digits).
+| RKL2 vs explicit, oracle deck (0.19 ms skip) | per-site max 1.0 K after the skip, 0.4 K at end of next pass |
+| RKL2, np 1 vs 2×2×1 | per-site d6 identical |
+| GP700 proxy box 0 (400 µm, 5 hatches, 8.8 ms pauses): `sts` 0 / 32 / 128 | pool, fusion depth, G/V quartiles equal to 3 digits; loop 573 / 141 / 99 s (Moser 52 s) |
 
-Cost: the example deck (1.6 M cells, about 4,000 sub-steps) runs in about 16 s
-on one gfx1151.
+Identity is checked on `%g` text dumps (6 significant digits). GP700 runs and
+`compare.py`: `/home/tron/gp700_runs/cond_cmp`.
+
+Cost: the example deck (1.6 M cells, about 4,000 sub-steps) runs in about 11 s
+on one gfx1151. With RKL2 the remaining cost is mostly the explicit steps
+while the laser is on.
 
 ## Possible next steps
-- Super-time-stepping (RKL2) if pause sub-steps dominate a run.
 - Keyhole lobes and fluctuations: sample the second lobe and `fluct_*` per sub-step.
 - Rebalancing margin cells across ranks.
 - Carrying thermal state across stitch boxes. Today each box starts at `T0`.

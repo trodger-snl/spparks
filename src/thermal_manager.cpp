@@ -887,11 +887,14 @@ ThermalManager::moser_advance(double current_time, double stoptime,
     }
 
     // Fast-forward predict-skip (also the sole behavior in the static case).
-    // Not for the conduction source: its state must be integrated through
-    // the gap, and the predictor would call its (absent) point query.
-    if (!dynamic_fire && !conduction_source() &&
-        predict_skip(moser_next_active_time(current_time, fast_forward_threshold),
-                     current_time, stoptime, fast_forward_threshold, "Moser", step))
+    // The conduction source skips to the next laser-on time; its refill
+    // integrates the gap (RKL2 super-steps), so only the app steps are saved.
+    ConductionTemperatureSource *cond = conduction_source();
+    const double next = cond ? cond->next_laser_on(current_time)
+                             : moser_next_active_time(current_time, fast_forward_threshold);
+    if (!dynamic_fire &&
+        predict_skip(next, current_time, stoptime, fast_forward_threshold,
+                     cond ? "conduction" : "Moser", step))
       refill(step.new_time);   // refill at the advanced time
   }
   return step;

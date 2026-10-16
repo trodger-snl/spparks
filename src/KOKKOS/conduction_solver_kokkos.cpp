@@ -115,8 +115,26 @@ double ConductionSolverKokkos::fill(double t, Kokkos::View<double*> d_T,
 
   if (t > t_fd) {
     const int n = (int) std::ceil((t - t_fd) / dt_fd - 1e-9);
-    const double h = (t - t_fd) / n;
-    for (int s = 0; s < n; s++) step(h, t_fd + s * h);
+    // Laser off for the whole interval: RKL2 super-steps of at most s_max
+    // stages, when that is fewer stage evaluations than n explicit steps.
+    const int smax = src->config().sts_smax;
+    double xl, yl;
+    bool sts = smax >= 2 && n > 2 && src->laser_window(t_fd, t, xl, yl) == 0.0;
+    int m = 0, s = 0;
+    if (sts) {
+      const double tau_max = dt_fd * (smax * smax + smax - 2) / 4.0;
+      m = (int) std::ceil((t - t_fd) / tau_max - 1e-9);
+      const double r = (t - t_fd) / m / dt_fd;
+      s = std::max(2, (int) std::ceil((-1.0 + std::sqrt(9.0 + 16.0 * r)) / 2.0 - 1e-9));
+      sts = (long) m * s < n;
+    }
+    if (sts) {
+      const double tau = (t - t_fd) / m;
+      for (int k = 0; k < m; k++) sts_step(tau, s);
+    } else {
+      const double h = (t - t_fd) / n;
+      for (int k = 0; k < n; k++) step(h, t_fd + k * h);
+    }
     t_fd = t;
   }
   return sample(d_T, nlocal, nall);
@@ -373,14 +391,70 @@ void ConductionSolverKokkos::reset_field(double Tr)
 
 void ConductionSolverKokkos::step(double h, double t0)
 {
+  Stage c;
+  c.h = h;
+  const double frac = src->laser_window(t0, t0 + h, c.xl, c.yl);
+  c.Pq = 0.25 * frac * src->absorbed_power();   // P/4 * prod(d erf)
+  stage(c, H, H, H);
+}
+
+/* ----------------------------------------------------------------------
+   One RKL2 super-step of length tau in s stages (Meyer, Balsara & Aslam,
+   J. Comput. Phys. 257 (2014) 594), laser off. Stable for
+   tau <= dt_fd (s^2 + s - 2)/4; second order. The phase only updates on
+   the last stage.
+------------------------------------------------------------------------- */
+
+void ConductionSolverKokkos::sts_step(double tau, int s)
+{
+  if (Ya.extent(0) != H.extent(0) || Ya.extent(1) != H.extent(1) || Ya.extent(2) != H.extent(2)) {
+    Ya = Kokkos::View<double***>("cond_Ya", H.extent(0), H.extent(1), H.extent(2));
+    Yb = Kokkos::View<double***>("cond_Yb", H.extent(0), H.extent(1), H.extent(2));
+    L0 = Kokkos::View<double***>("cond_L0", H.extent(0), H.extent(1), H.extent(2));
+  }
+  auto b = [](int j) { return j < 2 ? 1.0 / 3.0 : (j*j + j - 2.0) / (2.0 * j * (j + 1)); };
+  const double w1 = 4.0 / (s*s + s - 2.0);
+
+  Stage c;
+  c.sts = true; c.store_L0 = true; c.phase = (s == 1);
+  c.mu = 1.0; c.nu = 0.0; c.mut = b(1) * w1 * tau; c.gat = 0.0;
+  stage(c, H, H, Ya);                       // Y1 = H + mu~1 tau L(H)
+  Kokkos::View<double***> y1 = Ya, y2 = H, spare = Yb;
+  for (int j = 2; j <= s; j++) {
+    c.store_L0 = false; c.phase = (j == s);
+    c.mu = (2.0*j - 1.0) / j * b(j) / b(j-1);
+    c.nu = -(j - 1.0) / j * b(j) / b(j-2);
+    c.mut = c.mu * w1 * tau;
+    c.gat = -(1.0 - b(j-1)) * c.mut;
+    // Y_j overwrites Y_{j-2} in place, except while Y_{j-2} is H (Y0)
+    Kokkos::View<double***> out = (j == 2) ? spare : y2;
+    stage(c, y1, y2, out);
+    y2 = y1; y1 = out;
+  }
+  // y1 = Y_s: make it H; keep the other two as stage buffers
+  Kokkos::View<double***> oldH = H;
+  H = y1;
+  Ya = (y2.data() == oldH.data()) ? spare : y2;
+  Yb = oldH;
+}
+
+/* ----------------------------------------------------------------------
+   Flux divergence + source at T (the state Y1), then the stage update.
+------------------------------------------------------------------------- */
+
+void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<double***> Y1,
+                                   Kokkos::View<double***> Y2,
+                                   Kokkos::View<double***> Yout)
+{
   const auto &cfg = src->config();
-  double xl, yl;
-  const double frac = src->laser_window(t0, t0 + h, xl, yl);
-  const double Pq = 0.25 * frac * src->absorbed_power();   // P/4 * prod(d erf)
+  const double xl = c.xl, yl = c.yl, Pq = c.Pq, h = c.h;
+  const bool sts = c.sts, store_L0 = c.store_L0, do_phase = c.phase;
+  const double mu = c.mu, nu = c.nu, mut = c.mut, gat = c.gat;
   const double sx = src->sigma_x(), sy = src->sigma_y(), sz = src->sigma_z();
   const double zs = zsrc;
 
-  auto H_ = H; auto T_ = T; auto Tn_ = Tn; auto P_ = P; auto Pn_ = Pn;
+  auto H_ = H; auto Y1_ = Y1; auto Y2_ = Y2; auto Yo_ = Yout; auto L0_ = L0;
+  auto T_ = T; auto Tn_ = Tn; auto P_ = P; auto Pn_ = Pn;
   auto wx_ = wx, wy_ = wy, wz_ = wz;
   auto fxlo_ = fxlo, fxhi_ = fxhi, fylo_ = fylo, fyhi_ = fyhi, fzlo_ = fzlo, fzhi_ = fzhi;
   auto Htab_ = Htab; auto kT_ = kT; auto kV_ = kV;
@@ -416,7 +490,10 @@ void ConductionSolverKokkos::step(double h, double t0)
     KOKKOS_LAMBDA(const int i, const int j, const int k) {
       const unsigned char pc = P_(i, j, k);
       const double Tc = T_(i, j, k);
-      if (pc == GAS) { Tn_(i, j, k) = Tc; Pn_(i, j, k) = pc; return; }
+      if (pc == GAS) {
+        if (sts) Yo_(i, j, k) = H_(i, j, k);
+        Tn_(i, j, k) = Tc; Pn_(i, j, k) = pc; return;
+      }
 
       auto kof = [&](double Tv, unsigned char p) {
         return p == POWDER ? kp : interp(kT_, kV_, Tv);
@@ -448,8 +525,17 @@ void ConductionSolverKokkos::step(double h, double t0)
 
       if (Pq > 0.0) q += Pq * Ex_(i) * Ey_(j) * Ez_(k);
 
-      const double Hn = H_(i, j, k) + h * q / (dxc * dyc * dzc);
-      H_(i, j, k) = Hn;
+      double Hn;
+      if (!sts) {
+        Hn = H_(i, j, k) + h * q / (dxc * dyc * dzc);
+        H_(i, j, k) = Hn;
+      } else {
+        const double Lc = q / (dxc * dyc * dzc);
+        Hn = mu * Y1_(i, j, k) + nu * Y2_(i, j, k) + (1.0 - mu - nu) * H_(i, j, k)
+           + mut * Lc + gat * (store_L0 ? Lc : L0_(i, j, k));
+        if (store_L0) L0_(i, j, k) = Lc;
+        Yo_(i, j, k) = Hn;
+      }
       // T(H): table search, end slopes beyond.
       double Tv;
       if (Hn <= Htab_(0)) {
@@ -464,7 +550,7 @@ void ConductionSolverKokkos::step(double h, double t0)
         Tv = H0 + (lo + (dH > 0.0 ? (Hn - Htab_(lo)) / dH : 0.0)) * dTt;
       }
       Tn_(i, j, k) = Tv;
-      Pn_(i, j, k) = (pc == POWDER && Tv >= tl_) ? (unsigned char) DENSE : pc;
+      Pn_(i, j, k) = (do_phase && pc == POWDER && Tv >= tl_) ? (unsigned char) DENSE : pc;
     });
 
   std::swap(T, Tn);

@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <limits>
 
 using namespace SPPARKS_NS;
 
@@ -73,6 +74,7 @@ void ConductionTemperatureSource::setup_temperature_source(
       cfg.part_region = args[i];
     }
     else if (a == "layer_thickness") cfg.layer_thickness = num(++i);
+    else if (a == "sts") cfg.sts_smax = (int) num(++i);
     else if (a == "far_bc") {
       if (++i >= args.size()) error->all(FLERR,"setup_temperature_source conduction: far_bc needs a value");
       if (args[i] == "fixed") cfg.far_bc = FAR_FIXED;
@@ -91,6 +93,8 @@ void ConductionTemperatureSource::setup_temperature_source(
     error->all(FLERR,"setup_temperature_source conduction: stretch must be >= 1");
   for (double m : cfg.margin)
     if (m < 0.0) error->all(FLERR,"setup_temperature_source conduction: margin must be >= 0");
+  if (cfg.sts_smax < 0 || cfg.sts_smax == 1)
+    error->all(FLERR,"setup_temperature_source conduction: sts is 0 (off) or >= 2 stages");
   if (cfg.plate < 0.0 || cfg.layer_thickness < 0.0 || cfg.latent < 0.0)
     error->all(FLERR,"setup_temperature_source conduction: plate, layer_thickness, latent must be >= 0");
   if (!cfg.part_region.empty() &&
@@ -163,6 +167,17 @@ double ConductionTemperatureSource::laser_window(double t0, double t1,
     }
   }
   return on / (t1 - t0);
+}
+
+double ConductionTemperatureSource::next_laser_on(double t) const
+{
+  double next = std::numeric_limits<double>::max();
+  if (!scan_built) return next;
+  for (double s : pass_start_times_) {
+    if (t >= s && t < s + scan_pass_duration) return t;
+    if (s > t) next = std::min(next, s);
+  }
+  return next;
 }
 
 /* ----------------------------------------------------------------------

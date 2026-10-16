@@ -66,6 +66,7 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
     std::string part_region;           // empty = whole domain is part
     double layer_thickness = 0.0;      // powder depth outside the box
     int    far_bc = FAR_FIXED;
+    int    sts_smax = 32;               // RKL2 stages per laser-off super-step; 0 = explicit
   };
   const Config &config() const { return cfg; }
 
@@ -80,6 +81,10 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
   // Laser over [t0, t1]: returns the on-fraction of the interval and the
   // beam position at the midpoint of its on-time (x, y in m).
   double laser_window(double t0, double t1, double &x, double &y) const;
+
+  // Earliest time >= t at which the laser is on (t itself while on), or
+  // DBL_MAX when no scheduled pass remains. Drives the fast-forward.
+  double next_laser_on(double t) const;
 
   // Pending reset_temperature request: returns true once per reset.
   bool take_reset(double &T_reset);

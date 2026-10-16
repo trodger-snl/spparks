@@ -82,6 +82,11 @@ struct AdditiveParams {
   // `command` is not one of them. `me` is the rank, for screen output.
   bool parse_command(const char *command, int narg, char **arg,
                      Error *error, FILE *screen, int me, ThermalManager &thermal);
+
+  // Warn (rank 0) when even the shortest hop's rotation, sqrt(D*dx) at the
+  // full D, reaches mis_thresh: nearly every solidifying site would then
+  // start a new grain. dx is the lattice spacing in m.
+  void check_misorientation_step(double dx, Error *error, int me) const;
 };
 
 }

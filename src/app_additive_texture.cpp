@@ -490,6 +490,8 @@ void AppAdditiveTexture::grow_app()
 
 void AppAdditiveTexture::init_app()
 {
+  check_misorientation_step(dx, error, domain->me);
+
   // Duplicate parent's array allocation logic without quaternion randomization
   delete[] sites;
   delete[] unique;

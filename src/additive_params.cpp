@@ -12,6 +12,7 @@
 ------------------------------------------------------------------------- */
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include "additive_params.h"
@@ -215,4 +216,19 @@ bool AdditiveParams::parse_command(const char *command, int narg, char **arg,
 
   } else return false;
   return true;
+}
+
+/* ---------------------------------------------------------------------- */
+
+void AdditiveParams::check_misorientation_step(double dx, Error *error, int me) const
+{
+  if (me != 0 || mis_diffusion <= 0.0) return;
+  const double step = sqrt(mis_diffusion * dx);
+  if (step < mis_thresh) return;
+  char msg[256];
+  snprintf(msg, sizeof msg,
+           "misorientation_diffusion step sqrt(D*dx) = %g deg is at or above the "
+           "%g deg new-grain threshold: nearly every solidifying site will start "
+           "a new grain", step * 180.0 / MY_PI, mis_thresh * 180.0 / MY_PI);
+  error->warning(FLERR, msg);
 }

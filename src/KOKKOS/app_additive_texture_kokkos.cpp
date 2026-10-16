@@ -1391,6 +1391,7 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
 
   int nrefine_local = nrefine;
   double dx_local = dx;
+  const int nlocal_local = nlocal;
 
   // Nucleated-shell misorientation (mirrors the CPU
   // nucleation_particle_flipper): each claimed site takes one walk step of
@@ -1444,75 +1445,59 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
 
       const double Tcool_seed = tl_local - d_T_local(i);
 
-      // Calculate target number of sites from nucleus volume
-      // nucleation_sizes is in m^3, dx^3 is voxel volume
+      // Grow the nucleus as the CPU app's nucleation_particle_flipper does:
+      // claim round(V/dx^3) liquid sites besides the seed, shell by shell
+      // (6 faces, 12 edges, 8 corners), each shell in random order; when a
+      // centre's shells run out, carry on from a random owned solid
+      // neighbour of the same spin, until the nucleus is full or a round
+      // claims nothing. Claims are CAS'd, so competing nuclei never share a
+      // site; a lost claim does not count, as on the CPU.
       double nucleus_volume = d_nucleation_sizes_local(spin_i);
       double voxel_volume = dx_local * dx_local * dx_local;
-      int target_sites = static_cast<int>(Kokkos::round(nucleus_volume / voxel_volume));
+      int remaining = static_cast<int>(Kokkos::round(nucleus_volume / voxel_volume));
 
-      // Nucleus itself counts as 1 site
-      if (target_sites <= 1) {
-        // No neighbors to flip - just update solid_d to ready state
-        d_solid_d_local(i) = nucleus_done_d;  // terminal, or -1 under nuclei_smooth
-        count++;  // Track nucleation event
-        return;
-      }
+      // sc/26n neighbour slots, nearest shell first (the CPU's tables).
+      constexpr int shell_slot[26] = {4, 10, 12, 15, 21, 13,
+                                      9, 16, 3, 22, 14, 11, 20, 5, 1, 24, 7, 18,
+                                      0, 25, 23, 2, 6, 19, 17, 8};
+      constexpr int shell_start[4] = {0, 6, 18, 26};
+      constexpr int MAX_NEIGHBORS = 26;
 
-      // Build list of liquid neighbors that can be flipped
-      int nn = k_numneigh_d(i);
-      constexpr int MAX_NEIGHBORS = 26;  // sc/26n lattice assumption
-      int liquid_neighbors[MAX_NEIGHBORS];
-      int num_liquid = 0;
-
-      for (int j = 0; j < nn && j < MAX_NEIGHBORS; j++) {
-        int nbr = k_neighbor_d(i, j);
-        int nbr_flag = d_active_flag_local(nbr);
-
-        // Only flip liquid neighbors (active_flag == 2)
-        if (nbr_flag == 2) {
-          liquid_neighbors[num_liquid++] = nbr;
-        }
-      }
-
-      // Shuffle the liquid neighbor list using Fisher-Yates
       auto generator = rand_pool_local.get_state();
-      for (int j = num_liquid - 1; j > 0; j--) {
-        int k = static_cast<int>(generator.drand() * (j + 1));
-        if (k > j) k = j;  // Clamp to valid range [0, j] to prevent out-of-bounds
-        // Swap
-        int temp = liquid_neighbors[j];
-        liquid_neighbors[j] = liquid_neighbors[k];
-        liquid_neighbors[k] = temp;
-      }
+      int center = i;
+      while (remaining > 0) {
+        const int nn = Kokkos::min(k_numneigh_d(center), MAX_NEIGHBORS);
+        int order[MAX_NEIGHBORS];
+        if (nn == MAX_NEIGHBORS) {
+          for (int j = 0; j < MAX_NEIGHBORS; j++) order[j] = shell_slot[j];
+          for (int sh = 0; sh < 3; sh++) {        // Fisher-Yates within a shell
+            const int lo = shell_start[sh];
+            for (int j = shell_start[sh + 1] - 1; j > lo; j--) {
+              int k = lo + Kokkos::min(static_cast<int>(generator.drand() * (j - lo + 1)), j - lo);
+              int t = order[j]; order[j] = order[k]; order[k] = t;
+            }
+          }
+        } else {
+          for (int j = 0; j < nn; j++) order[j] = j;   // CPU: list order
+        }
 
-      // Flip up to (target_sites - 1) neighbors
-      // Note: In parallel execution, some neighbors may be claimed by other nuclei
-      // This is acceptable - results in statistical variation in nucleus sizes
-      int sites_to_flip = Kokkos::min(target_sites - 1, num_liquid);
+        const int before = remaining;
+        for (int j = 0; j < nn && remaining > 0; j++) {
+          const int nbr = k_neighbor_d(center, order[j]);
+          if (Kokkos::atomic_compare_exchange(&d_active_flag_local(nbr), 2, 3) != 2) continue;
+          remaining--;
 
-      for (int j = 0; j < sites_to_flip; j++) {
-        int nbr = liquid_neighbors[j];
-
-        // Attempt to flip this neighbor using atomic compare-and-swap
-        // to prevent race conditions when multiple nuclei compete for same neighbor
-        int expected = 2;  // LIQUID
-        int desired = 3;   // SOLID (claimed)
-
-        // Atomic CAS: only succeeds if neighbor is still liquid
-        int old_flag = Kokkos::atomic_compare_exchange(&d_active_flag_local(nbr), expected, desired);
-
-        if (old_flag == 2) {
-          // We successfully claimed this neighbor - flip it to match nucleus
           int spin_nbr = spin_i;
           double q_nbr[4] = {q_i[0], q_i[1], q_i[2], q_i[3]};
 
           if (nucl_rotate) {
-            // Distance from the seed (lattice units -> m); the flipper only
-            // claims the seed's 26 neighbours, so hop_distance's sqrt(3)
-            // clamp is exact here.
+            // Distance from the SEED (lattice units -> m), as on the CPU.
+            const double ddx = k_xyz_d(nbr, 0) - k_xyz_d(i, 0);
+            const double ddy = k_xyz_d(nbr, 1) - k_xyz_d(i, 1);
+            const double ddz = k_xyz_d(nbr, 2) - k_xyz_d(i, 2);
             double mis_angle = diffusion_angle(mis_diffusion_local, misorient_alpha_local,
                                                t_cool_max_local, Tcool_seed,
-                                               hop_distance(k_xyz_d, nbr, i) * dx_local);
+                                               Kokkos::sqrt(ddx*ddx + ddy*ddy + ddz*ddz) * dx_local);
 
             double q_rot[4];
             perturb_orientation(misori_mode_local, q_nbr, mis_angle, generator, q_rot);
@@ -1542,9 +1527,21 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
           d_G_local(nbr) = G_i;
           d_V_local(nbr) = V_i;
         }
-        // If old_flag != 2, another nucleus already claimed it - skip
-      }
+        if (remaining == 0 || remaining == before) break;
 
+        // Carry on from a random solid neighbour of the centre's spin.
+        const int spin_c = d_spin_local(center);
+        int cand[MAX_NEIGHBORS];
+        int nc = 0;
+        for (int j = 0; j < nn; j++) {
+          const int nbr = k_neighbor_d(center, j);
+          if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) == spin_c) cand[nc++] = nbr;
+        }
+        if (nc == 0) break;
+        const int next = cand[static_cast<int>(Kokkos::round((nc - 1) * generator.drand()))];
+        if (next >= nlocal_local) break;   // the CPU recurses only into owned sites
+        center = next;
+      }
       rand_pool_local.free_state(generator);
 
       // Update nucleus solid_d to ready state

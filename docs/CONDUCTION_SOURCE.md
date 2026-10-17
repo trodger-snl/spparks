@@ -158,6 +158,26 @@ surface term also has the wrong sign (convection and radiation heat), and
 its clock stops while the MC step is shorter than the thermal step. Ours
 at 2× power overshoots it, so the gap is its energy excess.
 
+After fixing those (am_finitedifference 137d5948, worktree
+`/home/tron/spparks-am-finitediff`, `FD_FIXES.md`), am/finitediff at the
+same inputs gives ThinWall 60 × 25 µm, as the conduction source does. Both
+codes' example decks now use inputs re-tuned to the original ThinWall pool
+(150 W absorbed; sigma 42 µm in x/y and 70 µm in z, i.e. s = 59.4 / 99.0 µm
+here):
+
+| Deck, 150 W | Solid above substrate | Pool width / melted depth |
+|---|---|---|
+| ThinWall, am/finitediff (fixed) | 63,662 | 100 / 60 µm |
+| ThinWall, conduction, matched (no margins) | 62,448 | 100 / 60 µm |
+| ThinWall, conduction, `in.thin_wall` (1 mm margins) | 62,468 | 100 / 65 µm |
+| LargerRectangle, am/finitediff (fixed) | 570,300 | depth 75 / 95 µm (median / max) |
+| LargerRectangle, conduction, `in.large_rectangle` | 597,200 | depth 110 / 140 µm |
+
+On LargerRectangle the 20 rasters at 50 µm hatch build up heat; the margins
+(powder outside the box) keep it where am/finitediff's fixed 300 K box faces,
+150 µm from the raster turns, remove it. The conduction rows ran at
+`stretch 1.1` (before the 1.25 default).
+
 Identity is checked on `%g` text dumps (6 significant digits). GP700 runs and
 `compare.py`: `/home/tron/gp700_runs/cond_cmp`.
 

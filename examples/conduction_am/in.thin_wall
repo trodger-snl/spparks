@@ -37,9 +37,11 @@ undercooling_deviation  3
 mean_nuclei_volume      8.4375e-16
 nuclei_volume_deviation 1.5625e-17
 
-# 115 W absorbed, k 30, rho 5706 (alpha = k/(rho cp0)), T0 300 K; am/finitediff
-# spot exp(-r^2/2 sigma^2), sigma 60 um = exp(-r^2/s^2), s = 84.85 um
-setup_temperature_source conduction 115.0 1.0 30.0 1.0954e-5 300.0 480.0 84.85e-6 84.85e-6 84.85e-6 &
+# 150 W absorbed, k 30, rho 5706 (alpha = k/(rho cp0)), T0 300 K. Spot sigma
+# 42 um (x, y) / 70 um (z) in am/finitediff's exp(-r^2/2 sigma^2), i.e.
+# s = sqrt(2) sigma here: re-tuned with the energy-conserving am/finitediff
+# (its 137d5948) to the original ThinWall pool, ~100 um wide x 60 um deep.
+setup_temperature_source conduction 150.0 1.0 30.0 1.0954e-5 300.0 480.0 59.4e-6 59.4e-6 99.0e-6 &
     k_powder 0.3 cp_table 6 300 480 600 550 1400 675 1550 693 1650 714 1750 736 &
     latent 2.85e5 convection 25 300 emissivity 1.0 &
     margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 part plate far_bc fixed

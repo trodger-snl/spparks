@@ -148,7 +148,17 @@ bool ConductionTemperatureSource::take_reset(double &T_reset)
    Segments are disjoint in time. The returned fraction is the power-weighted
    on-time of [t0, t1]; the position is the midpoint of the overlap with the
    segment that overlaps longest (one position per sub-step).
+   Segments are sorted, so both queries start at the first segment ending
+   after the query time (binary search): a G-code layer can hold many
+   thousands, and laser_window runs every sub-step.
 ------------------------------------------------------------------------- */
+
+static std::vector<ScanSeg>::const_iterator first_ending_after(
+  const std::vector<ScanSeg> &segs, double t)
+{
+  return std::upper_bound(segs.begin(), segs.end(), t,
+                          [](double v, const ScanSeg &g) { return v < g.t1; });
+}
 
 double ConductionTemperatureSource::laser_window(double t0, double t1,
                                                  double &x, double &y) const
@@ -156,7 +166,8 @@ double ConductionTemperatureSource::laser_window(double t0, double t1,
   x = y = 0.0;
   if (!scan_built || t1 <= t0) return 0.0;
   double on = 0.0, best = 0.0;
-  for (const Seg &g : segs_) {
+  for (auto it = first_ending_after(segs_, t0); it != segs_.end() && it->t0 < t1; ++it) {
+    const Seg &g = *it;
     const double a = std::max(t0, g.t0), b = std::min(t1, g.t1);
     if (b <= a || g.p <= 0.0) continue;
     on += (b - a) * g.p;
@@ -174,10 +185,9 @@ double ConductionTemperatureSource::next_laser_on(double t) const
 {
   double next = std::numeric_limits<double>::max();
   if (!scan_built) return next;
-  for (const Seg &g : segs_) {
-    if (g.p <= 0.0) continue;
-    if (t >= g.t0 && t < g.t1) return t;
-    if (g.t0 > t) next = std::min(next, g.t0);
+  for (auto it = first_ending_after(segs_, t); it != segs_.end(); ++it) {
+    if (it->p <= 0.0) continue;
+    return t >= it->t0 ? t : it->t0;   // first emitting segment not yet over
   }
   return next;
 }

@@ -160,7 +160,7 @@ double RosenthalTemperatureSource::rosenthal_kernel(double Q_eff, double v,
    pose (px/py/layer_z/ux/uy/v/scan_active/T0) is filled by the driving app
    from its scan path; here we only set the mode and the material constants
    that the device kernel needs. Keep in sync with rosenthal_pointwise().
-   Returns false for KEYHOLE (needs quadrature arrays -> host path).
+   KEYHOLE also needs the quadrature arrays (copy_keyhole_quadrature).
 ------------------------------------------------------------------------- */
 
 bool RosenthalTemperatureSource::fill_device_plan(RosenthalDevicePlan &plan) const

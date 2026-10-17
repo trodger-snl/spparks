@@ -33,10 +33,9 @@ namespace SPPARKS_NS {
    rosenthal_kernel) are reproduced device-side from these scalars; keep this
    struct in sync with those two functions.
 
-   KEYHOLE mode (Gauss-Legendre line integral) is not represented here -- it
-   needs the quadrature node/weight arrays on the device; for keyhole the app
-   falls back to the host path (valid is left false). STANDARD and ANISOTROPIC
-   are the closed-form modes handled on device.
+   STANDARD and ANISOTROPIC are closed form. KEYHOLE's Gauss-Legendre line
+   integral needs its node/weight arrays, which the kk app uploads once
+   (copy_keyhole_quadrature); all three modes run on the device.
 ------------------------------------------------------------------------- */
 
 struct RosenthalDevicePlan {

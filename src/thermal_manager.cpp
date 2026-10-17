@@ -891,7 +891,7 @@ RosenthalDevicePlan ThermalManager::rosenthal_device_plan(double simulation_time
   // device fill bypasses; keep smoothed runs on the host path.
   if (temperature_smooth_enabled) return plan;
 
-  // Material parameters; false (e.g. KEYHOLE) -> host path.
+  // Material parameters; all three modes (incl. KEYHOLE) are device-eligible.
   if (!ros->fill_device_plan(plan)) { plan.valid = false; return plan; }
 
   // Sync the laser pose to simulation_time in dt-sized chunks (move(dt) does
@@ -964,8 +964,8 @@ ThermalManager::rosenthal_fast_forward(double current_time, double stoptime,
    Unlike Rosenthal there is no scan-path pose to advance (the Moser source
    integrates over its own absolute-time path history); we just let the source
    do any per-step bookkeeping and snapshot its scalar parameters. Returns an
-   invalid plan (host path) for non-Moser sources, KEYHOLE / fluctuations, or
-   when a dynamic inter-pass pause/reset is configured.
+   invalid plan (host path) for non-Moser sources or under temperature_smooth;
+   keyhole, fluctuations and dynamic pause/reset all run on the device.
 ------------------------------------------------------------------------- */
 
 MoserDevicePlan ThermalManager::moser_device_plan(double simulation_time)

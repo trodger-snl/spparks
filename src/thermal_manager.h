@@ -97,8 +97,8 @@ class ThermalManager : protected Pointers {
   // Advance the laser scan path to simulation_time on the host (cheap) and
   // return a RosenthalDevicePlan the caller can use to evaluate the Rosenthal
   // temperature on a device, filling its own T view directly. plan.valid is
-  // false when the active source is not a device-eligible Rosenthal (i.e. not
-  // Rosenthal, or KEYHOLE mode) -- the caller must then use the host
+  // false when the active source is not Rosenthal (all three modes are
+  // device-eligible) or temperature_smooth is on -- the caller must then use the host
   // update_temperatures() + sync path. This advances the same scan_layer state
   // update_temperatures() would, so for a Rosenthal device step the caller must
   // NOT also call update_temperatures() (that would double-advance the path).

@@ -2162,7 +2162,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   // loop. Fast-forward uses a global max temperature + ThermalManager's
   // path-geometry predictor.
   //
-  // Other sources (HDF5 / Moser / Rosenthal KEYHOLE): host path via
+  // temperature_smooth, or a source without a device plan: host path via
   // ThermalManager::advance(), which fills host T[]; we then sync to device.
   refresh_thermal_host();
   bool device_temp = false;
@@ -2245,7 +2245,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       // value by construction (same global field, same point), so the field is
       // fully device-resident -- no host T round-trip, no T ghost comm.
     } else {
-      // ---- HOST path (Rosenthal-keyhole / temperature_smooth / other) ----
+      // ---- HOST path (temperature_smooth / no device plan) ----
       s = thermal->advance(time, stoptime);
     }
 
@@ -2461,8 +2461,8 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     // gradient, neighbor temperature T (darray[5]). mobility/solid_d/G/V are
     // never read as neighbors, so they are dropped (full-synced only at output).
     //
-    // T is not exchanged here: on the host-temperature path (Rosenthal keyhole /
-    // generic xyz / temperature_smooth) ghost T was exchanged right after the
+    // T is not exchanged here: on the host-temperature path (temperature_smooth /
+    // no device plan) ghost T was exchanged right after the
     // fill, before the kernels; on a device-temp path the fill already wrote
     // k_T over all nall positionally.
     //

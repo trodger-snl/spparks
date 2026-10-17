@@ -1,0 +1,105 @@
+"SPPARKS Website"_sws - "SPPARKS Documentation"_sd - "SPPARKS Commands"_sc :c
+
+:link(sws,https://spparks.github.io)
+:link(sd,Manual.html)
+:link(sc,Section_commands.html#comm)
+
+:line
+
+material command :h3
+
+[Syntax:]
+
+material file keyword value :pre
+
+file = material card, a TOML file :ulb,l
+zero or one keyword/value pair may be appended :l
+keyword = {process} :l
+  {process} value = name
+    name = one of the card's \[process.NAME\] sets :pre
+:ule
+
+[Examples:]
+
+material ../../materials/316L.toml process single_track_340W
+setup_temperature_source conduction card margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 part part
+laser_path start 0.15e-3 0.10e-3 0.1475e-3 end 0.85e-3 0.10e-3 speed card hatch card 2 serpentine :pre
+
+material ../../materials/IN625.toml process amb2018_02_cbm_B
+nucleation_density      1e14
+critical_undercooling   5
+undercooling_deviation  3
+mean_nuclei_volume      8.4375e-16
+nuclei_volume_deviation 1.5625e-17
+setup_temperature_source moser card :pre
+
+[Description:]
+
+This command loads a material parameter card for
+"app_style additive/texture"_app_additive_texture.html and
+"additive/texture/kk"_app_additive_texture.html, and selects one of its
+example process sets.  A card is a versioned TOML file holding a
+material's properties.  Each value carries its units, its citation and,
+where known, its uncertainty.  Cards for 316L, 304L, IN625, IN718 and
+Ti-6Al-4V are in the materials/ directory of the source tree; the format
+is specified in docs/MATERIAL_CARDS.md.
+
+The command sets {liquidus}, {solidus}, {solid_front_vel} and the
+nucleation values ({nucleation_density}, {critical_undercooling},
+{undercooling_deviation}, {mean_nuclei_volume},
+{nuclei_volume_deviation}) from the card.  It prints the card's name,
+version and modification date, then every value it read with its unit
+and reference, so the run's log records which data it used.
+
+The card is then used in two other places:
+
+"setup_temperature_source"_setup_temperature_source.html {type}
+{card}, for the {rosenthal}, {moser} and
+"conduction"_temperature_source_conduction.html sources, builds the
+source's arguments from the card and the process set.  The expanded
+command is printed. :ulb,l
+"laser_path"_laser_path.html {speed card} and {hatch card N} take the
+process set's scan speed and hatch spacing. :l,ule
+
+A command that comes after {material} in the input script overrides the
+card value, so put {material} first.  A command before it is
+overwritten.
+
+[No built-in defaults.]  Once a card is loaded, every material value the
+model uses must come from the card or from an explicit command, or the
+run stops with an error naming what is missing.  The nucleation values
+are not in any card yet, so give them in the input script.  To turn a
+term off, say so explicitly, e.g. {convection 0 300} on the
+{setup_temperature_source} command.
+
+[Process sets.]  A card holds zero or more example LPBF process sets
+(power, absorptivity, scan speed, hatch, layer thickness, spot size and
+its convention, preheat, and measured melt-pool sizes where published).
+Without {process}, only the material values are available, and a
+{setup_temperature_source ... card} must give Q, lambda and T0, and the
+spot for moser and conduction, on the command line.
+
+tools/material_card.py checks a card (units, references, changelog,
+DOIs) and converts literature solidification-front velocities into the
+polynomial form {solid_front_vel} uses.
+
+:line
+
+[Restrictions:]
+
+This command is only available in the additive/texture apps, which
+require an MPI build.  Only schema version 1 cards are read.  The
+loader does not convert units: a card whose unit strings differ from
+the canonical SI units is rejected.
+
+[Related commands:]
+
+"setup_temperature_source"_setup_temperature_source.html,
+"temperature_source_conduction"_temperature_source_conduction.html,
+"laser_path"_laser_path.html,
+"app_style additive/texture"_app_additive_texture.html
+
+[Default:]
+
+No card is loaded; every value comes from the input script or the
+app's built-in defaults.

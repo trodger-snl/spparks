@@ -1,0 +1,120 @@
+"SPPARKS Website"_sws - "SPPARKS Documentation"_sd - "SPPARKS Commands"_sc :c
+
+:link(sws,https://spparks.github.io)
+:link(sd,Manual.html)
+:link(sc,Section_commands.html#comm)
+
+:line
+
+temperature_source hdf5_unstructured / hdf5_csr :h3
+
+[Syntax:]
+
+setup_temperature_source hdf5_unstructured filename dx threshold_temp default_temp \[unused\] \[grid_cell_mult\]
+setup_temperature_source hdf5_csr          filename dx threshold_temp default_temp \[unused\] \[grid_cell_mult\] :pre
+
+filename = path to the HDF5 file holding the FE temperature history :ulb,l
+dx = lattice spacing in meters (the app's dx); converts site coordinates to meters :l
+threshold_temp = temperature (K) above which a site counts as "active";
+                 the fast-forward predictor skips periods with no active site :l
+default_temp = temperature (K) of sites not covered by the mesh of the
+               current layer :l
+unused = optional placeholder (formerly bounds_check_mode); read and ignored,
+         kept so decks that give grid_cell_mult in this position still work :l
+grid_cell_mult = optional positive number, in units of dx (default 100.0):
+                 the padding around each rank's subdomain when loading mesh
+                 chunks, and the bin size of the element-search grid :l,ule
+
+[Examples:]
+
+setup_temperature_source hdf5_csr "stale_layer_test.hdf5" 5e-06 250.0 300.0
+setup_temperature_source hdf5_unstructured thermal_trace.h5 5e-6 1500.0 300.0 0 50.0 :pre
+
+See examples/ReducedTempAM/StaleLayerTest/in.stale_layer.
+
+[Description:]
+
+Reads a time-resolved temperature history on an unstructured
+tetrahedral finite-element mesh from an HDF5 file written by an
+external thermal solver, and interpolates it onto the lattice sites
+each step.  Selected via
+"setup_temperature_source"_setup_temperature_source.html with type
+{hdf5_unstructured} or {hdf5_csr}.
+
+The file holds a root dataset {layerTimes} (non-negative, strictly
+increasing start times in seconds; trailing zeros are trimmed) and one
+group per layer, named "0", "1", ...  Layer {i} is active from
+{layerTimes\[i\]} until the next layer starts.  Each group holds the
+chunk bounding boxes and pointers ({boundingBoxes}, {elemPtrs},
+{nodePtrs}), the mesh ({nodeCoords}, {elementToNode}) and the per-node
+time series ({dataCounts}, {times}, {temperatures}).
+
+When a layer becomes active, each rank loads only the mesh chunks that
+overlap its subdomain padded by {grid_cell_mult * dx}, finds the
+tetrahedron containing each of its sites (owned and ghost), and caches
+the element and its barycentric weights.  Each step the node
+temperatures are interpolated in time and the site temperature is the
+barycentric blend of its element's nodes.  Sites outside the loaded
+mesh get {default_temp}.  The per-site temperature intervals above
+{threshold_temp} are precomputed per layer and drive the fast-forward
+predictor, which skips to the next interval when no site is active.
+
+The two variants differ only in how the per-node time series are
+stored:
+
+{hdf5_unstructured} : {times} and {temperatures} are rectangular
+{(nodes, max samples)} arrays, padded to the longest series. :ulb,l
+
+{hdf5_csr} : {times} and {temperatures} are flat arrays indexed by a
+{nodeOffsets} dataset (compressed sparse row), so ragged series need
+no padding.  Use it for large files, where the padded arrays exhaust
+memory. :l,ule
+
+With a parallel HDF5 build, the file is opened with MPI-IO and each
+rank reads only its own chunks.  Collective metadata is deliberately
+not used, because a rank with no overlapping chunk skips reads that
+other ranks make.
+
+The optional {nodal_smooth} command (see
+"app_style additive/texture"_app_additive_texture.html) smooths the
+node temperatures over the mesh before interpolation; it applies only
+to the HDF5 sources.
+
+:line
+
+[GPU support:]
+
+Both variants run in {additive/texture} and {additive/texture/kk}.  In
+the Kokkos app the host still reads the file, loads layers and builds
+the per-site element cache; the device does the per-node time
+interpolation (or, with {nodal_smooth}, receives the host's smoothed
+node values) and the per-site barycentric blend for owned and ghost
+sites, so no ghost temperature communication is needed.  With
+{temperature_smooth} enabled the Kokkos app uses the host path.
+
+:line
+
+[Restrictions:]
+
+The HDF5 sources need a build with HDF5 and HighFive
+(-DSPPARKS_ENABLE_HIGHFIVE=ON); without it, both stop with an error at
+setup.
+
+The simulation time must stay within \[{layerTimes} first, last\]; a
+time outside that range is an error.
+
+The laser path is implicit in the temperature history:
+"laser_path"_laser_path.html in its line form has no effect, its
+{file} form is an error, and
+"laser_fluctuations"_laser_fluctuations.html is an error.
+
+[Related commands:]
+
+"setup_temperature_source"_setup_temperature_source.html,
+"temperature_source_rosenthal"_temperature_source_rosenthal.html,
+"temperature_source_moser"_temperature_source_moser.html,
+"app_style additive/texture"_app_additive_texture.html
+
+[Default:]
+
+grid_cell_mult = 100.0

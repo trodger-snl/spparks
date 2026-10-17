@@ -1,0 +1,157 @@
+<HTML>
+<CENTER><A HREF = "https://spparks.github.io">SPPARKS Website</A> - <A HREF = "Manual.html">SPPARKS Documentation</A> - <A HREF = "Section_commands.html#comm">SPPARKS Commands</A> 
+</CENTER>
+
+
+
+
+
+
+<HR>
+
+<H3>temperature_source rosenthal 
+</H3>
+<P><B>Syntax:</B>
+</P>
+<PRE>setup_temperature_source rosenthal standard Q lambda k alpha T0
+setup_temperature_source rosenthal aniso    Q lambda k alpha T0 eta_y eta_z
+setup_temperature_source rosenthal keyhole  Q lambda_p lambda_l k alpha T0 d [n_quad] 
+</PRE>
+<UL><LI>mode = <I>standard</I>, <I>aniso</I> (or <I>anisotropic</I>), or <I>keyhole</I> 
+
+<LI>Q = total laser power (W) 
+
+<LI>lambda = absorption efficiency (-); absorbed power = lambda * Q 
+
+<LI>lambda_p = absorption efficiency for the surface point source (keyhole only) 
+
+<LI>lambda_l = absorption efficiency for the depth line source (keyhole only) 
+
+<LI>k = thermal conductivity (W/(m K)) 
+
+<LI>alpha = thermal diffusivity (m^2/s) 
+
+<LI>T0 = ambient / preheat temperature (K) 
+
+<LI>eta_y, eta_z = anisotropic stretching factors in y and z (aniso only); both > 0 
+
+<LI>d = half-depth of the line source over [-d, d] (m), keyhole only 
+
+<LI>n_quad = optional Gauss-Legendre order in [2,64] for the line-source quadrature (default 8) 
+</UL>
+<P><B>Examples:</B>
+</P>
+<PRE>setup_temperature_source rosenthal standard 285.0 0.0775 11.2 2.0959e-6 573.0
+setup_temperature_source rosenthal aniso    340.0 0.155 11.2 2.0959e-6 573.0 1.5 0.7
+setup_temperature_source rosenthal keyhole  340.0 0.155 0.155 11.2 2.0959e-6 573.0 100e-6 8 
+</PRE>
+<P><B>Description:</B>
+</P>
+<P>Implements the steady-state moving-frame Rosenthal solution for the
+temperature around a point or line heat source moving uniformly over
+the free surface of a half-space.  Selected via
+<A HREF = "setup_temperature_source.html">setup_temperature_source</A> with type
+<I>rosenthal</I>.  All quantities are SI.  Three modes are available.
+</P>
+<P>Rosenthal is the steady-state limit of the unsteady Green's-function
+source <A HREF = "temperature_source_moser.html">temperature_source moser</A>:
+Rosenthal assumes the moving frame has reached steady state, while
+<I>moser</I> integrates an ellipsoidal Gaussian Green's function over the
+time history of the laser path.  Choose <I>rosenthal</I> when the laser
+parameters are constant and a cheap field is enough; choose <I>moser</I>
+when start-up and end-of-track transients, inter-pass cooling, a
+finite spot size, or fluctuations matter.
+</P>
+<P><I>standard</I> : point source on the free surface.  For a site below the
+laser plane,
+</P>
+<PRE>T(R,xi) = T0 + (lambda Q) / (pi k R) * exp(-V (xi + R) / (2 alpha)) 
+</PRE>
+<P>i.e. twice the infinite-medium kernel lambda Q / (2 pi k R) (the
+factor 2 is the image source for the insulated surface).  R is the
+distance from the source, xi the signed distance along the scan
+direction (positive ahead of the source, so the hot tail is at
+xi < 0), and V the laser speed set by <A HREF = "laser_path.html">laser_path</A>.
+R is floored at <I>r_min</I> (see below).  Sites above the laser plane are
+vacuum and get T0.
+</P>
+<P><I>aniso</I> : identical to <I>standard</I> except the transverse and depth
+coordinates are scaled by <I>eta_y</I> and <I>eta_z</I> before R is formed,
+which fits elongated or bowl-shaped pools without leaving the
+analytical framework.  <I>eta_y</I> = <I>eta_z</I> = 1 reproduces <I>standard</I>.
+</P>
+<P><I>keyhole</I> : superposition of two sources sharing the laser path: a
+surface point source with absorption <I>lambda_p</I> (the conduction lobe)
+and a line source with absorption <I>lambda_l</I> (the keyhole channel),
+integrated along z over [-d, d] with <I>n_quad</I>-point Gauss-Legendre
+quadrature (nodes and weights built once at setup).  Both terms carry
+the image factor 2 and share <I>k</I>, <I>alpha</I> and <I>V</I>.  This is the
+analytical counterpart of the <A HREF = "temperature_source_moser.html">moser keyhole</A>
+double-ellipsoid model.
+</P>
+<HR>
+
+<P><B>Path and multi-pass behaviour:</B>
+</P>
+<P>The Rosenthal source needs a <A HREF = "laser_path.html">laser_path</A> line path
+(a run without one stops with an error).  The laser pose is advanced
+along the path each step; once the path is exhausted every site gets
+T0.  <I>repeats N</I> and <I>hatch S N</I> passes run back-to-back with no gap.
+<I>laser_path</I> sets the singularity guard <I>r_min = 0.5 * dx</I> (dx = the
+app's lattice spacing in meters) so the 1/R prefactor stays finite at
+the source.
+</P>
+<P>When no site is above the liquidus, a fast-forward predictor walks a
+copy of the path ahead in steps of <I>fast_forward_search_window</I> (see
+<A HREF = "app_additive_texture.html">app_style additive/texture</A>) and skips to
+the first time a conservative upper bound on the temperature in the
+local subdomain reaches the liquidus.
+</P>
+<HR>
+
+<P><B>GPU support:</B>
+</P>
+<P>All three modes run in both <I>additive/texture</I> and
+<I>additive/texture/kk</I>.  In the Kokkos app the temperature of every
+site (owned and ghost) is evaluated on the device, including the
+<I>keyhole</I> quadrature; the host only advances the laser pose.  With
+<I>temperature_smooth</I> enabled the Kokkos app uses the host path.
+</P>
+<HR>
+
+<P><B>Restrictions:</B>
+</P>
+<P>The Rosenthal source is steady state in the moving frame: it assumes
+the laser parameters have always had their current values, so it
+carries no thermal history.  <A HREF = "laser_fluctuations.html">laser_fluctuations</A>
+is rejected for this source.
+</P>
+<P>Because back-to-back passes are already independent, the <I>pause</I> and
+<I>pause_below</I> keywords of <A HREF = "laser_path.html">laser_path</A> are rejected
+for this source (and therefore <I>reset_temperature</I> too).  The
+<I>laser_path file</I> form is also rejected.  Use the
+<A HREF = "temperature_source_moser.html">moser</A> source for inter-pass cooling
+or waypoint paths.
+</P>
+<P>Q, k and alpha must be > 0; lambda (standard, aniso), lambda_p and
+lambda_l (keyhole), eta_y and eta_z (aniso), and d (keyhole) must be
+> 0, or setup stops with an error.  <I>n_quad</I> is clamped silently to
+[2, 64].  Extra trailing arguments are ignored.
+</P>
+<P><B>Related commands:</B>
+</P>
+<P><A HREF = "setup_temperature_source.html">setup_temperature_source</A>,
+<A HREF = "laser_path.html">laser_path</A>,
+<A HREF = "temperature_source_moser.html">temperature_source_moser</A>,
+<A HREF = "app_additive_texture.html">app_style additive/texture</A>
+</P>
+<P><B>Default:</B>
+</P>
+<P>n_quad = 8
+</P>
+<HR>
+
+<P>[1] Rosenthal, D. "The theory of moving sources of heat and its
+application to metal treatments." Trans. ASME 68 (1946): 849–866.
+</P>
+</HTML>

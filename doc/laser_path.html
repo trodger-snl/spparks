@@ -1,0 +1,210 @@
+<HTML>
+<CENTER><A HREF = "https://spparks.github.io">SPPARKS Website</A> - <A HREF = "Manual.html">SPPARKS Documentation</A> - <A HREF = "Section_commands.html#comm">SPPARKS Commands</A> 
+</CENTER>
+
+
+
+
+
+
+<HR>
+
+<H3>laser_path command 
+</H3>
+<P><B>Syntax:</B>
+</P>
+<PRE>laser_path start X0 Y0 Z0 end X1 Y1 speed V keyword value ...
+laser_path file F speed V keyword value ... 
+</PRE>
+<UL><LI>start/end form: 
+
+<LI>X0, Y0, Z0 = start point (m); Z0 is the laser plane (free surface) 
+
+<LI>X1, Y1 = end point (m); the line lies in the plane Z = Z0 
+
+<LI>V = laser speed (m/s), > 0, or <I>card</I> 
+
+<LI>zero or more keyword/value pairs may be appended 
+
+<LI>keyword = <I>repeats</I> or <I>hatch</I> or <I>serpentine</I> or <I>pause</I> or <I>pause_below</I> or <I>reset_temperature</I> 
+
+<PRE>  <I>repeats</I> value = N
+    N = number of passes along the same line (>= 1)
+  <I>hatch</I> values = S N
+    S = hatch spacing (m), > 0, or <I>card</I>
+    N = number of passes (>= 1); pass k is offset by k*S along the
+        in-plane normal (to the left of the scan direction)
+  <I>serpentine</I> = no value; reverse the direction of every odd pass
+  <I>pause</I> value = T
+    T = fixed gap between passes (s), > 0; time-resolved sources only
+  <I>pause_below</I> value = Tk
+    Tk = fire the next pass once the peak temperature is <= Tk (K), > 0;
+         time-resolved sources only
+  <I>reset_temperature</I> value = Tr
+    Tr = uniform temperature (K), > 0, the field is reset to at each
+         inter-pass boundary; needs <I>pause</I> or <I>pause_below</I> 
+</PRE>
+<LI>file form: 
+
+<LI>F = waypoint file (see below) 
+
+<LI>V = default emitting speed (m/s), > 0, or <I>card</I> 
+
+<LI>zero or more keyword/value pairs may be appended 
+
+<LI>keyword = <I>scale</I> or <I>shift</I> or <I>jump_speed</I> or <I>jump_time</I> or <I>recoat</I> or <I>layers</I> 
+
+<PRE>  <I>scale</I> value = S
+    S = factor applied to the file coordinates (default 1), > 0
+  <I>shift</I> values = DX DY DZ
+    DX, DY, DZ = offset (m) added after scaling (default 0 0 0)
+  <I>jump_speed</I> value = Vj
+    Vj = speed (m/s) of laser-off moves (default V), > 0
+  <I>jump_time</I> value = Tj
+    Tj = fixed duration (s) of every laser-off move (default 0 = use jump_speed)
+  <I>recoat</I> value = Tr
+    Tr = extra time (s) between the end of one layer and the start of the next (default 0)
+  <I>layers</I> value = N
+    N = use only the first N layers of the file (default 0 = all) 
+</PRE>
+
+</UL>
+<P><B>Examples:</B>
+</P>
+<PRE>laser_path start -2.0e-3 0.4e-3 0.4e-3 end 1.1e-3 0.4e-3 speed 1.2 repeats 1
+laser_path start 0.15e-3 0.10e-3 0.15e-3 end 0.85e-3 0.10e-3 speed 1.2 repeats 2 pause 1.0e-3
+laser_path start 0.15e-3 0.10e-3 0.15e-3 end 0.85e-3 0.10e-3 speed 1.2 repeats 3 pause_below 1500 reset_temperature 600
+laser_path start -100e-6 200e-6 90e-6 end 502e-6 200e-6 speed 1.137 hatch 80e-6 5 serpentine pause 8.8e-3
+laser_path start 0.15e-3 0.10e-3 0.1475e-3 end 0.85e-3 0.10e-3 speed card hatch card 2 serpentine pause 1.0e-3
+laser_path file large_rectangle.path speed 1.4 scale 5e-6 shift 0 0 2.5e-6 jump_time 5e-3 layers 2 
+</PRE>
+<P><B>Description:</B>
+</P>
+<P>Defines the laser scan for the path-driven temperature sources of
+<A HREF = "app_additive_texture.html">app_style additive/texture</A> and
+<I>additive/texture/kk</I>.  All values are SI (m, m/s, s, K).  The scan
+starts at the simulation time at which the command is issued, so a
+second <I>laser_path</I> (e.g. one per layer between <A HREF = "run.html">run</A>
+commands) replaces the previous scan; for the Moser source the thermal
+history of the old scan is discarded.
+</P>
+<P><A HREF = "setup_temperature_source.html">setup_temperature_source</A> must come
+first, and <A HREF = "laser_fluctuations.html">laser_fluctuations</A>, if used, must
+come between the two.
+</P>
+<P><I>speed card</I> and <I>hatch card N</I> take the speed and the hatch spacing
+from the process set selected by the <A HREF = "material.html">material</A> command.
+It is an error if no card is loaded or the process set does not give
+the value.
+</P>
+<P><B>Start/end form:</B>
+</P>
+<P>One straight line from (X0, Y0) to (X1, Y1) at height Z0, scanned at
+speed V; each pass lasts
+</P>
+<PRE>dt_pass = sqrt((X1 - X0)^2 + (Y1 - Y0)^2) / V 
+</PRE>
+<P><I>repeats N</I> scans the same line N times; <I>hatch S N</I> scans N parallel
+lines, line k shifted by k*S along the in-plane normal (-dY, dX)/L.
+<I>hatch</I> sets the pass count, so it replaces an earlier <I>repeats</I>.
+<I>serpentine</I> reverses passes 1, 3, 5, ...  Without a pause keyword the
+passes run back-to-back.
+</P>
+<P>How each source uses the path:
+</P>
+<UL><LI><A HREF = "temperature_source_rosenthal.html">rosenthal</A> : the laser pose is
+advanced along the passes each step.  The 1/R singularity guard <I>r_min</I>
+is set to 0.5 * dx.  <I>pause</I> and <I>pause_below</I> are rejected: steady-state
+passes carry no thermal history. 
+
+<LI><A HREF = "temperature_source_moser.html">moser</A> and
+<A HREF = "temperature_source_conduction.html">conduction</A> : the path becomes a
+time-resolved scan with one emitting segment per pass. 
+
+<LI><A HREF = "temperature_source_hdf5.html">hdf5_unstructured / hdf5_csr</A> : the
+command is accepted and has no effect (the path is implicit in the
+temperature history). 
+</UL>
+<P><B>Inter-pass pause (time-resolved sources):</B>
+</P>
+<P><I>pause T</I> places every pass on the timeline up front, separated by a
+laser-off gap of T seconds; the earlier passes' heat keeps decaying
+through the gap.
+</P>
+<P><I>pause_below Tk</I> schedules only the first pass.  Each further pass
+fires at the first step at which the current pass has finished
+emitting and the global peak temperature is <= Tk; if the field is
+already that cool, the next pass starts on the next step.  The gap
+therefore follows from the cooling.  After the last pass has finished
+and cooled to Tk, the run advances to its end time and stops.  Tk also
+replaces the liquidus as the fast-forward threshold.
+</P>
+<P><I>reset_temperature Tr</I> (with <I>pause</I> or <I>pause_below</I>) clears the scan
+history at each inter-pass boundary and sets the source's ambient
+temperature to Tr, so each pass starts from a uniform field at Tr.
+With <I>pause T</I>, passes are then fired one at a time, T seconds after
+the previous pass ended.
+</P>
+<P><I>pause</I> and <I>pause_below</I> are mutually exclusive.  <I>reset_temperature</I>
+cannot be combined with <I>hatch</I>.  A pause keyword with a single pass
+prints a warning and has no effect.
+</P>
+<P><B>File form:</B>
+</P>
+<P>Requires the moser or conduction source.  The file has one waypoint
+per row,
+</P>
+<PRE>x y z p [v] 
+</PRE>
+<P>separated by whitespace or commas; text after "#" is a comment and
+blank lines are skipped.  Coordinates are <I>file value * scale + shift</I>
+(m).  Each row is a move from the previous waypoint: with power
+fraction <I>p</I> > 0 the laser emits <I>p * lambda Q</I> and moves at speed <I>v</I>
+(default V); with <I>p</I> = 0 it is a laser-off jump that takes
+<I>jump_time</I> seconds if given, else distance / <I>jump_speed</I>.  A change
+of z starts a new layer at that waypoint (the move to the new height is
+not scanned).  Layers without an emitting move are dropped.  The file
+needs at least two waypoints and one emitting move.
+</P>
+<P>Layers run one at a time.  The next layer starts once the current one
+has finished emitting, the global peak temperature is below the
+solidus and no site is liquid, plus <I>recoat</I> seconds; simulation time
+jumps over the recoat interval.  For the Moser source each layer starts
+with a fresh thermal history; for the conduction source, see its page.
+<I>pause</I>, <I>pause_below</I> and <I>reset_temperature</I> are not available in
+this form.
+</P>
+<P>An example path file and deck are in examples/conduction_am
+(large_rectangle.path, in.large_rectangle).
+</P>
+<P><B>GPU support:</B>
+</P>
+<P>Both forms and all keywords work identically in <I>additive/texture</I> and
+<I>additive/texture/kk</I>.  In the Kokkos app the host advances the laser
+pose and makes the per-pass firing decisions; the per-site temperature
+is evaluated on the device (see
+<A HREF = "setup_temperature_source.html">setup_temperature_source</A> for the
+exceptions).
+</P>
+<P><B>Restrictions:</B>
+</P>
+<P>The start/end form scans straight lines only.  For arbitrary
+multi-segment or multi-layer paths use the file form (moser or
+conduction source), or an externally computed temperature history with
+the <A HREF = "temperature_source_hdf5.html">HDF5 sources</A>.
+</P>
+<P><B>Related commands:</B>
+</P>
+<P><A HREF = "setup_temperature_source.html">setup_temperature_source</A>,
+<A HREF = "laser_fluctuations.html">laser_fluctuations</A>,
+<A HREF = "material.html">material</A>,
+<A HREF = "app_additive_texture.html">app_style additive/texture</A>
+</P>
+<P><B>Default:</B>
+</P>
+<P>repeats = 1, no hatch offset, no serpentine, no pause (passes
+back-to-back), fast-forward threshold = liquidus.  File form: scale =
+1, shift = 0 0 0, jump_speed = V, jump_time = 0 (use jump_speed),
+recoat = 0, layers = all.
+</P>
+</HTML>

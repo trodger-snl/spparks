@@ -1,0 +1,165 @@
+"SPPARKS Website"_sws - "SPPARKS Documentation"_sd - "SPPARKS Commands"_sc :c
+
+:link(sws,https://spparks.github.io)
+:link(sd,Manual.html)
+:link(sc,Section_commands.html#comm)
+
+:line
+
+setup_temperature_source conduction command :h3
+
+[Syntax:]
+
+setup_temperature_source conduction Q lambda k alpha T0 cp sx sy sz keyword values ...
+setup_temperature_source conduction card overrides keyword values ... :pre
+
+Q = laser power (W) :ulb,l
+lambda = absorptivity; the absorbed power is lambda*Q :l
+k = thermal conductivity (W/(m K)); with {k_table} it only sets the density :l
+alpha = thermal diffusivity (m^2/s); the density is rho = k/(alpha*cp) :l
+T0 = ambient and initial temperature (K) :l
+cp = specific heat (J/(kg K)); with {cp_table} it only sets the density :l
+sx, sy, sz = Gaussian source widths (m), as in "moser"_temperature_source_moser.html :l
+{card} = take the positional values and material keywords from the loaded
+"material card"_material.html; see "setup_temperature_source"_setup_temperature_source.html :l
+zero or more keyword/value pairs may be appended :l
+keyword = {k_table} or {cp_table} or {latent} or {k_powder} or {convection} or {emissivity} or {margin} or {plate} or {stretch} or {max_cell} or {part} or {layer_thickness} or {packing} or {plate_top} or {far_bc} or {sts} :l
+  {k_table} values = n T1 k1 ... Tn kn
+    dense conductivity k(T), piecewise linear, held at the end values (K, W/(m K))
+  {cp_table} values = n T1 c1 ... Tn cn
+    specific heat cp(T), piecewise linear, held at the end values (K, J/(kg K))
+  {latent} value = L
+    latent heat of fusion (J/kg), released linearly between solidus and liquidus
+  {k_powder} value = k
+    powder conductivity (W/(m K))
+  {convection} values = h T_inf
+    convective loss coefficient (W/(m^2 K)) and gas temperature (K)
+  {emissivity} value = e
+    radiative loss to T_inf
+  {margin} values = xlo xhi ylo yhi
+    thermal domain beyond the lattice box on each side (m)
+  {plate} value = d
+    thermal domain below the lattice box (m)
+  {stretch} value = r
+    width ratio of successive cells outside the box (>= 1)
+  {max_cell} value = w
+    cap on the width of cells outside the box (m)
+  {part} value = region-ID
+    outside the box, cells inside this region are dense, the rest powder
+  {layer_thickness} value = t
+    outside the box, cells within t of the laser plane are powder (m)
+  {packing} value = f
+    powder cells hold f times the dense mass, 0 < f <= 1
+  {plate_top} value = z
+    every cell below z is dense (m)
+  {far_bc} value = {fixed} or {adiabatic}
+    outer faces of the thermal domain held at T0, or insulated
+  {sts} value = s
+    RKL2 stages per laser-off super-step, 0 = explicit steps only, or >= 2 :pre
+:ule
+
+[Examples:]
+
+setup_temperature_source conduction 340.0 0.355 19.442 4.517691892111699e-06 573.0 544.75 50e-6 50e-6 75e-6 &
+    k_powder 0.3 k_table 6 300 13.8 600 20.0 900 24.8 1200 28.4 1500 30.6 1675 31.3 &
+    cp_table 7 300 483 473 528 873 595 1073 611 1253 624 1675 714 1708 847 &
+    latent 2.9e5 convection 25 300 emissivity 0.4 &
+    margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 &
+    part part layer_thickness 30e-6 plate_top -0.2e-3 far_bc fixed :pre
+
+material ../../materials/316L.toml process single_track_340W
+setup_temperature_source conduction card margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 &
+    part part plate_top -0.2e-3 far_bc fixed :pre
+
+[Description:]
+
+The {conduction} temperature source solves nonlinear transient heat
+conduction for "app_style additive/texture/kk"_app_additive_texture.html.
+It is a finite-volume solver in enthalpy form on the GPU (or whatever
+Kokkos backend the build uses).  Unlike the analytic
+"rosenthal"_temperature_source_rosenthal.html and
+"moser"_temperature_source_moser.html sources, it handles
+temperature-dependent conductivity and specific heat, latent heat,
+powder, convective and radiative surface losses, and a thermal domain
+larger than the lattice box.
+
+The nine positional values have the same meaning as Moser's standard
+form.  The heat source is a Gaussian exp(-x^2/sx^2 - y^2/sy^2 -
+z^2/sz^2) carrying the absorbed power lambda*Q into the half space below
+the laser plane.  sx is therefore the 1/e radius, which is the 1/e^2
+radius divided by sqrt(2).  The laser moves along the
+"laser_path"_laser_path.html, including {hatch}, {serpentine}, {pause},
+{pause_below}, {reset_temperature} and the {laser_path file} form.
+{reset_temperature} resets the whole thermal field to that
+temperature.
+
+[Grid.]  Inside the lattice box each lattice site is one cell.  Outside
+it, cells grow by the factor {stretch} per cell out to {margin} and
+{plate}, so a large surrounding domain costs few cells.  The top face of
+the grid is the laser plane, put on the top face of the highest site
+layer below it.  Sites above the grid read T0.
+
+[Phases.]  Each cell is gas, powder or dense.  Inside the box the phase
+is read once from {i2}: 0 or 1 is powder, 2 or 3 is dense, 5 is gas.  A
+substrate must therefore be set to {i2} = 3, and powder loaded from a
+stitch file is kept.  Outside the box the cell is dense below
+{plate_top}; powder within {layer_thickness} of the laser plane; else
+dense inside the {part} region (the whole domain if {part} is not
+given); else powder.  Powder becomes dense the first time it reaches the
+liquidus.  The solver tracks the phase itself and never writes {i2}.
+
+[Density.]  One density, rho = k/(alpha*cp), is used for every phase.
+Give the dense value and make the model layer the consolidated layer
+thickness (the path z step), so that melting a model layer takes the
+same energy as melting the real, thicker powder layer.  {packing} f
+instead gives powder cells f*rho, kept after they melt.  The microstructure
+model does not shrink melted powder, so {packing} below 1 is for
+single-layer tests only.
+
+[Losses.]  Faces next to gas, and the top face, lose heat by convection
+and radiation to T_inf.  The outer faces of the thermal domain are held
+at T0 or insulated ({far_bc}).
+
+[Time stepping.]  The solver takes explicit sub-steps at 0.9 times the
+stable step.  Intervals with the laser off are advanced with RKL2
+super-time-stepping of up to {sts} stages.  Once the field is below the
+liquidus with no pass active, the app fast-forwards to the next pass,
+and the skipped interval is still integrated.
+
+[Layers.]  A layer is finished when its last pass has emitted, the
+maximum temperature is below the solidus, and no site is liquid.  With
+{laser_path file} the next layer then starts after the path's recoat
+time.  Otherwise the field is reset to T0, the rest of the run is
+skipped, and the next {laser_path} and "run"_run.html is the next layer.
+
+Solver details, validation against Moser, and the material discussion
+are in docs/CONDUCTION_SOURCE.md in the source tree.
+
+:line
+
+[Restrictions:]
+
+Only "app_style additive/texture/kk"_app_additive_texture.html can use
+this source; the CPU app stops with an error at its first temperature
+query.  It does not support the {keyhole} mode,
+"laser_fluctuations"_laser_fluctuations.html, {temperature_smooth},
+periodic boundaries, or a "processors"_processors.html grid that splits
+z (use processors * * 1).
+
+[Related commands:]
+
+"setup_temperature_source"_setup_temperature_source.html,
+"temperature_source_moser"_temperature_source_moser.html,
+"laser_path"_laser_path.html,
+"material"_material.html,
+"app_style additive/texture"_app_additive_texture.html
+
+[Default:]
+
+k_table = constant k, cp_table = constant cp, latent = 0, k_powder =
+k/100, convection h = 0 (T_inf = 300), emissivity = 0, margin = 0, plate
+= 0, stretch = 1.25, max_cell = none, part = whole domain dense,
+layer_thickness = 0, packing = 1, plate_top = box bottom, far_bc =
+fixed, sts = 32.  With a material card loaded, none of these material
+defaults (latent, k_powder, convection, emissivity, layer_thickness) is
+used: each must come from the card or the command.

@@ -37,6 +37,8 @@ more disordered.  The key point is that they are immobile and that
 each site's neighborhood of nearby sites can be specified.  Here is
 the list of on-lattice applications SPPARKS currently includes:
 
+"additive/texture"_app_additive_texture.html = additive manufacturing melting, solidification and texture
+"additive/texture/kk"_app_additive_texture.html = Kokkos (GPU) variant of additive/texture
 "diffusion"_app_diffusion.html = vacancy exchange diffusion model
 "erbium"_app_erbium.html = H/He diffusion/rection on an Erbium lattice
 "ising"_app_ising.html = Ising model

@@ -140,6 +140,9 @@ current session.
 
 ## Reference docs
 
+User-manual pages (txt2html: edit the `.txt`, regenerate with `python3 doc/txt2html.py`):
+`doc/app_additive_texture`, `setup_temperature_source`, `temperature_source_{rosenthal,moser,conduction,hdf5}`,
+`laser_path`, `laser_fluctuations`, `material`. Developer notes:
 `docs/AM_KOKKOS_PLAN.md` (the additive Kokkos plan/status),
 `docs/CONDUCTION_SOURCE.md` (the nonlinear conduction temperature source), `docs/MATERIAL_CARDS.md`
 (TOML material cards, `material` command, `tools/material_card.py`), plus

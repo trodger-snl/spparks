@@ -1,0 +1,211 @@
+<HTML>
+<CENTER><A HREF = "https://spparks.github.io">SPPARKS Website</A> - <A HREF = "Manual.html">SPPARKS Documentation</A> - <A HREF = "Section_commands.html#comm">SPPARKS Commands</A> 
+</CENTER>
+
+
+
+
+
+
+<HR>
+
+<H3>laser_fluctuations command 
+</H3>
+<P><B>Syntax:</B>
+</P>
+<PRE>laser_fluctuations psd [top|bot|both] shape keyword value ... 
+</PRE>
+<UL><LI>selector = optional <I>top</I>, <I>bot</I>, or <I>both</I> for the
+<A HREF = "temperature_source_moser.html">moser keyhole</A> mode (required in
+keyhole mode, rejected in standard mode) 
+
+<LI>shape = one of <I>white</I>, <I>lorentzian</I>, <I>pink</I>, <I>narrow_band</I> 
+
+<LI>keyword/value pairs in any order : 
+
+<LI>sigma_W : RMS fractional fluctuation of the lateral widths (sx, sy),
+          >= 0; default 0.0 
+
+<LI>sigma_D : RMS fractional fluctuation of the depth width (sz), >= 0;
+          default 0.0 
+
+<LI>sigma_P : RMS fractional fluctuation of this lobe's absorbed power,
+          >= 0; default 0.0 
+
+<LI>rho : Pearson correlation between the W and D draws, in [-1, 1];
+      default 0.0 
+
+<LI>seed : RNG seed (integer); default 12345.  Every MPI rank generates the
+       same stream from it, so no broadcast is needed. 
+
+<LI>dt : sample spacing of the fluctuation table in seconds, > 0; default
+     5e-6.  The table is linearly interpolated at each emission time,
+     so dt need not match the timestep. 
+
+<LI>tau : correlation time in seconds, > 0 (lorentzian; required) 
+
+<LI>f0 : center frequency in Hz, > 0 (narrow_band; required) 
+
+<LI>df : bandwidth in Hz, > 0 (narrow_band; required) 
+</UL>
+<P><B>Examples:</B>
+</P>
+<PRE># Standard (single ellipsoid) Moser source:
+laser_fluctuations psd lorentzian sigma_W 0.05 sigma_D 0.06 tau 200e-6 &
+                  rho 0.5 seed 12345 dt 5e-6 
+</PRE>
+<PRE># Moser keyhole, independent streams on cap and depth:
+laser_fluctuations psd top lorentzian sigma_W 0.05 sigma_D 0.06 &
+                  tau 200e-6 rho 0.5 seed 12345 dt 5e-6
+laser_fluctuations psd bot lorentzian sigma_W 0.08 sigma_D 0.10 &
+                  sigma_P 0.20 tau 500e-6 rho 0.3 seed 67890 dt 5e-6 
+</PRE>
+<PRE># Moser keyhole, "both" sugar (same shape and sigmas; bot's seed is
+# derived from top's via SplitMix64 XOR for independent streams):
+laser_fluctuations psd both lorentzian sigma_W 0.05 sigma_D 0.06 &
+                  tau 200e-6 rho 0.5 seed 12345 dt 5e-6 
+</PRE>
+<P>See examples/am_validation/in.moser_pause_below.cpu (and .kk) for a
+standard-mode deck.
+</P>
+<P><B>Description:</B>
+</P>
+<P>Attaches a Power Spectral Density (PSD) noise stream to one or both
+lobes of the <A HREF = "temperature_source_moser.html">moser</A> source so that the
+ellipsoid widths and absorbed power fluctuate around their nominal
+values.  When the scan is built, the stream is sampled every <I>dt</I>
+seconds over the scan's emitting window into a table of
+multiplicative factors.  Because the Moser integral evaluates the
+source at each emission time with that emission's factors,
+cooling-tail sites keep the fluctuations that heated them rather than
+snapping to the latest values each step.
+</P>
+<P>This is the Moser-source feature that distinguishes it from the
+Rosenthal source for fluctuation studies; the Rosenthal kernel is
+steady-state and cannot represent per-emission parameter histories.
+</P>
+<P>The four available PSD shapes are:
+</P>
+<UL><LI><I>white</I> : uncorrelated Gaussian draws each <I>dt</I>.  Flat spectrum. 
+
+<LI><I>lorentzian</I> : exponentially-correlated Gaussian process via a
+discrete first-order AR(1) filter with correlation time <I>tau</I>.
+Spectrum 1 / (1 + (omega tau)^2). 
+
+<LI><I>pink</I> : approximately 1/f noise via the Voss-McCartney algorithm:
+the sum of 6 independent levels, level k redrawn every 2^k samples. 
+
+<LI><I>narrow_band</I> : damped harmonic oscillator driven by white noise,
+with natural frequency <I>f0</I> and damping ratio <I>df</I> / (2 <I>f0</I>)
+(clamped below 1).  Spectrum peaks near <I>f0</I>. 
+</UL>
+<P>Each shape is scaled so its stationary RMS is the given sigma, and
+the chain is warmed up for 1000 samples before the table starts.
+</P>
+<P>With dW, dD, dP the sampled values, the source uses sx*(1+dW),
+sy*(1+dW), sz*(1+dD) and power*(1+dP).  The width factors are clamped
+to >= 1e-3 and the power factor to >= 0; a warning is printed if any
+|d| exceeds 0.5, where this first-order model stops being accurate.
+The W and D draws are correlated by <I>rho</I>; the P draw is independent.
+</P>
+<P>The table is regenerated whenever the scan is rebuilt.  When a pass is
+appended under <I>pause_below</I>, the table restarts from the scan's
+first pass with the same seed, so earlier samples are unchanged.  When
+the table starts later than t = 0 (e.g. a pass fired with
+<I>reset_temperature</I>, or a <I>laser_path</I> issued in a later run), the seed
+is mixed with that start time, so each such pass gets a different but
+reproducible stream.
+</P>
+<HR>
+
+<P><B>top|bot|both selector (Moser keyhole mode):</B>
+</P>
+<P>In <A HREF = "temperature_source_moser.html">moser keyhole</A> mode the source has
+two lobes (TOP cap and BOT depth) and the selector is required:
+</P>
+<UL><LI><I>top</I> : configure the top (cap) lobe only 
+
+<LI><I>bot</I> : configure the bottom (depth) lobe only 
+
+<LI><I>both</I> : sugar - apply the same shape and sigmas to both lobes.  The
+bottom-lobe seed is derived as
+<I>top_seed XOR 0x9E3779B97F4A7C15ULL</I> (the SplitMix64 golden constant)
+so the streams are statistically independent yet
+MPI-deterministic. 
+</UL>
+<P>To configure the two lobes with <I>different</I> shapes or sigmas (the
+typical canonical case for vapor-driven keyhole instabilities), issue
+two <I>laser_fluctuations</I> commands - one with <I>top</I>, one with <I>bot</I>.
+</P>
+<P>In Moser standard mode the selector must be omitted; supplying it
+raises an error.
+</P>
+<HR>
+
+<P><B>Required ordering:</B>
+</P>
+<PRE>setup_temperature_source moser ...
+laser_fluctuations psd [selector] shape ...
+laser_path start ... end ... speed ... 
+</PRE>
+<P>The fluctuation table is built by <A HREF = "laser_path.html">laser_path</A>
+(either form), once the scan duration is known, so
+<I>laser_fluctuations</I> must be issued after <I>setup_temperature_source</I>
+but before <I>laser_path</I>.  The reverse order is an error:
+</P>
+<PRE>laser_fluctuations must be issued BEFORE laser_path ... 
+</PRE>
+<P>rather than a silent no-op (the spec would otherwise be stored on the
+source but never materialized into a fluctuation table).
+</P>
+<HR>
+
+<P><B>Power conservation note:</B>
+</P>
+<P>Total absorbed power is <I>not</I> conserved through fluctuations.  In
+keyhole mode,
+</P>
+<PRE>P_total(t) = lambda Q [1 + f_top dP_top(t) + f_bot dP_bot(t)] 
+</PRE>
+<P>so <I>var(P_total) / (lambda Q)^2 = f_top^2 sigma_P_top^2 +
+f_bot^2 sigma_P_bot^2</I> for uncorrelated streams.  This is by design:
+the keyhole vapor cavity is a much stronger laser absorber than the
+solid/liquid metal, and the resulting intermittent absorption is one
+of the experimentally-observed drivers of unsteady keyhole behavior.
+A typical canonical setup is <I>sigma_P_bot ~ 0.20</I> with
+<I>sigma_P_top ~ 0.01</I>.
+</P>
+<HR>
+
+<P><B>Restrictions:</B>
+</P>
+<P>Only the <A HREF = "temperature_source_moser.html">moser</A> source supports
+<I>laser_fluctuations</I>.  The command is an error with a Rosenthal or
+HDF5 source; with the
+<A HREF = "temperature_source_conduction.html">conduction</A> source it is accepted
+but the run stops with an error.
+</P>
+<P><B>GPU support:</B>
+</P>
+<P>Fluctuations work in <I>additive/texture</I> and <I>additive/texture/kk</I>.
+In the Kokkos app the fluctuation tables are uploaded to the device
+and the fluctuating Green's-function integral is evaluated there, for
+both Moser modes and all pass schedules.
+</P>
+<P><B>Related commands:</B>
+</P>
+<P><A HREF = "setup_temperature_source.html">setup_temperature_source</A>,
+<A HREF = "laser_path.html">laser_path</A>,
+<A HREF = "temperature_source_moser.html">temperature_source_moser</A>,
+<A HREF = "app_additive_texture.html">app_style additive/texture</A>
+</P>
+<P><B>Default:</B>
+</P>
+<P>sigma_W = 0.0
+sigma_D = 0.0
+sigma_P = 0.0
+rho = 0.0
+seed = 12345
+dt = 5e-6 s
+</P>
+</HTML>

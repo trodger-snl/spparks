@@ -1,0 +1,130 @@
+<HTML>
+<CENTER><A HREF = "https://spparks.github.io">SPPARKS Website</A> - <A HREF = "Manual.html">SPPARKS Documentation</A> - <A HREF = "Section_commands.html#comm">SPPARKS Commands</A> 
+</CENTER>
+
+
+
+
+
+
+<HR>
+
+<H3>temperature_source hdf5_unstructured / hdf5_csr 
+</H3>
+<P><B>Syntax:</B>
+</P>
+<PRE>setup_temperature_source hdf5_unstructured filename dx threshold_temp default_temp [unused] [grid_cell_mult]
+setup_temperature_source hdf5_csr          filename dx threshold_temp default_temp [unused] [grid_cell_mult] 
+</PRE>
+<UL><LI>filename = path to the HDF5 file holding the FE temperature history 
+
+<LI>dx = lattice spacing in meters (the app's dx); converts site coordinates to meters 
+
+<LI>threshold_temp = temperature (K) above which a site counts as "active";
+                 the fast-forward predictor skips periods with no active site 
+
+<LI>default_temp = temperature (K) of sites not covered by the mesh of the
+               current layer 
+
+<LI>unused = optional placeholder (formerly bounds_check_mode); read and ignored,
+         kept so decks that give grid_cell_mult in this position still work 
+
+<LI>grid_cell_mult = optional positive number, in units of dx (default 100.0):
+                 the padding around each rank's subdomain when loading mesh
+                 chunks, and the bin size of the element-search grid 
+</UL>
+<P><B>Examples:</B>
+</P>
+<PRE>setup_temperature_source hdf5_csr "stale_layer_test.hdf5" 5e-06 250.0 300.0
+setup_temperature_source hdf5_unstructured thermal_trace.h5 5e-6 1500.0 300.0 0 50.0 
+</PRE>
+<P>See examples/ReducedTempAM/StaleLayerTest/in.stale_layer.
+</P>
+<P><B>Description:</B>
+</P>
+<P>Reads a time-resolved temperature history on an unstructured
+tetrahedral finite-element mesh from an HDF5 file written by an
+external thermal solver, and interpolates it onto the lattice sites
+each step.  Selected via
+<A HREF = "setup_temperature_source.html">setup_temperature_source</A> with type
+<I>hdf5_unstructured</I> or <I>hdf5_csr</I>.
+</P>
+<P>The file holds a root dataset <I>layerTimes</I> (non-negative, strictly
+increasing start times in seconds; trailing zeros are trimmed) and one
+group per layer, named "0", "1", ...  Layer <I>i</I> is active from
+<I>layerTimes[i]</I> until the next layer starts.  Each group holds the
+chunk bounding boxes and pointers (<I>boundingBoxes</I>, <I>elemPtrs</I>,
+<I>nodePtrs</I>), the mesh (<I>nodeCoords</I>, <I>elementToNode</I>) and the per-node
+time series (<I>dataCounts</I>, <I>times</I>, <I>temperatures</I>).
+</P>
+<P>When a layer becomes active, each rank loads only the mesh chunks that
+overlap its subdomain padded by <I>grid_cell_mult * dx</I>, finds the
+tetrahedron containing each of its sites (owned and ghost), and caches
+the element and its barycentric weights.  Each step the node
+temperatures are interpolated in time and the site temperature is the
+barycentric blend of its element's nodes.  Sites outside the loaded
+mesh get <I>default_temp</I>.  The per-site temperature intervals above
+<I>threshold_temp</I> are precomputed per layer and drive the fast-forward
+predictor, which skips to the next interval when no site is active.
+</P>
+<P>The two variants differ only in how the per-node time series are
+stored:
+</P>
+<UL><LI><I>hdf5_unstructured</I> : <I>times</I> and <I>temperatures</I> are rectangular
+<I>(nodes, max samples)</I> arrays, padded to the longest series. 
+
+<LI><I>hdf5_csr</I> : <I>times</I> and <I>temperatures</I> are flat arrays indexed by a
+<I>nodeOffsets</I> dataset (compressed sparse row), so ragged series need
+no padding.  Use it for large files, where the padded arrays exhaust
+memory. 
+</UL>
+<P>With a parallel HDF5 build, the file is opened with MPI-IO and each
+rank reads only its own chunks.  Collective metadata is deliberately
+not used, because a rank with no overlapping chunk skips reads that
+other ranks make.
+</P>
+<P>The optional <I>nodal_smooth</I> command (see
+<A HREF = "app_additive_texture.html">app_style additive/texture</A>) smooths the
+node temperatures over the mesh before interpolation; it applies only
+to the HDF5 sources.
+</P>
+<HR>
+
+<P><B>GPU support:</B>
+</P>
+<P>Both variants run in <I>additive/texture</I> and <I>additive/texture/kk</I>.  In
+the Kokkos app the host still reads the file, loads layers and builds
+the per-site element cache; the device does the per-node time
+interpolation (or, with <I>nodal_smooth</I>, receives the host's smoothed
+node values) and the per-site barycentric blend for owned and ghost
+sites, so no ghost temperature communication is needed.  With
+<I>temperature_smooth</I> enabled the Kokkos app uses the host path.
+</P>
+<HR>
+
+<P><B>Restrictions:</B>
+</P>
+<P>The HDF5 sources need a build with HDF5 and HighFive
+(-DSPPARKS_ENABLE_HIGHFIVE=ON); without it, both stop with an error at
+setup.
+</P>
+<P>The simulation time must stay within [<I>layerTimes</I> first, last]; a
+time outside that range is an error.
+</P>
+<P>The laser path is implicit in the temperature history:
+<A HREF = "laser_path.html">laser_path</A> in its line form has no effect, its
+<I>file</I> form is an error, and
+<A HREF = "laser_fluctuations.html">laser_fluctuations</A> is an error.
+</P>
+<P><B>Related commands:</B>
+</P>
+<P><A HREF = "setup_temperature_source.html">setup_temperature_source</A>,
+<A HREF = "temperature_source_rosenthal.html">temperature_source_rosenthal</A>,
+<A HREF = "temperature_source_moser.html">temperature_source_moser</A>,
+<A HREF = "app_additive_texture.html">app_style additive/texture</A>
+</P>
+<P><B>Default:</B>
+</P>
+<P>grid_cell_mult = 100.0
+</P>
+</HTML>

@@ -1,0 +1,204 @@
+<HTML>
+<CENTER><A HREF = "https://spparks.github.io">SPPARKS Website</A> - <A HREF = "Manual.html">SPPARKS Documentation</A> - <A HREF = "Section_commands.html#comm">SPPARKS Commands</A> 
+</CENTER>
+
+
+
+
+
+
+<HR>
+
+<H3>temperature_source moser 
+</H3>
+<P><B>Syntax:</B>
+</P>
+<PRE>setup_temperature_source moser           Q lambda k alpha T0 cp sx sy sz
+setup_temperature_source moser standard  Q lambda k alpha T0 cp sx sy sz
+setup_temperature_source moser keyhole   Q lambda k alpha T0 cp &
+    f_top sx_top sy_top sz_top z_top &
+    f_bot sx_bot sy_bot sz_bot z_bot
+setup_temperature_source moser card [Q v] [lambda v] [T0 v] [spot sx sy sz] 
+</PRE>
+<UL><LI>mode = omitted or <I>standard</I> (single ellipsoid), or <I>keyhole</I>
+       (two overlapping ellipsoids, surface cap + depth lobe) 
+
+<LI>Q = laser power (W) 
+
+<LI>lambda = absorptivity (-); absorbed power = lambda * Q 
+
+<LI>k = thermal conductivity (W/(m K)) 
+
+<LI>alpha = thermal diffusivity (m^2/s); with cp gives the density rho = k/(alpha cp) 
+
+<LI>T0 = ambient / preheat temperature (K) 
+
+<LI>cp = specific heat capacity (J/(kg K)) 
+
+<LI>sx, sy, sz = source widths (m) along the scan direction, transverse, and in depth;
+             the source is exp(-x^2/sx^2 - y^2/sy^2 - z^2/sz^2), so each is a
+             1/e radius (sqrt(2) times the Gaussian standard deviation) 
+
+<LI>f_top, f_bot = fractions of the absorbed power lambda*Q in each lobe;
+               each >= 0, summing to 1 within 1e-6 (keyhole only) 
+
+<LI>sx_top, sy_top, sz_top = top-lobe widths (m) (keyhole only) 
+
+<LI>z_top = depth of the top-lobe center below the laser plane (m), >= 0 (keyhole only) 
+
+<LI>sx_bot, sy_bot, sz_bot = bottom-lobe widths (m) (keyhole only) 
+
+<LI>z_bot = depth of the bottom-lobe center below the laser plane (m), >= 0 (keyhole only) 
+
+<LI>card = take the <I>standard</I> arguments from the loaded <A HREF = "material.html">material</A>
+       card; see <A HREF = "setup_temperature_source.html">setup_temperature_source</A> 
+</UL>
+<P><B>Examples:</B>
+</P>
+<PRE>setup_temperature_source moser 340.0 0.355 11.2 2.0959e-6 573.0 650.0 50e-6 50e-6 75e-6
+setup_temperature_source moser 176 0.9 22.5 4.335e-6 473 600 20e-6 20e-6 10e-6 
+</PRE>
+<PRE>setup_temperature_source moser keyhole 340.0 0.155 11.2 2.0959e-6 573.0 650.0 &
+    0.55  60e-6 60e-6  40e-6  0.0 &
+    0.45  35e-6 35e-6 100e-6  120e-6 
+</PRE>
+<P>See examples/am_validation (in.moser_pause.cpu, in.moser_pause_below.kk,
+...) and examples/gp700_moser/in.gp700_thermal.
+</P>
+<P><B>Description:</B>
+</P>
+<P>Implements an unsteady time-domain Green's-function solution for the
+temperature around an ellipsoidal Gaussian heat source moving along a
+path over a half-space.  Selected via
+<A HREF = "setup_temperature_source.html">setup_temperature_source</A> with type
+<I>moser</I>.  All quantities are SI.  Two modes are available.
+</P>
+<P><I>standard</I> (single ellipsoid).  The temperature at site (x,y,z) and
+time t is
+</P>
+<PRE>T(x,y,z,t) - T0 = (1 / (rho cp)) * integral_0^t G(x - xs(t'),
+                  y - ys(t'), z - zL, t - t') q(t') dt' 
+</PRE>
+<P>where (xs, ys, zL) is the laser path, q(t') the absorbed power, and G
+the Gaussian-source Green's function with the half-space image factor
+2, implemented in the GREENAM headers (<I>src/GREENAM</I>).  The integral
+over each emitting path segment is evaluated by adaptive
+Gauss-Legendre quadrature.  Because the integrand carries the source
+parameters at the time of emission, sites in the cooling tail
+"remember" the widths and power that heated them.  Sites above the
+laser plane are vacuum and get T0.
+</P>
+<P><I>keyhole</I> (double ellipsoid).  Two ellipsoidal Gaussian sources share
+the laser path:
+</P>
+<PRE>TOP cap   : typically wide and shallow, centered <I>z_top</I> below the
+            laser plane (usually 0); carries <I>f_top * lambda Q</I>.
+BOT depth : typically narrow and deep, centered <I>z_bot</I> below the
+            laser plane; carries <I>f_bot * lambda Q</I> and models the
+            keyhole channel. 
+</PRE>
+<P>The vacuum cutoff stays at the real laser plane.  The two lobes are
+integrated independently and summed, so a query costs about twice the
+<I>standard</I> mode.
+</P>
+<HR>
+
+<P><B>Path and multi-pass behaviour:</B>
+</P>
+<P>The scan comes from <A HREF = "laser_path.html">laser_path</A>, which must follow
+this command.  The line form (<I>start ... end ... speed V</I>) supports
+<I>repeats N</I>, <I>hatch S N</I> with optional <I>serpentine</I>, a fixed <I>pause T</I>
+between passes, a temperature-gated <I>pause_below Tk</I>, and
+<I>reset_temperature Tr</I>; the <I>file</I> form reads a multi-layer waypoint
+path.  Each lobe gets its own GREENAM scan with the shared geometry,
+its own center depth (<I>z_top</I> or <I>z_bot</I> below the laser plane) and
+its own power fraction.  The scan starts at the simulation time at which
+<I>laser_path</I> is issued; issuing <I>laser_path</I> again replaces the scan
+and discards the thermal history of the previous one.
+</P>
+<UL><LI><I>pause T</I> (static schedule): all passes are placed on the timeline up
+front, separated by zero-power gaps of <I>T</I> seconds; without <I>pause</I> the
+gap is 1e-12 s (back-to-back).  The integral keeps the decaying tail of
+every earlier pass. 
+
+<LI><I>pause_below Tk</I> (dynamic schedule): only the first pass is scheduled
+up front.  Once the current pass has finished emitting and the global
+peak temperature has dropped to <I>Tk</I> or below, the next pass is
+appended at the current time and the scan (and any fluctuation table)
+is rebuilt.  The gap therefore follows from the cooling, not from the
+input.  After the last pass has finished and cooled below <I>Tk</I>, the
+run advances straight to its end. 
+
+<LI><I>reset_temperature Tr</I> (with either pause keyword): at each inter-pass
+boundary the scan history is cleared, only the new pass is kept, and
+the source's ambient T0 is set to <I>Tr</I>, so the next pass starts from a
+uniform field at <I>Tr</I>.  With <I>pause T</I> this switches to the dynamic
+schedule, firing each pass <I>T</I> seconds after the previous one ended. 
+</UL>
+<P>When no site is above the threshold (the liquidus, or <I>Tk</I> under
+<I>pause_below</I>), a fast-forward predictor steps through the remaining
+emitting segments in increments of <I>fast_forward_search_window</I> (see
+<A HREF = "app_additive_texture.html">app_style additive/texture</A>), evaluating
+the integral at the point of the local subdomain closest to the laser,
+and skips to the first time it reaches the threshold.
+</P>
+<HR>
+
+<P><B>Stochastic source fluctuations:</B>
+</P>
+<P><A HREF = "laser_fluctuations.html">laser_fluctuations</A>, issued between this
+command and <I>laser_path</I>, attaches a noise stream that scales each
+lobe's lateral widths, depth width and power at every emission time.
+In <I>standard</I> mode omit the <I>top|bot|both</I> selector; in <I>keyhole</I> mode
+it is required.  Because the integrand uses each emission's own
+factors, the cooling tail keeps the fluctuations that produced it.
+Total absorbed power is not conserved:
+</P>
+<PRE>P_total(t) = lambda Q [f_top (1 + dP_top(t)) + f_bot (1 + dP_bot(t))] 
+</PRE>
+<HR>
+
+<P><B>GPU support:</B>
+</P>
+<P>Both modes run in <I>additive/texture</I> and <I>additive/texture/kk</I>.  In the
+Kokkos app every per-site Green's-function integral is evaluated on the
+device, for <I>standard</I> and <I>keyhole</I>, with or without fluctuations, and
+for the static and dynamic pass schedules (the host makes the per-pass
+firing decisions and rebuilds the scan; the device does every fill).
+With <I>temperature_smooth</I> enabled the Kokkos app uses the host path.
+</P>
+<HR>
+
+<P><B>Restrictions:</B>
+</P>
+<P>Q, lambda, k, alpha, cp and every lobe's sx, sy, sz must be > 0.  In
+<I>keyhole</I> mode z_top, z_bot, f_top and f_bot must be >= 0 and f_top +
+f_bot must equal 1 within 1e-6.  Extra trailing arguments are ignored.
+</P>
+<P>The <I>card</I> form supports <I>standard</I> mode only.
+</P>
+<P><B>Related commands:</B>
+</P>
+<P><A HREF = "setup_temperature_source.html">setup_temperature_source</A>,
+<A HREF = "laser_path.html">laser_path</A>,
+<A HREF = "laser_fluctuations.html">laser_fluctuations</A>,
+<A HREF = "temperature_source_rosenthal.html">temperature_source_rosenthal</A>,
+<A HREF = "temperature_source_conduction.html">temperature_source_conduction</A>,
+<A HREF = "app_additive_texture.html">app_style additive/texture</A>
+</P>
+<P><B>Default:</B>
+</P>
+<P>mode = standard (when the <I>standard|keyhole</I> token is omitted)
+</P>
+<HR>
+
+<P>[1] Moser, D., et al. "An evaluation of the integral form of the
+heat equation as a closed-form analytical solution to additive
+manufacturing thermal predictions." SAND2017 (Sandia National
+Laboratories).
+</P>
+<P>[2] Goldak, J., A. Chakravarti, and M. Bibby. "A new finite element
+model for welding heat sources." Metallurgical Transactions B 15
+(1984): 299–305.
+</P>
+</HTML>

@@ -1,0 +1,169 @@
+"SPPARKS Website"_sws - "SPPARKS Documentation"_sd - "SPPARKS Commands"_sc :c
+
+:link(sws,https://spparks.github.io)
+:link(sd,Manual.html)
+:link(sc,Section_commands.html#comm)
+
+:line
+
+setup_temperature_source command :h3
+
+[Syntax:]
+
+setup_temperature_source type args ...
+setup_temperature_source type card \[Q v\] \[lambda v\] \[T0 v\] \[spot sx sy sz\] \[keywords ...\] :pre
+
+type = one of {rosenthal}, {moser}, {conduction}, {hdf5_unstructured}, {hdf5_csr} :ulb,l
+args = source-specific arguments (see the source doc page) :l
+card = build the arguments from the loaded "material"_material.html card
+       (types {rosenthal}, {moser}, {conduction} only) :l
+Q v, lambda v, T0 v = replace the card's laser power (W), absorptivity (-),
+                      or preheat temperature (K) :l
+spot sx sy sz = replace the card's source widths sx, sy (from the process
+                {spot}) and sz (from {source_depth}), in meters :l
+keywords = any other tokens, appended after the expanded arguments
+           (e.g. the conduction source's keywords) :l,ule
+
+[Examples:]
+
+setup_temperature_source rosenthal standard 285.0 0.0775 11.2 2.0959e-6 573.0
+setup_temperature_source rosenthal keyhole 340.0 0.155 0.155 11.2 2.0959e-6 573.0 100e-6 8
+setup_temperature_source moser 176 0.9 22.5 4.335e-6 473 600 20e-6 20e-6 10e-6
+setup_temperature_source moser keyhole 340.0 0.155 11.2 2.0959e-6 573.0 650.0 &
+    0.55  60e-6 60e-6  40e-6  0.0 &
+    0.45  35e-6 35e-6 100e-6  120e-6
+setup_temperature_source hdf5_csr "stale_layer_test.hdf5" 5e-06 250.0 300.0 :pre
+
+material ../../materials/316L.toml process single_track_340W
+setup_temperature_source moser card
+setup_temperature_source conduction card margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 part part :pre
+
+[Description:]
+
+Selects and configures the temperature source used by
+"app_style additive/texture"_app_additive_texture.html and its Kokkos
+variant {additive/texture/kk} to drive melting, the mushy band, and
+solidification.  The first argument selects the source type; the
+remaining arguments are passed to that source and are documented on the
+per-source pages below.
+
+The registered sources are:
+
+"rosenthal"_temperature_source_rosenthal.html : steady-state moving-frame
+analytical solution.  Modes: {standard} (point source), {aniso}
+(anisotropic point source with eta_y, eta_z stretching), {keyhole}
+(surface point source plus a Gauss-Legendre line source over \[-d, d\]).
+Needs a "laser_path"_laser_path.html. :ulb,l
+
+"moser"_temperature_source_moser.html : unsteady time-domain Green's
+function integral of a moving ellipsoidal Gaussian source.  Modes:
+{standard} (one ellipsoid) and {keyhole} (two overlapping ellipsoids,
+a surface cap and a depth lobe).  Needs a
+"laser_path"_laser_path.html; supports stochastic width/depth/power
+fluctuations via "laser_fluctuations"_laser_fluctuations.html. :l
+
+"conduction"_temperature_source_conduction.html : nonlinear
+finite-volume heat conduction (temperature-dependent k and cp, latent
+heat) solved on its own grid and sampled onto the lattice.
+{additive/texture/kk} only.  Takes the Moser {standard} arguments plus
+keywords; needs a "laser_path"_laser_path.html. :l
+
+"hdf5_unstructured / hdf5_csr"_temperature_source_hdf5.html : reads a
+time-resolved temperature history on an unstructured tetrahedral FE
+mesh from an HDF5 file written by an external thermal solver and
+interpolates it to the lattice sites.  {hdf5_csr} stores the per-node
+time series in compressed sparse-row form instead of padded rectangular
+arrays. :l,ule
+
+Each step the source fills the per-site temperature T (darray\[5\],
+{d6} in input scripts), which the app's melting, nucleation and
+solidification physics read.
+
+[Material card form:]
+
+With {card} in place of the source arguments, the arguments are built
+from the material card loaded by the "material"_material.html command
+and the process set it selected.  This works for {rosenthal}, {moser}
+and {conduction}, in {standard} mode only: giving {standard}, {aniso},
+{anisotropic} or {keyhole} after {card} is an error.  The card supplies:
+
+Q, lambda, T0 : the process set's power, absorptivity and preheat :ulb,l
+sx = sy, sz : the process {spot}, converted to the 1/e radius, and
+{source_depth} (Moser and conduction only) :l
+k, cp : for {conduction}, the card's thermal tables evaluated at T0;
+for {rosenthal} and {moser}, the linear-model constants, or the tables
+evaluated at the card's reference temperature :l
+alpha : k / (density * cp) :l
+for {conduction} also the {k_table}, {cp_table}, {latent}, {k_powder},
+{emissivity}, {layer_thickness} and {convection} keywords. :l,ule
+
+{Q}, {lambda}, {T0} and {spot} after {card} replace the card's values.
+Every other token is appended after the expanded arguments, so a
+conduction keyword given in the deck follows the card's and the last
+occurrence wins.  The expanded command is printed, so it can be pasted
+into a deck that does not use a card.  A value that is in neither the
+card nor the deck is an error naming the missing value: there are no
+built-in defaults once a card is loaded (for conduction, e.g., give
+{convection 0 300} to turn convection off).
+
+:line
+
+[Required ordering:]
+
+For the path-driven sources ({rosenthal}, {moser}, {conduction}),
+issue the commands in this order:
+
+material ...                  # optional; first, if a card is used
+setup_temperature_source ...
+laser_fluctuations ...        # optional; moser only
+laser_path ... :pre
+
+{laser_path} errors if no source has been set up, and
+{laser_fluctuations} errors if issued after {laser_path} (the Moser
+source builds its fluctuation tables when the scan is built).
+
+:line
+
+[GPU support:]
+
+The CPU app ({additive/texture}) and the Kokkos app
+({additive/texture/kk}) share the same command parsing and pass
+scheduling.  In the Kokkos app the per-site temperature is computed on
+the device for: Rosenthal {standard}, {aniso} and {keyhole}; Moser
+{standard} and {keyhole}, with or without fluctuations, including
+static and dynamic multi-pass pause/reset; the conduction solver; and
+the HDF5 sources (the host still reads the file and builds the
+per-site element cache; the device interpolates).  When
+{temperature_smooth} (see "app_style
+additive/texture"_app_additive_texture.html) is enabled, Rosenthal,
+Moser and HDF5 fall back to the host path, and the conduction source
+stops with an error.
+
+:line
+
+[Restrictions:]
+
+The {additive/texture} apps need an MPI build.  The {hdf5_unstructured}
+and {hdf5_csr} sources need a build with HDF5 and HighFive
+(-DSPPARKS_ENABLE_HIGHFIVE=ON); without it they stop with an error at
+setup.  The {conduction} source runs only in {additive/texture/kk};
+in {additive/texture} it stops with an error at the first temperature
+update.
+
+The {moser} source uses the header-only GREENAM templates in
+{src/GREENAM}, which are part of every build.
+
+An unknown type is an error.
+
+[Related commands:]
+
+"app_style additive/texture"_app_additive_texture.html,
+"material"_material.html,
+"laser_path"_laser_path.html,
+"laser_fluctuations"_laser_fluctuations.html,
+"temperature_source_rosenthal"_temperature_source_rosenthal.html,
+"temperature_source_moser"_temperature_source_moser.html,
+"temperature_source_conduction"_temperature_source_conduction.html,
+"temperature_source_hdf5"_temperature_source_hdf5.html
+
+[Default:] none

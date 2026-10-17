@@ -21,6 +21,7 @@
 #include "moser_device.h"
 #include "hdf5_device.h"
 #include "am_raster.h"
+#include "material_card.h"
 #include <functional>
 #include <memory>
 #include <vector>
@@ -69,12 +70,15 @@ class ThermalManager : protected Pointers {
   bool enabled() const { return (bool)temperature_source; }
 
   // ---- input-script command handlers (called from app input_app) ----
+  void material_cmd(int narg, char **arg);
   void setup_cmd(int narg, char **arg);
   void laser_path_cmd(int narg, char **arg);
   void laser_fluctuations_cmd(int narg, char **arg);
   void smooth_cmd(int narg, char **arg);
   void nodal_smooth_cmd(int narg, char **arg);
   void set_fast_forward_search_window(double w);
+  // The card loaded by the `material` command, or nullptr.
+  const MaterialCard *card() const { return card_.get(); }
 
   // ---- per-step driver ----
   // Fill app->T from the source at simulation_time (and apply optional
@@ -195,6 +199,8 @@ class ThermalManager : protected Pointers {
   // Device temperature filler for hdf5_advance_device(): fills k_T[0,nlocal) at
   // a given time and returns the global max temperature (set by the Kokkos app).
   std::function<double(double)> hdf5_device_filler_;
+
+  std::unique_ptr<MaterialCard> card_;
 
   // Modular temperature source interface
   std::unique_ptr<TemperatureSource> temperature_source;

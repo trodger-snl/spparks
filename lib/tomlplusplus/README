@@ -1,0 +1,3 @@
+toml++ v3.4.0 (https://github.com/marzer/tomlplusplus), single-header release, MIT
+(LICENSE). sha256 6b5172ad4dd6519aec67b919181fa7a38a2234131e5b2afa232dfe444819783e.
+Used only by src/material_card.cpp (docs/MATERIAL_CARDS.md).

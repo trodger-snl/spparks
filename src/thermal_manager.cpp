@@ -35,6 +35,9 @@
 #include <cmath>
 #include <limits>
 #include <algorithm>
+#include <fstream>
+#include <iterator>
+#include <stdexcept>
 
 using namespace SPPARKS_NS;
 using namespace MathConst;
@@ -79,6 +82,41 @@ ThermalManager::ThermalManager(SPPARKS *spk, ThermalHost *host) :
    the factory and configure it with the remaining arguments.
 ------------------------------------------------------------------------- */
 
+/* ----------------------------------------------------------------------
+   material <file> [process <name>]: load a material card (docs/MATERIAL_CARDS.md).
+   Rank 0 reads the file; every rank parses the broadcast text.
+------------------------------------------------------------------------- */
+
+void ThermalManager::material_cmd(int narg, char **arg)
+{
+  if (narg != 1 && !(narg == 3 && strcmp(arg[1],"process") == 0))
+    error->all(FLERR,"Illegal material command: material <file> [process <name>]");
+  std::string text;
+  int n = 0;
+  if (domain->me == 0) {
+    std::ifstream f(arg[0], std::ios::binary);
+    if (f) text.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    n = f ? (int) text.size() : -1;
+  }
+  MPI_Bcast(&n, 1, MPI_INT, 0, world);
+  if (n < 0) error->all(FLERR,(std::string("material: cannot open ") + arg[0]).c_str());
+  text.resize(n);
+  MPI_Bcast(text.data(), n, MPI_CHAR, 0, world);
+  try {
+    card_ = std::make_unique<MaterialCard>(
+      MaterialCard::parse(text, arg[0], narg == 3 ? arg[2] : ""));
+  } catch (const std::exception &e) {
+    error->all(FLERR, e.what());
+  }
+  if (domain->me == 0) {
+    std::cout << "material card " << arg[0] << ": " << card_->material << " version "
+              << card_->version << " modified " << card_->modified;
+    if (!card_->process.empty()) std::cout << ", process " << card_->process;
+    std::cout << std::endl;
+    for (const std::string &l : card_->summary) std::cout << "  " << l << std::endl;
+  }
+}
+
 void ThermalManager::setup_cmd(int narg, char **arg)
 {
   if (narg < 1) {
@@ -91,6 +129,24 @@ void ThermalManager::setup_cmd(int narg, char **arg)
   // Convert remaining arguments to string vector
   for (int i = 1; i < narg; i++) {
     source_args.push_back(std::string(arg[i]));
+  }
+
+  // "card": the material card supplies the positional and material keywords
+  if (!source_args.empty() && source_args[0] == "card") {
+    if (!card_)
+      error->all(FLERR,"setup_temperature_source ... card: no material card (use the material command first)");
+    try {
+      source_args = card_->source_tokens(source_type,
+        std::vector<std::string>(source_args.begin() + 1, source_args.end()));
+    } catch (const std::exception &e) {
+      error->all(FLERR, e.what());
+    }
+    if (domain->me == 0) {
+      std::cout << "setup_temperature_source " << source_type << " from card " << card_->material
+                << " " << card_->version << ":";
+      for (const std::string &t : source_args) std::cout << " " << t;
+      std::cout << std::endl;
+    }
   }
 
   // Create temperature source using factory
@@ -128,6 +184,20 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
   //     [pause <T> | pause_below <Tk>]
   // hatch S N: N passes, pass k offset by k*S along the line's in-plane
   // normal; serpentine reverses the direction on odd passes.
+  // speed card / hatch card: the selected process set's value
+  std::vector<std::string> subst(arg, arg + narg);
+  std::vector<char *> argv_sub;
+  for (int i = 1; i < narg; i++) {
+    if (subst[i] != "card" || (subst[i-1] != "speed" && subst[i-1] != "hatch")) continue;
+    const MaterialCard::opt v = !card_ ? std::nullopt : subst[i-1] == "speed" ? card_->speed : card_->hatch;
+    if (!v)
+      error->all(FLERR,("laser_path: " + subst[i-1] + " card needs a material card with a process set "
+                        "giving " + subst[i-1]).c_str());
+    subst[i] = MaterialCard::num(*v);
+  }
+  for (std::string &t : subst) argv_sub.push_back(t.data());
+  arg = argv_sub.data();
+
   if (narg >= 1 && strcmp(arg[0],"file") == 0) {
     laser_path_file(narg - 1, arg + 1);
     return;

@@ -1,0 +1,47 @@
+# in.single_track driven by the 316L material card (docs/MATERIAL_CARDS.md).
+# Two hatched passes over a 30 um powder layer on a dense substrate. The
+# thermal grid extends 1 mm past the lattice box in x/y and 1 mm into the
+# plate with geometrically stretched cells; the part region outside the box
+# is dense below the powder layer. See docs/CONDUCTION_SOURCE.md.
+# ~15 s on one gfx1151 GPU (build-verify).
+app_style        additive/texture/kk 1000000 5e-6 5e-6 1
+seed             56789
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 200 0 40 0 30
+boundary         n n n
+create_box       box
+create_sites     box
+set site range 1 1000000
+set i2 value 1
+region           substrate block 0 200 0 40 0 24
+set i2 value 3 region substrate
+region           part block -40 240 -20 60 -400 30
+set i1 value 42 region substrate
+set d1 value 1.0 region substrate
+set d2 value 0.0 region substrate
+set d3 value 0.0 region substrate
+set d4 value 0.0 region substrate
+sector           yes
+sweep            color
+diag_style       array d6 sum d6 max
+temperature      0.0
+misorientation_target random_rotation
+# Material and process values from the card; deck commands after `material` win
+# (this deck keeps its own front-velocity fit).
+material         ../../materials/316L.toml process single_track_340W
+solid_front_vel  4 -1.0302e-7 1.0533e-4 2.2196e-3 0
+smooth_greedy_multiproposal on
+smooth_orientation copy
+nuclei_smooth off
+
+# Q, lambda, T0, spot, k/cp tables, latent, k_powder, emissivity, convection and
+# layer_thickness come from the card; the rest is grid and geometry.
+setup_temperature_source conduction card &
+    margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 &
+    part part plate_top -0.2e-3 far_bc fixed
+
+# laser plane at the top face of the top site layer (z = 29.5 dx)
+laser_path start 0.15e-3 0.10e-3 0.1475e-3 end 0.85e-3 0.10e-3 speed card hatch card 2 serpentine pause 1.0e-3
+stats            1e-4
+run              2.0e-3

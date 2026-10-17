@@ -131,6 +131,10 @@ in `processors`.
 
 ## Material (examples: 316L)
 
+The 316L values below are also in the material card `materials/316L.toml`
+(docs/MATERIAL_CARDS.md); `examples/conduction_am/in.single_track.card` runs
+`in.single_track` from it with `setup_temperature_source conduction card`.
+
 The example decks use 316L, ρ = 7900 kg/m³ (`k` 13.8, `alpha` 3.6166e-6,
 `cp` 483 give ρ = k/(α cp)), solidus/liquidus 1675/1708 K, latent 2.9e5
 J/kg, emissivity 0.4, k_powder 0.3. Sources: NIST (Pichler et al. 2020,

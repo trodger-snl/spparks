@@ -11,6 +11,7 @@
    See the README file in the top-level SPPARKS directory.
 ------------------------------------------------------------------------- */
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -59,7 +60,23 @@ bool AdditiveParams::parse_command(const char *command, int narg, char **arg,
   }
 
   // Temperature I/O lives in the ThermalManager.
-  if (strcmp(command, "setup_temperature_source") == 0) thermal.setup_cmd(narg, arg);
+  if (strcmp(command, "material") == 0) {
+    // The card's app-level values; deck commands after this one override them.
+    thermal.material_cmd(narg, arg);
+    const MaterialCard &c = *thermal.card();
+    auto take = [](double &dst, MaterialCard::opt v) { if (v) dst = *v; };
+    take(tl, c.liquidus); take(ts, c.solidus);
+    take(no, c.nucleation_density); take(tc, c.critical_undercooling);
+    take(tsig, c.undercooling_deviation); take(size_norm, c.mean_nuclei_volume);
+    take(size_sig, c.nuclei_volume_deviation);
+    if (!c.front.empty()) {
+      delete[] solid_front_coeffs;
+      solid_front_length = (int) c.front.size();
+      solid_front_coeffs = new double[solid_front_length];
+      std::copy(c.front.begin(), c.front.end(), solid_front_coeffs);
+    }
+  }
+  else if (strcmp(command, "setup_temperature_source") == 0) thermal.setup_cmd(narg, arg);
   else if (strcmp(command, "laser_path") == 0) thermal.laser_path_cmd(narg, arg);
   else if (strcmp(command, "laser_fluctuations") == 0) thermal.laser_fluctuations_cmd(narg, arg);
   else if (strcmp(command, "temperature_smooth") == 0) thermal.smooth_cmd(narg, arg);

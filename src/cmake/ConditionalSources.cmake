@@ -20,6 +20,7 @@ function(configure_conditional_sources)
             app_additive_texture.cpp
             thermal_manager.cpp
             additive_params.cpp
+            material_card.cpp
             temperature_source.cpp
             temperature_source_rosenthal.cpp
             temperature_source_moser.cpp

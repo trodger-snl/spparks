@@ -27,6 +27,16 @@ mkdir -p "$OUT"; ST=$OUT/gp700.st
 DX=${DX:-3e-6}; TGAP=10.0   # voxel size from the environment (DX=1.5e-6 run_layers.sh ...)
 # geometry in voxels: 150 um substrate, 30 um layers, 180 um box window
 VSUB=$(python3 -c "print(round(150e-6/$DX))"); VLAY=$(python3 -c "print(round(30e-6/$DX))"); VWIN=$(python3 -c "print(round(180e-6/$DX))")
+# Adaptive box depth (voxels). Each box runs `floor_check FLOOR`: the app stops,
+# before the stitch dump, if liquid comes within FLOOR voxels of the box bottom,
+# and the box is rerun 1.5x deeper. After a box, the next window is
+# max(VMIN, ceil(FACTOR * deepest melt below the top) + FLOOR). VWIN starts at 180 um.
+FLOOR=${FLOOR:-3}; FACTOR=${FACTOR:-1.5}; VMIN=${VMIN:-$(python3 -c "print(round(60e-6/$DX))")}
+next_window() {  # $1 box dir, $2 ztop: sets VWIN from the box's deepest liquid, if it printed one
+  local z; z=$(grep -a 'floor_check: deepest liquid' "$1/out.txt" 2>/dev/null | tail -1 | awk '{print $6}')
+  [ -n "$z" ] && VWIN=$(python3 -c "import math; print(max($VMIN, math.ceil($FACTOR*($2-$z)) + $FLOOR))")
+  return 0
+}
 # Inter-hatch pause = the real 10 mm track length / speed (8.8 ms): the previous
 # track has solidified (~0.75 ms) before the next hatch overlaps it. Box time
 # covers 5 hatches + pauses + 2 ms cooling; the predictor skips the idle gaps.
@@ -35,10 +45,10 @@ PAUSE=8.8e-3
 TBOX=$(python3 -c "print(round($NH*($NX*$DX+200e-6)/1.137 + ($NH-1)*$PAUSE + 2e-3, 6))")
 for ((n=0; n<NL; n++)); do
   D=$OUT/box_$(printf %03d $n); mkdir -p "$D"
-  [ -f "$D/completion.marker" ] && { echo "box $n done, skipping"; continue; }
   # 150 um substrate (50 voxels): five overlapping hatches remelt 80-100 um below
   # the surface, so anything thinner melts through in box 0.
-  ztop=$((VSUB + VLAY*(n+1))); zlo=$((ztop-VWIN)); [ $zlo -lt 0 ] && zlo=0
+  ztop=$((VSUB + VLAY*(n+1)))
+  [ -f "$D/completion.marker" ] && { echo "box $n done, skipping"; next_window "$D" $ztop; continue; }
   z0=$(python3 -c "print($ztop*$DX)")
   LEND=$(python3 -c "print($NX*$DX + 100e-6)"); YLAST=$(python3 -c "print(40e-6 + 80e-6*($NH-1))")
   OFF=$(python3 -c "import random; random.seed($SEED*7919+$n); print(random.uniform(-40e-6,40e-6) if '$HOFF'=='random' else float('$HOFF')*(($n//2)%2))")
@@ -74,6 +84,11 @@ set d8 value 0.0 if i2 != 3
 set d9 value 0.0 if i2 != 3
 set d10 value 0.0 if i2 != 3"
   fi
+  INIT="$INIT
+floor_check      $(python3 -c "print($FLOOR*$DX)")"
+  [ -f "$OUT/STOP" ] && { echo "STOP file present, stopping before box $n"; exit 0; }
+  while true; do
+  zlo=$((ztop-VWIN)); [ $zlo -lt 0 ] && zlo=0
   python3 - "$TPL" "$D/in.box" "$((SEED+n))" "$zlo" "$ztop" "$INIT" "$LASER" "$T0" "$T1" "$ST" "$NX" "$DT" "$DX" <<'PY'
 import sys
 tpl,out,seed,zlo,zhi,init,laser,t0,t1,st,nx,dt,dx = sys.argv[1:]
@@ -83,10 +98,17 @@ for k,v in {'__SEED__':seed,'__ZLO__':zlo,'__ZHI__':zhi,'__INIT_OR_STITCH__':ini
     s = s.replace(k, v)
 open(out,'w').write(s)
 PY
-  [ -f "$OUT/STOP" ] && { echo "STOP file present, stopping before box $n"; exit 0; }
   echo "box $n: z [$zlo,$ztop] t [$T0,$T1]  $(date +%T)"
   # Never kill a running box (HIP kernels mid-flight wedge the GPU): to stop
-  # the build, touch $OUT/STOP and let the current box finish.
-  ( cd "$D" && mpirun -np 1 --bind-to none "$BIN" < in.box > log.spparks 2>&1 && grep -q 'Loop time' log.spparks && touch completion.marker ) || { echo "box $n FAILED"; exit 1; }
+  # the build, touch $OUT/STOP and let the current box finish. Screen output
+  # goes to out.txt: log.spparks is SPPARKS's own log, two writers clobber it.
+  ( cd "$D" && mpirun -np 1 --bind-to none "$BIN" < in.box > out.txt 2>&1 && grep -q 'Loop time' out.txt ) && break
+  if grep -q 'floor_check: liquid' "$D/out.txt" && [ $zlo -gt 0 ]; then
+    VWIN=$(( (3*VWIN + 1) / 2 )); echo "box $n: melt reached the floor, retrying with window $VWIN"; continue
+  fi
+  echo "box $n FAILED"; exit 1
+  done
+  touch "$D/completion.marker"
+  next_window "$D" $ztop
 done
 echo "all $NL boxes done $(date +%T)"

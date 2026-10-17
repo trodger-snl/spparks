@@ -110,9 +110,9 @@ for k, p in enumerate(pts):
         if os.path.exists(f'{bd}/completion.marker'): continue
         deck(p, n, f'{bd}/in.box', st, a.seed)
         if a.dry: continue
-        cmd = f'. /home/tron/spack/share/spack/setup-env.sh && spack env activate spparks-dev && cd {bd} && mpirun -np 1 --bind-to none {a.binary} < in.box > log.spparks 2>&1'
+        cmd = f'. /home/tron/spack/share/spack/setup-env.sh && spack env activate spparks-dev && cd {bd} && mpirun -np 1 --bind-to none {a.binary} < in.box > out.txt 2>&1'
         r = subprocess.run(['bash', '-c', cmd])
-        if r.returncode != 0 or 'Loop time' not in open(f'{bd}/log.spparks').read():
+        if r.returncode != 0 or 'Loop time' not in open(f'{bd}/out.txt').read():
             log(f'point {k} box {n} FAILED (rc {r.returncode})'); ok = False; break
         open(f'{bd}/completion.marker', 'w').close()
     if a.dry: log(f'point {k}: decks written (dry)'); continue

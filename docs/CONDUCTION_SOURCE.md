@@ -222,6 +222,23 @@ build) become many small grains in one case and join one spin-42 network in
 the other. Use the same powder initialisation in both before comparing wall
 grain statistics.
 
+**Box depth in stitched builds.** Sites below a box cannot melt, so a pool
+that reaches the box bottom is silently cut off. Pools change with layer
+(here 70 → 80 µm median over 20 layers; more on thin walls or above hot
+material), so a fixed depth is a guess. Two guards:
+
+- **`floor_check d`** (additive/texture/kk app command, metres). Each step
+  the app takes the lowest liquid site and stops with an error if it is
+  within `d` of the box bottom. Because it stops before the box's stitch
+  dump, the stitch file is unchanged and the box can be rerun deeper. It also
+  prints `floor_check: deepest liquid z = …` whenever the pool reaches a new
+  deepest site. Off by default.
+- **Adaptive window in the drivers** (`examples/conduction_am/stitch_layers.py`,
+  `examples/gp700_moser/run_layers.sh`).
+  - After each box, the next window is max(min window, ⌈F × deepest melt
+    below the top⌉ + floor), with F = 1.5 by default.
+  - A box stopped by `floor_check` is rerun 1.5× deeper.
+
 Identity is checked on `%g` text dumps (6 significant digits). GP700 runs and
 `compare.py`: `/home/tron/gp700_runs/cond_cmp`.
 

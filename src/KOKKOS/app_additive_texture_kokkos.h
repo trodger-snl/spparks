@@ -104,6 +104,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   // Phase 3: Phase transition kernels
   void initialize_nucleation_parameters();
   int melting_kernel(Kokkos::View<int*> d_active_sites, int n_active);
+  void check_melt_floor(int n_active);
   int nucleation_kernel(Kokkos::View<int*> d_active_sites, int n_active);
   int particle_flipper_kernel(Kokkos::View<int*> d_active_sites, int n_active);
   int solidification_kernel(Kokkos::View<int*> d_active_sites, int n_active);
@@ -206,6 +207,8 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   int  d_n_active_nodes = 0;
   long d_ts_version = -1;             // cache generation the time-series Views hold
   bool device_time_interp_set = false;
+  double floor_check_d = 0.0;   // floor_check: error if liquid comes within this (m) of the box bottom
+  double floor_zmin_run = 1.0e300;  // deepest liquid z so far (lattice units), printed as it drops
 
   // Gradient cache (device-only, computed once per timestep)
   // Uses simple View because computed on device, no host sync needed

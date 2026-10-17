@@ -1318,6 +1318,44 @@ int AppAdditiveTextureKokkos::melting_kernel(Kokkos::View<int*> d_active_sites, 
 }
 
 /* ----------------------------------------------------------------------
+   floor_check: lowest liquid site vs the box bottom. The active-front list
+   holds every liquid site, so ranging over it sees them all.
+------------------------------------------------------------------------- */
+
+void AppAdditiveTextureKokkos::check_melt_floor(int n_active)
+{
+  ensure_device_xyz();
+  auto list = d_active_sites;
+  auto af = d_active_flag;
+  auto xyz_d = d_xyz;
+  double zmin_local = 1.0e300, zmin = 1.0e300;
+  Kokkos::parallel_reduce("MeltFloor", n_active,
+    KOKKOS_LAMBDA(int idx, double &m) {
+      const int i = list(idx);
+      if (af(i) == 2 && xyz_d(i,2) < m) m = xyz_d(i,2);
+    }, Kokkos::Min<double>(zmin_local));
+  MPI_Allreduce(&zmin_local, &zmin, 1, MPI_DOUBLE, MPI_MIN, world);
+  // Report each new deepest site; a driver sizes the next box from the last line.
+  if (zmin < 1.0e299 && zmin <= floor_zmin_run - 1.0) {
+    floor_zmin_run = zmin;
+    if (domain->me == 0) {
+      char line[160];
+      snprintf(line, sizeof(line), "floor_check: deepest liquid z = %g (%g m above the box bottom) at t = %g\n",
+               zmin, (zmin - domain->boxzlo) * dx, time);
+      if (screen) fputs(line, screen);
+      if (logfile) fputs(line, logfile);
+    }
+  }
+  const double zfloor = domain->boxzlo + floor_check_d / dx;
+  if (zmin < zfloor) {
+    char msg[256];
+    snprintf(msg, sizeof(msg), "floor_check: liquid at z = %g sites, within %g m of the box "
+             "bottom (z = %g) at t = %g; deepen the box", zmin, floor_check_d, domain->boxzlo, time);
+    error->all(FLERR, msg);
+  }
+}
+
+/* ----------------------------------------------------------------------
    Nucleation kernel: Stochastic nucleation in undercooled liquid
    Phase 3.2: Sites transition to solid when undercooling exceeds critical value
 ------------------------------------------------------------------------- */
@@ -2306,6 +2344,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   // were candidates, preserving the powder-activation trigger (melting_occurred).
   int nmelt = melting_kernel(d_active_sites, n_active);
   naccept += nmelt;
+  if (floor_check_d > 0.0) check_melt_floor(n_active);
   bool melting_occurred = (nmelt > 0);
 
   // Phase 3.2: Nucleation (stochastic nucleation in undercooled liquid)
@@ -2548,6 +2587,16 @@ void AppAdditiveTextureKokkos::input_app(char *command, int narg, char **arg)
   // Keep the thermal snapshot current before any thermal command handler
   // (e.g. laser_path reads host->time/dx when building the scan path).
   refresh_thermal_host();
+
+  // floor_check d: stop if liquid reaches within d (m) of the box bottom. For
+  // box-per-layer stitch builds: material below the box cannot melt, so a pool
+  // reaching the floor is silently cut off. Error before the run's stitch dump.
+  if (strcmp(command, "floor_check") == 0) {
+    if (narg != 1) error->all(FLERR, "Illegal floor_check command: floor_check d");
+    floor_check_d = atof(arg[0]);
+    if (floor_check_d < 0.0) error->all(FLERR, "floor_check distance must be >= 0");
+    return;
+  }
 
   if (!parse_command(command, narg, arg, error, screen, domain->me, *thermal))
     AppPottsQuaternionKokkos::input_app(command, narg, arg);

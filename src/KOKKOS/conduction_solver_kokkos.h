@@ -47,7 +47,7 @@ class ConductionSolverKokkos : protected Pointers {
               Kokkos::View<double*[3]> d_xyz, Kokkos::View<int*> d_af,
               int nlocal, int nall, double dx, double ts, double tl);
 
-  enum Phase { GAS = 0, POWDER = 1, DENSE = 3 };
+  enum Phase { GAS = 0, POWDER = 1, DENSE = 3, LOOSE = 4 };   // LOOSE: flag bit, see packing
 
  private:
   class ConductionTemperatureSource *src;

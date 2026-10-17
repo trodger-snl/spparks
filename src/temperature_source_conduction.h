@@ -65,6 +65,7 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
     double max_cell = 0.0;             // 0 = uncapped
     std::string part_region;           // empty = whole domain is part
     double layer_thickness = 0.0;      // powder depth outside the box
+    double packing = 1.0;              // powder mass fraction of dense (1 = dense)
     int    far_bc = FAR_FIXED;
     int    sts_smax = 32;               // RKL2 stages per laser-off super-step; 0 = explicit
   };

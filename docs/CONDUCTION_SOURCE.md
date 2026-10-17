@@ -61,6 +61,7 @@ per-move speed).
 | `max_cell w` | cap on margin/plate cell width (m) | none |
 | `part regionID` | outside the box: dense where the region matches, else powder | all dense |
 | `layer_thickness t` | outside the box: powder within `t` of the laser plane | 0 |
+| `packing f` | powder (and powder melted in place) holds f × the dense mass | 1 |
 | `plate_top z` | everything below `z` (m) is dense | box bottom face |
 | `far_bc fixed\|adiabatic` | outer faces of the thermal domain | fixed at `T0` |
 | `sts s` | RKL2 stages per laser-off super-step; 0 = explicit only | 32 |
@@ -82,11 +83,18 @@ in `processors`.
   source, so all absorbed power is deposited; put the plane on the face
   (z = (top layer + 0.5)·dx) to match Moser's surface exactly.
 - **Phase per cell.** GAS / POWDER / DENSE. Inside the box it is taken from
-  `i2` once (0 → powder, 1 → powder, 2/3 → dense, 5 → gas), so stitch-loaded
-  powder is kept. `i2 = 1` means "not yet melted", which substrates also use:
-  with `layer_thickness` set, only sites within it of the laser plane count as
-  powder and deeper `i2 = 1` sites are dense. After that the solver tracks it itself: powder becomes dense
-  the first time it reaches the liquidus.
+  `i2` once (0 → powder, 1 → powder, 2/3 → dense, 5 → gas) at every depth,
+  so stitch-loaded powder is kept and the part's walls are wherever the pools
+  melted, rough as they are. A substrate must be loaded as `i2 = 3`. Outside
+  the box, `part`, `layer_thickness` and `plate_top` decide. After that the
+  solver tracks it itself: powder becomes dense the first time it reaches the
+  liquidus.
+- **Density.** One ρ (from `k`, `alpha`, `cp`) for every phase: give the
+  dense value, and make the model layer the consolidated thickness (the path
+  z step). Melting t of powder then takes the same energy as the real t/φ of
+  powder at φρ. `packing f` instead gives powder cells f·ρ, kept after they
+  melt (the bed melts in place without shrinking); it brackets the
+  consolidated layer from the other side.
 - **Fluxes.** Between two cells, a harmonic mean of k over the centre distance.
   A face next to gas, and the top face, get convection plus radiation. Far
   faces are fixed or adiabatic.

@@ -284,20 +284,20 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3]> d_xyz,
     if (i < 0 || i > nxo + 1 || j < 0 || j > nyo + 1) { out = 1; hsc(s, 0) = -1; continue; }
     hsc(s, 0) = i; hsc(s, 1) = j; hsc(s, 2) = k;
     if (s < nlocal) {
+      // Inside the box i2 alone decides, at every depth: melted (2, 3) is
+      // dense, never melted (0, 1) is powder, 5 is gas. So the part's walls
+      // are wherever the pools melted, rough as they are. A substrate must be
+      // loaded as i2 = 3.
       const int af = haf(s);
-      // i2 = 1 is "not yet melted": with layer_thickness set, only the
-      // current layer is powder and the material below it (e.g. a
-      // substrate loaded with i2 = 1) is dense. i2 = 0 below the laser
-      // plane is a deposited, not yet activated layer: powder (as
-      // am/finitediff). Only i2 = 5 is gas.
-      const bool deep = cfg.layer_thickness > 0.0 &&
-                        g[3*s+2] * dx <= zl - cfg.layer_thickness;
-      hP(i, j, k) = (af == 2 || af == 3) ? DENSE
-                  : (af == 1) ? (deep ? DENSE : POWDER)
-                  : (af == 0) ? POWDER : GAS;
+      hP(i, j, k) = (af == 2 || af == 3) ? DENSE : (af == 0 || af == 1) ? POWDER : GAS;
     }
   }
   if (out) error->one(FLERR,"conduction: a ghost site lies outside the 1-cell halo");
+  // packing < 1: powder cells carry that fraction of the dense mass (LOOSE),
+  // and keep it once melted (the bed melts in place, it does not shrink).
+  if (cfg.packing < 1.0)
+    for (size_t n = 0; n < hP.size(); n++)
+      if (hP.data()[n] == POWDER) hP.data()[n] = POWDER | LOOSE;
   Kokkos::deep_copy(site_cell, hsc);
   Kokkos::deep_copy(P, hP);
 
@@ -332,7 +332,7 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3]> d_xyz,
   for (double v : cfg.k_v) kmax = std::max(kmax, v);
   double cmin = 1e300;
   for (double v : cfg.cp_v) cmin = std::min(cmin, v);
-  cmin *= src->density();
+  cmin *= src->density() * std::min(1.0, cfg.packing);
   const double hsurf = cfg.h + 4.0 * cfg.emissivity * SIGMA_SB * 4000.0 * 4000.0 * 4000.0;
   // an adiabatic far face carries no flux, so it does not limit the step
   const double farG = cfg.far_bc == ConductionTemperatureSource::FAR_FIXED ? kmax : 0.0;
@@ -479,6 +479,7 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<fastreal***> Y1,
   const bool exlo = edge[0], exhi = edge[1], eylo = edge[2], eyhi = edge[3];
   const int nxo_ = nxo, nyo_ = nyo, nz_ = nz;
   const double tl_ = tl;
+  const double pack = cfg.packing;
 
   // The Gaussian separates: integrate it over each cell's extent per axis.
   auto Ex_ = Ex, Ey_ = Ey, Ez_ = Ez;
@@ -505,11 +506,13 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<fastreal***> Y1,
     Kokkos::MDRangePolicy<Kokkos::Rank<3, Kokkos::Iterate::Left, Kokkos::Iterate::Left>>(
       {1, 1, 0}, {nxo_ + 1, nyo_ + 1, nz_}),
     KOKKOS_LAMBDA(const int i, const int j, const int k) {
-      const unsigned char pc = P_(i, j, k);
+      // H is the dense-equivalent enthalpy H(T); a LOOSE cell holds
+      // pack * H(T) * V, so its heat capacity is scaled by pack.
+      const unsigned char pfull = P_(i, j, k), pc = pfull & 3;
       const double Tc = T_(i, j, k);
       if (pc == GAS) {
         if (sts) Yo_(i, j, k) = H_(i, j, k);
-        Tn_(i, j, k) = Tc; Pn_(i, j, k) = pc; return;
+        Tn_(i, j, k) = Tc; Pn_(i, j, k) = pfull; return;
       }
 
       auto kof = [&](double Tv, unsigned char p) {
@@ -524,7 +527,7 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<fastreal***> Y1,
         return fixed ? A * kc / half * (R(Tfar) - Tr) : R(0);
       };
       auto face = [&](R A, R half_c, int ii, int jj, int kk, R half_n) {
-        const unsigned char pn = P_(ii, jj, kk);
+        const unsigned char pn = P_(ii, jj, kk) & 3;
         if (pn == GAS) return surf(A);
         const R Tv = R(T_(ii, jj, kk));
         const R G = A / (half_c / kc + half_n / kof(Tv, pn));
@@ -543,12 +546,13 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<fastreal***> Y1,
 
       if (Pq > 0.0) q += R(Pq) * R(Ex_(i)) * R(Ey_(j)) * R(Ez_(k));
 
+      const R vol = dxc * dyc * dzc * ((pfull & LOOSE) ? R(pack) : R(1));
       R Hn;
       if (!sts) {
-        Hn = H_(i, j, k) + R(h) * q / (dxc * dyc * dzc);
+        Hn = H_(i, j, k) + R(h) * q / vol;
         H_(i, j, k) = Hn;
       } else {
-        const R Lc = q / (dxc * dyc * dzc);
+        const R Lc = q / vol;
         Hn = R(mu) * Y1_(i, j, k) + R(nu) * Y2_(i, j, k) + R(1.0 - mu - nu) * H_(i, j, k)
            + R(mut) * Lc + R(gat) * (store_L0 ? Lc : L0_(i, j, k));
         if (store_L0) L0_(i, j, k) = Lc;
@@ -574,7 +578,8 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<fastreal***> Y1,
         Tv = H0r + (R(lo) + (dH > R(0) ? (Hn - Htab_(lo)) / dH : R(0))) * dTr;
       }
       Tn_(i, j, k) = Tv;
-      Pn_(i, j, k) = (do_phase && pc == POWDER && Tv >= tl_) ? (unsigned char) DENSE : pc;
+      Pn_(i, j, k) = (do_phase && pc == POWDER && Tv >= tl_)
+                   ? (unsigned char) (DENSE | (pfull & LOOSE)) : pfull;
     });
 
   std::swap(T, Tn);

@@ -74,6 +74,7 @@ void ConductionTemperatureSource::setup_temperature_source(
       cfg.part_region = args[i];
     }
     else if (a == "layer_thickness") cfg.layer_thickness = num(++i);
+    else if (a == "packing") cfg.packing = num(++i);
     else if (a == "sts") cfg.sts_smax = (int) num(++i);
     else if (a == "far_bc") {
       if (++i >= args.size()) error->all(FLERR,"setup_temperature_source conduction: far_bc needs a value");
@@ -97,6 +98,8 @@ void ConductionTemperatureSource::setup_temperature_source(
     error->all(FLERR,"setup_temperature_source conduction: sts is 0 (off) or >= 2 stages");
   if (cfg.plate < 0.0 || cfg.layer_thickness < 0.0 || cfg.latent < 0.0)
     error->all(FLERR,"setup_temperature_source conduction: plate, layer_thickness, latent must be >= 0");
+  if (cfg.packing <= 0.0 || cfg.packing > 1.0)
+    error->all(FLERR,"setup_temperature_source conduction: packing must be in (0, 1]");
   if (!cfg.part_region.empty() &&
       domain->find_region((char *) cfg.part_region.c_str()) < 0)
     error->all(FLERR,"setup_temperature_source conduction: part region ID does not exist");

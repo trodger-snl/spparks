@@ -16,6 +16,7 @@
 #include "domain.h"
 #include "region.h"
 #include "error.h"
+#include "spktype.h"
 #include <mpi.h>
 #include <algorithm>
 #include <cmath>
@@ -69,15 +70,16 @@ Axis make_axis(int g_lo, int g_hi, double dx, double mlo, double mhi,
   return a;
 }
 
+template <typename R>
 KOKKOS_INLINE_FUNCTION
-double interp(const Kokkos::View<double*> &X, const Kokkos::View<double*> &V, double x)
+R interp(const Kokkos::View<double*> &X, const Kokkos::View<double*> &V, R x)
 {
   const int n = (int) X.extent(0);
-  if (x <= X(0)) return V(0);
-  if (x >= X(n-1)) return V(n-1);
+  if (x <= R(X(0))) return R(V(0));
+  if (x >= R(X(n-1))) return R(V(n-1));
   int lo = 0, hi = n - 1;
-  while (hi - lo > 1) { const int m = (lo + hi) / 2; if (X(m) <= x) lo = m; else hi = m; }
-  return V(lo) + (x - X(lo)) / (X(hi) - X(lo)) * (V(hi) - V(lo));
+  while (hi - lo > 1) { const int m = (lo + hi) / 2; if (R(X(m)) <= x) lo = m; else hi = m; }
+  return R(V(lo)) + (x - R(X(lo))) / (R(X(hi)) - R(X(lo))) * (R(V(hi)) - R(V(lo)));
 }
 
 }   // namespace
@@ -488,8 +490,14 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<double***> Y1,
     });
   }
 
+  // Flux math in fastreal (float under SPPARKS_FP32; gfx1151 runs FP64 at a
+  // small fraction of FP32 and this kernel is FP64-bound). H, its update and
+  // T(H) stay double, so energy accumulates in double. With fastreal ==
+  // double every expression is the original one.
+  using R = fastreal;
   Kokkos::parallel_for("ConductionStep",
-    Kokkos::MDRangePolicy<Kokkos::Rank<3>>({1, 1, 0}, {nxo_ + 1, nyo_ + 1, nz_}),
+    Kokkos::MDRangePolicy<Kokkos::Rank<3, Kokkos::Iterate::Left, Kokkos::Iterate::Left>>(
+      {1, 1, 0}, {nxo_ + 1, nyo_ + 1, nz_}),
     KOKKOS_LAMBDA(const int i, const int j, const int k) {
       const unsigned char pc = P_(i, j, k);
       const double Tc = T_(i, j, k);
@@ -499,38 +507,39 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<double***> Y1,
       }
 
       auto kof = [&](double Tv, unsigned char p) {
-        return p == POWDER ? kp : interp(kT_, kV_, Tv);
+        return p == POWDER ? R(kp) : interp<R>(kT_, kV_, Tv);
       };
-      const double kc = kof(Tc, pc);
-      auto surf = [&](double A) {
-        return -A * (hc * (Tc - Tinf) + es * (Tc*Tc*Tc*Tc - Tinf*Tinf*Tinf*Tinf));
+      const R Tr = R(Tc);
+      const R kc = kof(Tr, pc);
+      auto surf = [&](R A) {
+        return -A * (R(hc) * (Tr - R(Tinf)) + R(es) * (Tr*Tr*Tr*Tr - R(Tinf)*R(Tinf)*R(Tinf)*R(Tinf)));
       };
-      auto far = [&](double A, double half) {
-        return fixed ? A * kc / half * (Tfar - Tc) : 0.0;
+      auto far = [&](R A, R half) {
+        return fixed ? A * kc / half * (R(Tfar) - Tr) : R(0);
       };
-      auto face = [&](double A, double half_c, int ii, int jj, int kk, double half_n) {
+      auto face = [&](R A, R half_c, int ii, int jj, int kk, R half_n) {
         const unsigned char pn = P_(ii, jj, kk);
         if (pn == GAS) return surf(A);
-        const double Tv = T_(ii, jj, kk);
-        const double G = A / (half_c / kc + half_n / kof(Tv, pn));
-        return G * (Tv - Tc);
+        const R Tv = R(T_(ii, jj, kk));
+        const R G = A / (half_c / kc + half_n / kof(Tv, pn));
+        return G * (Tv - Tr);
       };
 
-      const double dxc = wx_(i), dyc = wy_(j), dzc = wz_(k);
-      const double Ax = dyc * dzc, Ay = dxc * dzc, Az = dxc * dyc;
-      double q = 0.0;
-      q += (i == 1 && exlo) ? far(Ax, 0.5*dxc) : face(Ax, 0.5*dxc, i-1, j, k, 0.5*wx_(i-1));
-      q += (i == nxo_ && exhi) ? far(Ax, 0.5*dxc) : face(Ax, 0.5*dxc, i+1, j, k, 0.5*wx_(i+1));
-      q += (j == 1 && eylo) ? far(Ay, 0.5*dyc) : face(Ay, 0.5*dyc, i, j-1, k, 0.5*wy_(j-1));
-      q += (j == nyo_ && eyhi) ? far(Ay, 0.5*dyc) : face(Ay, 0.5*dyc, i, j+1, k, 0.5*wy_(j+1));
-      q += (k == 0) ? far(Az, 0.5*dzc) : face(Az, 0.5*dzc, i, j, k-1, 0.5*wz_(k-1));
-      q += (k == nz_ - 1) ? surf(Az) : face(Az, 0.5*dzc, i, j, k+1, 0.5*wz_(k+1));
+      const R dxc = R(wx_(i)), dyc = R(wy_(j)), dzc = R(wz_(k));
+      const R Ax = dyc * dzc, Ay = dxc * dzc, Az = dxc * dyc, half = R(0.5);
+      R q = R(0);
+      q += (i == 1 && exlo) ? far(Ax, half*dxc) : face(Ax, half*dxc, i-1, j, k, half*R(wx_(i-1)));
+      q += (i == nxo_ && exhi) ? far(Ax, half*dxc) : face(Ax, half*dxc, i+1, j, k, half*R(wx_(i+1)));
+      q += (j == 1 && eylo) ? far(Ay, half*dyc) : face(Ay, half*dyc, i, j-1, k, half*R(wy_(j-1)));
+      q += (j == nyo_ && eyhi) ? far(Ay, half*dyc) : face(Ay, half*dyc, i, j+1, k, half*R(wy_(j+1)));
+      q += (k == 0) ? far(Az, half*dzc) : face(Az, half*dzc, i, j, k-1, half*R(wz_(k-1)));
+      q += (k == nz_ - 1) ? surf(Az) : face(Az, half*dzc, i, j, k+1, half*R(wz_(k+1)));
 
-      if (Pq > 0.0) q += Pq * Ex_(i) * Ey_(j) * Ez_(k);
+      if (Pq > 0.0) q += R(Pq) * R(Ex_(i)) * R(Ey_(j)) * R(Ez_(k));
 
       double Hn;
       if (!sts) {
-        Hn = H_(i, j, k) + h * q / (dxc * dyc * dzc);
+        Hn = H_(i, j, k) + h * q / (dxc * dyc * dzc);   // H and its update stay double
         H_(i, j, k) = Hn;
       } else {
         const double Lc = q / (dxc * dyc * dzc);
@@ -547,8 +556,14 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<double***> Y1,
         Tv = H0 + (nHt - 1) * dTt +
              (Hn - Htab_(nHt - 1)) / (Htab_(nHt - 1) - Htab_(nHt - 2)) * dTt;
       } else {
-        int lo = 0, hi = nHt - 1;
-        while (hi - lo > 1) { const int m = (lo + hi) / 2; if (Htab_(m) <= Hn) lo = m; else hi = m; }
+        // H rises strictly with T, so the bracket Htab(lo) <= Hn < Htab(lo+1)
+        // is unique: walk to it from the cell's previous T (a few K away)
+        // instead of a 13-level binary search.
+        const double u = (Tc - H0) / dTt;
+        int lo = u <= 0.0 ? 0 : (u >= nHt - 2 ? nHt - 2 : (int) u);
+        while (lo > 0 && Htab_(lo) > Hn) lo--;
+        while (lo < nHt - 2 && Htab_(lo + 1) <= Hn) lo++;
+        const int hi = lo + 1;
         const double dH = Htab_(hi) - Htab_(lo);
         Tv = H0 + (lo + (dH > 0.0 ? (Hn - Htab_(lo)) / dH : 0.0)) * dTt;
       }

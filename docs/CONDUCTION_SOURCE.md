@@ -159,6 +159,14 @@ at 2× power overshoots it, so the gap is its energy excess.
 Identity is checked on `%g` text dumps (6 significant digits). GP700 runs and
 `compare.py`: `/home/tron/gp700_runs/cond_cmp`.
 
+**Precision.** The stage kernel is FP64-bound on gfx1151 (about 20 FP64
+divisions per cell). Built with `-DSPPARKS_FP32=ON` (`build-fp32`), its flux
+math runs in `fastreal` = float; H, its update and T(H) stay double. Matched
+LargerRectangle, 2 ms: `ConductionStep` 19.2 → 7.9 s, loop 20.5 → 9.1 s,
+per-site d6 within 0.01 K of FP64 (print resolution) after 8,778 steps;
+matched ThinWall loop 20.1 → 5.5 s, stats equal but one last digit. The
+default FP64 build is unchanged bit for bit.
+
 Cost: the example deck (1.6 M cells, about 4,000 sub-steps) runs in about 11 s
 on one gfx1151. With RKL2 the remaining cost is mostly the explicit steps
 while the laser is on.

@@ -135,6 +135,9 @@ typedef int bigint;
 //     The k_T field, plan PODs, site-minus-laser differences and absolute
 //     simulation times stay double (~4e4 s on a 3e-6 s step: float cannot
 //     bracket it).
+//   - conduction temperature source (ConductionSolverKokkos stage kernel):
+//     face conductances, surface losses, source product, flux divergence.
+//     H, its update, T(H) and the stored T stay double.
 //   - potts/quaternion/kk disorientation + Read-Shockley energy
 //     (QuaternionOps::compute_disorientation / read_shockley), device and
 //     host. Stored quaternions, symmetry table, energy sums stay double.

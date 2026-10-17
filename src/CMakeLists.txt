@@ -146,7 +146,7 @@ endif()
 #     flat across OMP_NUM_THREADS 1/4/16).
 #   * potts/quaternion/kk: 256^3 sweep color/strict loop 59.5 -> 32.4 s
 #     (cubic), 40.9 -> 21.1 s (hcp); disorientation within ~2e-5 deg of FP64.
-option(SPPARKS_FP32 "Use FP32 for hot-kernel math that opts in via fastreal (additive/texture/kk temperature, potts/quaternion/kk disorientation)" OFF)
+option(SPPARKS_FP32 "Use FP32 for hot-kernel math that opts in via fastreal (additive/texture/kk temperature incl. conduction fluxes, potts/quaternion/kk disorientation)" OFF)
 foreach(_old SPPARKS_AM_TEMP_FP32 SPPARKS_QUAT_FP32)
     if(${_old})
         message(FATAL_ERROR "${_old} was replaced by SPPARKS_FP32 (one switch for all fastreal code)")

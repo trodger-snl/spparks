@@ -17,11 +17,11 @@ set i2 value 1
 region           substrate block 0 200 0 40 0 24
 set i2 value 3 region substrate
 region           part block -40 240 -20 60 -400 30
-set i1 value 42
-set d1 value 1.0
-set d2 value 0.0
-set d3 value 0.0
-set d4 value 0.0
+set i1 value 42 region substrate
+set d1 value 1.0 region substrate
+set d2 value 0.0 region substrate
+set d3 value 0.0 region substrate
+set d4 value 0.0 region substrate
 sector           yes
 sweep            color
 diag_style       array d6 sum d6 max

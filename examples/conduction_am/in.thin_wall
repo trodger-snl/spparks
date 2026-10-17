@@ -18,11 +18,11 @@ set site range 1 1000000
 region           substrate block 0 180 0 75 0 18.5
 set i2 value 3 region substrate
 region           plate block -400 580 -400 475 -400 18.5
-set i1 value 42
-set d1 value 1.0
-set d2 value 0.0
-set d3 value 0.0
-set d4 value 0.0
+set i1 value 42 region substrate
+set d1 value 1.0 region substrate
+set d2 value 0.0 region substrate
+set d3 value 0.0 region substrate
+set d4 value 0.0 region substrate
 sector           yes
 sweep            color
 diag_style       array d6 sum d6 max

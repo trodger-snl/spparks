@@ -8,12 +8,14 @@ usage: material_card.py lint <card.toml> [--doi]
 lint       schema, canonical units, increasing tables, every value has a ref that
            resolves, changelog agrees with [card] version/modified, solid_front_vel
            reproduces front_velocity_source; --doi also checks each DOI resolves.
-fit-front  least-squares polynomial (SPPARKS order, highest power first, in
-           undercooling dT = liquidus - T) to [microstructure].front_velocity_source
-           over [0, liquidus - solidus]; prints a solid_front_vel line and the error.
+fit-front  relative least-squares polynomial with V(0) = 0 (SPPARKS order, highest
+           power first, in undercooling dT = liquidus - T) to
+           [microstructure].front_velocity_source over [0, liquidus - solidus]; prints a
+           solid_front_vel line whose max_rel_err is the largest pointwise |fit/source - 1|.
+           A non-integer power law needs --degree 5 or 6 to get within a few %.
 Python 3.11+ standard library only.
 """
-import sys, tomllib, urllib.request
+import json, math, sys, tomllib, urllib.error, urllib.request
 
 SCHEMA = 1
 REF_LITERALS = {'estimate', 'calibration'}
@@ -24,6 +26,7 @@ UNITS = {
     'thermal.conductivity': 'W/(m K)', 'thermal.heat_capacity': 'J/(kg K)',
     'thermal.linear.conductivity': 'W/(m K)', 'thermal.linear.heat_capacity': 'J/(kg K)',
     'thermal.linear.T_ref': 'K', 'powder.conductivity': 'W/(m K)', 'powder.packing': '1',
+    'powder.psd': 'm',
     'optical.absorptivity': '1', 'microstructure.solid_front_vel': 'm/s',
     'microstructure.front_velocity_source': 'm/s',
     'microstructure.nucleation_density': '1/m^3', 'microstructure.critical_undercooling': 'K',
@@ -45,6 +48,8 @@ def front_source(rec, dT):
     """V(dT) of a literature front-velocity record: power_law a*dT^n, or points."""
     if rec['form'] == 'power_law':
         return rec['a'] * dT ** rec['n']
+    if rec['form'] == 'polynomial':   # coeffs highest power first, as solid_front_vel
+        return polyval(rec['coeffs'], dT)
     if rec['form'] == 'points':   # piecewise linear through (dT, V)
         xs, vs = rec['dT'], rec['V']
         if dT <= xs[0]: return vs[0]
@@ -52,15 +57,19 @@ def front_source(rec, dT):
             if dT <= xs[i]:
                 return vs[i-1] + (dT - xs[i-1]) / (xs[i] - xs[i-1]) * (vs[i] - vs[i-1])
         return vs[-1]
-    raise ValueError(f"front_velocity_source form {rec['form']!r} is power_law or points")
+    raise ValueError(f"front_velocity_source form {rec['form']!r} is power_law, polynomial or points")
 
 
 def fit_poly(f, lo, hi, degree, n=200):
-    """Least-squares polynomial through f on [lo, hi]; normal equations, highest power first."""
-    xs = [lo + (hi - lo) * i / (n - 1) for i in range(n)]
-    m = degree + 1
-    A = [[sum(x ** (2 * degree - i - j) for x in xs) for j in range(m)] for i in range(m)]
-    b = [sum(f(x) * x ** (degree - i) for x in xs) for i in range(m)]
+    """Least-squares polynomial through f on [lo, hi], highest power first, with a zero
+    constant term: tip kinetics give V(0) = 0, and a free intercept goes negative there."""
+    # relative least squares (weight 1/f^2): the slow fronts at small undercooling
+    # matter as much as the fast ones; dT = 0 carries no information with V(0) = 0
+    xs = [x for x in (lo + (hi - lo) * i / (n - 1) for i in range(n)) if f(x) > 0]
+    w = [1.0 / f(x) ** 2 for x in xs]
+    m = degree                                  # powers degree..1
+    A = [[sum(wk * x ** (2 * degree - i - j) for wk, x in zip(w, xs)) for j in range(m)] for i in range(m)]
+    b = [sum(wk * f(x) * x ** (degree - i) for wk, x in zip(w, xs)) for i in range(m)]
     for c in range(m):                          # Gauss-Jordan with partial pivoting
         p = max(range(c, m), key=lambda r: abs(A[r][c]))
         A[c], A[p], b[c], b[p] = A[p], A[c], b[p], b[c]
@@ -69,12 +78,20 @@ def fit_poly(f, lo, hi, degree, n=200):
                 k = A[r][c] / A[c][c]
                 A[r] = [a - k * q for a, q in zip(A[r], A[c])]
                 b[r] -= k * b[c]
-    return [b[i] / A[i][i] for i in range(m)]
+    return [b[i] / A[i][i] for i in range(m)] + [0.0]
 
 
 def max_rel_err(c, f, lo, hi, n=200):
-    vmax = max(abs(f(lo + (hi - lo) * i / (n - 1))) for i in range(n))
-    return max(abs(polyval(c, x) - f(x)) / vmax for x in (lo + (hi - lo) * i / (n - 1) for i in range(n)))
+    """Largest pointwise |poly/f - 1| on (lo, hi] where f > 0."""
+    xs = [lo + (hi - lo) * i / n for i in range(1, n + 1)]
+    return max(abs(polyval(c, x) / f(x) - 1) for x in xs if f(x) > 0)
+
+
+def ceil2(x):
+    """x rounded UP to two significant figures, so a pasted tolerance never fails lint."""
+    if x <= 0: return 0.0
+    e = math.floor(math.log10(x)) - 1
+    return math.ceil(x / 10 ** e) * 10 ** e
 
 
 def lint(card, check_doi=False):
@@ -128,15 +145,24 @@ def lint(card, check_doi=False):
         sf, src = mi['solid_front_vel'], mi['front_velocity_source']
         lo, hi = sf.get('fit_range_K', [0, th['liquidus']['value'] - th['solidus']['value']])
         e = max_rel_err(sf['coeffs'], lambda x: front_source(src, x), lo, hi)
-        if e > sf.get('max_rel_err', 0.02):
+        if e > sf.get('max_rel_err', 0.1):
             errs.append(f'microstructure.solid_front_vel: {e:.3g} max relative error vs front_velocity_source')
+    if 'solid_front_vel' in mi and 'solidus' in th and 'liquidus' in th:
+        hi = th['liquidus']['value'] - th['solidus']['value']
+        neg = [x for x in (hi * i / 200 for i in range(1, 201)) if polyval(mi['solid_front_vel']['coeffs'], x) < 0]
+        if neg: errs.append(f'microstructure.solid_front_vel: negative velocity at dT = {neg[0]:.3g} K (range 0-{hi:g} K)')
     if check_doi:
         for key, r in refs.items():
             if 'doi' not in r: continue
+            # the doi.org handle API, not the publisher page: publishers 403 scripted requests
             try:
-                urllib.request.urlopen(urllib.request.Request(f"https://doi.org/{r['doi']}", method='HEAD'), timeout=20)
+                with urllib.request.urlopen(f"https://doi.org/api/handles/{r['doi']}", timeout=20) as f:
+                    ok = json.load(f).get('responseCode') == 1
+            except urllib.error.HTTPError as ex:   # 404 with responseCode 100: not registered
+                ok = False
             except Exception as ex:
-                errs.append(f'references.{key}: DOI {r["doi"]} does not resolve ({ex})')
+                errs.append(f'references.{key}: DOI {r["doi"]} not checked ({ex})'); continue
+            if not ok: errs.append(f'references.{key}: DOI {r["doi"]} is not registered')
     return errs
 
 
@@ -153,11 +179,14 @@ def selftest():
     assert any('nobody2099' in e for e in lint(bad)), lint(bad)
     bad = dict(card, thermal=dict(card['thermal'], density={'value': 7.9, 'unit': 'g/cm^3', 'ref': 'estimate'}))
     assert any('unit must be' in e for e in lint(bad))
+    poly = {'form': 'polynomial', 'coeffs': [2e-6, 1e-7, 0, 0]}
+    assert max_rel_err(fit_poly(lambda x: front_source(poly, x), 0, 50, 3), lambda x: front_source(poly, x), 0, 50) < 1e-9
     src = {'form': 'power_law', 'a': 1e-4, 'n': 2.0}       # a quadratic is fitted exactly
     c = fit_poly(lambda x: front_source(src, x), 0, 33, 3)
-    assert max_rel_err(c, lambda x: front_source(src, x), 0, 33) < 1e-9, c
+    assert max_rel_err(c, lambda x: front_source(src, x), 0, 33) < 1e-9 and c[-1] == 0.0, c
     pts = {'form': 'points', 'dT': [0, 10, 20], 'V': [0, 1, 3]}
     assert front_source(pts, 15) == 2.0 and front_source(pts, 30) == 3
+    assert ceil2(0.00103) >= 0.00103 and ceil2(0.00103) <= 0.0011 + 1e-12
     print('selftest ok')
 
 
@@ -176,7 +205,7 @@ def main(argv):
         c = fit_poly(f, 0.0, hi, deg)
         print(f'solid_front_vel = {{ coeffs = [{", ".join(f"{a:.6g}" for a in c)}], unit = "m/s", dT_unit = "K", '
               f'ref = {src["ref"]!r}, fit_of = "front_velocity_source", fit_range_K = [0, {hi:g}], '
-              f'max_rel_err = {max_rel_err(c, f, 0.0, hi):.2g} }}'.replace("'", '"'))
+              f'max_rel_err = {ceil2(max_rel_err(c, f, 0.0, hi)):g} }}'.replace("'", '"'))
         return
     sys.exit(__doc__)
 

@@ -1,0 +1,122 @@
+# Material parameter card: Inconel 625 (IN625, UNS N06625).
+# Format: docs/MATERIAL_CARDS.md (schema 1). SI units; every value carries a ref.
+
+[card]
+schema_version = 1
+material = "IN625"
+designation = { UNS = "N06625", spec = "ASTM F3056 (PBF nickel alloy UNS N06625); wrought ASTM B443/B446; W.Nr. 2.4856" }
+composition_wt_pct = { Ni = ">=58.0", Cr = "20.0-23.0", Mo = "8.0-10.0", Nb_plus_Ta = "3.15-4.15", Fe = "<=5.0", C = "<=0.10", Mn = "<=0.50", Si = "<=0.50", P = "<=0.015", S = "<=0.015", Al = "<=0.40", Ti = "<=0.40", Co = "<=1.0", note = "UNS N06625 limits (Special Metals datasheet Table 1), not a measured heat. AM-Bench 2018 powder lot (heigel2020 Table 1): Ni 64.66, Cr 20.61, Mo 8.82, Nb 3.97, Fe 0.81, Ti 0.39, Al 0.3, Si 0.18, Co 0.17, Mn 0.04, C 0.02" }
+version = "1.0.0"
+created = 2026-10-17
+modified = 2026-10-17
+status = "draft"
+reviewed_by = ""
+
+[[changelog]]
+version = "1.0.0"
+date = 2026-10-17
+author = "research agent (Claude)"
+changes = "Initial card: Special Metals k/cp tables extended to the liquidus with the JMatPro fits of Lim 2023; AM-Bench 2018 bare-plate (Lane 2020) and build (Heigel 2020) process sets; Ye 2019 absorptivity; ExaCA v2.0 KGT power law for the front velocity."
+
+[references.specialmetals625]
+citation = "Special Metals Corporation, INCONEL alloy 625 (technical bulletin SMC-063), 2013. Vendor datasheet: Table 1 composition, Table 2 density, melting range and calculated specific heat, Table 3 thermal conductivity (measured at Battelle Memorial Institute, annealed 2100 F/1 h)"
+url = "https://www.specialmetals.com/documents/technical-bulletins/inconel/inconel-alloy-625.pdf"
+
+[references.lim2023]
+citation = "R.E. Lim, T. Mukherjee, C. Chuang, T.Q. Phan, T. DebRoy, D.C. Pagan, Combining synchrotron X-ray diffraction, mechanistic modeling and machine learning for in situ subsurface temperature quantification during laser melting, J. Appl. Cryst. 56 (2023) 1131-1143. Table 1: IN625 properties calculated with JMatPro"
+doi = "10.1107/S1600576723005198"
+url = "https://arxiv.org/abs/2302.03146"
+
+[references.lane2020]
+citation = "B. Lane, J. Heigel, R. Ricker, I. Zhirnov, V. Khromchenko, J. Weaver, T. Phan, M. Stoudt, S. Mekhontsev, L. Levine, Measurements of Melt Pool Geometry and Cooling Rates of Individual Laser Traces on IN625 Bare Plates, Integr. Mater. Manuf. Innov. 9 (2020) 16-30"
+doi = "10.1007/s40192-020-00169-1"
+url = "https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=927485"
+
+[references.amb2018_02]
+citation = "NIST, AMB2018-02 Description (AM Bench 2018 bare-plate single laser tracks on IN625), web page, created 2018-02-21, updated 2025-04-24"
+url = "https://www.nist.gov/ambench/amb2018-02-description"
+
+[references.heigel2020]
+citation = "J.C. Heigel, B. Lane, L. Levine, T. Phan, J. Whiting, In Situ Thermography of the Metal Bridge Structures Fabricated for the 2018 Additive Manufacturing Benchmark Test Series (AM-Bench 2018), J. Res. Natl. Inst. Stand. Technol. 125 (2020) 125005"
+doi = "10.6028/jres.125.005"
+
+[references.ye2019]
+citation = "J. Ye, S.A. Khairallah, A.M. Rubenchik, M.F. Crumb, G. Guss, J. Belak, M.J. Matthews, Energy Coupling Mechanisms and Scaling Behavior Associated with Laser Powder Bed Fusion Additive Manufacturing, Adv. Eng. Mater. 21 (2019) 1900185"
+doi = "10.1002/adem.201900185"
+url = "https://www.osti.gov/pages/servlets/purl/1569671"
+
+[references.zhang2018sff]
+citation = "S. Zhang, B. Lane, J. Whiting, K. Chou, An Investigation into Metallic Powder Thermal Conductivity in Laser Powder Bed Fusion Additive Manufacturing, Proc. 29th Annual Int. Solid Freeform Fabrication Symposium (2018) 1797-1806"
+url = "https://utw10945.utweb.utexas.edu/sites/default/files/2018/148%20AnInvestigationintoMetallicPowderThermalCond.pdf"
+
+[references.cheng2018]
+citation = "B. Cheng, B. Lane, J. Whiting, K. Chou, A Combined Experimental-Numerical Method to Evaluate Powder Thermal Properties in Laser Powder Bed Fusion, J. Manuf. Sci. Eng. 140 (2018) 111008"
+doi = "10.1115/1.4040877"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC6463517"
+
+[references.rolchigo2025]
+citation = "M. Rolchigo, S.T. Reeve, B. Stump, J. Coleman, A. Plotkowski, ExaCA v2.0: A versatile, scalable, and performance portable cellular automata application for additive manufacturing solidification, Comput. Mater. Sci. 251 (2025) 113734. Power-law interfacial response fitted to KGT model data for IN625 (Table 4)"
+doi = "10.1016/j.commatsci.2025.113734"
+url = "https://www.osti.gov/servlets/purl/2538332"
+
+[references.li2024]
+citation = "L. Li, F. Wang, J. Gao, K. Yu, L. Wang, Y. Liu, Accurately Measuring the Infrared Spectral Emissivity of Inconel 601, Inconel 625, and Inconel 718 Alloys during the Oxidation Process, Sensors 24 (2024) 5906"
+doi = "10.3390/s24185906"
+
+[thermal]
+density = { value = 8440, unit = "kg/m^3", ref = "specialmetals625", note = "room-temperature solid (8.44 g/cm^3, vendor). Heugenhauser & Kaschnitz, High Temp.-High Press. 48 (2019/2020), doi 10.32908/hthp.v48.726, measured solid+liquid density but was not accessible" }
+solidus = { value = 1563, unit = "K", ref = "specialmetals625", note = "melting range 1290-1350 C (2350-2460 F). Lane 2020 also assumes Tfreeze = 1290 C; Thermo-Calc solidus 1587 K is used by Ghosh et al. JOM 70 (2018)" }
+liquidus = { value = 1623, unit = "K", ref = "specialmetals625", note = "top of the 1290-1350 C melting range; JMatPro (lim2023) gives the same 1563/1623 K" }
+latent_fusion = { value = 2.092e5, unit = "J/kg", ref = "lim2023", note = "JMatPro calculation (lim2023 Table 1), not a measurement; no accessible measured value found (Mills 2002 / Valencia & Quested not consulted)" }
+conductivity = { T = [294.15, 311.15, 366.15, 477.15, 589.15, 700.15, 811.15, 922.15, 1033.15, 1144.15, 1255.15, 1563, 1623], value = [9.8, 10.1, 10.8, 12.5, 14.1, 15.7, 17.5, 19.0, 20.8, 22.8, 25.2, 28.8, 29.2], unit = "W/(m K)", extrapolation = "clamp", ref = ["specialmetals625", "lim2023"], note = "294-1255 K: Special Metals Table 3 (21-982 C, W/m C, measured at Battelle). 1563 and 1623 K: lim2023 JMatPro fit k = 0.56 + 2.9e-2 T - 7e-6 T^2 (gives 25.9 at 1255 K vs 25.2 measured). Held at the liquidus value in the liquid. Kaschnitz et al. Int. J. Thermophys. 40 (2019) 27, doi 10.1007/s10765-019-2490-8, measured k to high T but was not accessible" }
+heat_capacity = { T = [294.15, 366.15, 477.15, 589.15, 700.15, 811.15, 922.15, 1033.15, 1144.15, 1255.15, 1366.15, 1563, 1623], value = [410, 427, 456, 481, 511, 536, 565, 590, 620, 645, 670, 669, 677], unit = "J/(kg K)", extrapolation = "clamp", ref = ["specialmetals625", "lim2023"], note = "294-1366 K: Special Metals Table 2 (21-1093 C, J/kg C), which the vendor marks CALCULATED. 1563 and 1623 K: lim2023 JMatPro fit cp = 360.4 + 0.26 T - 4e-5 T^2. Latent heat is not folded in (latent_fusion is separate)" }
+emissivity = { value = 0.4, unit = "1", ref = "estimate", note = "rough, oxidised LPBF surface, total hemispherical; no IN625 total-emissivity data found. Normal spectral emissivity of smooth IN625 is 0.10-0.23 (3-10 um, 673-873 K; li2024), a lower bound for a rough melt-track surface" }
+
+[thermal.linear]
+# Rosenthal/Moser need one k and cp: the tables evaluated at T_ref unless
+# conductivity/heat_capacity are given here.
+T_ref = { value = 1000, unit = "K", ref = "estimate", note = "between preheat (~298 K) and solidus (1563 K)" }
+
+[powder]
+conductivity = { value = 0.65, unit = "W/(m K)", ref = "zhang2018sff", uncertainty = [0.65, 0.85], uncertainty_type = "bounds", T_range = [373, 373], note = "IN625 LPBF powder encapsulated in an EOS M270 build, laser flash + inverse FE, 100 C; rises ~linearly to 1.02 W/(m K) at 500 C (cheng2018: 1.01 at 500 C). One of three specimen geometries gives 0.1-0.2 higher. Furnace gas N2 (cheng2018), not Ar: Ar's lower gas conductivity would lower it somewhat" }
+packing = { value = 0.54, unit = "1", ref = "cheng2018", note = "estimated powder-bed density 4459 kg/m^3, stated as 46 % porosity. Recorded only; never passed (docs/MATERIAL_CARDS.md)" }
+psd = { D10 = 16.4e-6, D50 = 30.6e-6, D90 = 47.5e-6, unit = "m", method = "dynamic image analysis, average of three", ref = "heigel2020", note = "Table 1, AM-Bench 2018 IN625 powder lot" }
+
+[optical]
+absorptivity = { value = 0.28, unit = "1", ref = "ye2019", note = "bare IN625 plate, 1080 nm CW, calorimetric; minimum absorptivity Am at the conduction-keyhole transition (Ye Table 1; flat Ni literature value 0.27). Absorptivity rises sharply above the keyhole threshold and saturates near 0.7 for IN625/Ti64/316L. Use 0.28 for conduction mode only; powder-covered values are not given separately for IN625 here" }
+
+[microstructure]
+# Front velocity only; nucleation parameters are deliberately omitted (decks supply them).
+front_velocity_source = { form = "power_law", a = 7.325e-6, n = 3.12, unit = "m/s", dT_unit = "K", ref = "rolchigo2025", note = "V = a dT^n, power-law fit to KGT dendrite-tip data for IN625 (ExaCA v2.0 Table 4; V in m/s, dT in K). The same paper's Table 6 lists a second IN625 power law, a = 5.937e-8, n = 3.337, about 65x slower at 20 K; the a = 7.325e-6 fit agrees with ExaCA's cubic IN625 IRF (-1.0302e-7, 1.0533e-4, 2.2196e-3, 0) near 20 K and is used here" }
+solid_front_vel = { coeffs = [-8.08823e-10, 9.81868e-08, 8.89339e-06, -2.11365e-06, 4.08254e-07, 0], unit = "m/s", dT_unit = "K", ref = "rolchigo2025", fit_of = "front_velocity_source", fit_range_K = [0, 60], max_rel_err = 0.048, note = "fit-front --degree 5, relative least squares with V(0) = 0: within 4.8% of the power law pointwise over (0, 60] K (a cubic is off by up to 30%). For comparison, ExaCA's own cubic IN625 IRF is (-1.0302e-7, 1.0533e-4, 2.2196e-3, 0), the in.single_track and kk-app default" }
+
+# Process sets: NIST AM-Bench 2018. Bare-plate single tracks (AMB2018-02,
+# commercial build machine CBM) carry measured melt-pool cross sections;
+# the build set (AMB2018-01) carries the hatch and layer thickness.
+
+[process.amb2018_02_cbm_A]
+note = "AM-Bench 2018 bare-plate single track, Case A (near keyhole: deep V-shaped pools, depth uncertainty largest). Bare IN625 plate, 320-grit polished, no powder; 14 mm tracks 0.5 mm apart, 5 min between tracks. Absorptivity not reported: [optical] 0.28 is the conduction-mode value and underestimates this case"
+machine = "EOSint M270 (NIST CBM), CW Yb:fiber 1070 nm, f-theta lens, N2 atmosphere ~0.5 % O2"
+power = { value = 150, unit = "W", ref = "lane2020" }
+speed = { value = 0.4, unit = "m/s", ref = "lane2020" }
+spot = { value = 100e-6, unit = "m", convention = "D4sigma", ref = ["lane2020", "amb2018_02"], note = "D4sigma diameter 100 um, FWHM 59 um (corrected value after AM Bench 2018; presumed from manufacturer settings)" }
+preheat = { value = 298, unit = "K", ref = "amb2018_02", note = "substrate not heated; nominal initial temperature ~25 C" }
+validation = { melt_pool_width = 171e-6, melt_pool_depth = 151e-6, melt_pool_length = 659e-6, width_uncertainty = 3.57e-6, depth_uncertainty = 9.51e-6, uncertainty_type = "1sigma", unit = "m", ref = "lane2020", note = "Table 4 class means of transverse cross sections (N = 9); combined standard uncertainties from Tables 6/7. Length from thermography with assumed Tfreeze = 1290 C" }
+
+[process.amb2018_02_cbm_B]
+note = "AM-Bench 2018 bare-plate single track, Case B (same power/speed/spot as the AMB2018-01 build infill). Bare IN625 plate, no powder. Case C (195 W, 1.2 m/s) measured 100 um wide, 60 um deep (lane2020 Table 4)"
+machine = "EOSint M270 (NIST CBM), CW Yb:fiber 1070 nm, f-theta lens, N2 atmosphere ~0.5 % O2"
+power = { value = 195, unit = "W", ref = "lane2020" }
+speed = { value = 0.8, unit = "m/s", ref = "lane2020" }
+spot = { value = 100e-6, unit = "m", convention = "D4sigma", ref = ["lane2020", "amb2018_02"], note = "D4sigma diameter 100 um, FWHM 59 um" }
+preheat = { value = 298, unit = "K", ref = "amb2018_02", note = "substrate not heated; nominal initial temperature ~25 C" }
+validation = { melt_pool_width = 133e-6, melt_pool_depth = 91e-6, melt_pool_length = 780e-6, width_uncertainty = 2.78e-6, depth_uncertainty = 4.62e-6, uncertainty_type = "1sigma", unit = "m", ref = "lane2020", note = "Table 4 class means (N = 9); combined standard uncertainties from Tables 6/7. Length from thermography with assumed Tfreeze = 1290 C" }
+
+[process.amb2018_01_build]
+note = "AM-Bench 2018 IN625 bridge-structure builds (624 layers), infill parameters; contours 100 W at 0.9 m/s, beam offset 0.03 mm, scan direction alternating x/y each layer. No melt-pool cross sections for this set; no plate preheat reported, so pass T0 in the deck"
+machine = "EOSint M270D (NIST CBM), CW Yb:fiber 1070 nm, N2 atmosphere ~0.5 % O2, HSS recoater blade at 80 mm/s"
+power = { value = 195, unit = "W", ref = "heigel2020" }
+speed = { value = 0.8, unit = "m/s", ref = "heigel2020" }
+hatch = { value = 100e-6, unit = "m", ref = "heigel2020" }
+layer_thickness = { value = 20e-6, unit = "m", ref = "heigel2020" }
+spot = { value = 100e-6, unit = "m", convention = "D4sigma", ref = ["heigel2020", "lane2020"], note = "heigel2020 gives a nominally Gaussian 0.10 mm diameter from vendor values without a convention; lane2020 gives D4sigma 100 um on the same machine" }

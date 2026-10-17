@@ -115,6 +115,7 @@ the table below exactly; it never converts units.
 | `thermal.conductivity` (table), `thermal.linear.conductivity`, `powder.conductivity` | `W/(m K)` |
 | `thermal.heat_capacity` (table), `thermal.linear.heat_capacity` | `J/(kg K)` |
 | `thermal.emissivity`, `powder.packing`, `optical.absorptivity` | `1` |
+| `powder.psd` (`{ D10, D50, D90 }`, recorded only) | `m` |
 | `microstructure.solid_front_vel` | `m/s`, with `dT_unit = "K"` |
 | `microstructure.nucleation_density` | `1/m^3` |
 | `microstructure.critical_undercooling`, `undercooling_deviation` | `K` |
@@ -129,12 +130,20 @@ the table below exactly; it never converts units.
 **Front velocity.**
 - `solid_front_vel = { coeffs = [...] }` is SPPARKS's polynomial, highest
   power first, in undercooling ΔT = liquidus − T.
-- Literature data go in `front_velocity_source` as
-  `{ form = "power_law", a, n }` (V = a ΔT^n) or
-  `{ form = "points", dT = [...], V = [...] }`, with their ref.
-- `tools/material_card.py fit-front` turns that into `coeffs`.
-- `lint` checks the polynomial against the source within `max_rel_err`
-  (default 0.02) over `fit_range_K`.
+  Any number of coefficients is allowed.
+- Literature data go in `front_velocity_source`, with their ref, in one of
+  three forms:
+  - `{ form = "power_law", a, n }` (V = a ΔT^n);
+  - `{ form = "polynomial", coeffs = [...] }` (a KGT polynomial; copy it
+    exactly into `solid_front_vel`);
+  - `{ form = "points", dT = [...], V = [...] }`.
+- `tools/material_card.py fit-front [--degree N]` turns the source into
+  `coeffs`. It is a relative least-squares fit with V(0) = 0, so slow fronts
+  at small undercooling count as much as fast ones. A cubic is off by 30 to
+  140 % for ΔT^3.1 to ΔT^3.5 laws; degree 5 or 6 gets within about 5 %.
+- `lint` checks that the polynomial stays within `max_rel_err` (default 0.1)
+  of the source at every point of (0, `fit_range_K` max]. It also checks that
+  the polynomial is non-negative over (0, liquidus − solidus].
 
 **Process sets.**
 - `[process.<name>]` holds the records in the table above, plus free-form

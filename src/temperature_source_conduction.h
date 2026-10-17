@@ -61,7 +61,7 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
     double plate = 0.0;                // grid depth below the lattice box
     double plate_top = -1e300;         // all cells below this z are dense
     bool   plate_top_set = false;
-    double stretch = 1.1;
+    double stretch = 1.25;
     double max_cell = 0.0;             // 0 = uncapped
     std::string part_region;           // empty = whole domain is part
     double layer_thickness = 0.0;      // powder depth outside the box

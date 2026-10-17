@@ -41,7 +41,7 @@ setup_temperature_source conduction 340.0 0.355 11.2 2.0959e-6 573.0 650.0 50e-6
     k_powder 0.3 k_table 3 300 9 1000 20 1700 30 &
     cp_table 3 300 480 1400 675 1750 736 latent 2.7e5 &
     convection 25 300 emissivity 0.4 &
-    margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 stretch 1.1 &
+    margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 &
     part part layer_thickness 30e-6 plate_top -0.2e-3 far_bc fixed
 
 # laser plane at the top face of the top site layer (z = 29.5 dx)

@@ -57,7 +57,7 @@ per-move speed).
 | `emissivity e` | radiative loss (to `T_inf`) on the same faces | 0 |
 | `margin xlo xhi ylo yhi` | thermal domain beyond the lattice box (m) | 0 |
 | `plate d` | thermal domain below the lattice box (m) | 0 |
-| `stretch r` | width ratio of successive margin/plate cells | 1.1 |
+| `stretch r` | width ratio of successive margin/plate cells | 1.25 |
 | `max_cell w` | cap on margin/plate cell width (m) | none |
 | `part regionID` | outside the box: dense where the region matches, else powder | all dense |
 | `layer_thickness t` | outside the box: powder within `t` of the laser plane | 0 |
@@ -74,7 +74,8 @@ in `processors`.
 - **Grid.** Inside the lattice box the cells *are* the lattice sites (spacing
   dx), so sites read their cell directly. Outside, cell widths grow by `stretch`
   per cell out to `margin`/`plate`. Example: a 1×0.2×0.15 mm box at 5 µm with
-  1 mm margins and plate is 262×102×61 cells (1.6 M), against 61 M uniform.
+  1 mm margins and plate is 234×74×47 cells (0.8 M) at the default 1.25,
+  against 61 M uniform.
 - **Top.** The grid's top face is half a cell above the highest site layer at
   or below the laser plane. Sites above it read `T0`. A laser plane above that
   face (e.g. GP700's `ztop·dx`, half a cell up) is moved down onto it for the
@@ -127,6 +128,7 @@ in `processors`.
 | vs `moser`, constant properties, `k_powder = k`, adiabatic, 1 mm margins | box energy 0.01–0.04 %, peak T ≤ 0.07 % |
 | Energy, adiabatic box, latent 0 vs 2.7e5 | stored energy equal to 2.5e-8 (print limit) |
 | `stretch 1.0` (12.5 M cells) vs `1.1` (1.2 M), 0.5 mm margins | box energy 1e-4, peak ≤ 0.08 % |
+| `stretch 1.25` (default) / `1.5` vs `1.1`: ThinWall, LargerRectangle 2 ms | molten sites +0.16 % / +0.7 %, mean pool \|ΔT\| 0.3 / 1.1 K, ThinWall wall identical; loop 1.66× / 2.1× (ThinWall), 1.34× / 1.67× (LargerRectangle) |
 | np 1 / 2 / 4 (4×1×1 and 2×2×1) | per-site d6 identical |
 | HIP vs OpenMP (including all-features deck at np = 2) | per-site d6 identical |
 | `pause_below` + `reset_temperature`, `pause` + `reset_temperature` | fire and reset as with Moser |
@@ -176,7 +178,7 @@ Without the offset, float H lost increments below about 2e-5 K in cold
 cells (mean −3.5e-4 K after 8,778 steps). Keeping H double with float
 fluxes only gives 7.9 s on the same step.
 
-Cost: the example deck (1.6 M cells, about 4,000 sub-steps) runs in about 11 s
+Cost: `in.single_track` (0.8 M cells, about 4,000 sub-steps) runs in about 4 s
 on one gfx1151. With RKL2 the remaining cost is mostly the explicit steps
 while the laser is on.
 

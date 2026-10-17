@@ -397,10 +397,15 @@ void AppAdditiveTextureKokkos::sync_app_data_to_device()
   AppPottsQuaternionKokkos::sync_app_data_to_device();
 
   // AM arrays over the full owned+ghost range. T is synced separately
-  // (sync_temperature_to_device); G and V are device-computed.
+  // (sync_temperature_to_device). G and V are written on the device at
+  // solidification, but the host copies can hold loaded values (`set d8/d9
+  // stitch`): without the upload a stitched box zeroed them for all earlier
+  // material it did not remelt.
   const int nall = nlocal + nghost;
   upload_range(d_active_flag, active_flag, 0, nall);
   upload_range(d_solid_d, solid_d, 0, nall);
+  upload_range(d_G, G, 0, nall);
+  upload_range(d_V, V, 0, nall);
   upload_range(d_spath, spath, 0, nall);
   upload_range(d_mobility_out, mobility_out, 0, nall);
 }

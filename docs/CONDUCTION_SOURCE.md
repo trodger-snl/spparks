@@ -178,6 +178,50 @@ On LargerRectangle the 20 rasters at 50 µm hatch build up heat; the margins
 150 µm from the raster turns, remove it. The conduction rows ran at
 `stretch 1.1` (before the 1.25 default).
 
+**Inter-hatch pause.** With the original 2e-7 s jumps, layer 1's melted depth
+grows from 65 µm (raster 1) to 110 µm (raster 20) and the peak from 2,356 to
+3,781 K. A pause lets each raster start cold (`jump_time`, FP32, layer 1):
+
+| jump_time | depth raster 1 → 20 | peak raster 1 → 20 |
+|---|---|---|
+| 2e-7 s | 65 → 110 µm | 2,356 → 3,781 K |
+| 1 ms | 65 → 100 µm | 2,356 → 2,877 K |
+| 2 ms | 65 → 85 µm | 2,356 → 2,627 K |
+| 5 ms | 65 → 75 µm | 2,356 → 2,418 K |
+
+`in.large_rectangle` now uses 5 ms with `sts 128`; RKL2 covers the pauses.
+
+**One tall box vs stitched boxes (20 layers, 5 ms pauses).** The two setups:
+- **Tall box:** one 360 × 250 × 136-site box takes all 20 layers through
+  `laser_path file ... layers 20`.
+- **Stitched boxes:** 20 boxes, one per layer. Each spans 36 sites below its
+  layer top and is chained through `set ... stitch`/`dump stitch`.
+
+Both use `plate_top 92.5e-6` and `part` (plate ∪ scanned footprint), FP32.
+Resolidified = i2 3 and G > 0; grains = 26-connected same-spin
+components. Runs: `/home/tron/lr_runs/layers` (`gen.py`, `compare.py`).
+
+| | Tall box | Stitched |
+|---|---|---|
+| resolidified sites | 8,443,816 | 8,438,831 |
+| grains (whole / central crop) | 300,075 / 186,598 | 337,355 / 186,189 |
+| vol-wt grain size, crop | 3,984 | 4,240 |
+| <001> ∥ z within 15°, crop | 0.188 | 0.185 |
+| G quartiles, crop (K/m) | 8.95 / 10.1 / 11.3 e6 | 8.98 / 10.1 / 11.3 e6 |
+| V quartiles, crop (m/s) | 0.734 / 0.844 / 0.977 | 0.740 / 0.850 / 0.983 |
+| melt depth per layer, median / max | 70/75 → 80/90 µm | 70/75 → 80/90 µm |
+| loop time | 5,941 s | 3,161 s (20 × 107–177 s) |
+
+Per-layer melt depth agrees within one 5 µm cell on every layer, and the
+central crop agrees in every measure. The 12 % extra grains in the stitched
+build are all in the 60-site wall strips (+28 % grains there). They come from
+the deck set-up, not from stitching. The stitched decks give powder a random
+spin per site (the GP700 fix-ups), the tall deck gives all powder spin 42.
+Wall sites that grow epitaxially from powder (32,606 sites in the stitched
+build) become many small grains in one case and join one spin-42 network in
+the other. Use the same powder initialisation in both before comparing wall
+grain statistics.
+
 Identity is checked on `%g` text dumps (6 significant digits). GP700 runs and
 `compare.py`: `/home/tron/gp700_runs/cond_cmp`.
 

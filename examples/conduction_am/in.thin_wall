@@ -6,7 +6,7 @@
 # and the rest of the run is skipped (the recoat).
 # Units: lattice 5 um; track x 50-850 um at y 187.5 um; substrate z <= 18,
 # layer tops at z = 21, 27, 33, 39.
-app_style        additive/texture/kk 1000000 5e-6 5e-6 2
+app_style        additive/texture/kk 1000000 5e-6 5e-6 1
 seed             56789
 dimension        3
 lattice          sc/26n 1.0

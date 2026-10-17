@@ -25,7 +25,7 @@ import argparse, math, os, re, subprocess, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 DX, SPEED, PAUSE = 5e-6, 1.4, 5e-3
 
-DECK = '''app_style        additive/texture/kk 1000000 5e-6 5e-6 2
+DECK = '''app_style        additive/texture/kk 1000000 5e-6 5e-6 1
 seed             {seed}
 dimension        3
 lattice          sc/26n 1.0

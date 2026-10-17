@@ -9,7 +9,7 @@
 # taller box and a longer run take more.
 # Path in lattice units: scale by dx, laser plane half a site above the
 # top site of each layer. One process, ~0.29 s with the pauses.
-app_style        additive/texture/kk 1000000 5e-6 5e-6 2
+app_style        additive/texture/kk 1000000 5e-6 5e-6 1
 seed             56789
 dimension        3
 lattice          sc/26n 1.0

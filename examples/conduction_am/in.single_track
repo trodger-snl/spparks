@@ -4,7 +4,7 @@
 # plate with geometrically stretched cells; the part region outside the box
 # is dense below the powder layer. See docs/CONDUCTION_SOURCE.md.
 # ~15 s on one gfx1151 GPU (build-verify).
-app_style        additive/texture/kk 1000000 5e-6 5e-6 2
+app_style        additive/texture/kk 1000000 5e-6 5e-6 1
 seed             56789
 dimension        3
 lattice          sc/26n 1.0

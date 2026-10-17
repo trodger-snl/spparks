@@ -29,7 +29,7 @@ temperature      0.0
 misorientation_target random_rotation
 liquidus         1708
 solidus          1675
-solid_front_vel  4 -1.0302e-7 1.0533e-4 2.2196e-3 0
+solid_front_vel  4 1.091e-5 -2.034e-4 2.74e-3 1.151e-4
 nucleation_density      1e14
 critical_undercooling   5
 undercooling_deviation  3
@@ -39,8 +39,11 @@ smooth_greedy_multiproposal on
 smooth_orientation copy
 nuclei_smooth off
 
-# Q lambda k alpha T0 cp sx sy sz (Moser standard form), then keywords
-setup_temperature_source conduction 340.0 0.355 13.8 3.6166e-6 573.0 483.0 50e-6 50e-6 75e-6 &
+# Q lambda k alpha T0 cp sx sy sz (Moser standard form), then keywords.
+# 316L as in materials/316L.toml (process single_track_340W): k and cp are the
+# tables at T0, alpha = k/(rho cp) with rho 7900; the same tokens the card
+# deck in.single_track.card expands to.
+setup_temperature_source conduction 340.0 0.355 19.442 4.517691892111699e-06 573.0 544.75 50e-6 50e-6 75e-6 &
     k_powder 0.3 k_table 6 300 13.8 600 20.0 900 24.8 1200 28.4 1500 30.6 1675 31.3 &
     cp_table 7 300 483 473 528 873 595 1073 611 1253 624 1675 714 1708 847 &
     latent 2.9e5 &

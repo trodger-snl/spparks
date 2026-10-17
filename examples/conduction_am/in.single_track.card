@@ -27,10 +27,8 @@ sweep            color
 diag_style       array d6 sum d6 max
 temperature      0.0
 misorientation_target random_rotation
-# Material and process values from the card; deck commands after `material` win
-# (this deck keeps its own front-velocity fit).
+# Material and process values from the card; deck commands after `material` win.
 material         ../../materials/316L.toml process single_track_340W
-solid_front_vel  4 -1.0302e-7 1.0533e-4 2.2196e-3 0
 smooth_greedy_multiproposal on
 smooth_orientation copy
 nuclei_smooth off

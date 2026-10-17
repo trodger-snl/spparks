@@ -129,6 +129,37 @@ in `processors`.
   frozen by the reset (a very slow `solid_front_vel` can hold it off
   indefinitely).
 
+## Material (examples: 316L)
+
+The example decks use 316L, ρ = 7900 kg/m³ (`k` 13.8, `alpha` 3.6166e-6,
+`cp` 483 give ρ = k/(α cp)), solidus/liquidus 1675/1708 K, latent 2.9e5
+J/kg, emissivity 0.4, k_powder 0.3. Sources: NIST (Pichler et al. 2020,
+PMC8193647) for ρ, cp, the melting range and ΔH; Mills (2002) fits as in
+MOOSE's ThermalSS316Properties for k(T) (13.8 W/m·K at 300 K, 31.3 at the
+solidus, held in the liquid). The earlier decks carried am/finitediff's
+values (ρ 5706, a compromise between powder and dense; k 30 constant;
+304's melting range; emissivity 1). At the same 150 W the 316L pools are
+shallower: deepest melt 70 → 55 µm below the first layer top in
+`in.large_rectangle`, 60 → 35 µm in `in.thin_wall` (FP64, 2026-10-17).
+
+**Powder depth test** (`in.single_track`, 316L, 2026-10-17). The model
+layer is the consolidated thickness at dense ρ. Against a powder layer
+1/φ deeper at `packing φ` (same mass per area, melts in place without
+shrinking) and the same deeper layer at dense ρ, mid-track:
+
+| Powder layer | Melt depth into substrate | Remelted substrate (sites per x slice) | Peak T |
+|---|---|---|---|
+| 25 µm, dense ρ (consolidated) | 47.5 µm | 36 | 2877 K |
+| 40 µm, `packing 0.625` | 37.5 µm | 25 | 3632 K |
+| 40 µm, dense ρ | 37.5 µm | 18 | 2976 K |
+
+The real case lies between the first two rows (the melt does shrink to the
+consolidated height). So the consolidated layer overstates remelt of the
+layer below by up to ~10 µm (two sites) and ~30 % in area; a source
+calibrated against measured pools on powder absorbs it. `packing` with a
+deeper powder layer is for single-layer tests only: the microstructure
+model does not shrink melted powder, so a build would grow 1/φ per layer.
+
 ## Validation (2026-10-16, gfx1151 + OpenMP backend)
 
 | Check | Result |

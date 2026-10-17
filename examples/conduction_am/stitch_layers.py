@@ -42,8 +42,8 @@ sweep            color
 diag_style       array d6 sum d6 max
 temperature      0.0
 misorientation_target random_rotation
-liquidus         1723
-solidus          1673
+liquidus         1708
+solidus          1675
 solid_front_vel  4 1.091e-5 -2.034e-4 2.74e-3 1.151e-4
 nucleation_density      1e14
 critical_undercooling   5
@@ -52,9 +52,10 @@ mean_nuclei_volume      8.4375e-16
 nuclei_volume_deviation 1.5625e-17
 floor_check      {floor}
 reset_time       {t0}
-setup_temperature_source conduction 150.0 1.0 30.0 1.0954e-5 300.0 480.0 59.4e-6 59.4e-6 99.0e-6 &
-    k_powder 0.3 cp_table 6 300 480 600 550 1400 675 1550 693 1650 714 1750 736 &
-    latent 2.85e5 convection 25 300 emissivity 1.0 &
+setup_temperature_source conduction 150.0 1.0 13.8 3.6166e-6 300.0 483.0 59.4e-6 59.4e-6 99.0e-6 &
+    k_powder 0.3 k_table 6 300 13.8 600 20.0 900 24.8 1200 28.4 1500 30.6 1675 31.3 &
+    cp_table 7 300 483 473 528 873 595 1073 611 1253 624 1675 714 1708 847 &
+    latent 2.9e5 convection 25 300 emissivity 0.4 &
     margin 0.5e-3 0.5e-3 0.5e-3 0.5e-3 plate {plate} plate_top 92.5e-6 part part far_bc fixed sts 128
 laser_path file {path} speed 1.4 scale 5e-6 shift 0 0 2.5e-6 jump_time {pause}
 stats            1e-3

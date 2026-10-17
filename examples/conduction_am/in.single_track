@@ -27,8 +27,8 @@ sweep            color
 diag_style       array d6 sum d6 max
 temperature      0.0
 misorientation_target random_rotation
-liquidus         1573
-solidus          1523
+liquidus         1708
+solidus          1675
 solid_front_vel  4 -1.0302e-7 1.0533e-4 2.2196e-3 0
 nucleation_density      1e14
 critical_undercooling   5
@@ -37,9 +37,10 @@ mean_nuclei_volume      8.4375e-16
 nuclei_volume_deviation 1.5625e-17
 
 # Q lambda k alpha T0 cp sx sy sz (Moser standard form), then keywords
-setup_temperature_source conduction 340.0 0.355 11.2 2.0959e-6 573.0 650.0 50e-6 50e-6 75e-6 &
-    k_powder 0.3 k_table 3 300 9 1000 20 1700 30 &
-    cp_table 3 300 480 1400 675 1750 736 latent 2.7e5 &
+setup_temperature_source conduction 340.0 0.355 13.8 3.6166e-6 573.0 483.0 50e-6 50e-6 75e-6 &
+    k_powder 0.3 k_table 6 300 13.8 600 20.0 900 24.8 1200 28.4 1500 30.6 1675 31.3 &
+    cp_table 7 300 483 473 528 873 595 1073 611 1253 624 1675 714 1708 847 &
+    latent 2.9e5 &
     convection 25 300 emissivity 0.4 &
     margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 &
     part part layer_thickness 30e-6 plate_top -0.2e-3 far_bc fixed

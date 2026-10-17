@@ -160,12 +160,21 @@ Identity is checked on `%g` text dumps (6 significant digits). GP700 runs and
 `compare.py`: `/home/tron/gp700_runs/cond_cmp`.
 
 **Precision.** The stage kernel is FP64-bound on gfx1151 (about 20 FP64
-divisions per cell). Built with `-DSPPARKS_FP32=ON` (`build-fp32`), its flux
-math runs in `fastreal` = float; H, its update and T(H) stay double. Matched
-LargerRectangle, 2 ms: `ConductionStep` 19.2 → 7.9 s, loop 20.5 → 9.1 s,
-per-site d6 within 0.01 K of FP64 (print resolution) after 8,778 steps;
-matched ThinWall loop 20.1 → 5.5 s, stats equal but one last digit. The
-default FP64 build is unchanged bit for bit.
+divisions per cell). Built with `-DSPPARKS_FP32=ON` (`build-fp32`) the
+solver runs entirely in `fastreal` = float, state included; H is stored
+relative to H(T0), which keeps cold cells (small H increments) resolved.
+The default FP64 build is unchanged bit for bit.
+
+| Matched decks | FP64 | FP32 |
+|---|---|---|
+| LargerRectangle 2 ms: `ConductionStep` / loop | 19.2 / 20.5 s | 4.3 / 5.9 s |
+| per-site d6 vs FP64: max / mean / cold (< 310 K) mean | | 0.010 K (print) / +3e-7 / −2e-7 K |
+| adiabatic energy deck vs FP64 | | −2.0e-6 |
+| ThinWall 4 layers (mostly RKL2): loop; ΣT, max T vs FP64 | 20.1 s | 3.8 s; 5.4e-5, 0.08 K |
+
+Without the offset, float H lost increments below about 2e-5 K in cold
+cells (mean −3.5e-4 K after 8,778 steps). Keeping H double with float
+fluxes only gives 7.9 s on the same step.
 
 Cost: the example deck (1.6 M cells, about 4,000 sub-steps) runs in about 11 s
 on one gfx1151. With RKL2 the remaining cost is mostly the explicit steps

@@ -15,6 +15,7 @@
 #define SPK_CONDUCTION_SOLVER_KOKKOS_H
 
 #include "pointers.h"
+#include "spktype.h"
 #include <Kokkos_Core.hpp>
 #include <vector>
 
@@ -65,14 +66,18 @@ class ConductionSolverKokkos : protected Pointers {
   int nbr[4] = {-1, -1, -1, -1};
   double zl = 0.0;
 
-  Kokkos::View<double***> H, T, Tn;
-  Kokkos::View<double***> Ya, Yb, L0;   // RKL2 stage buffers (allocated on demand)
+  // State in fastreal. H is stored relative to Href = H(T0) under
+  // SPPARKS_FP32 (float resolves small increments near T0 that way; 0 in
+  // FP64, so the FP64 arithmetic is the original).
+  Kokkos::View<fastreal***> H, T, Tn;
+  Kokkos::View<fastreal***> Ya, Yb, L0;   // RKL2 stage buffers (allocated on demand)
   Kokkos::View<unsigned char***> P, Pn;
   // per local cell: width and lower/upper face per axis (halo included)
   Kokkos::View<double*> wx, wy, wz, fxlo, fxhi, fylo, fyhi, fzlo, fzhi;
   Kokkos::View<double*> Ex, Ey, Ez;   // per-axis Gaussian integrals, per sub-step
   double zsrc = 0.0;                  // source plane: laser plane, capped at the top face
-  Kokkos::View<double*> Htab, kT, kV;
+  Kokkos::View<fastreal*> Htab;   // H(T) - Href
+  Kokkos::View<double*> kT, kV;
   double Htab_T0 = 0.0, Htab_dT = 1.0;
   Kokkos::View<int*[3]> site_cell;   // local (i,j,k) per site, i<0 = above grid
 
@@ -89,8 +94,8 @@ class ConductionSolverKokkos : protected Pointers {
     double h = 0.0, mu = 1.0, nu = 0.0, mut = 0.0, gat = 0.0;
     double Pq = 0.0, xl = 0.0, yl = 0.0;
   };
-  void stage(const Stage &c, Kokkos::View<double***> Y1,
-             Kokkos::View<double***> Y2, Kokkos::View<double***> Yout);
+  void stage(const Stage &c, Kokkos::View<fastreal***> Y1,
+             Kokkos::View<fastreal***> Y2, Kokkos::View<fastreal***> Yout);
   void step(double h, double t0);
   void sts_step(double tau, int s);
   void exchange();

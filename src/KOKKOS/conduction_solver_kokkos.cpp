@@ -22,6 +22,7 @@
 #include <cmath>
 #include <climits>
 #include <cstdio>
+#include <type_traits>
 #include <vector>
 
 using namespace SPPARKS_NS;
@@ -238,9 +239,9 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3]> d_xyz,
   fzlo = axis_view("cond_fzlo", az, 0, nz, 1);
   fzhi = axis_view("cond_fzhi", az, 0, nz, 2);
 
-  H = Kokkos::View<double***>("cond_H", NXL, NYL, nz);
-  T = Kokkos::View<double***>("cond_T", NXL, NYL, nz);
-  Tn = Kokkos::View<double***>("cond_Tn", NXL, NYL, nz);
+  H = Kokkos::View<fastreal***>("cond_H", NXL, NYL, nz);
+  T = Kokkos::View<fastreal***>("cond_T", NXL, NYL, nz);
+  Tn = Kokkos::View<fastreal***>("cond_Tn", NXL, NYL, nz);
   P = Kokkos::View<unsigned char***>("cond_P", NXL, NYL, nz);
   Pn = Kokkos::View<unsigned char***>("cond_Pn", NXL, NYL, nz);
 
@@ -303,10 +304,16 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3]> d_xyz,
   // Property tables.
   std::vector<double> Ht;
   src->enthalpy_table(ts, tl, Htab_T0, Htab_dT, Ht);
-  Htab = Kokkos::View<double*>("cond_Htab", Ht.size());
+  double Href = 0.0;
+  if (std::is_same<fastreal, float>::value) {
+    const double u = (src->ambient() - Htab_T0) / Htab_dT;
+    const int i = std::max(0, std::min((int) Ht.size() - 2, (int) std::floor(u)));
+    Href = Ht[i] + (u - i) * (Ht[i+1] - Ht[i]);
+  }
+  Htab = Kokkos::View<fastreal*>("cond_Htab", Ht.size());
   {
     auto h = Kokkos::create_mirror_view(Htab);
-    for (size_t i = 0; i < Ht.size(); i++) h(i) = Ht[i];
+    for (size_t i = 0; i < Ht.size(); i++) h(i) = Ht[i] - Href;
     Kokkos::deep_copy(Htab, h);
   }
   auto up = [](const char *nm, const std::vector<double> &v) {
@@ -381,7 +388,7 @@ void ConductionSolverKokkos::reset_field(double Tr)
   const int n = (int) hH.extent(0);
   const double u = (Tr - Htab_T0) / Htab_dT;
   const int i = std::max(0, std::min(n - 2, (int) std::floor(u)));
-  const double Hr = hH(i) + (u - i) * (hH(i+1) - hH(i));
+  const double Hr = hH(i) + (u - i) * ((double) hH(i+1) - hH(i));
   Kokkos::deep_copy(H, Hr);
   Kokkos::deep_copy(T, Tr);
   Kokkos::deep_copy(Tn, Tr);
@@ -413,9 +420,9 @@ void ConductionSolverKokkos::step(double h, double t0)
 void ConductionSolverKokkos::sts_step(double tau, int s)
 {
   if (Ya.extent(0) != H.extent(0) || Ya.extent(1) != H.extent(1) || Ya.extent(2) != H.extent(2)) {
-    Ya = Kokkos::View<double***>("cond_Ya", H.extent(0), H.extent(1), H.extent(2));
-    Yb = Kokkos::View<double***>("cond_Yb", H.extent(0), H.extent(1), H.extent(2));
-    L0 = Kokkos::View<double***>("cond_L0", H.extent(0), H.extent(1), H.extent(2));
+    Ya = Kokkos::View<fastreal***>("cond_Ya", H.extent(0), H.extent(1), H.extent(2));
+    Yb = Kokkos::View<fastreal***>("cond_Yb", H.extent(0), H.extent(1), H.extent(2));
+    L0 = Kokkos::View<fastreal***>("cond_L0", H.extent(0), H.extent(1), H.extent(2));
   }
   auto b = [](int j) { return j < 2 ? 1.0 / 3.0 : (j*j + j - 2.0) / (2.0 * j * (j + 1)); };
   const double w1 = 4.0 / (s*s + s - 2.0);
@@ -424,7 +431,7 @@ void ConductionSolverKokkos::sts_step(double tau, int s)
   c.sts = true; c.store_L0 = true; c.phase = (s == 1);
   c.mu = 1.0; c.nu = 0.0; c.mut = b(1) * w1 * tau; c.gat = 0.0;
   stage(c, H, H, Ya);                       // Y1 = H + mu~1 tau L(H)
-  Kokkos::View<double***> y1 = Ya, y2 = H, spare = Yb;
+  Kokkos::View<fastreal***> y1 = Ya, y2 = H, spare = Yb;
   for (int j = 2; j <= s; j++) {
     c.store_L0 = false; c.phase = (j == s);
     c.mu = (2.0*j - 1.0) / j * b(j) / b(j-1);
@@ -432,12 +439,12 @@ void ConductionSolverKokkos::sts_step(double tau, int s)
     c.mut = c.mu * w1 * tau;
     c.gat = -(1.0 - b(j-1)) * c.mut;
     // Y_j overwrites Y_{j-2} in place, except while Y_{j-2} is H (Y0)
-    Kokkos::View<double***> out = (j == 2) ? spare : y2;
+    Kokkos::View<fastreal***> out = (j == 2) ? spare : y2;
     stage(c, y1, y2, out);
     y2 = y1; y1 = out;
   }
   // y1 = Y_s: make it H; keep the other two as stage buffers
-  Kokkos::View<double***> oldH = H;
+  Kokkos::View<fastreal***> oldH = H;
   H = y1;
   Ya = (y2.data() == oldH.data()) ? spare : y2;
   Yb = oldH;
@@ -447,9 +454,9 @@ void ConductionSolverKokkos::sts_step(double tau, int s)
    Flux divergence + source at T (the state Y1), then the stage update.
 ------------------------------------------------------------------------- */
 
-void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<double***> Y1,
-                                   Kokkos::View<double***> Y2,
-                                   Kokkos::View<double***> Yout)
+void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<fastreal***> Y1,
+                                   Kokkos::View<fastreal***> Y2,
+                                   Kokkos::View<fastreal***> Yout)
 {
   const auto &cfg = src->config();
   const double xl = c.xl, yl = c.yl, Pq = c.Pq, h = c.h;
@@ -490,10 +497,9 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<double***> Y1,
     });
   }
 
-  // Flux math in fastreal (float under SPPARKS_FP32; gfx1151 runs FP64 at a
-  // small fraction of FP32 and this kernel is FP64-bound). H, its update and
-  // T(H) stay double, so energy accumulates in double. With fastreal ==
-  // double every expression is the original one.
+  // All math in fastreal (float under SPPARKS_FP32; gfx1151 runs FP64 at a
+  // small fraction of FP32 and this kernel is FP64-bound), H relative to
+  // Href. With fastreal == double every expression is the original one.
   using R = fastreal;
   Kokkos::parallel_for("ConductionStep",
     Kokkos::MDRangePolicy<Kokkos::Rank<3, Kokkos::Iterate::Left, Kokkos::Iterate::Left>>(
@@ -537,35 +543,35 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<double***> Y1,
 
       if (Pq > 0.0) q += R(Pq) * R(Ex_(i)) * R(Ey_(j)) * R(Ez_(k));
 
-      double Hn;
+      R Hn;
       if (!sts) {
-        Hn = H_(i, j, k) + h * q / (dxc * dyc * dzc);   // H and its update stay double
+        Hn = H_(i, j, k) + R(h) * q / (dxc * dyc * dzc);
         H_(i, j, k) = Hn;
       } else {
-        const double Lc = q / (dxc * dyc * dzc);
-        Hn = mu * Y1_(i, j, k) + nu * Y2_(i, j, k) + (1.0 - mu - nu) * H_(i, j, k)
-           + mut * Lc + gat * (store_L0 ? Lc : L0_(i, j, k));
+        const R Lc = q / (dxc * dyc * dzc);
+        Hn = R(mu) * Y1_(i, j, k) + R(nu) * Y2_(i, j, k) + R(1.0 - mu - nu) * H_(i, j, k)
+           + R(mut) * Lc + R(gat) * (store_L0 ? Lc : L0_(i, j, k));
         if (store_L0) L0_(i, j, k) = Lc;
         Yo_(i, j, k) = Hn;
       }
       // T(H): table search, end slopes beyond.
-      double Tv;
+      R Tv;
+      const R H0r = R(H0), dTr = R(dTt);
       if (Hn <= Htab_(0)) {
-        Tv = H0 + (Hn - Htab_(0)) / (Htab_(1) - Htab_(0)) * dTt;
+        Tv = H0r + (Hn - Htab_(0)) / (Htab_(1) - Htab_(0)) * dTr;
       } else if (Hn >= Htab_(nHt - 1)) {
-        Tv = H0 + (nHt - 1) * dTt +
-             (Hn - Htab_(nHt - 1)) / (Htab_(nHt - 1) - Htab_(nHt - 2)) * dTt;
+        Tv = H0r + R(nHt - 1) * dTr +
+             (Hn - Htab_(nHt - 1)) / (Htab_(nHt - 1) - Htab_(nHt - 2)) * dTr;
       } else {
         // H rises strictly with T, so the bracket Htab(lo) <= Hn < Htab(lo+1)
         // is unique: walk to it from the cell's previous T (a few K away)
         // instead of a 13-level binary search.
-        const double u = (Tc - H0) / dTt;
-        int lo = u <= 0.0 ? 0 : (u >= nHt - 2 ? nHt - 2 : (int) u);
+        const R u = (Tr - H0r) / dTr;
+        int lo = u <= R(0) ? 0 : (u >= R(nHt - 2) ? nHt - 2 : (int) u);
         while (lo > 0 && Htab_(lo) > Hn) lo--;
         while (lo < nHt - 2 && Htab_(lo + 1) <= Hn) lo++;
-        const int hi = lo + 1;
-        const double dH = Htab_(hi) - Htab_(lo);
-        Tv = H0 + (lo + (dH > 0.0 ? (Hn - Htab_(lo)) / dH : 0.0)) * dTt;
+        const R dH = Htab_(lo + 1) - Htab_(lo);
+        Tv = H0r + (R(lo) + (dH > R(0) ? (Hn - Htab_(lo)) / dH : R(0))) * dTr;
       }
       Tn_(i, j, k) = Tv;
       Pn_(i, j, k) = (do_phase && pc == POWDER && Tv >= tl_) ? (unsigned char) DENSE : pc;

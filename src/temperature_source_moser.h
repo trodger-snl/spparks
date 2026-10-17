@@ -135,6 +135,20 @@ class MoserTemperatureSource : public TemperatureSource {
                   double hatch = 0.0,
                   bool serpentine = false);
 
+  // One emitting segment of the scan: the laser moves (x0,y0) -> (x1,y1)
+  // over [t0, t1] at power fraction p of lambda*Q. Line scans are one
+  // segment per pass; a path file is a polyline of them.
+  using Seg = ScanSeg;
+
+  // Generic scan: segments with times relative to t_start (sorted,
+  // disjoint; touching segments are a continuous polyline). Replaces any
+  // line scan. append_pass / reset_history_and_start are not available.
+  void build_scan_path(double t_start, const std::vector<Seg> &segs,
+                       double laser_plane_z);
+
+  // Emitting segments in absolute time (pass mode included).
+  const std::vector<Seg> &segments() const { return segs_; }
+
   // Endpoints of pass r under the hatch/serpentine rule (r >= 0).
   void pass_geometry(int r, double &x0, double &y0, double &x1, double &y1) const;
 
@@ -173,9 +187,7 @@ class MoserTemperatureSource : public TemperatureSource {
   // current pass has actually finished emitting" so it doesn't drain
   // all queued passes during the laser's initial warm-up.
   double get_last_pass_end_time() const {
-    return pass_start_times_.empty()
-             ? scan_t_origin
-             : pass_start_times_.back() + scan_pass_duration;
+    return segs_.empty() ? scan_t_origin : segs_.back().t1;
   }
 
   MoserMode get_mode() const { return mode; }
@@ -283,6 +295,10 @@ class MoserTemperatureSource : public TemperatureSource {
   // (start_time, repeats, pause) spec, or grown by append_pass when the
   // app's pause_below path decides the threshold has been met.
   std::vector<double> pass_start_times_;
+  // Emitting segments, absolute times. Pass mode derives them from
+  // pass_start_times_ in rebuild_scan_from_pass_list_; path mode sets them.
+  std::vector<Seg> segs_;
+  bool path_mode_ = false;
 
   // GREENAM integrator pointers (instantiated in the cpp file via
   // forward-declared templates so the GREENAM headers are pulled into

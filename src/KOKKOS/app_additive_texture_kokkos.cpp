@@ -442,6 +442,15 @@ void AppAdditiveTextureKokkos::refresh_thermal_host()
   thermal_host_.dx = dx;
   thermal_host_.tl = tl;
   thermal_host_.ts = ts;
+  if (!thermal_host_.any_liquid)
+    thermal_host_.any_liquid = [this]() {
+      auto af = d_active_flag;
+      int nl = 0, ng = 0;
+      Kokkos::parallel_reduce("AnyLiquid", nlocal,
+        KOKKOS_LAMBDA(int i, int &c) { if (af(i) == 2) c++; }, nl);
+      MPI_Allreduce(&nl, &ng, 1, MPI_INT, MPI_SUM, world);
+      return ng > 0;
+    };
   t_cool_max = tl - ts;  // undercooling normalization for misorient_alpha (matches CPU)
   thermal_host_.t_room = t_room;
   thermal_host_.time = time;

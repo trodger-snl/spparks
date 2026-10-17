@@ -215,6 +215,15 @@ class ThermalManager : protected Pointers {
   double laser_reset_temperature;  // [K], 0 = disabled
   int    pending_moser_passes;     // remaining queued Moser passes
 
+  // laser_path file: one entry per layer (constant z), segment times
+  // relative to the layer start. path_layer is the layer now scanning.
+  struct PathLayer { double z; std::vector<ScanSeg> segs; };
+  std::vector<PathLayer> path_layers;
+  size_t path_layer = 0;
+  double path_recoat = 0.0;
+  void laser_path_file(int narg, char **arg);
+  void start_path_layer(size_t k, double t_start);
+
 
   // Solidification-band temperature smoothing (opt-in via temperature_smooth)
   bool   temperature_smooth_enabled;

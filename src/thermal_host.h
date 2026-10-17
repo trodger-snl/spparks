@@ -14,6 +14,8 @@
 #ifndef SPK_THERMAL_HOST_H
 #define SPK_THERMAL_HOST_H
 
+#include <functional>
+
 namespace SPPARKS_NS {
 
 /* ----------------------------------------------------------------------
@@ -41,6 +43,9 @@ struct ThermalHost {
   double dx = 0.0;                 // source lattice spacing (physical m)
   double tl = 0.0;                 // liquidus temperature (K)
   double ts = 0.0;                 // solidus temperature (K)
+  // Collective: true if any owned site is liquid on any rank. Empty when
+  // the app does not provide it (treated as no liquid).
+  std::function<bool()> any_liquid;
   double t_room = 0.0;             // ambient/room temperature (K)
   double time = 0.0;               // current simulation time (s)
   double dt = 0.0;                 // simulation timestep (s)

@@ -1,0 +1,52 @@
+# am/finitediff's LargerRectangle example (github/am_finitedifference,
+# examples/am_finitediff/LargerRectangle) on the conduction source: its
+# 21-layer raster path read with `laser_path file`. Layer 1 rasters along
+# x, layer 2 along y, 50 um hatch, 2e-7 s jumps between rasters. As in the
+# original, the 30-site box holds the first two layers (`layers 2`); a
+# taller box and a longer run take more.
+# Path in lattice units: scale by dx, laser plane half a site above the
+# top site of each layer. One process, ~45 ms of scan.
+app_style        additive/texture/kk 1000000 5e-6 5e-6 2
+seed             56789
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 360 0 250 0 30
+boundary         n n n
+create_box       box
+create_sites     box
+set site range 1 1000000
+region           substrate block 0 360 0 250 0 18.5
+set i2 value 3 region substrate
+region           plate block -200 560 -200 450 -200 18.5
+set i1 value 42
+set d1 value 1.0
+set d2 value 0.0
+set d3 value 0.0
+set d4 value 0.0
+sector           yes
+sweep            color
+diag_style       array d6 sum d6 max
+temperature      0.0
+misorientation_target random_rotation
+liquidus         1723
+solidus          1673
+solid_front_vel  4 1.091e-5 -2.034e-4 2.74e-3 1.151e-4
+nucleation_density      1e14
+critical_undercooling   5
+undercooling_deviation  3
+mean_nuclei_volume      8.4375e-16
+nuclei_volume_deviation 1.5625e-17
+
+# 115 W absorbed, k 30, rho 5706 (alpha = k/(rho cp0)), T0 300 K; am/finitediff
+# spot exp(-r^2/2 sigma^2), sigma 60 um = exp(-r^2/s^2), s = 84.85 um
+setup_temperature_source conduction 115.0 1.0 30.0 1.0954e-5 300.0 480.0 84.85e-6 84.85e-6 84.85e-6 &
+    k_powder 0.3 cp_table 6 300 480 600 550 1400 675 1550 693 1650 714 1750 736 &
+    latent 2.85e5 convection 25 300 emissivity 1.0 &
+    margin 0.5e-3 0.5e-3 0.5e-3 0.5e-3 plate 0.5e-3 part plate far_bc fixed
+
+laser_path file large_rectangle.path speed 1.4 scale 5e-6 shift 0 0 2.5e-6 &
+    jump_time 2e-7 layers 2
+stats            1e-3
+dump             1 text 0.06 dump.large_rectangle.* id i1 i2 x y z
+dump_modify      1 thresh i2 > 2
+run              0.06

@@ -128,6 +128,12 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
   //     [pause <T> | pause_below <Tk>]
   // hatch S N: N passes, pass k offset by k*S along the line's in-plane
   // normal; serpentine reverses the direction on odd passes.
+  if (narg >= 1 && strcmp(arg[0],"file") == 0) {
+    laser_path_file(narg - 1, arg + 1);
+    return;
+  }
+  path_layers.clear();
+
   if (narg < 9)
     error->all(FLERR,"Illegal laser_path command: expected start X0 Y0 Z0 end X1 Y1 speed V [repeats N | hatch S N] [serpentine] [pause T | pause_below Tk]");
   if (strcmp(arg[0],"start") != 0)
@@ -304,6 +310,127 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
       std::cout << ", reset_temperature=" << reset_temperature_T << " K";
     std::cout << std::endl;
   }
+}
+
+/* ----------------------------------------------------------------------
+   laser_path file F speed V [scale S] [shift DX DY DZ] [jump_speed V]
+     [jump_time T] [recoat T] [layers N]
+   Waypoint file, one row per point: x y z p [v] (whitespace or commas,
+   '#' comments). Each row is a move from the previous point at power
+   fraction p (0 = laser off) and speed v (default V). Off moves take
+   jump_time if given, else distance / jump_speed (default V). A change of
+   z starts a new layer at that point; layers run one after another, each
+   once the previous one has cooled below the solidus with no liquid left,
+   plus recoat seconds. Coordinates are file units * scale + shift (m).
+------------------------------------------------------------------------- */
+
+void ThermalManager::laser_path_file(int narg, char **arg)
+{
+  if (narg < 3 || strcmp(arg[1],"speed") != 0)
+    error->all(FLERR,"Illegal laser_path file command: expected file F speed V ...");
+  if (!moser_source() || rosenthal_source())
+    error->all(FLERR,"laser_path file: requires the moser or conduction source");
+  const double v = atof(arg[2]);
+  double scale = 1.0, shift[3] = {0.0, 0.0, 0.0}, jump_speed = v, jump_time = 0.0;
+  double recoat = 0.0;
+  int nlayers = 0;
+  for (int i = 3; i < narg; ) {
+    auto need = [&](int n) {
+      if (i + n >= narg) error->all(FLERR,"laser_path file: missing keyword value");
+    };
+    if (strcmp(arg[i],"scale") == 0) { need(1); scale = atof(arg[i+1]); i += 2; }
+    else if (strcmp(arg[i],"shift") == 0) {
+      need(3);
+      for (int d = 0; d < 3; d++) shift[d] = atof(arg[i+1+d]);
+      i += 4;
+    }
+    else if (strcmp(arg[i],"jump_speed") == 0) { need(1); jump_speed = atof(arg[i+1]); i += 2; }
+    else if (strcmp(arg[i],"jump_time") == 0) { need(1); jump_time = atof(arg[i+1]); i += 2; }
+    else if (strcmp(arg[i],"recoat") == 0) { need(1); recoat = atof(arg[i+1]); i += 2; }
+    else if (strcmp(arg[i],"layers") == 0) { need(1); nlayers = atoi(arg[i+1]); i += 2; }
+    else error->all(FLERR,"laser_path file: unknown keyword (expected scale, shift, "
+                    "jump_speed, jump_time, recoat or layers)");
+  }
+  if (v <= 0.0 || scale <= 0.0 || jump_speed <= 0.0 || jump_time < 0.0 ||
+      recoat < 0.0 || nlayers < 0)
+    error->all(FLERR,"laser_path file: speeds and scale must be > 0, times >= 0");
+
+  // Rank 0 reads rows of 5 values (v = 0 when absent) and broadcasts them.
+  std::vector<double> rows;
+  if (domain->me == 0) {
+    FILE *fp = fopen(arg[0], "r");
+    if (!fp) error->one(FLERR,"laser_path file: cannot open path file");
+    char line[1024];
+    while (fgets(line, sizeof(line), fp)) {
+      if (char *c = strchr(line, '#')) *c = '\0';
+      for (char *c = line; *c; c++) if (*c == ',') *c = ' ';
+      double r[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+      const int n = sscanf(line, "%lf %lf %lf %lf %lf", r, r+1, r+2, r+3, r+4);
+      if (n <= 0) continue;
+      if (n < 4) error->one(FLERR,"laser_path file: a row needs x y z p [v]");
+      rows.insert(rows.end(), r, r + 5);
+    }
+    fclose(fp);
+  }
+  int nr = (int) rows.size();
+  MPI_Bcast(&nr, 1, MPI_INT, 0, world);
+  rows.resize(nr);
+  MPI_Bcast(rows.data(), nr, MPI_DOUBLE, 0, world);
+  if (nr < 10) error->all(FLERR,"laser_path file: needs at least two points");
+
+  path_layers.clear();
+  double t = 0.0;
+  auto P = [&](int r, int d) { return rows[5*r+d] * scale + shift[d]; };
+  for (int r = 1; r < nr / 5; r++) {
+    const double x0 = P(r-1,0), y0 = P(r-1,1), z0 = P(r-1,2);
+    const double x1 = P(r,0), y1 = P(r,1), z1 = P(r,2);
+    const double p = rows[5*r+3], vr = rows[5*r+4] > 0.0 ? rows[5*r+4] : v;
+    if (path_layers.empty() || z1 != z0) {          // first point of a layer
+      if (!path_layers.empty() && path_layers.back().segs.empty()) path_layers.pop_back();
+      path_layers.push_back({z1, {}});
+      t = 0.0;
+      if (z1 != z0) continue;
+    }
+    const double d = std::sqrt((x1-x0)*(x1-x0) + (y1-y0)*(y1-y0));
+    if (p > 0.0) {
+      if (d <= 0.0) continue;
+      path_layers.back().segs.push_back({t, t + d / vr, x0, y0, x1, y1, p});
+      t += d / vr;
+    } else {
+      // floor keeps a zero-time jump from putting two waypoints at one time
+      t += std::max(jump_time > 0.0 ? jump_time : d / jump_speed, 1.0e-12);
+    }
+  }
+  if (!path_layers.empty() && path_layers.back().segs.empty()) path_layers.pop_back();
+  if (path_layers.empty()) error->all(FLERR,"laser_path file: no emitting move");
+  if (nlayers > 0 && (size_t) nlayers < path_layers.size()) path_layers.resize(nlayers);
+
+  laser_pause_constant = laser_pause_below = laser_reset_temperature = 0.0;
+  pending_moser_passes = 0;
+  path_recoat = recoat;
+  laser_path_set = true;
+  scan_layer_active = false;   // Rosenthal state; file paths are Moser-only
+  if (domain->me == 0) {
+    size_t nseg = 0;
+    for (const auto &L : path_layers) nseg += L.segs.size();
+    std::cout << "laser_path file " << arg[0] << ": " << path_layers.size()
+              << " layers, " << nseg << " emitting segments, z "
+              << path_layers.front().z << " .. " << path_layers.back().z
+              << " m, recoat " << recoat << " s" << std::endl;
+  }
+  start_path_layer(0, host_->time);
+}
+
+void ThermalManager::start_path_layer(size_t k, double t_start)
+{
+  path_layer = k;
+  const PathLayer &L = path_layers[k];
+  scan_layer_z = L.z;
+  moser_source()->build_scan_path(t_start, L.segs, L.z);
+  if (domain->me == 0)
+    std::cout << "laser_path file: layer " << k + 1 << " of " << path_layers.size()
+              << " at z=" << L.z << " m starts at t=" << t_start << " s ("
+              << L.segs.back().t1 << " s of scan)" << std::endl;
 }
 
 /* ----------------------------------------------------------------------
@@ -869,23 +996,33 @@ ThermalManager::moser_advance(double current_time, double stoptime,
       }
     }
 
-    // Conduction: the last pass is done and the field is below the solidus,
-    // so the layer is finished. Reset the field to ambient and skip to
-    // stoptime (the recoat, as am/finitediff); the next laser_path starts
-    // from T0.
+    // Layer finished: the last segment has emitted, the field is below the
+    // solidus and no site is liquid (any_liquid is collective; every
+    // condition before it is rank-uniform). A path file starts its next
+    // layer after the recoat time, from a fresh field (Moser: new history;
+    // conduction: the new plane rebuilds the grid at T0), as am/finitediff.
+    // Conduction with no layer left resets to ambient and skips to stoptime.
     ConductionTemperatureSource *cond = conduction_source();
-    if (cond && !dynamic_fire && pending_moser_passes == 0 &&
+    const bool more_layers = path_layer + 1 < path_layers.size();
+    if ((cond || more_layers) && !dynamic_fire && pending_moser_passes == 0 &&
         current_time >= moser->get_last_pass_end_time() &&
-        cond->next_laser_on(current_time) == std::numeric_limits<double>::max() &&
-        gmax < host_->ts && current_time < stoptime) {
-      if (domain->me == 0)
-        std::cout << "Fast-forward (conduction): layer done, max(T) < "
-                  << host_->ts << " K at t=" << current_time
-                  << " s; field reset to " << cond->ambient()
-                  << " K, skipping to stoptime=" << stoptime << " s" << std::endl;
-      cond->request_reset(cond->ambient());
-      step.new_time = stoptime;
-      refill(stoptime);
+        (!cond || cond->next_laser_on(current_time) == std::numeric_limits<double>::max()) &&
+        gmax < host_->ts && current_time < stoptime &&
+        !(host_->any_liquid && host_->any_liquid())) {
+      if (more_layers) {
+        const double t_next = current_time + path_recoat;
+        start_path_layer(path_layer + 1, t_next);
+        step.new_time = std::min(t_next, stoptime);
+      } else {
+        if (domain->me == 0)
+          std::cout << "Fast-forward (conduction): layer done, max(T) < "
+                    << host_->ts << " K and no liquid at t=" << current_time
+                    << " s; field reset to " << cond->ambient()
+                    << " K, skipping to stoptime=" << stoptime << " s" << std::endl;
+        cond->request_reset(cond->ambient());
+        step.new_time = stoptime;
+      }
+      refill(step.new_time);
       return step;
     }
 
@@ -1096,28 +1233,18 @@ double ThermalManager::moser_next_active_time(double current_time, double thresh
   double lo[3], hi[3];
   if (!local_bbox(lo, hi)) return std::numeric_limits<double>::max();
 
-  const double t_origin    = moser->get_scan_t_origin();
-  const double pass_dur    = moser->get_scan_pass_duration();
-  const double pause_gap   = moser->get_scan_pause();
-  const int    n_reps      = moser->get_scan_repeats();
-  const double laser_z     = moser->get_scan_laser_plane_z();
-
+  const double laser_z = moser->get_scan_laser_plane_z();
   const double ddt = (fast_forward_search_window > 0.0)
                        ? fast_forward_search_window : 0.01;
-  for (int r = 0; r < n_reps; ++r) {
-    const double t_r_start = t_origin + r * pass_dur + r * pause_gap;
-    const double t_r_end   = t_r_start + pass_dur;
-    if (t_r_end <= current_time) continue;  // pass already completed
-    double x0, y0, x1, y1;
-    moser->pass_geometry(r, x0, y0, x1, y1);
-
-    double t = std::max(current_time, t_r_start);
-    while (t <= t_r_end) {
-      // Lerp laser (x,y) along this pass.
-      const double s = (t - t_r_start) / pass_dur;
+  for (const auto &g : moser->segments()) {
+    if (g.t1 <= current_time || g.p <= 0.0) continue;  // done or dark
+    double t = std::max(current_time, g.t0);
+    while (t <= g.t1) {
+      // Lerp laser (x,y) along this segment.
+      const double s = (t - g.t0) / (g.t1 - g.t0);
       // Closest point on local box to laser.
-      const double cx = std::clamp(x0 + s * (x1 - x0), lo[0], hi[0]);
-      const double cy = std::clamp(y0 + s * (y1 - y0), lo[1], hi[1]);
+      const double cx = std::clamp(g.x0 + s * (g.x1 - g.x0), lo[0], hi[0]);
+      const double cy = std::clamp(g.y0 + s * (g.y1 - g.y0), lo[1], hi[1]);
       const double cz = std::clamp(laser_z, lo[2], hi[2]);
       const double T_probe = moser->get_temperature_at_xyz_and_time(cx, cy, cz, t);
       if (T_probe >= threshold_temp) return t;

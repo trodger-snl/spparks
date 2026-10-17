@@ -4,7 +4,8 @@
 # left at i2 = 0 and become powder once the laser plane rises over them;
 # after a layer's track the field cools below the solidus, is reset to T0,
 # and the rest of the run is skipped (the recoat).
-# Units: lattice 5 um; track x 50-850 um at y 187.5 um, 30 um layers.
+# Units: lattice 5 um; track x 50-850 um at y 187.5 um; substrate z <= 18,
+# layer tops at z = 21, 27, 33, 39.
 app_style        additive/texture/kk 1000000 5e-6 5e-6 2
 seed             56789
 dimension        3
@@ -14,9 +15,9 @@ boundary         n n n
 create_box       box
 create_sites     box
 set site range 1 1000000
-region           substrate block 0 180 0 75 0 15.5
+region           substrate block 0 180 0 75 0 18.5
 set i2 value 3 region substrate
-region           plate block -400 580 -400 475 -400 15.5
+region           plate block -400 580 -400 475 -400 18.5
 set i1 value 42
 set d1 value 1.0
 set d2 value 0.0
@@ -36,8 +37,9 @@ undercooling_deviation  3
 mean_nuclei_volume      8.4375e-16
 nuclei_volume_deviation 1.5625e-17
 
-# 115 W absorbed, k 30, rho 5706 (alpha = k/(rho cp0)), T0 300 K
-setup_temperature_source conduction 115.0 1.0 30.0 1.0954e-5 300.0 480.0 60e-6 60e-6 60e-6 &
+# 115 W absorbed, k 30, rho 5706 (alpha = k/(rho cp0)), T0 300 K; am/finitediff
+# spot exp(-r^2/2 sigma^2), sigma 60 um = exp(-r^2/s^2), s = 84.85 um
+setup_temperature_source conduction 115.0 1.0 30.0 1.0954e-5 300.0 480.0 84.85e-6 84.85e-6 84.85e-6 &
     k_powder 0.3 cp_table 6 300 480 600 550 1400 675 1550 693 1650 714 1750 736 &
     latent 2.85e5 convection 25 300 emissivity 1.0 &
     margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 part plate far_bc fixed

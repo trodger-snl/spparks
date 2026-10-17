@@ -258,6 +258,7 @@ void MoserTemperatureSource::build_scan(double start_time,
   if (speed <= 0.0)
     error->all(FLERR,"moser build_scan: speed must be > 0");
 
+  path_mode_ = false;
   scan_t_origin = start_time;
   scan_x0 = x0;  scan_y0 = y0;
   scan_x1 = x1;  scan_y1 = y1;
@@ -303,8 +304,33 @@ void MoserTemperatureSource::build_scan(double start_time,
    No-op if the scan has not yet been built.
 ------------------------------------------------------------------------- */
 
+void MoserTemperatureSource::build_scan_path(double t_start,
+                                             const std::vector<Seg> &segs,
+                                             double laser_plane_z)
+{
+  if (!source_initialized)
+    error->all(FLERR,"moser build_scan_path: source must be set up first");
+  if (segs.empty())
+    error->all(FLERR,"moser build_scan_path: path has no emitting segment");
+  path_mode_ = true;
+  segs_ = segs;
+  for (Seg &s : segs_) { s.t0 += t_start; s.t1 += t_start; }
+  scan_t_origin = t_start;
+  scan_laser_plane_z = laser_plane_z;
+  scan_x0 = segs_.front().x0;  scan_y0 = segs_.front().y0;
+  scan_x1 = segs_.back().x1;   scan_y1 = segs_.back().y1;
+  scan_speed = 0.0;
+  scan_repeats = 1;
+  scan_pause_between_repeats = 0.0;
+  scan_pass_duration = segs_.back().t1 - t_start;
+  pass_start_times_.assign(1, t_start);
+  rebuild_scan_from_pass_list_();
+}
+
 void MoserTemperatureSource::append_pass(double t_start)
 {
+  if (path_mode_)
+    error->all(FLERR,"moser append_pass: not available for a path-file scan");
   if (!scan_built) {
     error->all(FLERR,
       "moser append_pass: cannot extend before initial build_scan has run");
@@ -348,6 +374,8 @@ void MoserTemperatureSource::reset_history_and_start(double t_start,
     error->all(FLERR,
       "moser reset_history_and_start: cannot reset before initial build_scan has run");
   }
+  if (path_mode_)
+    error->all(FLERR,"moser reset_history_and_start: not available for a path-file scan");
   pass_start_times_.clear();
   pass_start_times_.push_back(t_start);
   scan_t_origin = t_start;
@@ -370,47 +398,42 @@ void MoserTemperatureSource::rebuild_scan_from_pass_list_()
   if (repeats < 1)
     error->all(FLERR,"moser rebuild_scan: pass list is empty");
 
-  const double L = std::sqrt((scan_x1-scan_x0)*(scan_x1-scan_x0)
-                             + (scan_y1-scan_y0)*(scan_y1-scan_y0));
-  const double dt_scan = L / scan_speed;
+  if (!path_mode_) {
+    const double L = std::sqrt((scan_x1-scan_x0)*(scan_x1-scan_x0)
+                               + (scan_y1-scan_y0)*(scan_y1-scan_y0));
+    const double dt_scan = L / scan_speed;
+    segs_.clear();
+    double px0, py0, px1, py1;
+    for (int r = 0; r < repeats; ++r) {
+      pass_geometry(r, px0, py0, px1, py1);
+      segs_.push_back({pass_start_times_[r], pass_start_times_[r] + dt_scan,
+                       px0, py0, px1, py1, 1.0});
+    }
+  }
 
-  // Each pass = 1 active waypoint + 1 transit waypoint. Plus a final
-  // velocity-calc sentinel waypoint far in the future.
-  const int nlines = 2 * repeats;
-  const int nwp    = nlines + 1;
-
-  std::vector<double> ts(nwp);
-  std::vector<double> xs(nwp);
-  std::vector<double> ys(nwp);
-
-  int wp = 0;
-  double px0 = scan_x0, py0 = scan_y0, px1 = scan_x1, py1 = scan_y1;
-  for (int r = 0; r < repeats; ++r) {
-    pass_geometry(r, px0, py0, px1, py1);
-    ts[wp] = pass_start_times_[r];
-    xs[wp] = px0;
-    ys[wp] = py0;
-    ++wp;
-
-    ts[wp] = pass_start_times_[r] + dt_scan;
-    xs[wp] = px1;
-    ys[wp] = py1;
-    ++wp;
+  // Waypoints: a segment starts at a new waypoint unless it continues the
+  // previous one (same time and position); the waypoint at a segment end
+  // carries power 0 (transit/stop) until a following segment overwrites it.
+  // A final velocity-calc sentinel waypoint lies far in the future.
+  std::vector<double> ts, xs, ys, pf;
+  for (const Seg &g : segs_) {
+    const bool cont = !ts.empty() && ts.back() == g.t0 &&
+                      xs.back() == g.x0 && ys.back() == g.y0;
+    if (cont) pf.back() = g.p;
+    else { ts.push_back(g.t0); xs.push_back(g.x0); ys.push_back(g.y0); pf.push_back(g.p); }
+    ts.push_back(g.t1); xs.push_back(g.x1); ys.push_back(g.y1); pf.push_back(0.0);
   }
 
   // End time of the last active emission. The fluctuation table only
-  // needs to span [pass_start_times_[0], t_end_active]; anything past
-  // this is in a 0-power stop segment.
-  const double t_end_active = pass_start_times_.back() + dt_scan;
-
-  ts[wp] = t_end_active + 1.0e6;
-  xs[wp] = px1;
-  ys[wp] = py1;
-  ++wp;
-
-  if (wp != nwp) {
-    error->all(FLERR,"moser rebuild_scan: internal waypoint count mismatch");
-  }
+  // needs to span [first start, t_end_active]; anything past this is in a
+  // 0-power stop segment.
+  const double t_end_active = segs_.back().t1;
+  ts.push_back(t_end_active + 1.0e6); xs.push_back(xs.back());
+  ys.push_back(ys.back()); pf.push_back(0.0);
+  const int nwp = (int) ts.size();
+  const double L = std::sqrt((scan_x1-scan_x0)*(scan_x1-scan_x0)
+                             + (scan_y1-scan_y0)*(scan_y1-scan_y0));
+  const double dt_scan = scan_pass_duration;
 
 
   sierra::greenam::ThermalProperties<double> th{k_th, rho, cp};
@@ -423,12 +446,7 @@ void MoserTemperatureSource::rebuild_scan_from_pass_list_()
     // is scaled by f_lobe so each LaserScan is self-describing for
     // total-absorbed-power audits).
     std::vector<double> ps(nwp);
-    int wp2 = 0;
-    for (int r = 0; r < repeats; ++r) {
-      ps[wp2++] = abs_power * L_ref.power_fraction;   // active scan
-      ps[wp2++] = 0.0;                                 // transit/stop
-    }
-    ps[wp2++] = 0.0;                                   // sentinel
+    for (int w = 0; w < nwp; ++w) ps[w] = abs_power * L_ref.power_fraction * pf[w];
 
     sierra::greenam::EllipsoidProperties<double> ep{L_ref.sx, L_ref.sy, L_ref.sz};
     const double zl_eff = scan_laser_plane_z - L_ref.z_offset;
@@ -443,7 +461,7 @@ void MoserTemperatureSource::rebuild_scan_from_pass_list_()
     L_ref.integrator = std::make_shared<GREENAM_Integ>(*L_ref.scan);
 
     if (L_ref.psd_spec_set) {
-      populate_fluctuation_table(L_ref, pass_start_times_.front(), t_end_active);
+      populate_fluctuation_table(L_ref, segs_.front().t0, t_end_active);
       L_ref.scan->set_fluctuation_table(&L_ref.fluct_table);
     }
   }

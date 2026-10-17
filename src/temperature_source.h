@@ -21,6 +21,10 @@
 
 namespace SPPARKS_NS {
 
+// One emitting segment of a laser scan: (x0,y0) -> (x1,y1) over [t0, t1]
+// at power fraction p (SI units).
+struct ScanSeg { double t0, t1, x0, y0, x1, y1, p; };
+
 /* ----------------------------------------------------------------------
    Abstract base class for temperature data sources
    

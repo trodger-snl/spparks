@@ -145,9 +145,9 @@ bool ConductionTemperatureSource::take_reset(double &T_reset)
 }
 
 /* ----------------------------------------------------------------------
-   Passes are disjoint [start, start + duration] windows. Several can fall
-   in one interval only if it is longer than a pause; the position is then
-   that of the pass with the longest overlap.
+   Segments are disjoint in time. The returned fraction is the power-weighted
+   on-time of [t0, t1]; the position is the midpoint of the overlap with the
+   segment that overlaps longest (one position per sub-step).
 ------------------------------------------------------------------------- */
 
 double ConductionTemperatureSource::laser_window(double t0, double t1,
@@ -155,20 +155,16 @@ double ConductionTemperatureSource::laser_window(double t0, double t1,
 {
   x = y = 0.0;
   if (!scan_built || t1 <= t0) return 0.0;
-  const double dur = scan_pass_duration;
   double on = 0.0, best = 0.0;
-  for (size_t r = 0; r < pass_start_times_.size(); r++) {
-    const double s = pass_start_times_[r];
-    const double a = std::max(t0, s), b = std::min(t1, s + dur);
-    if (b <= a) continue;
-    on += b - a;
+  for (const Seg &g : segs_) {
+    const double a = std::max(t0, g.t0), b = std::min(t1, g.t1);
+    if (b <= a || g.p <= 0.0) continue;
+    on += (b - a) * g.p;
     if (b - a > best) {
       best = b - a;
-      double x0, y0, x1, y1;
-      pass_geometry((int) r, x0, y0, x1, y1);
-      const double u = (dur > 0.0) ? (0.5 * (a + b) - s) / dur : 0.0;
-      x = x0 + u * (x1 - x0);
-      y = y0 + u * (y1 - y0);
+      const double u = (0.5 * (a + b) - g.t0) / (g.t1 - g.t0);
+      x = g.x0 + u * (g.x1 - g.x0);
+      y = g.y0 + u * (g.y1 - g.y0);
     }
   }
   return on / (t1 - t0);
@@ -178,9 +174,10 @@ double ConductionTemperatureSource::next_laser_on(double t) const
 {
   double next = std::numeric_limits<double>::max();
   if (!scan_built) return next;
-  for (double s : pass_start_times_) {
-    if (t >= s && t < s + scan_pass_duration) return t;
-    if (s > t) next = std::min(next, s);
+  for (const Seg &g : segs_) {
+    if (g.p <= 0.0) continue;
+    if (t >= g.t0 && t < g.t1) return t;
+    if (g.t0 > t) next = std::min(next, g.t0);
   }
   return next;
 }

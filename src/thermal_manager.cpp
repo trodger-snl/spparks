@@ -869,6 +869,26 @@ ThermalManager::moser_advance(double current_time, double stoptime,
       }
     }
 
+    // Conduction: the last pass is done and the field is below the solidus,
+    // so the layer is finished. Reset the field to ambient and skip to
+    // stoptime (the recoat, as am/finitediff); the next laser_path starts
+    // from T0.
+    ConductionTemperatureSource *cond = conduction_source();
+    if (cond && !dynamic_fire && pending_moser_passes == 0 &&
+        current_time >= moser->get_last_pass_end_time() &&
+        cond->next_laser_on(current_time) == std::numeric_limits<double>::max() &&
+        gmax < host_->ts && current_time < stoptime) {
+      if (domain->me == 0)
+        std::cout << "Fast-forward (conduction): layer done, max(T) < "
+                  << host_->ts << " K at t=" << current_time
+                  << " s; field reset to " << cond->ambient()
+                  << " K, skipping to stoptime=" << stoptime << " s" << std::endl;
+      cond->request_reset(cond->ambient());
+      step.new_time = stoptime;
+      refill(stoptime);
+      return step;
+    }
+
     // pause_below: once the FINAL pass has finished and the peak has dropped
     // below threshold, advance to stoptime for a clean early exit.
     if (!dynamic_fire && laser_pause_below > 0.0 &&
@@ -889,7 +909,6 @@ ThermalManager::moser_advance(double current_time, double stoptime,
     // Fast-forward predict-skip (also the sole behavior in the static case).
     // The conduction source skips to the next laser-on time; its refill
     // integrates the gap (RKL2 super-steps), so only the app steps are saved.
-    ConductionTemperatureSource *cond = conduction_source();
     const double next = cond ? cond->next_laser_on(current_time)
                              : moser_next_active_time(current_time, fast_forward_threshold);
     if (!dynamic_fire &&

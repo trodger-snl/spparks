@@ -284,11 +284,14 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3]> d_xyz,
       const int af = haf(s);
       // i2 = 1 is "not yet melted": with layer_thickness set, only the
       // current layer is powder and the material below it (e.g. a
-      // substrate loaded with i2 = 1) is dense.
+      // substrate loaded with i2 = 1) is dense. i2 = 0 below the laser
+      // plane is a deposited, not yet activated layer: powder (as
+      // am/finitediff). Only i2 = 5 is gas.
       const bool deep = cfg.layer_thickness > 0.0 &&
                         g[3*s+2] * dx <= zl - cfg.layer_thickness;
       hP(i, j, k) = (af == 2 || af == 3) ? DENSE
-                  : (af == 1) ? (deep ? DENSE : POWDER) : GAS;
+                  : (af == 1) ? (deep ? DENSE : POWDER)
+                  : (af == 0) ? POWDER : GAS;
     }
   }
   if (out) error->one(FLERR,"conduction: a ghost site lies outside the 1-cell halo");

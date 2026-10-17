@@ -441,6 +441,7 @@ void AppAdditiveTextureKokkos::refresh_thermal_host()
   thermal_host_.nlocal = nlocal;
   thermal_host_.dx = dx;
   thermal_host_.tl = tl;
+  thermal_host_.ts = ts;
   t_cool_max = tl - ts;  // undercooling normalization for misorient_alpha (matches CPU)
   thermal_host_.t_room = t_room;
   thermal_host_.time = time;

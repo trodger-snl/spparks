@@ -8,7 +8,8 @@ heat, powder, surface losses, and a thermal domain larger than the lattice box.
 Code: `src/temperature_source_conduction.{h,cpp}` (configuration, tables,
 laser pose; a `MoserTemperatureSource` subclass) and
 `src/KOKKOS/conduction_solver_kokkos.{h,cpp}` (grid, kernels, halo).
-Example: `examples/conduction_am/in.single_track`.
+Examples: `examples/conduction_am/in.single_track`, and `in.thin_wall`
+(four layers in one process, ported from am/finitediff's ThinWall).
 
 ## Syntax
 
@@ -57,7 +58,7 @@ in `processors`.
   source, so all absorbed power is deposited; put the plane on the face
   (z = (top layer + 0.5)·dx) to match Moser's surface exactly.
 - **Phase per cell.** GAS / POWDER / DENSE. Inside the box it is taken from
-  `i2` once (0 → gas, 1 → powder, 2/3 → dense, 5 → gas), so stitch-loaded
+  `i2` once (0 → powder, 1 → powder, 2/3 → dense, 5 → gas), so stitch-loaded
   powder is kept. `i2 = 1` means "not yet melted", which substrates also use:
   with `layer_thickness` set, only sites within it of the laser plane count as
   powder and deeper `i2 = 1` sites are dense. After that the solver tracks it itself: powder becomes dense
@@ -85,6 +86,12 @@ in `processors`.
   `next_laser_on` instead of the Green's-function estimate). The jump itself
   is integrated with RKL2, so an inter-hatch pause costs about
   pause / (dt_fd·sts²/4) super-steps instead of pause / dt_fd steps.
+- **Layers.** Several layers in one process are one `laser_path` + `run`
+  per layer. After a layer's last pass, once max T is below the solidus, the
+  field is reset to `T0` and the rest of the run is skipped (the recoat, as
+  in am/finitediff). A `laser_path` at a new plane rebuilds the grid up to it
+  and re-reads phases from `i2`; a deposited layer can stay at `i2 = 0`,
+  which below the laser plane counts as powder and melts like `i2 = 1`.
 
 ## Validation (2026-10-16, gfx1151 + OpenMP backend)
 
@@ -96,6 +103,7 @@ in `processors`.
 | np 1 / 2 / 4 (4×1×1 and 2×2×1) | per-site d6 identical |
 | HIP vs OpenMP (including all-features deck at np = 2) | per-site d6 identical |
 | `pause_below` + `reset_temperature`, `pause` + `reset_temperature` | fire and reset as with Moser |
+| `in.thin_wall` (4 layers), np 1 vs 2×2×1 | d6 identical; continuous wall z 16–39, each layer fused to the one below; 28 s |
 
 | RKL2 vs explicit, oracle deck (0.19 ms skip) | per-site max 1.0 K after the skip, 0.4 K at end of next pass |
 | RKL2, np 1 vs 2×2×1 | per-site d6 identical |

@@ -127,8 +127,13 @@ void ConductionTemperatureSource::reset_history_and_start(double t_start,
                                                           double new_ambient)
 {
   MoserTemperatureSource::reset_history_and_start(t_start, new_ambient);
+  request_reset(new_ambient);
+}
+
+void ConductionTemperatureSource::request_reset(double T_reset)
+{
   reset_pending = true;
-  reset_T = new_ambient;
+  reset_T = T_reset;
 }
 
 bool ConductionTemperatureSource::take_reset(double &T_reset)

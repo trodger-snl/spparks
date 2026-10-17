@@ -214,6 +214,7 @@ void AppAdditiveTexture::refresh_thermal_host()
   thermal_host_.nlocal = nlocal;
   thermal_host_.dx = dx;
   thermal_host_.tl = tl;
+  thermal_host_.ts = ts;
   thermal_host_.t_room = t_room;
   thermal_host_.time = time;
   thermal_host_.dt = dt;

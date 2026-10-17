@@ -86,7 +86,9 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
   // DBL_MAX when no scheduled pass remains. Drives the fast-forward.
   double next_laser_on(double t) const;
 
-  // Pending reset_temperature request: returns true once per reset.
+  // Pending field reset (reset_temperature, end of layer): returns true
+  // once per request.
+  void request_reset(double T_reset);
   bool take_reset(double &T_reset);
 
   // Enthalpy table H(T) on a uniform T grid (J/m^3), built from cp(T),

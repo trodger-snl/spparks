@@ -15,6 +15,8 @@
 #define SPK_ADDITIVE_PARAMS_H
 
 #include <cstdio>
+#include <set>
+#include <string>
 
 namespace SPPARKS_NS {
 
@@ -76,6 +78,10 @@ struct AdditiveParams {
   bool smooth_orientation_copy = false;
   bool nuclei_smooth_enabled = false;
 
+  // Material commands given by the deck or a material card, for the
+  // completeness check when a card is loaded.
+  std::set<std::string> material_given;
+
   ~AdditiveParams() { delete[] solid_front_coeffs; }
 
   // Handle a shared microstructure or thermal command. Returns false if
@@ -87,6 +93,9 @@ struct AdditiveParams {
   // full D, reaches mis_thresh: nearly every solidifying site would then
   // start a new grain. dx is the lattice spacing in m.
   void check_misorientation_step(double dx, Error *error, int me) const;
+  // With a material card loaded, every material value must come from the card
+  // or the deck: none falls back to a built-in default.
+  void check_material_complete(Error *error, const ThermalManager &thermal) const;
 };
 
 }

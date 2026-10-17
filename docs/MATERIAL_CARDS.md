@@ -46,7 +46,18 @@ Overrides:
 - Any other keyword (grid, geometry, or a material keyword such as
   `k_powder 0.5`) is appended after the card's, and the last occurrence wins.
 
-A value the card lacks is an error that names it.
+**No built-in defaults with a card.** Once `material` is loaded, every
+material value the model uses must come from the card or from an explicit
+deck command; otherwise the run stops with an error naming what is missing.
+- `setup_temperature_source ... card` needs Q, lambda, T0, the spot,
+  `source_depth`, density, and k and cp.
+- For conduction it also needs `latent`, `k_powder`, `emissivity`,
+  `layer_thickness` and `convection`.
+- `init_app` checks `liquidus`, `solidus`, `solid_front_vel` and the five
+  nucleation values.
+- To turn a term off, say so in the deck, e.g. `convection 0 300` or
+  `emissivity 0`.
+- Decks without a card keep the old defaults.
 
 `powder.packing` is recorded but never passed: `packing` < 1 is for
 single-layer tests only (docs/CONDUCTION_SOURCE.md, Material).

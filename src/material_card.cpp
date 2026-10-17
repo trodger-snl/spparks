@@ -18,6 +18,7 @@
 #pragma clang diagnostic ignored "-Wdeprecated-literal-operator"
 #include "../lib/tomlplusplus/toml.hpp"
 #pragma clang diagnostic pop
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <sstream>
@@ -286,13 +287,24 @@ std::vector<std::string> MaterialCard::source_tokens(const std::string &type,
       out.push_back(kw); out.push_back(std::to_string(t.T.size()));
       for (size_t i = 0; i < t.T.size(); i++) { out.push_back(num(t.T[i])); out.push_back(num(t.v[i])); }
     };
-    auto scalar = [&](const char *kw, opt v) {
+    // A value missing from the card must be in the deck: the solver's
+    // built-in defaults (k_powder = k/100, latent 0, ...) never apply.
+    auto in_deck = [&](const char *kw) { return std::find(rest.begin(), rest.end(), kw) != rest.end(); };
+    std::string missing;
+    auto scalar = [&](const char *kw, opt v, const char *card_key) {
       if (v) { out.push_back(kw); out.push_back(num(*v)); }
+      else if (!in_deck(kw)) missing += std::string(" ") + kw + " (" + card_key + ")";
     };
     table("k_table", k); table("cp_table", cp);
-    scalar("latent", latent); scalar("k_powder", k_powder); scalar("emissivity", emissivity);
-    scalar("layer_thickness", layer_thickness);
+    scalar("latent", latent, "thermal.latent_fusion");
+    scalar("k_powder", k_powder, "powder.conductivity");
+    scalar("emissivity", emissivity, "thermal.emissivity");
+    scalar("layer_thickness", layer_thickness, "process layer_thickness");
     if (conv_h) { out.push_back("convection"); out.push_back(num(*conv_h)); out.push_back(num(*conv_Tinf)); }
+    else if (!in_deck("convection")) missing += " convection (process convection)";
+    if (!missing.empty())
+      fail("setup_temperature_source conduction card",
+           "not in the card:" + missing + "; give each in the deck (e.g. convection 0 300 to turn it off)");
     // ponytail: powder.packing is recorded, not passed: packing < 1 assumes no
     // shrinkage, valid for single-layer tests only (docs/CONDUCTION_SOURCE.md)
   }

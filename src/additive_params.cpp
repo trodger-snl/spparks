@@ -56,6 +56,7 @@ bool AdditiveParams::parse_command(const char *command, int narg, char **arg,
     if (narg != 1) error->all(FLERR, msg);
     *s.v = atof(arg[0]);
     if (s.zero_ok ? *s.v < 0 : *s.v <= 0) error->all(FLERR, msg);
+    material_given.insert(s.name);
     return true;
   }
 
@@ -64,12 +65,17 @@ bool AdditiveParams::parse_command(const char *command, int narg, char **arg,
     // The card's app-level values; deck commands after this one override them.
     thermal.material_cmd(narg, arg);
     const MaterialCard &c = *thermal.card();
-    auto take = [](double &dst, MaterialCard::opt v) { if (v) dst = *v; };
-    take(tl, c.liquidus); take(ts, c.solidus);
-    take(no, c.nucleation_density); take(tc, c.critical_undercooling);
-    take(tsig, c.undercooling_deviation); take(size_norm, c.mean_nuclei_volume);
-    take(size_sig, c.nuclei_volume_deviation);
+    auto take = [&](const char *name, double &dst, MaterialCard::opt v) {
+      if (v) { dst = *v; material_given.insert(name); }
+    };
+    take("liquidus", tl, c.liquidus); take("solidus", ts, c.solidus);
+    take("nucleation_density", no, c.nucleation_density);
+    take("critical_undercooling", tc, c.critical_undercooling);
+    take("undercooling_deviation", tsig, c.undercooling_deviation);
+    take("mean_nuclei_volume", size_norm, c.mean_nuclei_volume);
+    take("nuclei_volume_deviation", size_sig, c.nuclei_volume_deviation);
     if (!c.front.empty()) {
+      material_given.insert("solid_front_vel");
       delete[] solid_front_coeffs;
       solid_front_length = (int) c.front.size();
       solid_front_coeffs = new double[solid_front_length];
@@ -96,6 +102,7 @@ bool AdditiveParams::parse_command(const char *command, int narg, char **arg,
     solid_front_length = n;
     solid_front_coeffs = new double[n];
     for (int i = 0; i < n; i++) solid_front_coeffs[i] = atof(arg[i + 1]);
+    material_given.insert("solid_front_vel");
 
   } else if (strcmp(command, "texture_parameters") == 0) {
     if (narg == 3)
@@ -248,4 +255,19 @@ void AdditiveParams::check_misorientation_step(double dx, Error *error, int me) 
            "%g deg new-grain threshold: nearly every solidifying site will start "
            "a new grain", step * 180.0 / MY_PI, mis_thresh * 180.0 / MY_PI);
   error->warning(FLERR, msg);
+}
+
+/* ---------------------------------------------------------------------- */
+
+void AdditiveParams::check_material_complete(Error *error, const ThermalManager &thermal) const
+{
+  if (!thermal.card()) return;
+  std::string missing;
+  for (const char *name : {"liquidus", "solidus", "solid_front_vel", "nucleation_density",
+                           "critical_undercooling", "undercooling_deviation",
+                           "mean_nuclei_volume", "nuclei_volume_deviation"})
+    if (!material_given.count(name)) missing += std::string(" ") + name;
+  if (!missing.empty())
+    error->all(FLERR, ("material card " + thermal.card()->material + " lacks" + missing +
+                       "; give them in the deck (no built-in defaults with a card)").c_str());
 }

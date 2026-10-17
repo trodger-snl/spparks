@@ -9,21 +9,21 @@
 
 <HR>
 
-<H3>app_style additive/texture command
+<H3>app_style additive/texture command 
 </H3>
 <P><B>Syntax:</B>
 </P>
-<PRE>app_style additive/texture nspins dx dt nrefine
+<PRE>app_style additive/texture nspins dx dt nrefine 
 </PRE>
-<UL><LI>style = additive/texture
+<UL><LI>style = additive/texture 
 
-<LI>nspins = number of possible Potts model spins
+<LI>nspins = number of possible Potts model spins 
 
-<LI>dx = lattice spacing in meters (SI)
+<LI>dx = lattice spacing in meters (SI) 
 
-<LI>dt = simulation timestep in seconds (SI)
+<LI>dt = simulation timestep in seconds (SI) 
 
-<LI>nrefine = number of post-solidification rejection-MC refinement passes per voxel
+<LI>nrefine = number of post-solidification rejection-MC refinement passes per voxel 
 </UL>
 <P>The legacy style name <I>additive_temperature_texture</I> is accepted as a
 deprecated alias for backward compatibility with existing input
@@ -32,7 +32,7 @@ scripts; using it prints a warning at parse time. Switch to
 </P>
 <P><B>Examples:</B>
 </P>
-<PRE>app_style additive/texture 1000000 5e-6 5e-6 2
+<PRE>app_style additive/texture 1000000 5e-6 5e-6 2 
 </PRE>
 <P><B>Description:</B>
 </P>
@@ -133,9 +133,12 @@ for monotonicity.
 envelope; <I>mis_thresh</I> is supplied in degrees (default 2) and
 converted to radians. 
 
-<LI><I>misorientation_target</I> <I>gradient|random</I> : selects whether
-misorientation is computed against the local thermal gradient
-(default) or a fixed random target axis. 
+<LI><I>misorientation_target</I> <I>gradient|random|random_rotation</I> : selects
+how the misorientation is applied.  <I>gradient</I> (default) rotates the
+orientation toward the local thermal gradient; <I>random</I> rotates it
+toward a random unit vector drawn afresh for each event;
+<I>random_rotation</I> rotates it by the misorientation angle about a
+random axis, with no alignment toward a target. 
 </UL>
 <P>Temperature source plumbing:
 </P>
@@ -176,6 +179,10 @@ neighbor grain.  Default off.
 passes, evaluate every distinct neighbor spin and adopt the
 energy-minimizing one (steepest descent) instead of testing one
 random proposal per pass.  Default off. 
+
+<LI><I>nuclei_smooth</I> <I>on|off</I> : make nucleated sites eligible for the
+<I>nrefine</I> smoothing passes like epitaxially solidified sites; by
+default nuclei skip smoothing.  Default off. 
 </UL>
 <P>Voids (porosity):
 </P>
@@ -194,9 +201,10 @@ distribution of pore radii in micrometers.
 <I>on|off</I> : toggle per-feature performance optimizations on the HDF5
 source. 
 
-<LI><I>fast_forward_search_window</I> <I>seconds</I> : look-ahead window used by
-the Rosenthal fast-forward predictor when scanning forward in time
-for the next melt event.  Default 0.1 s. 
+<LI><I>fast_forward_search_window</I> <I>seconds</I> : time step of the look-ahead
+walk used by the Rosenthal and Moser fast-forward predictors when
+scanning forward in time for the next melt event (not used by the
+HDF5 sources).  Default 0.1 s. 
 </UL>
 <HR>
 
@@ -231,7 +239,7 @@ examples/moser_am/in.additive.moser                  : single-pass Moser baselin
 examples/moser_am/in.additive.moser_multiscan_fluct  : Moser standard-mode multi-pass
                                                        with PSD fluctuations
 examples/moser_am/in.additive.moser_keyhole          : Moser double-ellipsoid keyhole
-                                                       with independent top/bot streams
+                                                       with independent top/bot streams 
 </PRE>
 <HR>
 
@@ -239,9 +247,11 @@ examples/moser_am/in.additive.moser_keyhole          : Moser double-ellipsoid ke
 </P>
 <P>This application requires
 <A HREF = "app_potts_quaternion.html">app_style potts/quaternion</A> behavior and
-is restricted to square cubic lattices.  It can only be evolved by a
-rejection KMC (rKMC) algorithm; see the <A HREF = "sweep.html">sweep</A> command
-for more details.  The <A HREF = "create_sites.html">create_sites</A> command must
+is restricted to square cubic lattices.  The app sets
+<I>app_update_only</I>, so all of its physics runs in <I>app_update</I> once per
+timestep and no KMC or rKMC site events are performed.  A solver must
+still be defined (the example inputs use a <A HREF = "sweep.html">sweep</A>
+command) to drive the step loop.  The <A HREF = "create_sites.html">create_sites</A> command must
 be called before the first temperature query.
 </P>
 <P><B>Related commands:</B>
@@ -259,6 +269,7 @@ be called before the first temperature query.
 misorientation_target = gradient
 single_voxel_cleanup = off
 smooth_greedy_multiproposal = off
+nuclei_smooth = off
 fast_forward_search_window = 0.1 s
 temperature smoothing = off (until temperature_smooth is issued)
 void generation = off (until void_density or void_pore_fraction is issued)

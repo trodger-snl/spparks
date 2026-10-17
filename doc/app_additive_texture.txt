@@ -115,9 +115,12 @@ for monotonicity. :ulb,l
 {mis_thresh} and {alpha} : parameters of the per-event misorientation
 envelope; {mis_thresh} is supplied in degrees (default 2) and
 converted to radians. :l
-{misorientation_target} {gradient|random} : selects whether
-misorientation is computed against the local thermal gradient
-(default) or a fixed random target axis. :l,ule
+{misorientation_target} {gradient|random|random_rotation} : selects
+how the misorientation is applied.  {gradient} (default) rotates the
+orientation toward the local thermal gradient; {random} rotates it
+toward a random unit vector drawn afresh for each event;
+{random_rotation} rotates it by the misorientation angle about a
+random axis, with no alignment toward a target. :l,ule
 
 Temperature source plumbing:
 
@@ -153,7 +156,10 @@ neighbor grain.  Default off. :ulb,l
 {smooth_greedy_multiproposal} {on|off} : during {nrefine} smoothing
 passes, evaluate every distinct neighbor spin and adopt the
 energy-minimizing one (steepest descent) instead of testing one
-random proposal per pass.  Default off. :l,ule
+random proposal per pass.  Default off. :l
+{nuclei_smooth} {on|off} : make nucleated sites eligible for the
+{nrefine} smoothing passes like epitaxially solidified sites; by
+default nuclei skip smoothing.  Default off. :l,ule
 
 Voids (porosity):
 
@@ -169,9 +175,10 @@ HDF5 source optimization:
 {temperature_optimization} {spatial_grid|element_cache|nodal_precompute}
 {on|off} : toggle per-feature performance optimizations on the HDF5
 source. :ulb,l
-{fast_forward_search_window} {seconds} : look-ahead window used by
-the Rosenthal fast-forward predictor when scanning forward in time
-for the next melt event.  Default 0.1 s. :l,ule
+{fast_forward_search_window} {seconds} : time step of the look-ahead
+walk used by the Rosenthal and Moser fast-forward predictors when
+scanning forward in time for the next melt event (not used by the
+HDF5 sources).  Default 0.1 s. :l,ule
 
 :line
 
@@ -214,9 +221,11 @@ examples/moser_am/in.additive.moser_keyhole          : Moser double-ellipsoid ke
 
 This application requires
 "app_style potts/quaternion"_app_potts_quaternion.html behavior and
-is restricted to square cubic lattices.  It can only be evolved by a
-rejection KMC (rKMC) algorithm; see the "sweep"_sweep.html command
-for more details.  The "create_sites"_create_sites.html command must
+is restricted to square cubic lattices.  The app sets
+{app_update_only}, so all of its physics runs in {app_update} once per
+timestep and no KMC or rKMC site events are performed.  A solver must
+still be defined (the example inputs use a "sweep"_sweep.html
+command) to drive the step loop.  The "create_sites"_create_sites.html command must
 be called before the first temperature query.
 
 [Related commands:]
@@ -234,6 +243,7 @@ nucleation_mode = threshold
 misorientation_target = gradient
 single_voxel_cleanup = off
 smooth_greedy_multiproposal = off
+nuclei_smooth = off
 fast_forward_search_window = 0.1 s
 temperature smoothing = off (until temperature_smooth is issued)
 void generation = off (until void_density or void_pore_fraction is issued)

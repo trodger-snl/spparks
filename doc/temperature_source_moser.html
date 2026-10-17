@@ -80,7 +80,8 @@ along with the path geometry, sites in the cooling tail correctly
 <P><I>keyhole</I> (overlapping double-ellipsoid).  Two ellipsoidal Gaussian
 sources share the laser path:
 </P>
-<P>  TOP cap   : wide and shallow, centered at the laser plane.  Carries
+<P>  TOP cap   : wide and shallow, centered <I>z_top</I> below the laser plane
+              (typically <I>z_top</I> = 0).  Carries
               <I>f_top * lambda Q</I> and models the broad surface
               conduction lobe.
 </P>
@@ -94,10 +95,9 @@ two lobes integrate independently (each with its own
 <I>ScanIntegration</I>) and the result is summed; per-query cost is
 therefore ~2x the standard mode.
 </P>
-<P>Both modes produce identical results to a fluctuation-free unsteady
-Goldak source, and the <I>standard</I> path collapses to the legacy
-single-ellipsoid form bit-for-bit when called with the same inputs and
-seed.
+<P>The <I>standard</I> token is optional: omitting it runs the same
+single-ellipsoid code path, so the two forms give bit-identical
+results for the same inputs and seed.
 </P>
 <HR>
 
@@ -168,8 +168,9 @@ selected by one of two keywords on the <I>laser_path</I> command:
 <UL><LI><I>pause T</I>: inserts a fixed gap of <I>T</I> seconds between repeats.  The
 gap appears in the GREENAM scan as a zero-power transit segment, so
 the integrand cumulates only the decaying tail of the previous pass
-during the gap.  Replaces the legacy hardcoded 1e-12 s spacing; that
-floor is still applied when <I>T = 0</I>. 
+during the gap.  <I>T</I> must be > 0 (<I>pause 0</I> is an error); when <I>pause</I>
+is omitted, consecutive repeats are separated by a 1e-12 s numerical
+floor. 
 
 <LI><I>pause_below Tk</I>: dynamic inter-pass gap.  Only the first pass is
 pre-scheduled inside <I>build_scan</I>; the remaining <I>repeats - 1</I> passes
@@ -199,9 +200,10 @@ the Moser scan history at each inter-pass boundary and shifts the
 source's ambient T0 to <I>Tr</I>.  The next pass therefore starts from a
 uniform field at <I>Tr</I> with no Green's-function tail from earlier
 passes, modelling the simulation domain fully cooling between passes.
-Under reset, the PSD chain re-seeds at each rebuild (same RNG seed,
-re-warmed up, samples drawn from the new pass start time), so the
-fluctuation series is time-shifted but statistically equivalent.
+Under reset, the PSD chain re-seeds at each rebuild from the base
+seed mixed with the new pass start time (then re-warmed up, samples
+drawn from the new pass start time), so each pass gets a different
+but reproducible fluctuation series with the same statistics.
 </P>
 <HR>
 

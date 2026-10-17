@@ -26,8 +26,9 @@ rho : Pearson correlation between (sigma_W, sigma_D) draws,
       in [-1, 1]; default 0.0 :l
 seed : RNG seed; default 12345.  Identical seeds reproduce identical
        streams across MPI ranks (no MPI_Bcast). :l
-dt : PSD update interval in seconds; default 5e-6.  Should match or
-     subdivide the simulation timestep. :l
+dt : sample spacing in seconds of the emission-time fluctuation table;
+     default 5e-6.  The integrand linearly interpolates the table, so
+     {dt} is independent of the SPPARKS timestep. :l
 tau : Lorentzian correlation time in seconds (lorentzian only) :l
 f0 : narrow-band center frequency in Hz (narrow_band only) :l
 df : narrow-band bandwidth in Hz (narrow_band only) :l,ule
@@ -56,8 +57,8 @@ lobes of the "moser"_temperature_source_moser.html source so that the
 ellipsoid widths and absorbed power fluctuate around their nominal
 values.  Because the Moser unsteady integral evaluates the source at
 each emission time with the parameters in effect at that emission, the
-stream is recorded into a {FluctuationTable} that is consumed in
-order: cooling-tail sites correctly retain the {sigma_W, sigma_D,
+stream is recorded into a {FluctuationTable} that the integrand
+linearly interpolates at each emission time: cooling-tail sites correctly retain the {sigma_W, sigma_D,
 sigma_P} that produced them, rather than snapping to the latest values
 each timestep.
 
@@ -71,8 +72,10 @@ The four available PSD shapes are:
 {lorentzian} : exponentially-correlated Gaussian process via a
 discrete first-order AR(1) filter with correlation time {tau}.
 Spectrum 1 / (1 + (omega tau)^2). :l
-{pink} : 1/f noise via the Voss-McCartney algorithm (sum of K
-exponentially-spaced AR(1) filters). :l
+{pink} : 1/f noise via the Voss-McCartney algorithm: the sum of K = 6
+held random levels, with one level redrawn per sample (level k = the
+number of trailing zero bits of the sample counter, capped at K-1), so
+level k changes roughly every 2^(k+1) samples. :l
 {narrow_band} : damped harmonic oscillator driven by white noise,
 parameterized by center frequency {f0} and bandwidth {df}.  Spectrum
 peaks at {f0}. :l,ule
@@ -149,8 +152,9 @@ Only the "moser"_temperature_source_moser.html source supports
 {laser_fluctuations}.  Issuing the command against a Rosenthal or
 HDF5 source raises an error.
 
-The {seed} XOR-derivation in the {both} sugar guarantees independent
-streams across MPI ranks for any input seed.  When in doubt, prefer
+The {seed} XOR-derivation in the {both} sugar gives the two lobes
+distinct streams that are identical on every MPI rank for any input
+seed.  When in doubt, prefer
 two explicit {top} / {bot} commands with different seeds.
 
 [Related commands:]

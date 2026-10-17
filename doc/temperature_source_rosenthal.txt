@@ -52,16 +52,20 @@ Green's function along the time-history of the laser path.  Choose
 {standard} : classical Rosenthal point source on the half-space free
 surface. The pool-local temperature is
 
-T(R,xi) = T0 + (lambda Q) / (2 pi k R) * exp(-V (xi + R) / (2 alpha)) :pre
+T(R,xi) = T0 + (lambda Q) / (pi k R) * exp(-V (xi + R) / (2 alpha)) :pre
 
-where R is distance to the moving point source, xi is the lab-frame
-distance behind the source along the scan direction, and V is the
-laser speed (set by "laser_path"_laser_path.html).  The free-surface
-factor of 2 is absorbed into the prefactor so that lambda*Q is the
-total absorbed power coupled into the half-space.
+where R is distance to the moving point source, xi is the signed
+distance from the source along the scan direction (positive ahead of
+the source, negative behind it), and V is the laser speed (set by
+"laser_path"_laser_path.html).  The code evaluates the kernel
+(lambda Q) / (2 pi k R) * exp(...) and multiplies it by an explicit
+image-source factor of 2 for the free surface, which gives the
+prefactor above.  Sites above the laser plane (z > Z0) are treated as
+vacuum and stay at T0.
 
 {aniso} : anisotropic point source.  Identical to {standard} except the
-in-plane and depth coordinates are pre-scaled by {eta_y} and {eta_z},
+transverse (y) and depth (z) coordinates are pre-scaled by {eta_y} and
+{eta_z} inside R (xi is not scaled),
 which empirically fits non-spherical pool shapes (transverse-elongated
 melt pools or bowl-shaped penetration profiles) without leaving the
 analytical Rosenthal framework. {eta_y} = {eta_z} = 1 reproduces
@@ -114,8 +118,8 @@ repeat), the {pause} and {pause_below} keywords on
 source.  If you need a real inter-pass cooling interval, use the
 "moser"_temperature_source_moser.html source.
 
-The {keyhole} mode requires {d > 0} and 2 <= {n_quad} <= 64.  Values
-outside this range are clamped silently.
+The {keyhole} mode requires {d > 0}; {d <= 0} is an error.  {n_quad}
+must lie in \[2, 64\]; values outside this range are clamped silently.
 
 [Related commands:]
 

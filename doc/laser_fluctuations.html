@@ -37,8 +37,9 @@ keyhole mode, rejected in standard mode)
 <LI>seed : RNG seed; default 12345.  Identical seeds reproduce identical
        streams across MPI ranks (no MPI_Bcast). 
 
-<LI>dt : PSD update interval in seconds; default 5e-6.  Should match or
-     subdivide the simulation timestep. 
+<LI>dt : sample spacing in seconds of the emission-time fluctuation table;
+     default 5e-6.  The integrand linearly interpolates the table, so
+     <I>dt</I> is independent of the SPPARKS timestep. 
 
 <LI>tau : Lorentzian correlation time in seconds (lorentzian only) 
 
@@ -70,8 +71,8 @@ lobes of the <A HREF = "temperature_source_moser.html">moser</A> source so that 
 ellipsoid widths and absorbed power fluctuate around their nominal
 values.  Because the Moser unsteady integral evaluates the source at
 each emission time with the parameters in effect at that emission, the
-stream is recorded into a <I>FluctuationTable</I> that is consumed in
-order: cooling-tail sites correctly retain the <I>sigma_W, sigma_D,
+stream is recorded into a <I>FluctuationTable</I> that the integrand
+linearly interpolates at each emission time: cooling-tail sites correctly retain the <I>sigma_W, sigma_D,
 sigma_P</I> that produced them, rather than snapping to the latest values
 each timestep.
 </P>
@@ -87,8 +88,10 @@ steady-state and cannot represent per-emission parameter histories.
 discrete first-order AR(1) filter with correlation time <I>tau</I>.
 Spectrum 1 / (1 + (omega tau)^2). 
 
-<LI><I>pink</I> : 1/f noise via the Voss-McCartney algorithm (sum of K
-exponentially-spaced AR(1) filters). 
+<LI><I>pink</I> : 1/f noise via the Voss-McCartney algorithm: the sum of K = 6
+held random levels, with one level redrawn per sample (level k = the
+number of trailing zero bits of the sample counter, capped at K-1), so
+level k changes roughly every 2^(k+1) samples. 
 
 <LI><I>narrow_band</I> : damped harmonic oscillator driven by white noise,
 parameterized by center frequency <I>f0</I> and bandwidth <I>df</I>.  Spectrum
@@ -135,7 +138,13 @@ laser_path start ... end ... speed ...
 <P>The fluctuation table is materialized inside the
 <A HREF = "laser_path.html">laser_path</A> call to <I>build_scan</I> once the scan
 duration is known, so <I>laser_fluctuations</I> must be issued after
-<I>setup_temperature_source</I> but before <I>laser_path</I>.
+<I>setup_temperature_source</I> but before <I>laser_path</I>.  Violating this
+order produces an explicit error:
+</P>
+<PRE>laser_fluctuations must be issued BEFORE laser_path ... 
+</PRE>
+<P>rather than a silent no-op (the spec would otherwise be stored on the
+source but never materialized into a fluctuation table).
 </P>
 <HR>
 
@@ -162,8 +171,9 @@ A typical canonical setup is <I>sigma_P_bot ~ 0.20</I> with
 <I>laser_fluctuations</I>.  Issuing the command against a Rosenthal or
 HDF5 source raises an error.
 </P>
-<P>The <I>seed</I> XOR-derivation in the <I>both</I> sugar guarantees independent
-streams across MPI ranks for any input seed.  When in doubt, prefer
+<P>The <I>seed</I> XOR-derivation in the <I>both</I> sugar gives the two lobes
+distinct streams that are identical on every MPI rank for any input
+seed.  When in doubt, prefer
 two explicit <I>top</I> / <I>bot</I> commands with different seeds.
 </P>
 <P><B>Related commands:</B>

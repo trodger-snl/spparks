@@ -24,7 +24,7 @@
 <LI>N = number of times to replay the same linear segment back-to-back
     (default 1; must be >= 1) 
 
-<LI>T = constant inter-pass pause in seconds (default 0; must be > 0 if given);
+<LI>T = constant inter-pass pause in seconds (default none; must be > 0 if given);
     Moser source only 
 
 <LI>Tk = peak-temperature threshold in K that gates the inter-pass pause
@@ -58,7 +58,7 @@ times back-to-back.  Each pass duration is
 </P>
 <PRE>dt_pass = sqrt((X1 - X0)^2 + (Y1 - Y0)^2) / V 
 </PRE>
-<P>so the total scan time is <I>N * dt_pass</I>.  Subsequent commands
+<P>so the total scan time is <I>N * dt_pass</I> plus any inter-pass pauses.  Subsequent commands
 (typically the <A HREF = "run.html">run</A> command) advance simulation time across
 the full scan and any post-scan cooling.
 </P>
@@ -94,8 +94,9 @@ carries across a back-to-back repeat).
 each pair of consecutive passes. The interval is realized inside the
 Moser/GREENAM scan as a zero-power transit segment, so the integrand
 naturally captures the cooling tail of the previous pass while no new
-heat is being deposited. The legacy <I>1e-12 s</I> numerical floor on the
-inter-repeat time step is preserved automatically when <I>pause = 0</I>. 
+heat is being deposited. <I>pause 0</I> is rejected (<I>T</I> must be > 0);
+when <I>pause</I> is omitted, repeats are separated by a <I>1e-12 s</I>
+numerical floor. 
 
 <LI><I>pause_below Tk</I> fires each subsequent pass dynamically.  Only the
 first pass is scheduled when <I>laser_path</I> is parsed; the remaining
@@ -173,6 +174,6 @@ with an externally-prepared FE thermal trace.
 </P>
 <P><B>Default:</B>
 </P>
-<P>repeats = 1, pause = 0 s, pause_below = (use liquidus tl)
+<P>repeats = 1, pause = none (1e-12 s floor between repeats), pause_below = (use liquidus tl)
 </P>
 </HTML>

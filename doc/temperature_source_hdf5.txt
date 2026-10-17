@@ -17,13 +17,16 @@ filename = path to an HDF5 file containing the unstructured FE thermal trace :ul
 dx = SPPARKS lattice spacing in meters (must match {app_style} dx) :l
 threshold_temp = temperature (K) above which a site is considered "active";
                  used by the fast-forward predictor to skip cool periods :l
-default_temp = ambient / fall-back temperature (K) returned outside the FE
-               mesh and before the first layer becomes active :l
-bounds_check_mode = optional integer; 0 = silent, 1 = warn on out-of-mesh
-                    sites, 2 = error.  Default 0. :l
-grid_cell_mult = optional positive double controlling the spatial-grid bin
-                 size used for fast point-in-element lookup, in units of dx.
-                 Default 100.0 (i.e. one bin per 100 lattice cells). :l,ule
+default_temp = ambient / fall-back temperature (K) returned at sites
+               outside the FE mesh and at nodes whose recorded time
+               trace does not cover the current time :l
+bounds_check_mode = optional integer; parsed but currently unused.
+                    Default 0. :l
+grid_cell_mult = optional positive double, in units of dx: the
+                 spatial-grid bin size used for fast point-in-element
+                 lookup, and also the padding added to each rank's
+                 subdomain when selecting FE chunks to load.
+                 Default 100.0. :l,ule
 
 [Examples:]
 
@@ -49,8 +52,10 @@ nodal time-temperature traces for the nodes touched in that layer. :l,ule
 
 For each lattice site the source caches the FE element it falls inside
 (or "outside mesh" if it falls outside any element in the active
-layers) and interpolates the node temperatures by trilinear / tet shape
-functions at the requested simulation time.  A fast-forward predictor
+layers) and interpolates the four tetrahedral node temperatures with
+barycentric (linear tet) weights; each node's trace is interpolated
+linearly in time.  A simulation time before the first or after the
+last {layerTimes} entry is an error.  A fast-forward predictor
 {get_next_time_with_temperature(current_time, threshold)} walks the
 layer table forward to find the earliest time at which any node's
 temperature exceeds {threshold_temp}, so the simulation can skip
@@ -59,9 +64,10 @@ periods when the laser is off the local subdomain.
 The two variants share identical setup, lookup, and interpolation
 logic, and differ only in HDF5 storage format:
 
-{hdf5_unstructured} : node temperatures are stored as a rectangular
-{(layers, nodes, time)} array.  Simpler format; pads to the longest
-per-node trace and reads with one hyperslab per layer. :l,ulb
+{hdf5_unstructured} : node temperatures are stored per layer as a
+rectangular {(nodes, times)} array.  Simpler format; pads to the
+longest per-node trace and is read one chunk at a time, stripping the
+padding as it goes. :l,ulb
 
 {hdf5_csr} : node temperatures are stored in compressed sparse-row
 form ({nodeOffsets} + flat {times} + flat {temperatures}) so that
@@ -96,7 +102,8 @@ those precomputed values.  Requires {element_cache}.  Default on. :l,ule
 
 The {grid_cell_mult} setup-time argument tunes the spatial-grid bin
 size; smaller values create more, smaller bins and trade memory for
-faster lookup.
+faster lookup.  It also sets the chunk-load padding, so smaller values
+load fewer elements beyond each rank's subdomain.
 
 :line
 
@@ -104,12 +111,14 @@ faster lookup.
 
 The HDF5 sources require SPPARKS to be built with HDF5 and HighFive
 support; see "Section_start"_Section_start.html for build options.
-Without HighFive, only the {hdf5_csr} variant's compressed reader is
-unavailable; without HDF5 entirely, neither variant is usable.
+Without HighFive (and MPI) neither variant is available: the
+additive/texture app and all of its temperature sources are left out
+of the build.
 
 The HDF5 sources are not path-aware in the SPPARKS sense
-({laser_path} and {laser_fluctuations} have no effect): the laser
-trajectory is implicitly encoded in the FE temperature trace.
+({laser_path} has no effect, and {laser_fluctuations} is rejected with
+an error): the laser trajectory is implicitly encoded in the FE
+temperature trace.
 
 [Related commands:]
 

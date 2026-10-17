@@ -91,7 +91,10 @@ every standard build.
 
 The {hdf5_unstructured} and {hdf5_csr} sources require SPPARKS to be
 built with HDF5 and HighFive support; see
-"Section_start"_Section_start.html for build options.
+"Section_start"_Section_start.html for build options.  The {rosenthal}
+and {moser} sources need the same build: the additive/texture app and
+all four sources are compiled only when SPPARKS is built with
+HighFive and MPI.
 
 The {finitediff} source name is reserved but not yet implemented and
 will raise an error.

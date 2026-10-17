@@ -65,7 +65,8 @@ along with the path geometry, sites in the cooling tail correctly
 {keyhole} (overlapping double-ellipsoid).  Two ellipsoidal Gaussian
 sources share the laser path:
 
-  TOP cap   : wide and shallow, centered at the laser plane.  Carries
+  TOP cap   : wide and shallow, centered {z_top} below the laser plane
+              (typically {z_top} = 0).  Carries
               {f_top * lambda Q} and models the broad surface
               conduction lobe.
 
@@ -79,10 +80,9 @@ two lobes integrate independently (each with its own
 {ScanIntegration}) and the result is summed; per-query cost is
 therefore ~2x the standard mode.
 
-Both modes produce identical results to a fluctuation-free unsteady
-Goldak source, and the {standard} path collapses to the legacy
-single-ellipsoid form bit-for-bit when called with the same inputs and
-seed.
+The {standard} token is optional: omitting it runs the same
+single-ellipsoid code path, so the two forms give bit-identical
+results for the same inputs and seed.
 
 :line
 
@@ -152,8 +152,9 @@ selected by one of two keywords on the {laser_path} command:
 {pause T}: inserts a fixed gap of {T} seconds between repeats.  The
 gap appears in the GREENAM scan as a zero-power transit segment, so
 the integrand cumulates only the decaying tail of the previous pass
-during the gap.  Replaces the legacy hardcoded 1e-12 s spacing; that
-floor is still applied when {T = 0}. :ulb,l
+during the gap.  {T} must be > 0 ({pause 0} is an error); when {pause}
+is omitted, consecutive repeats are separated by a 1e-12 s numerical
+floor. :ulb,l
 
 {pause_below Tk}: dynamic inter-pass gap.  Only the first pass is
 pre-scheduled inside {build_scan}; the remaining {repeats - 1} passes
@@ -183,9 +184,10 @@ the Moser scan history at each inter-pass boundary and shifts the
 source's ambient T0 to {Tr}.  The next pass therefore starts from a
 uniform field at {Tr} with no Green's-function tail from earlier
 passes, modelling the simulation domain fully cooling between passes.
-Under reset, the PSD chain re-seeds at each rebuild (same RNG seed,
-re-warmed up, samples drawn from the new pass start time), so the
-fluctuation series is time-shifted but statistically equivalent.
+Under reset, the PSD chain re-seeds at each rebuild from the base
+seed mixed with the new pass start time (then re-warmed up, samples
+drawn from the new pass start time), so each pass gets a different
+but reproducible fluctuation series with the same statistics.
 
 :line
 

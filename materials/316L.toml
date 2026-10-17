@@ -6,7 +6,7 @@ schema_version = 1
 material = "316L"
 designation = { UNS = "S31603", spec = "NIST SRM 316L (Pichler 2020 samples); LPBF powder per ASTM F3184" }
 composition_wt_pct = { Fe = "bal", Cr = "16-18", Ni = "10-14", Mo = "2-3", Mn = "<2", C = "<0.03", note = "UNS S31603 ranges, not a measured heat" }
-version = "1.0.0"
+version = "1.0.1"
 created = 2026-10-17
 modified = 2026-10-17
 status = "draft"
@@ -17,6 +17,12 @@ version = "1.0.0"
 date = 2026-10-17
 author = "T. Rodgers"
 changes = "Initial card from the examples/conduction_am decks (docs/CONDUCTION_SOURCE.md, Material)."
+
+[[changelog]]
+version = "1.0.1"
+date = 2026-10-17
+author = "T. Rodgers"
+changes = "solid_front_vel traced to Li & Tan 2017 (KGT for austenitic stainless after Tan & Shin 2015), found while researching the 304L card; values unchanged."
 
 [references.pichler2020]
 citation = "P. Pichler, B.J. Simonds, J.W. Sowards, G. Pottlacher, Measurements of thermophysical properties of solid and liquid NIST SRM 316L stainless steel, J. Mater. Sci. 55 (2020) 4081-4093"
@@ -30,6 +36,14 @@ isbn = "9781855735699"
 [references.moose_ss316]
 citation = "MOOSE heat_transfer module, ThermalSS316Properties (fits after Mills 2002)"
 url = "https://github.com/idaholab/moose"
+
+[references.li_tan2017]
+citation = "X. Li, W. Tan, 3-dimensional cellular automata simulation of grain structure in metal additive manufacturing processes, Proc. 28th Solid Freeform Fabrication Symposium (2017) 1030-1047"
+url = "https://utw10945.utweb.utexas.edu/sites/default/files/2017/Manuscripts/3DimensionalCellularAutomataSimulationofGrai.pdf"
+
+[references.tan_shin2015]
+citation = "W. Tan, Y.C. Shin, Multi-scale modeling of solidification and microstructure development in laser keyhole welding process for austenitic stainless steel, Comput. Mater. Sci. 98 (2015) 446-458"
+doi = "10.1016/j.commatsci.2014.10.063"
 
 [thermal]
 density = { value = 7900, unit = "kg/m^3", ref = "pichler2020", note = "room-temperature solid; the conduction solver uses one dense density" }
@@ -49,8 +63,9 @@ T_ref = { value = 1000, unit = "K", ref = "estimate", note = "between preheat an
 conductivity = { value = 0.3, unit = "W/(m K)", ref = "estimate", note = "loose powder in Ar, order of magnitude; source not recorded" }
 
 [microstructure]
-# SPPARKS calibrations: V(dT) polynomial in undercooling dT = liquidus - T, highest power first.
-solid_front_vel = { coeffs = [1.091e-5, -2.034e-4, 2.74e-3, 1.151e-4], unit = "m/s", dT_unit = "K", ref = "calibration", note = "additive/texture default fit; origin not recorded" }
+# V(dT) polynomial in undercooling dT = liquidus - T, highest power first; nucleation values are SPPARKS calibrations.
+front_velocity_source = { form = "polynomial", coeffs = [1.091e-5, -2.034e-4, 2.74e-3, 1.151e-4], unit = "m/s", dT_unit = "K", ref = ["li_tan2017", "tan_shin2015"], note = "Li & Tan 2017 Eq. 4, applied there to 316L: a polynomial interpolation of KGT tip kinetics for austenitic stainless steel from Tan & Shin 2015 (closed access, not read). Traced by the 304L research agent. Nonzero constant term (V(0) = 0.115 mm/s) as printed" }
+solid_front_vel = { coeffs = [1.091e-5, -2.034e-4, 2.74e-3, 1.151e-4], unit = "m/s", dT_unit = "K", ref = ["li_tan2017", "tan_shin2015"], fit_of = "front_velocity_source", fit_range_K = [0, 33], max_rel_err = 1e-9, note = "copied exactly from front_velocity_source; also the CPU additive/texture default" }
 nucleation_density = { value = 1e14, unit = "1/m^3", ref = "calibration" }
 critical_undercooling = { value = 5, unit = "K", ref = "calibration" }
 undercooling_deviation = { value = 3, unit = "K", ref = "calibration" }

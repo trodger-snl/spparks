@@ -35,6 +35,9 @@ critical_undercooling   5
 undercooling_deviation  3
 mean_nuclei_volume      8.4375e-16
 nuclei_volume_deviation 1.5625e-17
+smooth_greedy_multiproposal on
+smooth_orientation copy
+nuclei_smooth off
 
 # Q lambda k alpha T0 cp sx sy sz (Moser standard form), then keywords
 setup_temperature_source conduction 340.0 0.355 13.8 3.6166e-6 573.0 483.0 50e-6 50e-6 75e-6 &

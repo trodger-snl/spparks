@@ -50,6 +50,9 @@ critical_undercooling   5
 undercooling_deviation  3
 mean_nuclei_volume      8.4375e-16
 nuclei_volume_deviation 1.5625e-17
+smooth_greedy_multiproposal on
+smooth_orientation copy
+nuclei_smooth off
 floor_check      {floor}
 reset_time       {t0}
 setup_temperature_source conduction 150.0 1.0 13.8 3.6166e-6 300.0 483.0 59.4e-6 59.4e-6 99.0e-6 &

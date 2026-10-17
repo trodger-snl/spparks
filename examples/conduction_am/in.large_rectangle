@@ -39,6 +39,9 @@ critical_undercooling   5
 undercooling_deviation  3
 mean_nuclei_volume      8.4375e-16
 nuclei_volume_deviation 1.5625e-17
+smooth_greedy_multiproposal on
+smooth_orientation copy
+nuclei_smooth off
 
 # 150 W absorbed, k 30, rho 5706 (alpha = k/(rho cp0)), T0 300 K. Spot sigma
 # 42 um (x, y) / 70 um (z) in am/finitediff's exp(-r^2/2 sigma^2), i.e.

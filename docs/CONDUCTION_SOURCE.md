@@ -136,6 +136,26 @@ in `processors`.
 | RKL2, np 1 vs 2×2×1 | per-site d6 identical |
 | GP700 proxy box 0 (400 µm, 5 hatches, 8.8 ms pauses): `sts` 0 / 32 / 128 | pool, fusion depth, G/V quartiles equal to 3 digits; loop 573 / 141 / 99 s (Moser 52 s) |
 
+**vs am/finitediff (github/am_finitedifference f6a84fe0, `make mpi`).** Same
+decks, spot, substrate and fixed box faces (no margins), `/home/tron/fd_runs`:
+
+| Deck | Solid above substrate (sites) | Pool width / depth | Peak T | Time |
+|---|---|---|---|---|
+| ThinWall, am/finitediff | 58,300 | 100 / 60 µm, melts to z 11 | 2,150 K | 26 s, 8 CPU ranks |
+| ThinWall, conduction | 16,600 (layer bottoms unfused) | 60 / 25 µm | 1,800 K | 33 s, 1 GPU |
+| ThinWall, conduction, `latent 0` | 58,100 | 105 / 30 µm | 1,980 K | |
+| LargerRectangle (2 layers), am/finitediff | 600,600 | | | 881 s, 16 CPU ranks |
+| LargerRectangle, conduction | 570,800 | | | 696 s, 1 GPU |
+
+am/finitediff deposits more heat than its laser: with constant properties
+its ΣT rises 1.3–3× the source energy. Sites are updated in place, so
+each neighbour pair exchanges r·ΔT of the earlier site's step (laser
+heating included), and dt = 7e-7 s is above the explicit limit
+(r = αdt/dx² = 0.31 > 1/6; it diverges when powder k = solid k). Its
+surface term also has the wrong sign (convection and radiation heat), and
+its clock stops while the MC step is shorter than the thermal step. Ours
+at 2× power overshoots it, so the gap is its energy excess.
+
 Identity is checked on `%g` text dumps (6 significant digits). GP700 runs and
 `compare.py`: `/home/tron/gp700_runs/cond_cmp`.
 

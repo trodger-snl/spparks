@@ -44,7 +44,6 @@ public:
   AM_Bezier(const array<double, 5> &x, const array<double, 5> &y,
             const array<double, 5> &z, double beta1, double beta2, double width,
             double depth);
-  void initialize();
 
   bool inside_outside(const array<double, 3> &xyz,
                       const double tolerance) const;
@@ -56,14 +55,9 @@ public:
   double get_pool_width() const { return width; }
   double get_pool_length() const { return length; }
   double get_pool_depth() const { return depth; }
-  double get_length_to_width_ratio() const { return length / width; }
-  double get_length_to_depth_ratio() const { return length / depth; }
   double get_umax_width() const { return umax_width; }
-  double get_umax_depth() const { return umax_depth; }
   array<double, 3> get_pool_bb_center() const { return bb_center; }
-  array<double, 3> get_pool_bb_dimensions() const { return bb_dimensions; }
   void print() const;
-  void print_rho(double u, double v) const;
   virtual ~AM_Bezier();
 
 private:

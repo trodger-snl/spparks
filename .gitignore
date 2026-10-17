@@ -33,10 +33,6 @@ dump.*
 src/Makefile.package
 src/Makefile.package.settings
 
-# STITCH package installed copies (source lives in src/STITCH/)
-src/dump_stitch.cpp
-src/dump_stitch.h
-
 # Package file backups (created by Install.sh)
 *.backup
 *.backup2
@@ -52,7 +48,6 @@ CMakeCache.txt
 cmake_install.cmake
 CTestTestfile.cmake
 feature_status.cmake
-src/cmake/package_installer.cmake
 
 # OS files
 .DS_Store
@@ -61,3 +56,14 @@ Thumbs.dbexternal/
 # Distribution archives (large files)
 micro_analysis_scripts/*.tar.gz
 micro_analysis_scripts/*.tar.xz
+# Large binary dump files - simulation output
+examples/**/DumpFiles*/*.st
+
+# CMake build trees (build-verify = HIP/gfx1151, build-openmp = CPU reference)
+build-*/
+
+# pi project-local package installs (ponytail)
+.pi/npm/
+
+# local tool installs
+.pi/

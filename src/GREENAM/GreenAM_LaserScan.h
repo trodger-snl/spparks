@@ -1,6 +1,9 @@
 #ifndef GREENAM_LASER_SCAN_H
 #define GREENAM_LASER_SCAN_H
 
+#include <cmath>
+#include <stdexcept>
+#include "GreenAM_Constants.h"
 #include "GreenAM_Fluctuations.h"
 #include "GreenAM_Properties.h"
 
@@ -123,26 +126,26 @@ struct LaserScan {
     if(nlines+1 != ys.size()) throw std::runtime_error("GreenAM::LaserScan::LaserScan: All input arrays must be same length");
     if(nlines+1 != ps.size()) throw std::runtime_error("GreenAM::LaserScan::LaserScan: All input arrays must be same length");
 
-    bounds = ArrayType("Bounds", nlines);
-    xl = ArrayType("XLaser", nlines);
-    yl = ArrayType("YLaser", nlines);
-    powers = ArrayType("Powers", nlines);
-    normals_x = ArrayType("Normals_X", nlines);
-    normals_y = ArrayType("Normals_Y", nlines);
-    speeds = ArrayType("Speeds", nlines);
+    bounds = ArrayType(nlines);
+    xl = ArrayType(nlines);
+    yl = ArrayType(nlines);
+    powers = ArrayType(nlines);
+    normals_x = ArrayType(nlines);
+    normals_y = ArrayType(nlines);
+    speeds = ArrayType(nlines);
 
     for(unsigned p=0; p<nlines; p++)
     {
-      bounds(p) = ts(p);
-      xl(p) = xs(p);
-      yl(p) = ys(p);
-      powers(p) = ps(p);
-      const RealType & t1 = ts(p);
-      const RealType & t2 = ts(p+1);
-      const RealType & x1 = xs(p);
-      const RealType & x2 = xs(p+1);
-      const RealType & y1 = ys(p);
-      const RealType & y2 = ys(p+1);
+      bounds[p] = ts[p];
+      xl[p] = xs[p];
+      yl[p] = ys[p];
+      powers[p] = ps[p];
+      const RealType & t1 = ts[p];
+      const RealType & t2 = ts[p+1];
+      const RealType & x1 = xs[p];
+      const RealType & x2 = xs[p+1];
+      const RealType & y1 = ys[p];
+      const RealType & y2 = ys[p+1];
 
       RealType vx = (x2-x1)/(t2-t1);
       RealType vy = (y2-y1)/(t2-t1);
@@ -157,18 +160,11 @@ struct LaserScan {
         vx = 1.;
         vy = 0.;
       }
-      normals_x(p) = vx;
-      normals_y(p) = vy;
-      speeds(p) = speed;
+      normals_x[p] = vx;
+      normals_y[p] = vy;
+      speeds[p] = speed;
     }
 
-    bounds.commit();
-    xl.commit();
-    yl.commit();
-    powers.commit();
-    normals_x.commit();
-    normals_y.commit();
-    speeds.commit();  
   }
 
   //Get function to integrate for a provided spatial location and scan line
@@ -183,8 +179,8 @@ struct LaserScan {
   GREENAM_FUNCTION GaussGreenEllips<RealType> get_gg_ellipse_for_point(const RealType & x, const RealType & y,
     const RealType & z, const RealType & t, unsigned l) const
   {
-    return GaussGreenEllips<RealType>(x, y, z, t, xl(l), yl(l), zl, powers(l), speeds(l), bounds(l),
-      normals_x(l), normals_y(l), alpha, c, eprop, ftable);
+    return GaussGreenEllips<RealType>(x, y, z, t, xl[l], yl[l], zl, powers[l], speeds[l], bounds[l],
+      normals_x[l], normals_y[l], alpha, c, eprop, ftable);
   }
 
   // SPPARKS extension: attach an emission-time fluctuation table.
@@ -193,53 +189,6 @@ struct LaserScan {
   // LaserScan. Pass nullptr to disable fluctuations.
   void set_fluctuation_table(const FluctuationTable<RealType> * t) { ftable = t; }
 
-  GREENAM_FUNCTION void get_laser_location_at_time(const RealType & t, RealType & x, RealType & y)
-  {
-    unsigned idx = binary_search(bounds.data(), t, bounds.size());
-    RealType dt = t - bounds(idx);
-
-    x = xl(idx) + speeds(idx)*normals_x(idx)*dt;
-    y = yl(idx) + speeds(idx)*normals_y(idx)*dt;
-  }
-
-  GREENAM_FUNCTION RealType get_laser_power_at_time(const RealType & t)
-  {
-    unsigned idx = binary_search(bounds.data(), t, bounds.size());
-    
-    return powers(idx);
-  }
-
-  GREENAM_FUNCTION RealType min_dist_to_scan_line(const RealType & x, const RealType & y, const RealType & z, unsigned i) const
-  {
-    if(std::fabs(powers(i)) < epsilon)
-    {
-      return double_max;
-    }
-    RealType vx = normals_x(i)*speeds(i);
-    RealType vy = normals_y(i)*speeds(i);
-    RealType & x0 = xl(i);
-    RealType & y0 = yl(i);
-    RealType dt;
-    if(i==(bounds.size()-1)) dt = double_max;
-    else dt = bounds(i+1)-bounds(i);
-    auto dist_func = [&](RealType & t)
-    {
-      RealType xdist = (x-x0-vx*t)/eprop.sx;
-      RealType ydist = (y-y0-vy*t)/eprop.sy;
-      RealType zdist = (z-zl)/eprop.sz;
-      RealType ans = xdist*xdist + ydist*ydist + zdist*zdist;
-      return ans;
-    };
-
-    RealType sx2 = eprop.sx*eprop.sx;
-    RealType sy2 = eprop.sy*eprop.sy;
-    RealType mint = vx == 0. && vy == 0. ? 
-      -1 : (sx2*vy*(y-y0)+sy2*vx*(x-x0))/(sx2*vy*vy+sy2*vx*vx);
-    RealType dist = std::fmin(dist_func(0),dist_func(dt));
-    if(mint > 0. && mint < dt) dist = std::fmin(dist, dist_func(mint));
-    return dist;
-  }
-  
   ~LaserScan() = default;
 
   ArrayType normals_x;

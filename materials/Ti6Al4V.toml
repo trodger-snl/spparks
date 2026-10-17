@@ -1,0 +1,119 @@
+# Material parameter card: Ti-6Al-4V (Grade 5 / Grade 23 ELI).
+# Format: docs/MATERIAL_CARDS.md (schema 1). SI units; every value carries a ref.
+
+[card]
+schema_version = 1
+material = "Ti6Al4V"
+designation = { UNS = "R56400 (Grade 5), R56401 (Grade 23 ELI)", spec = "LPBF: ASTM F2924 (Grade 5), ASTM F3001 (ELI)" }
+composition_wt_pct = { Ti = "bal", Al = "5.50-6.75", V = "3.50-4.50", Fe = "<0.30", O = "<0.20", C = "<0.08", N = "<0.05", H = "<0.015", note = "Grade 5 ranges; ELI (F3001) narrows Al to 5.50-6.50, Fe <0.25, O <0.13, H <0.012. Al/V ranges as quoted by bartsch2021; interstitial limits from the ASTM F2924/F3001 tables, not re-checked against the standard text for this card. Measured LPBF powder heat (rottler2025 Table 1): Al 6.23, V 3.76, O 0.119, N 0.035, H 0.004." }
+version = "1.0.0"
+created = 2026-10-17
+modified = 2026-10-17
+status = "draft"
+reviewed_by = ""
+
+[[changelog]]
+version = "1.0.0"
+date = 2026-10-17
+author = "research agent (Claude)"
+changes = "Initial card: Bartsch 2021 LPBF material model (k, cp, Ts, Tl, latent heat, powder k), Mohr 2020 liquid cp, Cezairliyan 1977 emittance, Rottler 2025 density/packing, Ye 2019 absorptivity, Panwisawas 2017 KGT front law, three published LPBF process sets."
+
+[references.bartsch2021]
+citation = "K. Bartsch, D. Herzog, B. Bossen, C. Emmelmann, Material modeling of Ti-6Al-4V alloy processed by laser powder bed fusion for application in macro-scale process simulation, Mater. Sci. Eng. A 814 (2021) 141237"
+doi = "10.1016/j.msea.2021.141237"
+url = "https://tore.tuhh.de/bitstreams/ef255f46-e996-4039-87d8-dd7010965df6/download"
+
+[references.boivineau2006]
+citation = "M. Boivineau, C. Cagran, D. Doytier, V. Eyraud, M.-H. Nadal, B. Wilthan, G. Pottlacher, Thermophysical properties of solid and liquid Ti-6Al-4V (TA6V) alloy, Int. J. Thermophys. 27 (2006) 507-529"
+doi = "10.1007/PL00021868"
+
+[references.mohr2020]
+citation = "M. Mohr, R. Wunderlich, R. Novakovic, E. Ricci, H.-J. Fecht, Precise measurements of thermophysical properties of liquid Ti-6Al-4V (Ti64) alloy on board the International Space Station, Adv. Eng. Mater. 22 (2020) 2000169"
+doi = "10.1002/adem.202000169"
+url = "https://oparu.uni-ulm.de/bitstreams/f5f7ca31-f99f-472f-babf-df6bc3c72608/download"
+
+[references.cezairliyan1977]
+citation = "A. Cezairliyan, J.L. McClure, R. Taylor, Thermophysical measurements on 90Ti-6Al-4V alloy above 1450 K using a transient (subsecond) technique, J. Res. Natl. Bur. Stand. 81A (1977) 251-256"
+doi = "10.6028/jres.081A.014"
+url = "https://nvlpubs.nist.gov/nistpubs/jres/81A/jresv81An2-3p251_A1b.pdf"
+
+[references.rottler2025]
+citation = "J. Rottler, T.K. Tetzlaff, A. Wohninsland, A. Lion, M. Johlitz, Thermophysical and microstructural characterization of Ti-6Al-4V in powder and laser powder bed fusion-processed state within the global temperature field range, Mater. Des. 253 (2025) 113823"
+doi = "10.1016/j.matdes.2025.113823"
+url = "https://athene-forschung.unibw.de/doc/153001/153001.pdf"
+
+[references.wei2018]
+citation = "L.C. Wei, L.E. Ehrlich, M.J. Powell-Palm, C. Montgomery, J. Beuth, J.A. Malen, Thermal conductivity of metal powders for powder bed additive manufacturing, Addit. Manuf. 21 (2018) 201-208"
+doi = "10.1016/j.addma.2018.02.002"
+
+[references.ye2019]
+citation = "J. Ye, S.A. Khairallah, A.M. Rubenchik, M.F. Crumb, G. Guss, J. Belak, M.J. Matthews, Energy coupling mechanisms and scaling behavior associated with laser powder bed fusion additive manufacturing, Adv. Eng. Mater. 21 (2019) 1900185"
+doi = "10.1002/adem.201900185"
+url = "https://www.osti.gov/pages/servlets/purl/1569671"
+
+[references.cook2023]
+citation = "P.S. Cook, D. Ritchie, Determining the laser absorptivity of Ti-6Al-4V during laser powder bed fusion by calibrated melt pool simulation, Opt. Laser Technol. 162 (2023) 109247"
+doi = "10.1016/j.optlastec.2023.109247"
+
+[references.panwisawas2017]
+citation = "C. Panwisawas, C. Qiu, M.J. Anderson, Y. Sovani, R.P. Turner, M.M. Attallah, J.W. Brooks, H.C. Basoalto, Mesoscale modelling of selective laser melting: Thermal fluid dynamics and microstructural evolution, Comput. Mater. Sci. 126 (2017) 479-490"
+doi = "10.1016/j.commatsci.2016.10.011"
+url = "https://ndownloader.figshare.com/files/22232328"
+
+[references.vaglio2020]
+citation = "E. Vaglio, T. De Monte, A. Lanzutti, G. Totis, M. Sortino, L. Fedrizzi, Single tracks data obtained by selective laser melting of Ti6Al4V with a small laser spot diameter, Data in Brief 33 (2020) 106443"
+doi = "10.1016/j.dib.2020.106443"
+url = "https://data.mendeley.com/datasets/s9438vb5xd"
+
+[thermal]
+density = { value = 4417.5, unit = "kg/m^3", ref = "rottler2025", uncertainty = [4410, 4430], uncertainty_type = "bounds", T_range = [293, 298], note = "as-built LPBF Ti-6Al-4V ELI, He pycnometry (4.4175 g/cm^3, ~0.6% porosity); powder skeletal 4414.0. Bounds = data-sheet spread 4410-4430 quoted by bartsch2021. One dense density for the conduction solver." }
+solidus = { value = 1878, unit = "K", ref = "bartsch2021", uncertainty = [1873, 1878], uncertainty_type = "bounds", note = "median of experimental + simulation literature (Bartsch 2021 Sec. 3.3; experimental values 1873 and 1878 K). Cezairliyan 1977 saw a melting plateau at 1943 +/- 8 K in subsecond heating; panwisawas2017 also uses 1878 K." }
+liquidus = { value = 1928, unit = "K", ref = "bartsch2021", uncertainty = [1923, 1943], uncertainty_type = "bounds", note = "median of literature values, which cluster at 1923 K or 1943 K (Bartsch 2021 Sec. 3.2)" }
+latent_fusion = { value = 2.90e5, unit = "J/kg", ref = ["bartsch2021", "boivineau2006"], uncertainty = [2.86e5, 3.00e5], uncertainty_type = "bounds", note = "Boivineau 2006 value (290 kJ/kg) as quoted and adopted by Bartsch 2021 Sec. 3.7.3, median of 286 (McClure & Cezairliyan 1992), 290 and 300 kJ/kg; Boivineau's paper itself is paywalled and was not read for this card" }
+conductivity = { T = [300, 600, 900, 1268, 1269, 1600, 1878, 1928], value = [6.9, 10.5, 14.1, 18.5, 17.3, 22.6, 27.0, 29.2], unit = "W/(m K)", extrapolation = "clamp", ref = "bartsch2021", note = "evaluated from Bartsch 2021 Eqs. 20-22 (fits to literature data + own LFA on LPBF alpha' and alpha+beta, up to 1423 K): alpha' k = 0.012 T + 3.3 to the beta transus 1268 K, beta k = 0.016 T - 3 to the solidus, liquid k = 0.0175 T - 4.5 at the liquidus (Mohr 2020: 29.8 at 1933 K by Wiedemann-Franz). The 1268/1269 pair is the transus step; held at the liquidus value above it." }
+heat_capacity = { T = [300, 600, 900, 1268, 1269, 1600, 1878, 1928], value = [558, 633, 708, 800, 708, 754, 793, 930], unit = "J/(kg K)", extrapolation = "clamp", ref = ["bartsch2021", "mohr2020"], note = "Bartsch 2021 Eqs. 10, 12, 14 linear parts only: alpha' cp = 0.25 T + 483 to the transus 1268 K, beta cp = 0.14 T + 530 to the solidus, liquid 930 at the liquidus (Mohr 2020 ISS calorimetry 0.93 +/- 0.02 J/(g K) in the undercooled liquid; Mills 2002 gives 0.83). Kept smooth: no alpha->beta transformation enthalpy and no latent peak (latent_fusion carries the latter). Bartsch models the transus heat as a Gaussian about 1160 K (sigma 90 K) on heating, 952 K on cooling; its printed amplitude is ambiguous, so it is not folded in. Cezairliyan 1977 beta-phase cp (1450-1900 K) agrees within 1% at 1600 K and is ~4% higher at 1850 K." }
+emissivity = { value = 0.39, unit = "1", ref = "cezairliyan1977", uncertainty = [0.37, 0.41], uncertainty_type = "bounds", T_range = [1450, 1900], note = "hemispherical total emittance of polished tube specimens in vacuum, no significant T dependence 1450-1900 K; bounds = the paper's 5% estimated inaccuracy. Oxidised or rough LPBF surfaces are likely higher." }
+
+[thermal.linear]
+# Rosenthal/Moser need one k and cp: the tables evaluated at T_ref unless
+# conductivity/heat_capacity are given here.
+T_ref = { value = 1000, unit = "K", ref = "estimate", note = "between preheat and solidus, below the 1268 K beta-transus step" }
+
+[powder]
+conductivity = { value = 0.177, unit = "W/(m K)", ref = "bartsch2021", note = "Bartsch 2021 Eq. 25, k_p = 327.6e-6 T + 0.079 W/(m K), evaluated at 300 K; C-Therm TCi modified transient plane source, Ar-flushed cell, lightly compacted (75 g), mixed fresh/recycled powder. Wei 2018 transient hot wire (as quoted by Bartsch): ~0.2 at 300 K to ~0.25 at 450 K in ambient-pressure gas." }
+packing = { value = 0.61, unit = "1", ref = "rottler2025", uncertainty = [0.60, 0.62], uncertainty_type = "bounds", note = "1 - porosity 0.39: apparent density 2.70 +/- 0.04 g/cm^3 of spatula-levelled powder in an LFA holder vs 4430 kg/m^3 solid; not a recoater-spread bed. EOS Ti-6Al-4V ELI powder, D10/D50/D90 = 25.4/37.6/46.4 um, sphericity 0.88." }
+
+[optical]
+absorptivity = { value = 0.26, unit = "1", ref = "ye2019", note = "minimum calorimetric absorptivity of bare Ti-6Al-4V plate at ~1080 nm in conduction mode (flat melt surface), Ye 2019 Table 1; flat-Ti room-temperature value 0.39. Absorptivity rises sharply above the keyhole threshold (Ye 2019 Fig. 1, not read numerically). cook2023 calibrates 0.27 +/- 0.03 in situ for LPBF at 1.07 um; bartsch2021 reviews solid 0.34-0.55 (median 0.4) and powder 0.65-0.74 (median 0.7)." }
+
+[microstructure]
+# KGT tip kinetics for beta-Ti dendrites; nucleation records omitted (decks provide them).
+front_velocity_source = { form = "polynomial", coeffs = [1.03e-6, 1.06e-7, 0, 0], unit = "m/s", dT_unit = "K", ref = "panwisawas2017", note = "Panwisawas 2017 Eq. 7, V = a2 dT^2 + a3 dT^3 with a2 = 1.06e-7 m/(s K^2), a3 = 1.03e-6 m/(s K^3), KGT from a Ti-6Al-4V thermodynamic database; dT is tip undercooling. Table 3 prints both units as K^-2, so a3's unit is inferred, and a3 >> a2 is unusual: check against the paper before relying on it" }
+solid_front_vel = { coeffs = [1.03e-6, 1.06e-7, 0, 0], unit = "m/s", dT_unit = "K", ref = "panwisawas2017", fit_of = "front_velocity_source", fit_range_K = [0, 50], max_rel_err = 1e-9, note = "the source law is already SPPARKS's polynomial form, copied exactly" }
+
+# Process sets: published LPBF parameters.
+
+[process.vaglio2020_single_track_250W]
+note = "single track on a 25 um Ti-6Al-4V powder layer over a printed base (top layer at 45 deg), scanned against the gas flow; linear energy 0.2 J/mm, the low end of the regular-track window. Preheat not reported. Data: Mendeley s9438vb5xd Data.xlsx, mean of up to 3 sections."
+machine = "Concept Laser M2 Cusing, 400 W single-mode CW Yb fibre laser, 1070 nm, M^2 = 1.08"
+power = { value = 250, unit = "W", ref = "vaglio2020" }
+speed = { value = 1.25, unit = "m/s", ref = "vaglio2020" }
+layer_thickness = { value = 25e-6, unit = "m", ref = "vaglio2020" }
+spot = { value = 50e-6, unit = "m", convention = "1/e2 diameter", ref = "vaglio2020" }
+validation = { melt_pool_width = 121.9e-6, melt_pool_depth = 133.1e-6, unit = "m", ref = "vaglio2020", note = "track width W and depth D below the base surface (Vaglio Fig. 2b); the grid is noisy (e.g. 200 W/1.0 m/s gave D = 66 um, 300 W/1.25 m/s D = 268 um)" }
+
+[process.bartsch2021_slm500_240W]
+note = "bulk build for DSC/LFA specimens (10 mm cube); Tekna powder 23-50 um; Ar atmosphere. Spot and preheat not reported."
+machine = "SLM Solutions SLM500HL"
+power = { value = 240, unit = "W", ref = "bartsch2021" }
+speed = { value = 1.2, unit = "m/s", ref = "bartsch2021" }
+hatch = { value = 105e-6, unit = "m", ref = "bartsch2021" }
+layer_thickness = { value = 60e-6, unit = "m", ref = "bartsch2021" }
+
+[process.rottler2025_truprint1000_110W]
+note = "bulk build, parallel lines rotated 67 deg per layer, Ar with O2 < 0.01%; 0.6% porosity. Focus spot diameter 55 um with no stated convention, so no spot record. Preheat not reported."
+machine = "Trumpf TruPrint1000 Multilaser, two fibre lasers at 1070 nm"
+power = { value = 110, unit = "W", ref = "rottler2025" }
+speed = { value = 0.905, unit = "m/s", ref = "rottler2025" }
+hatch = { value = 80e-6, unit = "m", ref = "rottler2025" }
+layer_thickness = { value = 20e-6, unit = "m", ref = "rottler2025" }

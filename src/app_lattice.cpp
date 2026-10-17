@@ -87,8 +87,9 @@ AppLattice::AppLattice(SPPARKS *spk, int narg, char **arg) : App(spk,narg,arg)
   dt_sweep = 0.0;
   naccept = nattempt = 0;
   nsweeps = 0;
-  
+
   app_update_only = 0;
+  use_xyz_color = 0;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -186,17 +187,29 @@ void AppLattice::init()
   // if coloring, determine number of colors
   // setup test for create_set
   // check periodicity against lattice extent
+  // if site IDs are not contiguous (e.g. non-periodic boundaries),
+  // use xyz-based coloring which works for any box size
 
   ncolors = 1;
+  use_xyz_color = 0;
   if (sweepflag == COLOR || sweepflag == COLOR_STRICT) {
     int delcolor = delevent + delpropensity;
     if (domain->lattice == NULL)
       error->all(FLERR,"Cannot color without a lattice definition of sites");
-    if (contiguous_sites() == 0)
-      error->all(FLERR,"Cannot color without contiguous site IDs");
-    ncolors = domain->lattice->ncolors(delcolor);
-    if (ncolors == 0)
-      error->all(FLERR,"Cannot color this combination of lattice and app");
+
+    // check if site IDs are contiguous - if not, use xyz-based coloring
+    if (contiguous_sites() == 0) {
+      // use xyz-based coloring for non-contiguous site IDs
+      use_xyz_color = 1;
+      ncolors = domain->lattice->ncolors_any(delcolor);
+      if (ncolors == 0)
+        error->all(FLERR,"Cannot color this combination of lattice and app");
+    } else {
+      // use traditional ID-based coloring for contiguous site IDs
+      ncolors = domain->lattice->ncolors(delcolor);
+      if (ncolors == 0)
+        error->all(FLERR,"Cannot color this combination of lattice and app");
+    }
   }
 
   if (nsector > 1 && ncolors > 1) bothflag = 1;
@@ -288,9 +301,16 @@ void AppLattice::init()
     ranstrict = new RandomPark(ranmaster->uniform());
     double seed = ranmaster->uniform();
     memory->create(siteseeds,nlocal,"app:siteseeds");
-    for (int i = 0; i < nlocal; i++) {
-      ranstrict->tagreset(seed,id[i],100);
-      siteseeds[i] = ranstrict->seed;
+    // each site's stream depends only on (seed, id), so threads give the same
+    // bits; ranstrict itself is reseeded from siteseeds before every use
+    #pragma omp parallel
+    {
+      RandomPark r(1);
+      #pragma omp for schedule(static)
+      for (int i = 0; i < nlocal; i++) {
+        r.tagreset(seed,id[i],100);
+        siteseeds[i] = r.seed;
+      }
     }
   }
 
@@ -985,7 +1005,10 @@ void AppLattice::create_set(int iset, int isector, int icolor, Solve *oldsolve)
     }
     
     if (icolor > 0) {
-      mcolor = domain->lattice->id2color(id[i],delcolor);
+      if (use_xyz_color)
+        mcolor = domain->lattice->xyz2color(xyz[i][0],xyz[i][1],xyz[i][2],delcolor);
+      else
+        mcolor = domain->lattice->id2color(id[i],delcolor);
       if (icolor != mcolor) flag = 0;
     }
 
@@ -1018,7 +1041,10 @@ void AppLattice::create_set(int iset, int isector, int icolor, Solve *oldsolve)
     }
 
     if (icolor > 0) {
-      mcolor = domain->lattice->id2color(id[i],delcolor);
+      if (use_xyz_color)
+        mcolor = domain->lattice->xyz2color(xyz[i][0],xyz[i][1],xyz[i][2],delcolor);
+      else
+        mcolor = domain->lattice->id2color(id[i],delcolor);
       if (icolor != mcolor) flag = 0;
     }
 
@@ -1029,7 +1055,7 @@ void AppLattice::create_set(int iset, int isector, int icolor, Solve *oldsolve)
   // i2site = 0 to nsite-1 for owned points in set, else -1
 
   if (solve) {
-    (int *) memory->create(set[iset].i2site,nlocal+nghost,"app:i2site");
+    memory->create(set[iset].i2site,nlocal+nghost,"app:i2site");
     for (int i = 0; i < nlocal+nghost; i++) set[iset].i2site[i] = -1;
     for (int i = 0; i < set[iset].nlocal; i++) 
       set[iset].i2site[set[iset].site2i[i]] = i;

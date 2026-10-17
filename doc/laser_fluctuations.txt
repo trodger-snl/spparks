@@ -10,28 +10,29 @@ laser_fluctuations command :h3
 
 [Syntax:]
 
-laser_fluctuations psd [top|bot|both] shape keyword value ... :pre
+laser_fluctuations psd \[top|bot|both\] shape keyword value ... :pre
 
 selector = optional {top}, {bot}, or {both} for the
 "moser keyhole"_temperature_source_moser.html mode (required in
 keyhole mode, rejected in standard mode) :ulb,l
 shape = one of {white}, {lorentzian}, {pink}, {narrow_band} :l
 keyword/value pairs in any order : :l
-sigma_W : RMS fractional fluctuation in lateral widths (sx, sy);
+sigma_W : RMS fractional fluctuation of the lateral widths (sx, sy),
+          >= 0; default 0.0 :l
+sigma_D : RMS fractional fluctuation of the depth width (sz), >= 0;
           default 0.0 :l
-sigma_D : RMS fractional fluctuation in depth width (sz); default 0.0 :l
-sigma_P : RMS fractional fluctuation in absorbed power (lambda*Q on
-          this lobe); default 0.0 :l
-rho : Pearson correlation between (sigma_W, sigma_D) draws,
-      in [-1, 1]; default 0.0 :l
-seed : RNG seed; default 12345.  Identical seeds reproduce identical
-       streams across MPI ranks (no MPI_Bcast). :l
-dt : sample spacing in seconds of the emission-time fluctuation table;
-     default 5e-6.  The integrand linearly interpolates the table, so
-     {dt} is independent of the SPPARKS timestep. :l
-tau : Lorentzian correlation time in seconds (lorentzian only) :l
-f0 : narrow-band center frequency in Hz (narrow_band only) :l
-df : narrow-band bandwidth in Hz (narrow_band only) :l,ule
+sigma_P : RMS fractional fluctuation of this lobe's absorbed power,
+          >= 0; default 0.0 :l
+rho : Pearson correlation between the W and D draws, in \[-1, 1\];
+      default 0.0 :l
+seed : RNG seed (integer); default 12345.  Every MPI rank generates the
+       same stream from it, so no broadcast is needed. :l
+dt : sample spacing of the fluctuation table in seconds, > 0; default
+     5e-6.  The table is linearly interpolated at each emission time,
+     so dt need not match the timestep. :l
+tau : correlation time in seconds, > 0 (lorentzian; required) :l
+f0 : center frequency in Hz, > 0 (narrow_band; required) :l
+df : bandwidth in Hz, > 0 (narrow_band; required) :l,ule
 
 [Examples:]
 
@@ -50,17 +51,20 @@ laser_fluctuations psd bot lorentzian sigma_W 0.08 sigma_D 0.10 &
 laser_fluctuations psd both lorentzian sigma_W 0.05 sigma_D 0.06 &
                   tau 200e-6 rho 0.5 seed 12345 dt 5e-6 :pre
 
+See examples/am_validation/in.moser_pause_below.cpu (and .kk) for a
+standard-mode deck.
+
 [Description:]
 
 Attaches a Power Spectral Density (PSD) noise stream to one or both
 lobes of the "moser"_temperature_source_moser.html source so that the
 ellipsoid widths and absorbed power fluctuate around their nominal
-values.  Because the Moser unsteady integral evaluates the source at
-each emission time with the parameters in effect at that emission, the
-stream is recorded into a {FluctuationTable} that the integrand
-linearly interpolates at each emission time: cooling-tail sites correctly retain the {sigma_W, sigma_D,
-sigma_P} that produced them, rather than snapping to the latest values
-each timestep.
+values.  When the scan is built, the stream is sampled every {dt}
+seconds over the scan's emitting window into a table of
+multiplicative factors.  Because the Moser integral evaluates the
+source at each emission time with that emission's factors,
+cooling-tail sites keep the fluctuations that heated them rather than
+snapping to the latest values each step.
 
 This is the Moser-source feature that distinguishes it from the
 Rosenthal source for fluctuation studies; the Rosenthal kernel is
@@ -72,19 +76,28 @@ The four available PSD shapes are:
 {lorentzian} : exponentially-correlated Gaussian process via a
 discrete first-order AR(1) filter with correlation time {tau}.
 Spectrum 1 / (1 + (omega tau)^2). :l
-{pink} : 1/f noise via the Voss-McCartney algorithm: the sum of K = 6
-held random levels, with one level redrawn per sample (level k = the
-number of trailing zero bits of the sample counter, capped at K-1), so
-level k changes roughly every 2^(k+1) samples. :l
+{pink} : approximately 1/f noise via the Voss-McCartney algorithm:
+the sum of 6 independent levels, level k redrawn every 2^k samples. :l
 {narrow_band} : damped harmonic oscillator driven by white noise,
-parameterized by center frequency {f0} and bandwidth {df}.  Spectrum
-peaks at {f0}. :l,ule
+with natural frequency {f0} and damping ratio {df} / (2 {f0})
+(clamped below 1).  Spectrum peaks near {f0}. :l,ule
 
-The {sigma_W} draw is applied to both lateral widths (sx and sy)
-identically; {sigma_D} is applied to the depth width sz; {sigma_P} is
-applied to the lobe's power fraction.  The {(sigma_W, sigma_D)} pair
-can be correlated via {rho}; {sigma_P} is independent of the geometric
-draws.
+Each shape is scaled so its stationary RMS is the given sigma, and
+the chain is warmed up for 1000 samples before the table starts.
+
+With dW, dD, dP the sampled values, the source uses sx*(1+dW),
+sy*(1+dW), sz*(1+dD) and power*(1+dP).  The width factors are clamped
+to >= 1e-3 and the power factor to >= 0; a warning is printed if any
+|d| exceeds 0.5, where this first-order model stops being accurate.
+The W and D draws are correlated by {rho}; the P draw is independent.
+
+The table is regenerated whenever the scan is rebuilt.  When a pass is
+appended under {pause_below}, the table restarts from the scan's
+first pass with the same seed, so earlier samples are unchanged.  When
+the table starts later than t = 0 (e.g. a pass fired with
+{reset_temperature}, or a {laser_path} issued in a later run), the seed
+is mixed with that start time, so each such pass gets a different but
+reproducible stream.
 
 :line
 
@@ -113,14 +126,13 @@ raises an error.
 [Required ordering:]
 
 setup_temperature_source moser ...
-laser_fluctuations psd [selector] shape ...
+laser_fluctuations psd \[selector\] shape ...
 laser_path start ... end ... speed ... :pre
 
-The fluctuation table is materialized inside the
-"laser_path"_laser_path.html call to {build_scan} once the scan
-duration is known, so {laser_fluctuations} must be issued after
-{setup_temperature_source} but before {laser_path}.  Violating this
-order produces an explicit error:
+The fluctuation table is built by "laser_path"_laser_path.html
+(either form), once the scan duration is known, so
+{laser_fluctuations} must be issued after {setup_temperature_source}
+but before {laser_path}.  The reverse order is an error:
 
 laser_fluctuations must be issued BEFORE laser_path ... :pre
 
@@ -134,7 +146,7 @@ source but never materialized into a fluctuation table).
 Total absorbed power is {not} conserved through fluctuations.  In
 keyhole mode,
 
-P_total(t) = lambda Q [1 + f_top dP_top(t) + f_bot dP_bot(t)] :pre
+P_total(t) = lambda Q \[1 + f_top dP_top(t) + f_bot dP_bot(t)\] :pre
 
 so {var(P_total) / (lambda Q)^2 = f_top^2 sigma_P_top^2 +
 f_bot^2 sigma_P_bot^2} for uncorrelated streams.  This is by design:
@@ -149,13 +161,17 @@ A typical canonical setup is {sigma_P_bot ~ 0.20} with
 [Restrictions:]
 
 Only the "moser"_temperature_source_moser.html source supports
-{laser_fluctuations}.  Issuing the command against a Rosenthal or
-HDF5 source raises an error.
+{laser_fluctuations}.  The command is an error with a Rosenthal or
+HDF5 source; with the
+"conduction"_temperature_source_conduction.html source it is accepted
+but the run stops with an error.
 
-The {seed} XOR-derivation in the {both} sugar gives the two lobes
-distinct streams that are identical on every MPI rank for any input
-seed.  When in doubt, prefer
-two explicit {top} / {bot} commands with different seeds.
+[GPU support:]
+
+Fluctuations work in {additive/texture} and {additive/texture/kk}.
+In the Kokkos app the fluctuation tables are uploaded to the device
+and the fluctuating Green's-function integral is evaluated there, for
+both Moser modes and all pass schedules.
 
 [Related commands:]
 

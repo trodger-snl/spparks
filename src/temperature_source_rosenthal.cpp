@@ -12,6 +12,7 @@
 ------------------------------------------------------------------------- */
 
 #include "temperature_source_rosenthal.h"
+#include "rosenthal_device.h"
 #include "error.h"
 #include "domain.h"
 #include "math_const.h"
@@ -139,33 +140,6 @@ double RosenthalTemperatureSource::get_temperature_at_xyz_and_time(double /*x*/,
   return ambient_temperature;
 }
 
-/* ---------------------------------------------------------------------- */
-
-void RosenthalTemperatureSource::update_temperatures(double /*dt*/, double /*simulation_time*/)
-{
-  // Analytical solution: nothing to load.
-}
-
-/* ---------------------------------------------------------------------- */
-
-bool RosenthalTemperatureSource::needs_data_refresh(double /*simulation_time*/)
-{
-  return false;
-}
-
-/* ----------------------------------------------------------------------
-   Fast-forward query: the source itself has no path geometry, so it
-   declares "yes I support time queries" but returns +inf here. The
-   driving app intercepts and computes the real next-active time using
-   its scan_layer state.
-------------------------------------------------------------------------- */
-
-double RosenthalTemperatureSource::get_next_time_with_temperature(double /*current_time*/,
-                                                                  double /*threshold_temp*/)
-{
-  return std::numeric_limits<double>::max();
-}
-
 /* ----------------------------------------------------------------------
    Core kernel (Eq. B4 form):
    T_rise = (Q_eff / (2 pi k R)) * exp(-v (xi + R) / (2 alpha))
@@ -179,6 +153,43 @@ double RosenthalTemperatureSource::rosenthal_kernel(double Q_eff, double v,
   const double prefactor = Q_eff / (2.0 * MY_PI * k_cond * R);
   const double exponent  = -v * (xi + R) / (2.0 * alpha);
   return prefactor * std::exp(exponent);
+}
+
+/* ----------------------------------------------------------------------
+   Export material/source parameters for device-side evaluation. The laser
+   pose (px/py/layer_z/ux/uy/v/scan_active/T0) is filled by the driving app
+   from its scan path; here we only set the mode and the material constants
+   that the device kernel needs. Keep in sync with rosenthal_pointwise().
+   KEYHOLE also needs the quadrature arrays (copy_keyhole_quadrature).
+------------------------------------------------------------------------- */
+
+bool RosenthalTemperatureSource::fill_device_plan(RosenthalDevicePlan &plan) const
+{
+  plan.k_cond = k_cond;
+  plan.alpha  = alpha;
+  plan.r_min  = r_min;
+  plan.lambdaQ = lambda * Q;   // image factor of 2 is applied in the kernel
+  plan.eta_y  = eta_y;
+  plan.eta_z  = eta_z;
+
+  switch (mode) {
+  case RosenthalMode::STANDARD:    plan.mode = 0; return true;
+  case RosenthalMode::ANISOTROPIC: plan.mode = 1; return true;
+  case RosenthalMode::KEYHOLE:
+    plan.mode = 2;
+    plan.lambda_pQ = lambda_p * Q;
+    plan.lambda_lQ = lambda_l * Q;
+    plan.n_quad = n_quad;
+    return true;
+  }
+  return false;
+}
+
+void RosenthalTemperatureSource::copy_keyhole_quadrature(
+    std::vector<double> &nodes, std::vector<double> &weights) const
+{
+  nodes = quad_nodes;
+  weights = quad_weights;
 }
 
 /* ----------------------------------------------------------------------

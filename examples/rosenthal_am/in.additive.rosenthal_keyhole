@@ -32,8 +32,7 @@ sweep            random mask no
 diag_style       array d6 sum
 
 temperature      0.0
-misorientation_target gradient
-
+misorientation_target random_rotation   # gradient was removed (see doc/app_additive_texture)
 liquidus         1573
 solidus          1523
 solid_front_vel  4 -1.0302e-7 1.0533e-4 2.2196e-3 0

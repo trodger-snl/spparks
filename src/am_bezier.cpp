@@ -35,34 +35,6 @@ using std::vector;
 
 namespace bezier_pool_geometry {
 
-class negative_jacobian : public runtime_error {
-public:
-  negative_jacobian(string &s, const array<double, 3> &xyz, int iter,
-                    const array<double, 2> &_u)
-      : runtime_error(s), err(s), p{xyz[0], xyz[1], xyz[2]}, u{_u[0], _u[1]},
-        iteration(iter) {}
-
-  string mywhat() const {
-    stringstream ss;
-    ss << "\tClosest point solver encountered negative jacobian\n";
-    ss << "\t\titeration = " << std::to_string(iteration) << "\n";
-    ss << "\t\txyz point = " << std::scientific << std::setw(15) << p[0];
-    ss << std::scientific << std::setw(15) << p[1];
-    ss << std::scientific << std::setw(15) << p[2] << "\n";
-    ss << "\t\tu =" << std::scientific << std::setw(15) << u[0];
-    ss << std::scientific << std::setw(15) << u[1] << "\n";
-    return ss.str();
-  }
-  array<double, 3> search_point() const { return p; }
-  array<double, 2> parametric_coordinate() const { return u; }
-
-private:
-  string err;
-  array<double, 3> p;
-  array<double, 2> u;
-  int iteration;
-};
-
 array<double, 3> compute_rho(const array<double, 5> &cx,
                              const array<double, 5> &cy,
                              const array<double, 5> &cz,
@@ -525,13 +497,8 @@ compute_closest_point(const array<double, 5> &cx, const array<double, 5> &cy,
       j22 = J[1][1];
       det = j11 * j22 - j12 * j21;
 
-      if (det < 0) {
-        // throw std::runtime_error("AM_Bezier.cpp; compute_closest point;
-        // 'negative jacobian'\n");
-        string s(
-            "Closest point projection solver encountered negative jacobian");
-        throw negative_jacobian(s, xyz, iter, array<double, 2>{u, v});
-      }
+      if (det < 0)
+        throw runtime_error("Closest point projection solver encountered negative jacobian");
 
       // rhs
       r1 = rhs[0];
@@ -715,8 +682,6 @@ AM_Bezier::AM_Bezier(const array<double, 5> &x, const array<double, 5> &y,
   */
 }
 
-void AM_Bezier::print_rho(double u, double v) const {}
-
 bool AM_Bezier::is_outside_pool(const array<double, 3> &xyz) const {
 
   // Until more accurate method is developed,
@@ -884,8 +849,8 @@ AM_Bezier::_closest_point_projection(const array<double, 3> &xyz) const {
       predict(cx, cy, cz, ry, rz, xyz, umax_width, umax_depth);
   try {
     U = compute_closest_point(cx, cy, cz, ry, rz, xyz, u0);
-  } catch (bezier_pool_geometry::negative_jacobian &e) {
-    // std::cout << e.mywhat() << std::endl;
+  } catch (const runtime_error &) {
+    // Negative Jacobian: retry from the nearest sampled surface point.
     int u0id =
         tree.nearest_neighbor_search(vector<double>{xyz[0], xyz[1], xyz[2]});
     u0 = search_coordinates[u0id];

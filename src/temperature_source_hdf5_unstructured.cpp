@@ -16,33 +16,18 @@
 #include "error.h"
 #include "universe.h"
 #include "app.h"
+#ifdef SPPARKS_HIGHFIVE
 #include "highfive/highfive.hpp"
+#endif
 #include <algorithm>
+#include <functional>
+#include <numeric>
 #include <limits>
 #include <stdexcept>
 #include <cmath>
 #include <set>
-#include <fstream>
-#include <sstream>
 
 using namespace SPPARKS_NS;
-
-// Helper function to get current memory usage (Linux only)
-static size_t get_memory_usage_kb() {
-#ifdef __linux__
-  std::ifstream status("/proc/self/status");
-  std::string line;
-  while (std::getline(status, line)) {
-    if (line.compare(0, 6, "VmRSS:") == 0) {
-      std::istringstream iss(line.substr(6));
-      size_t kb;
-      iss >> kb;
-      return kb;
-    }
-  }
-#endif
-  return 0;
-}
 
 /* ---------------------------------------------------------------------- */
 
@@ -51,14 +36,13 @@ HDF5UnstructuredTemperatureSource::HDF5UnstructuredTemperatureSource(SPPARKS *sp
   current_time(std::numeric_limits<double>::lowest()),
   active_layer(std::numeric_limits<unsigned>::max()),
   cache_valid(false),
+  cache_generation_(0),
   total_layer_load_time(0.0),
   layer_load_count(0),
   cached_nodal_time(std::numeric_limits<double>::lowest()),
   nodal_cache_valid(false),
   site_intervals_for_layer(std::numeric_limits<unsigned>::max()),
   grid_cell_size_multiplier(100.0),
-  use_spatial_grid(true),
-  use_element_cache(true),
   nodal_smooth_enabled(false),
   nodal_sigma_xy(4.0),
   nodal_sigma_z(0.3),
@@ -83,16 +67,21 @@ HDF5UnstructuredTemperatureSource::~HDF5UnstructuredTemperatureSource()
 
 void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vector<std::string> &args)
 {
-  // Parse arguments: filename dx threshold_temp default_temp [bounds_check_mode] [grid_cell_mult]
+#ifndef SPPARKS_HIGHFIVE
+  (void)args;
+  error->all(FLERR, "HDF5 temperature sources need a build with HighFive (-DSPPARKS_ENABLE_HIGHFIVE=ON)");
+#else
+  // Parse arguments: filename dx threshold_temp default_temp [ignored] [grid_cell_mult]
+  // (args[4] was a bounds_check_mode that nothing ever read; the slot is kept
+  // so existing decks that pass grid_cell_mult in position 5 keep working.)
   if (args.size() < 4) {
-    error->all(FLERR, "HDF5 unstructured temperature source requires: filename dx threshold_temp default_temp [bounds_check_mode] [grid_cell_mult]");
+    error->all(FLERR, "HDF5 unstructured temperature source requires: filename dx threshold_temp default_temp [ignored] [grid_cell_mult]");
   }
 
   filename = args[0];
   dx = std::stod(args[1]);  // Grid spacing in meters
   threshold_temp = std::stod(args[2]);  // Threshold temperature for fast-forward
   default_temp = std::stod(args[3]);    // Default/ambient temperature
-  bounds_check_mode = (args.size() > 4) ? std::stoi(args[4]) : 0;
   grid_cell_size_multiplier = (args.size() > 5) ? std::stod(args[5]) : 100.0;
 
   // Open HDF5 file with parallel I/O when available
@@ -144,60 +133,19 @@ void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vect
   // Data validation
   if (universe->me == 0) {
     if (layerTimes.empty()) {
-      error->all(FLERR, "layerTimes array is empty");
+      // error->one, NOT error->all: this is inside `if (universe->me == 0)`, and
+      // Error::all opens with MPI_Barrier(world), so firing it on rank 0 alone
+      // blocks rank 0 in the barrier while every other rank runs on -- a hang
+      // instead of a diagnostic.
+      error->one(FLERR, "layerTimes array is empty");
     }
 
-    // Check for monotonically increasing values
-    bool is_monotonic = true;
-    size_t first_violation = 0;
-    for (size_t i = 1; i < layerTimes.size(); i++) {
-      if (layerTimes[i] <= layerTimes[i-1]) {
-        is_monotonic = false;
-        first_violation = i;
-        break;
-      }
-    }
-
-    if (is_monotonic) {
-      fprintf(screen, "LayerTimes validation: PASSED\n");
-    } else {
-      fprintf(screen, "WARNING: Monotonicity check FAILED at index %zu\n", first_violation);
-    }
-
-    // Check for negative values
-    size_t negative_count = 0;
-    for (size_t i = 0; i < layerTimes.size(); i++) {
-      if (layerTimes[i] < 0.0) {
-        negative_count++;
-      }
-    }
-
-    if (negative_count > 0) {
-      fprintf(screen, "WARNING: Found %zu negative values in layerTimes\n", negative_count);
-    }
-
-    // Check for duplicate consecutive values
-    size_t duplicate_count = 0;
-    for (size_t i = 1; i < layerTimes.size(); i++) {
-      if (layerTimes[i] == layerTimes[i-1]) {
-        duplicate_count++;
-      }
-    }
-
-    if (duplicate_count > 0) {
-      fprintf(screen, "WARNING: Found %zu duplicate consecutive values\n", duplicate_count);
-    }
-
-    // Check for zeros in middle of array
-    size_t internal_zeros = 0;
-    for (size_t i = 0; i < layerTimes.size(); i++) {
-      if (layerTimes[i] == 0.0) {
-        internal_zeros++;
-      }
-    }
-
-    if (internal_zeros > 0) {
-      fprintf(screen, "WARNING: Found %zu zero values in layerTimes\n", internal_zeros);
+    // Layer times must be strictly increasing (this also rejects negative,
+    // duplicate and interior-zero entries).
+    if (layerTimes.front() < 0.0 ||
+        std::adjacent_find(layerTimes.begin(), layerTimes.end(),
+                           std::greater_equal<double>()) != layerTimes.end()) {
+      error->one(FLERR, "layerTimes must be non-negative and strictly increasing");
     }
   }
 
@@ -211,94 +159,19 @@ void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vect
   if (universe->me == 0) {
     print_source_info();
   }
+#endif
 }
 
 /* ---------------------------------------------------------------------- */
 
 double HDF5UnstructuredTemperatureSource::get_temperature_at_xyz_and_time(
-  double x, double y, double z, double time)
+  double, double, double, double)
 {
-  if (!source_initialized) {
-    error->all(FLERR, "Temperature source not initialized");
-  }
-  
-  // Check if we need to load new layer data
-  constexpr double tol = 5.0 * std::numeric_limits<double>::epsilon();
-  if (std::fabs(time - current_time) / (std::fabs(time) + tol) > tol) {
-    auto currentLayer = get_active_layer(time);
-    if (currentLayer != active_layer) {
-      load_layer(currentLayer);
-      active_layer = currentLayer;
-    }
-    current_time = time;
-  }
-  
-  // Check if we have valid data loaded
-  if (selected_chunks.empty() || elem_bboxes.empty()) {
-    return default_temp;
-  }
-  
-  // Find the element containing this point and get interpolation weights
-  std::array<double, 3> pt{x, y, z};
-  auto result = find_element_point_is_in(selected_chunks, chunk_bboxes, 
-                                        node_offsets, elem_offsets, 
-                                        elemNode, nodeCoords, 
-                                        elem_bboxes, pt);
-  
-  const auto& nodeIndices = result.first;
-  const auto& weights = result.second;
-  
-  // Check if point was found in any element
-  if (nodeIndices[0] == std::numeric_limits<unsigned>::max()) {
-    return default_temp;
-  }
-  
-  // Get temperatures at the four tetrahedral nodes
-  std::array<double, NODES_PER_ELEM> nodalVals;
-  for (unsigned n = 0; n < NODES_PER_ELEM; n++) {
-    const unsigned nodeIdx = nodeIndices[n];
-    
-    const auto timeIter = times.row_iterator(nodeIdx);
-    const auto tempIter = temperatures.row_iterator(nodeIdx);
-    
-    // Check time bounds
-    if (time < *timeIter || time > timeIter[dataCounts[nodeIdx] - 1]) {
-      return default_temp;
-    }
-    
-    // Linear interpolation in time
-    auto lower = std::lower_bound(timeIter, timeIter + dataCounts[nodeIdx], time);
-    auto idx = std::distance(timeIter, lower);
-    idx = (idx == 0) ? 1 : idx;
-    
-    nodalVals[n] = tempIter[idx-1] + 
-                   (tempIter[idx] - tempIter[idx-1]) / 
-                   (timeIter[idx] - timeIter[idx-1]) * 
-                   (time - timeIter[idx-1]);
-  }
-  
-  // Tetrahedral interpolation using barycentric coordinates
-  return nodalVals[0] + 
-         weights[0] * (nodalVals[1] - nodalVals[0]) + 
-         weights[1] * (nodalVals[2] - nodalVals[0]) + 
-         weights[2] * (nodalVals[3] - nodalVals[0]);
-}
-
-/* ---------------------------------------------------------------------- */
-
-void HDF5UnstructuredTemperatureSource::update_temperatures(double dt, double simulation_time)
-{
-  // This temperature source is passive - no update needed
-}
-
-/* ---------------------------------------------------------------------- */
-
-bool HDF5UnstructuredTemperatureSource::needs_data_refresh(double simulation_time)
-{
-  if (!source_initialized) return false;
-  
-  auto layer = get_active_layer(simulation_time);
-  return (layer != active_layer);
+  // Every live path goes through the per-site element cache
+  // (prepare_for_timestep + get_temperature_at_site_fast).
+  error->all(FLERR, "HDF5 temperature source: point queries are not supported; "
+                    "use prepare_for_timestep + get_temperature_at_site_fast");
+  return default_temp;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -332,13 +205,15 @@ void HDF5UnstructuredTemperatureSource::print_source_info() const
 
 void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
 {
+#ifndef SPPARKS_HIGHFIVE
+  (void)layerIdx;
+  error->all(FLERR, "HDF5 temperature sources need a build with HighFive (-DSPPARKS_ENABLE_HIGHFIVE=ON)");
+#else
   auto load_start = std::chrono::high_resolution_clock::now();
-  size_t mem_start = get_memory_usage_kb();
 
   if (universe->me == 0) {
     fprintf(screen, "Loading layer %u at time %.6e s\n", layerIdx,
             (layerIdx < layerTimes.size()) ? layerTimes[layerIdx] : -1.0);
-    fprintf(screen, "  [MEM] Start: %zu MB (rank 0)\n", mem_start / 1024);
   }
 
   // Try to open the layer group with error handling
@@ -382,6 +257,43 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
     domain->subxlo * dx - pad, domain->subylo * dx - pad, domain->subzlo * dx - pad,
     domain->subxhi * dx + pad, domain->subyhi * dx + pad, domain->subzhi * dx + pad
   };
+
+  // Diagnostic: on any axis that is actually decomposed, a pad wider than the
+  // subdomain itself erases that axis from chunk selection -- every rank's
+  // selection box then spans the whole domain on that axis and they all load
+  // the same chunks, paying N-fold I/O and memory for no locality.
+  //
+  // Measured on the ct15 box deck (311x317x51 sites, dx=5e-6, so a 0.255 mm
+  // z-extent against a 0.5 mm pad): forcing `processors 1 1 4` made all four
+  // ranks load a byte-identical 93/291 chunks, versus 66/69/62/62 for the
+  // default 2x2x1. Same temperatures, 39% more wall time, 25% more memory.
+  //
+  // This is NOT a reason to shrink the pad -- it is load-bearing for boundary
+  // element interpolation, for ghost sites (the cache covers nall), and for the
+  // nodal_smooth halo, which already warns that it only has ~one tet hop. It is
+  // a reason to not decompose that axis. Warned once per run, from rank 0.
+  if (!pad_vs_subdomain_warned && universe->me == 0 && screen) {
+    const char *axis_name[3] = {"x","y","z"};
+    const double sublo[3] = {domain->subxlo, domain->subylo, domain->subzlo};
+    const double subhi[3] = {domain->subxhi, domain->subyhi, domain->subzhi};
+    for (int ax = 0; ax < 3; ax++) {
+      if (domain->procgrid[ax] <= 1) continue;      // axis not decomposed
+      const double extent = (subhi[ax] - sublo[ax]) * dx;
+      if (pad >= extent) {
+        fprintf(screen,
+          "WARNING: chunk-load pad (%.3g m = %g*dx) >= this rank's %s-extent "
+          "(%.3g m) while %s is split over %d procs. Chunk selection ignores "
+          "the %s decomposition, so every rank loads nearly the same chunks: "
+          "expect ~%dx redundant thermal I/O and memory on this axis with no "
+          "locality gained. Decompose %s less (or not at all), or raise the "
+          "site count per rank along %s.\n",
+          pad, grid_cell_size_multiplier, axis_name[ax], extent,
+          axis_name[ax], domain->procgrid[ax], axis_name[ax],
+          domain->procgrid[ax], axis_name[ax], axis_name[ax]);
+        pad_vs_subdomain_warned = true;
+      }
+    }
+  }
   
   // Find overlapping chunks - first pass for chunks that directly overlap SPPARKS domain
   std::vector<unsigned> overlappingChunks;
@@ -399,7 +311,32 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   }
   
   if (chunksToLoad.empty()) {
-    // No data for this domain 
+    // This rank's padded subdomain overlaps no chunk of this layer, so there is
+    // genuinely no thermal data here -- normal when thin boxes are tiled across
+    // a part and stitched back together, since a box can sit far from the layer
+    // currently being deposited.
+    //
+    // Drop the PREVIOUS layer's mesh and time series rather than returning with
+    // them still resident. Leaving them loaded made every site keep
+    // interpolating the old layer's field: silently harmless while each layer's
+    // series happens to end where the next begins (the reader then falls back to
+    // default_temp on the time-bounds check), but silently WRONG the moment a
+    // layer carries a cooldown tail into the next layer's window, which nothing
+    // in the format forbids.
+    //
+    // With the state cleared, build_site_element_cache finds no mesh, every
+    // cache entry comes back invalid, and every site reads default_temp -- the
+    // correct answer for "no data" -- while the empty interval list lets
+    // get_next_time_with_temperature fast-forward to the next layer.
+    clear_layer_data();
+    if (layerIdx >= layer_thermal_intervals.size())
+      layer_thermal_intervals.resize(layerIdx + 1);
+    layer_thermal_intervals[layerIdx].clear();
+    if (screen)
+      fprintf(screen, "  Rank %d: layer %u has no chunks overlapping this "
+              "subdomain; no thermal data here, sites read default_temp "
+              "(%.1f K) until a later layer covers them\n",
+              universe->me, layerIdx, default_temp);
     return;
   }
   
@@ -448,11 +385,17 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
     unsigned totalNodes = nodePtr.back();
     unsigned loadedNodes = nodeOffsets.back();
 
-    fprintf(screen, "  Rank %d: Loaded %zu/%zu chunks (%.1f%%), %u/%u elements (%.1f%%), %u/%u nodes (%.1f%%)\n",
-            universe->me,
-            overlappingChunks.size(), bboxes.size(), 100.0 * overlappingChunks.size() / bboxes.size(),
-            loadedElements, totalElements, 100.0 * loadedElements / totalElements,
-            loadedNodes, totalNodes, 100.0 * loadedNodes / totalNodes);
+    // Deliberately per-rank (not gated on rank 0) -- the point is the per-rank
+    // chunk split. But `screen` is NULL on every non-root rank whenever ANY
+    // -screen flag is given (spparks.cpp:136-140 sets uscreen = stdout only when
+    // screenflag == 0), and NULL on rank 0 too under `-screen none`. Unguarded,
+    // this fprintf segfaults there.
+    if (screen)
+      fprintf(screen, "  Rank %d: Loaded %zu/%zu chunks (%.1f%%), %u/%u elements (%.1f%%), %u/%u nodes (%.1f%%)\n",
+              universe->me,
+              overlappingChunks.size(), bboxes.size(), 100.0 * overlappingChunks.size() / bboxes.size(),
+              loadedElements, totalElements, 100.0 * loadedElements / totalElements,
+              loadedNodes, totalNodes, 100.0 * loadedNodes / totalNodes);
   }
   node_offsets = nodeOffsets;
   elem_offsets = elemOffsets;
@@ -463,68 +406,26 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
     build_hyperslab(elemSlices, {0, NODES_PER_ELEM})).read(elemNodeData);
   elemNode = Array2D<unsigned>(NODES_PER_ELEM, std::move(elemNodeData));
 
-  if (universe->me == 0) {
-    fprintf(screen, "  [MEM] After elemNode (%u elems): %zu MB\n",
-            elemOffsets.back(), get_memory_usage_kb() / 1024);
-  }
-
   // Read node coordinates
   std::vector<double> nodeCoordsData;
   grp->getDataSet("nodeCoords").select(
     build_hyperslab(nodeSlices, {0, DIM})).read(nodeCoordsData);
   nodeCoords = Array2D<double>(DIM, std::move(nodeCoordsData));
 
-  if (universe->me == 0) {
-    fprintf(screen, "  [MEM] After nodeCoords (%u nodes): %zu MB\n",
-            nodeOffsets.back(), get_memory_usage_kb() / 1024);
-  }
-
   // Read data counts
   grp->getDataSet("dataCounts").select(
     build_hyperslab_1d(nodeSlices)).read(dataCounts);
 
-  if (universe->me == 0) {
-    fprintf(screen, "  [MEM] After dataCounts: %zu MB\n", get_memory_usage_kb() / 1024);
-  }
-
   // Read time and temperature data (virtual — overridden by CSR subclass)
   read_time_temperature_data(*grp, nodeSlices);
 
-  if (universe->me == 0) {
-    size_t times_mem = times.total_elements() * sizeof(double) / 1024 / 1024;
-    size_t temps_mem = temperatures.total_elements() * sizeof(double) / 1024 / 1024;
-    fprintf(screen, "  [MEM] After CSR data (times: %zu MB, temps: %zu MB): %zu MB total\n",
-            times_mem, temps_mem, get_memory_usage_kb() / 1024);
-  }
-
   // Build element bounding boxes for spatial queries
-  elem_bboxes = build_elem_bounding_boxes(overlappingChunks.size(),
-                                         nodeOffsets, elemOffsets,
-                                         elemNode, nodeCoords);
+  elem_bboxes = build_elem_bounding_boxes();
 
-  if (universe->me == 0) {
-    size_t bbox_mem = elem_bboxes.size() * sizeof(std::array<double, 6>) / 1024 / 1024;
-    fprintf(screen, "  [MEM] After elem_bboxes (%zu elems, %zu MB array): %zu MB total\n",
-            elem_bboxes.size(), bbox_mem, get_memory_usage_kb() / 1024);
-  }
-
-  // Build spatial acceleration grid (optional, controlled by use_spatial_grid flag)
+  // Build the spatial acceleration grid used by every element lookup.
   // Larger cells = less memory but more elements per cell to search
   // Default 50x lattice spacing (~250 microns), user-configurable via grid_cell_mult parameter
-  if (use_spatial_grid) {
-    build_spatial_grid(dx * grid_cell_size_multiplier);
-
-    if (universe->me == 0) {
-      size_t grid_cells = spatial_grid.dims[0] * spatial_grid.dims[1] * spatial_grid.dims[2];
-      fprintf(screen, "  [MEM] After spatial_grid (%zu cells): %zu MB total\n",
-              grid_cells, get_memory_usage_kb() / 1024);
-    }
-  } else {
-    spatial_grid.valid = false;
-    if (universe->me == 0) {
-      fprintf(screen, "  Spatial grid: DISABLED\n");
-    }
-  }
+  build_spatial_grid(dx * grid_cell_size_multiplier);
 
   // Build node-graph adjacency for mesh-Laplacian smoothing (optional).
   // Must run AFTER elemNode + nodeCoords + dataCounts are populated for the
@@ -546,16 +447,51 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   layer_load_count++;
 
   if (universe->me == 0) {
-    size_t mem_end = get_memory_usage_kb();
-    fprintf(screen, "  [MEM] Final: %zu MB (delta: %+zd MB)\n",
-            mem_end / 1024, (long)(mem_end - mem_start) / 1024);
     fprintf(screen, "  Layer load time: %.3f s (avg: %.3f s over %d loads)\n",
             load_time, total_layer_load_time / layer_load_count, layer_load_count);
   }
+#endif
 }
 
 /* ---------------------------------------------------------------------- */
 
+void HDF5UnstructuredTemperatureSource::clear_layer_data()
+{
+  // Mesh + connectivity
+  elemNode = Array2D<unsigned>();
+  nodeCoords = Array2D<double>();
+  chunk_bboxes.clear();
+  selected_chunks.clear();
+  node_offsets.clear();
+  elem_offsets.clear();
+  elem_bboxes.clear();
+  spatial_grid = SpatialGrid();          // resets valid = false and frees the CSR
+
+  // Per-node time series. dataCounts must go too: num_loaded_nodes() is derived
+  // from it and sizes the device nodal-temperature slice, so leaving it behind
+  // would advertise nodes whose series no longer exists.
+  dataCounts.clear();
+  times = CompressedArray2D<double>();
+  temperatures = CompressedArray2D<double>();
+
+  // Nodal-smoothing adjacency and its derived sets
+  nbr_offsets.clear();
+  nbr_indices.clear();
+  nbr_weights.clear();
+  nodal_smooth_buffer.clear();
+  nodal_adjacency_valid = false;
+
+  // Derived per-step caches
+  cached_nodal_temps.clear();
+  nodal_cache_valid = false;
+  active_node_indices.clear();
+  smooth_interp_indices.clear();
+  smooth_update_indices.clear();
+}
+
+/* ---------------------------------------------------------------------- */
+
+#ifdef SPPARKS_HIGHFIVE
 HighFive::HyperSlab HDF5UnstructuredTemperatureSource::build_hyperslab(
   const std::vector<std::array<size_t, 2>>& slices,
   const std::array<size_t, 2>& cols)
@@ -590,6 +526,7 @@ HighFive::HyperSlab HDF5UnstructuredTemperatureSource::build_hyperslab_1d(
   }
   return result;
 }
+#endif // SPPARKS_HIGHFIVE
 
 /* ---------------------------------------------------------------------- */
 
@@ -597,11 +534,14 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
   HighFive::Group& grp,
   const std::vector<std::array<size_t, 2>>& nodeSlices)
 {
+#ifndef SPPARKS_HIGHFIVE
+  (void)grp;
+  (void)nodeSlices;
+  error->all(FLERR, "HDF5 temperature sources need a build with HighFive (-DSPPARKS_ENABLE_HIGHFIVE=ON)");
+#else
   // Streaming implementation: read one chunk at a time from the padded 2D
   // datasets, stripping padding on the fly into pre-allocated CSR arrays.
   // Peak temporary buffer = max_chunk_rows × readCols × 8 bytes.
-
-  auto t_start = std::chrono::high_resolution_clock::now();
 
   // Determine how many columns to read per row
   auto timesDset = grp.getDataSet("times");
@@ -616,24 +556,15 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
 
   // Build CSR offsets from dataCounts
   size_t nrows = dataCounts.size();
-  std::vector<size_t> offsets(nrows + 1);
-  offsets[0] = 0;
-  for (size_t i = 0; i < nrows; i++)
-    offsets[i + 1] = offsets[i] + dataCounts[i];
+  std::vector<size_t> offsets(nrows + 1, 0);
+  std::inclusive_scan(dataCounts.begin(), dataCounts.end(), offsets.begin() + 1,
+                      std::plus<size_t>(), size_t{0});
 
   size_t totalElements = offsets[nrows];
 
   // Pre-allocate flat output arrays to exact CSR size
   std::vector<double> timesFlat(totalElements);
   std::vector<double> tempsFlat(totalElements);
-
-  if (universe->me == 0) {
-    size_t rectMB = nrows * static_cast<size_t>(readCols) * sizeof(double) / (1024 * 1024);
-    fprintf(screen, "  Streaming 2D read: %zu nodes, %u readCols, %zu total elements\n",
-            nrows, readCols, totalElements);
-    fprintf(screen, "  [MEM] Rectangular would need: %zu MB per dataset (%zu MB total)\n",
-            rectMB, rectMB * 2);
-  }
 
   // Reusable chunk buffer — grows to largest chunk, then stays put
   std::vector<double> buf;
@@ -670,13 +601,6 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
                   tempsFlat.data() + offsets[dcPos + r]);
     }
 
-    if (universe->me == 0) {
-      fprintf(screen, "    Chunk %zu/%zu: %zu rows, buf %.1f MB, [MEM] %zu MB\n",
-              s + 1, nodeSlices.size(), chunkRows,
-              chunkRows * static_cast<size_t>(readCols) * sizeof(double) / (1024.0 * 1024.0),
-              get_memory_usage_kb() / 1024);
-    }
-
     dcPos += chunkRows;
   }
 
@@ -684,14 +608,7 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
   auto offsets2 = offsets;  // copy before first move
   times = CompressedArray2D<double>(std::move(timesFlat), std::move(offsets));
   temperatures = CompressedArray2D<double>(std::move(tempsFlat), std::move(offsets2));
-
-  auto t_end = std::chrono::high_resolution_clock::now();
-  double elapsed = std::chrono::duration<double>(t_end - t_start).count();
-
-  if (universe->me == 0) {
-    fprintf(screen, "  [TIMING] Streaming 2D read: %.3f s (%zu elements)\n",
-            elapsed, totalElements);
-  }
+#endif
 }
 
 /* ---------------------------------------------------------------------- */
@@ -794,15 +711,13 @@ bool HDF5UnstructuredTemperatureSource::point_in_bbox(
 
 std::pair<std::array<unsigned, 4>, std::array<double, 3>>
 HDF5UnstructuredTemperatureSource::find_element_point_is_in(
-  const std::vector<unsigned>& selectedChunks,
-  const std::vector<std::array<double, 6>>& chunkBboxes,
-  const std::vector<unsigned>& nodeOffsets,
-  const std::vector<unsigned>& elemOffsets,
-  const Array2D<unsigned>& elemNode,
-  const Array2D<double>& nodeCoords,
-  const std::vector<std::array<double, 6>>& elemBboxes,
   const std::array<double, 3>& pt) const
 {
+  const auto& selectedChunks = selected_chunks;
+  const auto& chunkBboxes = chunk_bboxes;
+  const auto& nodeOffsets = node_offsets;
+  const auto& elemOffsets = elem_offsets;
+  const auto& elemBboxes = elem_bboxes;
   std::array<unsigned, 4> nodeIds;
   std::array<double, 3> parCoords;
 
@@ -826,20 +741,9 @@ HDF5UnstructuredTemperatureSource::find_element_point_is_in(
     if (e >= elemBboxes.size()) return false;
     if (!point_in_bbox(pt, elemBboxes[e])) return false;
 
-    // Find which chunk this element belongs to (for node offset mapping)
-    // Use O(1) precomputed mapping when spatial grid is valid, else O(n) search
-    unsigned c;
-    if (spatial_grid.valid && e < spatial_grid.elem_to_chunk.size()) {
-      c = spatial_grid.elem_to_chunk[e];
-    } else {
-      c = 0;
-      for (unsigned i = 0; i < elemOffsets.size() - 1; i++) {
-        if (e >= elemOffsets[i] && e < elemOffsets[i + 1]) {
-          c = i;
-          break;
-        }
-      }
-    }
+    // Which chunk this element belongs to (for node offset mapping)
+    if (e >= spatial_grid.elem_to_chunk.size()) return false;
+    const unsigned c = spatial_grid.elem_to_chunk[e];
 
     // Get tetrahedron node coordinates
     bool validElement = true;
@@ -863,7 +767,7 @@ HDF5UnstructuredTemperatureSource::find_element_point_is_in(
             1.0 - parCoords[0] - parCoords[1] - parCoords[2] > -tol);
   };
 
-  // Use spatial grid if available (O(1) cell lookup vs O(n) brute force)
+  // O(1) spatial-grid cell lookup (the grid is built on every layer load)
   if (spatial_grid.valid) {
     int cell_idx = spatial_grid.point_to_cell(pt);
     if (cell_idx >= 0 && static_cast<size_t>(cell_idx) < spatial_grid.cell_offsets.size() - 1) {
@@ -874,30 +778,6 @@ HDF5UnstructuredTemperatureSource::find_element_point_is_in(
         if (test_element(*ep)) {
           return std::make_pair(nodeIds, parCoords);
         }
-      }
-    }
-    // Point not in grid or not found in cell - return not found
-    return std::make_pair(
-      std::array<unsigned, 4>{invalidId, invalidId, invalidId, invalidId},
-      std::array<double, 3>{0.0, 0.0, 0.0}
-    );
-  }
-
-  // Fallback: brute force search through chunks (used if grid not built)
-  std::vector<unsigned> possibleChunks;
-  for (unsigned c = 0; c < selectedChunks.size(); c++) {
-    if (selectedChunks[c] >= chunkBboxes.size()) continue;
-    const auto& cBbox = chunkBboxes[selectedChunks[c]];
-    if (point_in_bbox(pt, cBbox)) {
-      possibleChunks.push_back(c);
-    }
-  }
-
-  for (auto c : possibleChunks) {
-    if (c + 1 >= elemOffsets.size()) continue;
-    for (unsigned e = elemOffsets[c]; e < elemOffsets[c + 1]; e++) {
-      if (test_element(e)) {
-        return std::make_pair(nodeIds, parCoords);
       }
     }
   }
@@ -911,13 +791,11 @@ HDF5UnstructuredTemperatureSource::find_element_point_is_in(
 
 /* ---------------------------------------------------------------------- */
 
-std::vector<std::array<double, 6>> HDF5UnstructuredTemperatureSource::build_elem_bounding_boxes(
-  unsigned nChunks,
-  const std::vector<unsigned>& nodeOffsets,
-  const std::vector<unsigned>& elemOffsets,
-  const Array2D<unsigned>& elemNode,
-  const Array2D<double>& nodeCoords) const
+std::vector<std::array<double, 6>> HDF5UnstructuredTemperatureSource::build_elem_bounding_boxes() const
 {
+  const unsigned nChunks = static_cast<unsigned>(selected_chunks.size());
+  const auto& nodeOffsets = node_offsets;
+  const auto& elemOffsets = elem_offsets;
   constexpr double maxVal = std::numeric_limits<double>::max();
   constexpr double minVal = std::numeric_limits<double>::lowest();
 
@@ -1035,11 +913,9 @@ void HDF5UnstructuredTemperatureSource::build_spatial_grid(double target_cell_si
   }
 
   // Build prefix sum to get offsets
-  spatial_grid.cell_offsets.resize(total_cells + 1);
-  spatial_grid.cell_offsets[0] = 0;
-  for (size_t i = 0; i < total_cells; i++) {
-    spatial_grid.cell_offsets[i + 1] = spatial_grid.cell_offsets[i] + cell_counts[i];
-  }
+  spatial_grid.cell_offsets.assign(total_cells + 1, 0);
+  std::partial_sum(cell_counts.begin(), cell_counts.end(),
+                   spatial_grid.cell_offsets.begin() + 1);
 
   // Allocate flat element array
   size_t total_refs = spatial_grid.cell_offsets[total_cells];
@@ -1083,29 +959,6 @@ void HDF5UnstructuredTemperatureSource::build_spatial_grid(double target_cell_si
 
 /* ---------------------------------------------------------------------- */
 
-bool HDF5UnstructuredTemperatureSource::all_temperatures_below_threshold(double time)
-{
-  if (!app) {
-    error->all(FLERR, "App not available for temperature checking");
-  }
-  
-  // Check temperatures at all local sites
-  for (int i = 0; i < app->nlocal; i++) {
-    // Get site coordinates in physical units
-    double x = app->xyz[i][0] * dx;
-    double y = app->xyz[i][1] * dx; 
-    double z = app->xyz[i][2] * dx;
-    double temp = get_temperature_at_xyz_and_time(x, y, z, time);
-    if (temp >= threshold_temp) {
-      return false;
-    }
-  }
-  
-  return true;
-}
-
-/* ---------------------------------------------------------------------- */
-
 void HDF5UnstructuredTemperatureSource::prepare_for_timestep(double time)
 {
   if (!source_initialized) {
@@ -1139,19 +992,12 @@ void HDF5UnstructuredTemperatureSource::prepare_for_timestep(double time)
     compute_site_thermal_intervals(threshold_temp);
   }
 
-  // Precompute nodal temperatures for this timestep
-  precompute_nodal_temperatures(time);
-}
-
-/* ---------------------------------------------------------------------- */
-
-double HDF5UnstructuredTemperatureSource::get_temperature_at_site(int site_index, double time)
-{
-  // Ensure caches are ready (for standalone calls)
-  prepare_for_timestep(time);
-
-  // Use fast path
-  return get_temperature_at_site_fast(site_index);
+  // Precompute nodal temperatures for this timestep -- UNLESS the device does the
+  // time interpolation itself (device_time_interp_), in which case the per-node
+  // host time-interp is redundant and skipped (its dominant per-step host cost
+  // moves onto the device fill).
+  if (!device_time_interp_)
+    precompute_nodal_temperatures(time);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1159,52 +1005,69 @@ double HDF5UnstructuredTemperatureSource::get_temperature_at_site(int site_index
 void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
 {
   auto start_time = std::chrono::high_resolution_clock::now();
-  size_t mem_before = get_memory_usage_kb();
 
-  // Get total number of sites from app
+  // Build the cache over OWNED + GHOST sites (nall), not just owned. The chunk
+  // load already pads the subdomain by grid_cell_size_multiplier cells (>> the
+  // one-cell ghost layer), so every ghost site's coordinate lies inside this
+  // rank's loaded mesh and finds its containing element. Giving ghosts valid
+  // cache entries lets the device fill evaluate ghost temperature POSITIONALLY
+  // (like the Rosenthal/Moser device paths) -- ghost T is then correct on-device
+  // with no host round-trip and no T ghost comm, because every rank evaluates
+  // the same global thermal field at the same physical point. Host consumers
+  // (thermal intervals, threshold scan) still loop nlocal, so the extra ghost
+  // entries are used only by the device fill.
   int nlocal = app->nlocal;
+  int nall = nlocal + app->nghost;
 
-  if (universe->me == 0) {
-    size_t cache_size_mb = nlocal * sizeof(ElementCache) / 1024 / 1024;
-    fprintf(screen, "  [MEM] Building site cache for %d sites (%zu MB), current: %zu MB\n",
-            nlocal, cache_size_mb, mem_before / 1024);
-  }
+  // Resize cache to match owned+ghost site count
+  site_element_cache.resize(nall);
 
-  // Resize cache to match number of local sites
-  site_element_cache.resize(nlocal);
-
-  // For each site, find its containing element and cache the result
-  for (int i = 0; i < nlocal; i++) {
-    // Get site coordinates 
+  // For each site (owned + ghost), find its containing element and cache it.
+  // The point-location is independent per site and read-only against the shared
+  // mesh (find_element_point_is_in is const with only function-local scratch),
+  // and each iteration writes its own distinct cache slot -- so this is
+  // embarrassingly parallel. dynamic schedule because sites inside the loaded
+  // mesh find their element in a few tet tests while sites outside it search the
+  // whole grid cell and fail, so the per-site cost is uneven. (Pragma is a no-op
+  // when built without OpenMP.)
+  #pragma omp parallel for schedule(dynamic, 256)
+  for (int i = 0; i < nall; i++) {
+    // Get site coordinates
     double x = app->xyz[i][0] * dx;  // Convert lattice to physical
     double y = app->xyz[i][1] * dx;
     double z = app->xyz[i][2] * dx;
-    
+
     std::array<double, 3> pt{x, y, z};
-    
+
     // Find element containing this point
-    auto result = find_element_point_is_in(selected_chunks, chunk_bboxes, 
-                                          node_offsets, elem_offsets, 
-                                          elemNode, nodeCoords, 
-                                          elem_bboxes, pt);
-    
+    auto result = find_element_point_is_in(pt);
+
     // Store in cache
     site_element_cache[i].nodeIndices = result.first;
     site_element_cache[i].weights = result.second;
     site_element_cache[i].valid = (result.first[0] != std::numeric_limits<unsigned>::max());
   }
 
-  // Collect unique node indices from valid cached elements
-  // This allows precompute_nodal_temperatures to skip unused nodes
-  std::set<unsigned> unique_nodes;
-  for (int i = 0; i < nlocal; i++) {
-    if (site_element_cache[i].valid) {
-      for (int j = 0; j < 4; j++) {
-        unique_nodes.insert(site_element_cache[i].nodeIndices[j]);
-      }
+  // Collect unique node indices from valid cached elements (owned + ghost) so
+  // precompute_nodal_temperatures fills every node the device fill will read --
+  // including ghost sites' tet nodes.
+  // A mark-and-compact over a byte array per loaded node, NOT a std::set: the
+  // set took 4*nall (~20M here) red-black-tree inserts to end up with at most
+  // n_nodes (~233k) distinct entries. Marking is O(1) per touch and the
+  // compaction walks node indices in ascending order, which is exactly the
+  // order std::set iteration produced -- so active_node_indices is identical.
+  const size_t n_nodes = dataCounts.size();
+  std::vector<unsigned char> node_used(n_nodes, 0);
+  for (int i = 0; i < nall; i++) {
+    if (!site_element_cache[i].valid) continue;
+    for (int j = 0; j < 4; j++) {
+      const unsigned nd = site_element_cache[i].nodeIndices[j];
+      if (nd < n_nodes) node_used[nd] = 1;
     }
   }
-  active_node_indices.assign(unique_nodes.begin(), unique_nodes.end());
+  active_node_indices.clear();
+  for (size_t nd = 0; nd < n_nodes; nd++)
+    if (node_used[nd]) active_node_indices.push_back(static_cast<unsigned>(nd));
 
   // Build BFS-expanded node sets used to keep the per-step interpolation
   // and smoothing tight. Requires adjacency; safe to skip otherwise.
@@ -1216,30 +1079,44 @@ void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
   }
 
   cache_valid = true;
+  // Bump the generation so a device caller re-uploads its static cache Views.
+  ++cache_generation_;
 
   auto end_time = std::chrono::high_resolution_clock::now();
   double cache_build_time = std::chrono::duration<double>(end_time - start_time).count();
 
   if (universe->me == 0) {
-    size_t mem_after = get_memory_usage_kb();
-    fprintf(screen, "  Built element cache for %d sites in %.3f s\n", nlocal, cache_build_time);
+    fprintf(screen, "  Built element cache for %d sites (incl ghosts) in %.3f s\n", nall, cache_build_time);
     fprintf(screen, "  Active nodes: %zu / %zu (%.1f%% of loaded nodes)\n",
             active_node_indices.size(), dataCounts.size(),
             100.0 * active_node_indices.size() / dataCounts.size());
-    fprintf(screen, "  [MEM] After site cache: %zu MB (delta: %+zd MB)\n",
-            mem_after / 1024, (long)(mem_after - mem_before) / 1024);
   }
 }
 
-/* ---------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------
+   Flatten the static per-site element cache for device upload. node_idx is
+   [4*nlocal] (tet-node indices into the nodal-temp slice, site-major), weights
+   is [3*nlocal] (barycentric weights), valid is [nlocal] (1/0). Invalid sites
+   (no containing element) get zeroed indices/weights and valid 0 so the device
+   kernel yields default_temp for them. Mirrors get_temperature_at_site_fast().
+------------------------------------------------------------------------- */
 
-const HDF5UnstructuredTemperatureSource::ElementCache&
-HDF5UnstructuredTemperatureSource::get_cached_element(int site_index) const
+void HDF5UnstructuredTemperatureSource::copy_device_cache(
+    std::vector<int> &node_idx,
+    std::vector<double> &weights,
+    std::vector<int> &valid) const
 {
-  if (site_index < 0 || site_index >= static_cast<int>(site_element_cache.size())) {
-    error->all(FLERR, "Invalid site index in get_cached_element");
+  const size_t n = site_element_cache.size();
+  node_idx.assign(4 * n, 0);
+  weights.assign(3 * n, 0.0);
+  valid.assign(n, 0);
+  for (size_t i = 0; i < n; i++) {
+    const ElementCache &c = site_element_cache[i];
+    if (!c.valid) continue;
+    valid[i] = 1;
+    for (int j = 0; j < 4; j++) node_idx[4 * i + j] = (int) c.nodeIndices[j];
+    for (int j = 0; j < 3; j++) weights[3 * i + j] = c.weights[j];
   }
-  return site_element_cache[site_index];
 }
 
 /* ---------------------------------------------------------------------- */
@@ -1252,18 +1129,8 @@ void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double tim
     return;
   }
 
-  // Performance diagnostics
-  static int precompute_call_count = 0;
-  static double t_total = 0.0;
-  static size_t total_nodes_processed = 0, total_nodes_interpolated = 0;
-  precompute_call_count++;
-  auto t_start = std::chrono::high_resolution_clock::now();
-
   const size_t num_nodes = dataCounts.size();
   cached_nodal_temps.resize(num_nodes);
-  constexpr unsigned LINEAR_SEARCH_THRESHOLD = 32;
-
-  size_t nodes_interpolated = 0;
 
   // Pick the tightest interpolation set that still satisfies downstream reads:
   //   • smoothing on + BFS sets built → (K+1)-hop expansion of active set
@@ -1277,6 +1144,14 @@ void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double tim
   }
   const size_t num_to_process = subset ? subset->size() : num_nodes;
 
+  // Each node's time-interpolation is independent: it reads the shared
+  // (immutable-per-layer) times/temps CSR and writes its own distinct
+  // cached_nodal_temps[nodeIdx] slot, so this loop parallelizes with no
+  // reduction -> the result is bit-identical to serial. This runs every step (~33k nodes here) and was
+  // the dominant host cost in the per-step "Temperature update" timer. Same
+  // proven pattern as build_site_element_cache / compute_site_thermal_intervals.
+  // (Pragma is a no-op when built without OpenMP.)
+  #pragma omp parallel for schedule(static)
   for (size_t i = 0; i < num_to_process; i++) {
     const size_t nodeIdx = subset ? (*subset)[i] : i;
     const unsigned count = dataCounts[nodeIdx];
@@ -1289,42 +1164,15 @@ void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double tim
       continue;
     }
 
-    nodes_interpolated++;
-
-    // Find time index - use linear search for small arrays, binary for large
-    unsigned idx;
-    if (count <= LINEAR_SEARCH_THRESHOLD) {
-      idx = 1;
-      while (idx < count && timeIter[idx] < time) {
-        ++idx;
-      }
-    } else {
-      auto lower = std::lower_bound(timeIter, timeIter + count, time);
-      idx = std::distance(timeIter, lower);
-      if (idx == 0) idx = 1;
-    }
+    // First sample at or after `time` (bracket [idx-1, idx]).
+    unsigned idx = std::distance(timeIter, std::lower_bound(timeIter, timeIter + count, time));
+    if (idx == 0) idx = 1;
 
     // Linear interpolation in time
     cached_nodal_temps[nodeIdx] = tempIter[idx-1] +
                                   (tempIter[idx] - tempIter[idx-1]) /
                                   (timeIter[idx] - timeIter[idx-1]) *
                                   (time - timeIter[idx-1]);
-  }
-
-  auto t_end = std::chrono::high_resolution_clock::now();
-  double elapsed = std::chrono::duration<double>(t_end - t_start).count();
-  t_total += elapsed;
-  total_nodes_processed += num_to_process;
-  total_nodes_interpolated += nodes_interpolated;
-
-  // Print diagnostics every 100 calls
-  if (precompute_call_count % 100 == 0 && universe->me == 0) {
-    fprintf(screen, "  [PRECOMPUTE] After %d calls: total=%.3f s (%.3f ms/call), "
-            "active: %zu/%zu nodes (%.1f%%), interpolated: %zu (%.1f%%)\n",
-            precompute_call_count, t_total, 1000.0*t_total/precompute_call_count,
-            num_to_process, num_nodes, 100.0*num_to_process/num_nodes,
-            total_nodes_interpolated/precompute_call_count,
-            100.0*total_nodes_interpolated/total_nodes_processed);
   }
 
   // Apply mesh-Laplacian smoothing on the FEA node graph before any
@@ -1750,9 +1598,20 @@ void HDF5UnstructuredTemperatureSource::compute_site_thermal_intervals(double th
   auto t_start = std::chrono::high_resolution_clock::now();
 
   std::vector<ThermalInterval> raw;
-  raw.reserve(256);
 
   const int nlocal = app->nlocal;
+
+  // Per-site interval extraction is independent across sites and reads only
+  // shared (immutable here) mesh/cache data. merge_overlapping_intervals()
+  // below sorts, so the accumulation order does not affect the result -- each
+  // thread fills a private buffer and we concatenate. (When built without
+  // OpenMP the pragmas are no-ops, raw_local is a single buffer, and this runs
+  // exactly as the previous serial loop did.)
+  #pragma omp parallel
+  {
+  std::vector<ThermalInterval> raw_local;
+  raw_local.reserve(256);
+  #pragma omp for schedule(dynamic, 512) nowait
   for (int i = 0; i < nlocal; i++) {
     const ElementCache& cache = site_element_cache[i];
     if (!cache.valid) continue;
@@ -1850,7 +1709,7 @@ void HDF5UnstructuredTemperatureSource::compute_site_thermal_intervals(double th
         const double denom = T_cur - T_prev;
         const double alpha = (threshold - T_prev) / denom;
         const double hot_end = t_prev + alpha * (t_next - t_prev);
-        raw.emplace_back(hot_start, hot_end);
+        raw_local.emplace_back(hot_start, hot_end);
         in_hot = false;
       }
 
@@ -1865,9 +1724,12 @@ void HDF5UnstructuredTemperatureSource::compute_site_thermal_intervals(double th
     }
 
     if (in_hot) {
-      raw.emplace_back(hot_start, t_end);
+      raw_local.emplace_back(hot_start, t_end);
     }
   }
+  #pragma omp critical
+  raw.insert(raw.end(), raw_local.begin(), raw_local.end());
+  }  // omp parallel
 
   current_layer_site_intervals = merge_overlapping_intervals(raw);
   site_intervals_for_layer = active_layer;

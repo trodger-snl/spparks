@@ -1,0 +1,37 @@
+# AM temperature-field validation deck (see README.md). The temperature
+# field is deterministic; compare "diag_style array d6 sum d6 max" between
+# the CPU (additive/texture) and Kokkos (additive/texture/kk) apps.
+app_style additive/texture/kk 1000000 5e-6 5e-6 2
+seed             56789
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 200 0 40 0 30
+boundary         n n n
+create_box       box
+create_sites     box
+set site range 1 1000000
+set i2 value 1
+set i1 value 42
+set d1 value 1.0
+set d2 value 0.0
+set d3 value 0.0
+set d4 value 0.0
+sector           yes
+sweep            color
+diag_style       array d6 sum d6 max
+temperature      0.0
+misorientation_target random_rotation
+liquidus         1573
+solidus          1523
+solid_front_vel  4 -1.0302e-7 1.0533e-4 2.2196e-3 0
+nucleation_density      1e14
+critical_undercooling   5
+undercooling_deviation  3
+mean_nuclei_volume      8.4375e-16
+nuclei_volume_deviation 1.5625e-17
+setup_temperature_source moser 340.0 0.355 11.2 2.0959e-6 573.0 650.0 50e-6 50e-6 75e-6
+laser_fluctuations psd lorentzian sigma_W 0.05 sigma_D 0.06 sigma_P 0.5 tau 200e-6 rho 0.5 seed 12345 dt 5e-6
+laser_path start 0.15e-3 0.10e-3 0.15e-3 end 0.85e-3 0.10e-3 speed 1.2 repeats 3 pause_below 1500 reset_temperature 600
+fast_forward_search_window 1e-4
+stats            1e-4
+run              4.5e-3

@@ -1,0 +1,111 @@
+# Material parameter card: 304L stainless steel.
+# Format: docs/MATERIAL_CARDS.md (schema 1). SI units; every value carries a ref.
+
+[card]
+schema_version = 1
+material = "304L"
+designation = { UNS = "S30403", spec = "AISI 304L; wrought per ASTM A240/A276; LPBF powder gas-atomised 304L" }
+composition_wt_pct = { Fe = "bal", Cr = "18-20", Ni = "8-12", Mn = "<2", Si = "<0.75", N = "<0.10", C = "<0.03", note = "UNS S30403 ranges, not a measured heat" }
+version = "1.0.0"
+created = 2026-10-17
+modified = 2026-10-17
+status = "draft"
+reviewed_by = ""
+
+[[changelog]]
+version = "1.0.0"
+date = 2026-10-17
+author = "research agent (Claude)"
+changes = "Initial draft from literature: Kim 1975 304L tables, Mills 2002 melting range, Cezairliyan 1980 emittance, Simonds 2018 absorptance, Li & Tan 2017 growth kinetics, two 304L LPBF process sets."
+
+[references.kim1975]
+citation = "C.S. Kim, Thermophysical Properties of Stainless Steels, Argonne National Laboratory report ANL-75-55 (1975)"
+doi = "10.2172/4152287"
+url = "https://www.osti.gov/biblio/4152287"
+
+[references.mills2002]
+citation = "K.C. Mills, Recommended Values of Thermophysical Properties for Selected Commercial Alloys, Woodhead Publishing (2002)"
+isbn = "9781855735699"
+
+[references.li_lough2017]
+citation = "L. Li, C. Lough, A. Replogle, D. Bristow, R. Landers, E. Kinzel, Thermal modeling of 304L stainless steel selective laser melting, Proc. 28th Solid Freeform Fabrication Symposium (2017) 1068-1081"
+url = "https://utw10945.utweb.utexas.edu/sites/default/files/2017/Manuscripts/ThermalModelingof304LStainlessSteelSelective.pdf"
+
+[references.cezairliyan1980]
+citation = "A. Cezairliyan, A.P. Miiller, Thermophysical measurements on low carbon 304 stainless steel above 1400 K by a transient (subsecond) technique, Int. J. Thermophys. 1 (1980) 83-95"
+doi = "10.1007/BF00506274"
+
+[references.shurtz2018]
+citation = "R.C. Shurtz, Total Hemispherical Emissivity of Metals Applicable to Radiant Heat Testing, Sandia National Laboratories report SAND2018-13271 (2018)"
+doi = "10.2172/1483461"
+
+[references.simonds2018]
+citation = "B.J. Simonds, J. Sowards, J. Hadler, E. Pfeif, B. Wilthan, J. Tanner, C. Harris, P. Williams, J. Lehman, Time-resolved absorptance and melt pool dynamics during intense laser irradiation of a metal, Phys. Rev. Applied 10 (2018) 044061"
+doi = "10.1103/PhysRevApplied.10.044061"
+url = "https://arxiv.org/abs/1809.03993"
+
+[references.li_tan2017]
+citation = "X. Li, W. Tan, 3-dimensional cellular automata simulation of grain structure in metal additive manufacturing processes, Proc. 28th Solid Freeform Fabrication Symposium (2017) 1030-1047"
+url = "https://utw10945.utweb.utexas.edu/sites/default/files/2017/Manuscripts/3DimensionalCellularAutomataSimulationofGrai.pdf"
+
+[references.tan_shin2015]
+citation = "W. Tan, Y.C. Shin, Multi-scale modeling of solidification and microstructure development in laser keyhole welding process for austenitic stainless steel, Comput. Mater. Sci. 98 (2015) 446-458"
+doi = "10.1016/j.commatsci.2014.10.063"
+
+[references.ghayoor2020]
+citation = "M. Ghayoor, K. Lee, Y. He, C.-H. Chang, B.K. Paul, S. Pasebani, Selective laser melting of 304L stainless steel: Role of volumetric energy density on the microstructure, texture and mechanical properties, Addit. Manuf. 32 (2020) 101011"
+doi = "10.1016/j.addma.2019.101011"
+url = "https://www.osti.gov/biblio/1647744"
+
+[references.parvez2020]
+citation = "M.M. Parvez, T. Pan, Y. Chen, S. Karnati, J.W. Newkirk, F. Liou, High cycle fatigue performance of LPBF 304L stainless steel at nominal and optimized parameters, Materials 13 (2020) 1591"
+doi = "10.3390/ma13071591"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC7177987/"
+
+[thermal]
+density = { value = 7894, unit = "kg/m^3", ref = "kim1975", T_range = [300, 300], note = "Kim Table 7 (7.894 g/cm^3 at 300 K), smoothed from Type 304 (not 304L) density data; carbon effect taken as negligible. The conduction solver uses one dense density" }
+solidus = { value = 1673, unit = "K", ref = ["mills2002", "li_lough2017"], note = "Mills 2002 value as quoted for 304L by Li et al. 2017 (book table not read). Cezairliyan & Miiller 1980 measured a single melting point of 1707 +/- 8 K on 304L; Kim 1975 gives a 1670-1730 K melting range" }
+liquidus = { value = 1727, unit = "K", ref = ["mills2002", "li_lough2017"], note = "Mills 2002 value as quoted for 304L by Li et al. 2017 (book table not read)" }
+latent_fusion = { value = 2.61e5, unit = "J/kg", ref = ["mills2002", "li_lough2017"], note = "261 kJ/kg, Mills 2002 as quoted by Li et al. 2017. Kim 1975 estimates 64.0 cal/g = 2.68e5 J/kg by an element additivity rule; no 304L DSC value found" }
+conductivity = { T = [300, 400, 600, 800, 1000, 1200, 1400, 1600, 1673], value = [12.97, 14.59, 17.82, 21.06, 24.29, 27.53, 30.76, 34.00, 35.18], unit = "W/(m K)", extrapolation = "clamp", ref = "kim1975", note = "Kim Table 10, Type 304L (W/(cm K) x 100): linear fit k = 8.116 + 0.01618 T to low-carbon 304 measurements to 1600 K (Feith et al., GEMP-643); the 1673 K point is that fit extrapolated to the solidus; held there in the liquid. A single linear fit; Kim is likely several percent above modern 304 recommendations near melting (not verified against Mills)" }
+heat_capacity = { T = [300, 400, 600, 800, 1000, 1200, 1400, 1600, 1700, 1727], value = [510.0, 523.4, 550.2, 577.4, 604.2, 631.4, 658.1, 685.3, 698.7, 795.0], unit = "J/(kg K)", extrapolation = "clamp", ref = "kim1975", note = "Kim Table 2, Type 304L (cal/(g K) x 4184): solid values fit to 304L enthalpy data to 1620 K and extrapolated to 1700 K; the liquidus point is Kim's liquid estimate 0.190 cal/(g K) by an element additivity rule, not a measurement. Latent heat is separate (latent_fusion)" }
+emissivity = { value = 0.37, unit = "1", ref = ["cezairliyan1980", "shurtz2018"], uncertainty = 0.05, uncertainty_type = "relative_1sigma", note = "Cezairliyan & Miiller 1980: hemispherical total emittance of 304L near melting (abstract value; clean surface heated in vacuum), stated inaccuracy 5% (confidence level not stated). Oxidised surfaces are much higher: Shurtz 2018 measured 0.67-0.72 on well-oxidised SS304 (room temperature, after heating)" }
+
+[thermal.linear]
+# Rosenthal/Moser need one k and cp: the tables evaluated at T_ref unless
+# conductivity/heat_capacity are given here.
+T_ref = { value = 1000, unit = "K", ref = "estimate", note = "between preheat and solidus" }
+
+# [powder] omitted: no readable 304L powder-bed conductivity found (Wei et al. 2018,
+# Addit. Manuf. 21, 201 and Ahsan et al. 2020, Powder Technol. 374, 648 are paywalled).
+# A deck using the conduction source must give k_powder.
+
+[optical]
+absorptivity = { value = 0.31, unit = "1", ref = "simonds2018", note = "316L proxy: bulk NIST SRM 1155a (316L), stationary 1070 nm spot welds, conduction mode (Table 3, coupling 0.31 at 1.2-2.05 J); rises to 0.5-0.86 in transition/keyhole mode. Bulk, not powder; LPBF powder beds absorb more" }
+
+[microstructure]
+# Literature growth kinetics, a polynomial in dT = liquidus - T (highest power first).
+# No nucleation records: decks provide them.
+front_velocity_source = { form = "polynomial", coeffs = [1.091e-5, -2.034e-4, 2.740e-3, 1.151e-4], unit = "m/s", dT_unit = "K", ref = ["li_tan2017", "tan_shin2015"], note = "Li & Tan 2017 Eq. 4, a polynomial interpolation of KGT dendrite-tip results for austenitic stainless steel in Tan & Shin 2015 (closed access, not read). Li & Tan applied it to 316L, not 304L. Same coefficients as the SPPARKS additive/texture default fit. Nonzero constant term (V(0) = 0.115 mm/s) as printed" }
+solid_front_vel = { coeffs = [1.091e-5, -2.034e-4, 2.740e-3, 1.151e-4], unit = "m/s", dT_unit = "K", ref = ["li_tan2017", "tan_shin2015"], note = "copied exactly from front_velocity_source" }
+
+# Process sets from published 304L LPBF studies.
+
+[process.ghayoor2020_105W_600mms]
+note = "Ghayoor et al. 2020 Sec. 2.2: cylinders on a 316 SS plate, 105 deg scan rotation, N2 atmosphere (<100 ppm O2); VED 117 J/mm^3 (the fastest of their 50-600 mm/s series, relative density below their 99% best)"
+machine = "ORLAS Creator (OR Laser/Coherent), 250 W CW Yb fibre laser, 1067 nm"
+power = { value = 105, unit = "W", ref = "ghayoor2020" }
+speed = { value = 0.6, unit = "m/s", ref = "ghayoor2020" }
+hatch = { value = 50e-6, unit = "m", ref = "ghayoor2020" }
+layer_thickness = { value = 30e-6, unit = "m", ref = "ghayoor2020" }
+spot = { value = 50e-6, unit = "m", convention = "1/e2 diameter", ref = "ghayoor2020", note = "'focal spot size (1/e2, Gaussian beam)' of 50 um; read as a diameter" }
+validation = { melt_pool_depth = 43.8e-6, unit = "m", ref = "ghayoor2020", uncertainty = 5.7e-6, uncertainty_type = "1sigma", note = "Table 3: top-layer full melt-pool depth dp/tL = 1.46 +/- 0.19 times the 30 um layer (overlap depth 1.09 +/- 0.12); +/- assumed 1 sigma. No width reported" }
+
+[process.parvez2020_ED8]
+note = "Parvez et al. 2020 Table 2, ED #8, their nominal parameters (58.8 J/mm^3, >99% dense); pulsed point exposure: 70 um point distance, 88 us exposure, speed is their effective v = point distance / exposure; stripe scan, argon"
+machine = "Renishaw AM250, 200 W IPG laser (pulsed point exposure)"
+power = { value = 200, unit = "W", ref = "parvez2020" }
+speed = { value = 0.8, unit = "m/s", ref = "parvez2020" }
+hatch = { value = 85e-6, unit = "m", ref = "parvez2020" }
+layer_thickness = { value = 50e-6, unit = "m", ref = "parvez2020" }
+preheat = { value = 353.15, unit = "K", ref = "parvez2020", note = "substrate and powder held at 80 C (Sec. 2.2)" }

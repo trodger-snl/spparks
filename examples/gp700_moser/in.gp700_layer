@@ -1,0 +1,61 @@
+# GammaPrint-700 PBF-L, one build layer per box (docs/GP700_MOSER_SROD_DECK_PLAN.md).
+# Print: 176 W, 1137 mm/s, 80 um spot (D4sigma -> sx=sy=20 um), 80 um hatch,
+# 30 um layers, 90 deg interlayer rotation, 473 K preheat (Lamb et al. 2023/2026).
+# Material (Met Trans 2026 3DThesis set): k 22.5 W/mK, rho 8650, cp 600 ->
+# alpha 4.335e-6 m^2/s, absorptivity 0.9, Tl 1646 K, Ts 1592 K.
+# Placeholders (double-underscore tokens) are filled in by run_layers.sh.
+variable DX equal __DX__
+
+app_style additive/texture/kk 1000000 ${DX} __DT__ 1
+seed             __SEED__
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 __NX__ 0 __NX__ __ZLO__ __ZHI__
+boundary         n n n
+create_box       box
+create_sites     box
+__INIT_OR_STITCH__
+sector           yes
+sweep            color
+diag_style       array d6 sum d6 max
+temperature      0.0
+
+liquidus         1646
+solidus          1592
+# ct15 (304L) V(dT) polynomial scaled 3.5x so the front keeps up with the
+# 1.137 m/s scan at ~30 K undercooling (Plan 2 5.1); V(50 K) = 1.27 m/s.
+solid_front_vel  4 -3.6057e-7 3.68655e-4 7.7686e-3 0
+# Sobol study 2026-09-05 (docs/GP700_MOSER_SROD_DECK_PLAN.md): lower nucleation
+# strengthens the <001> fibre; 1.5e13 with critical_undercooling 15 K (selective
+# for the pool tail; tc has no effect on the SROD bias).
+nucleation_density      1.5e13
+critical_undercooling   15
+undercooling_deviation  2
+mean_nuclei_volume      8.4375e-16
+nuclei_volume_deviation 1.5625e-17
+# c2 2.8: mobility 1 + 2.8 cos(2.5 theta) (negative beyond ~40 deg => zero weight);
+# the <001> fraction rises ~0.03 per unit c2 (Sobol study 2).
+texture_parameters 2.8 2.5
+smooth_greedy_multiproposal on
+smooth_orientation copy
+nuclei_smooth off
+
+# D = 0.40 deg^2/um: with a coarse-grained substrate (make_substrate.py) and ONE greedy
+# smoothing pass (nrefine 1, the ct15 pairing) the walk accumulates ~1.2x its input
+# against height, so the input sits near Lamb's fit (0.42). The 1.15 used in v5
+# compensated the damping of two greedy passes on a single-voxel-seeded substrate.
+misorientation_diffusion 6.5e4 30
+misorientation_grain_walk 1.0e4 0.9 path
+misorientation_target random_rotation
+nucleation_misorientation_target on
+
+# reset_time BEFORE laser_path: the scan is anchored at the current sim time.
+reset_time       __T0__
+setup_temperature_source moser 176 0.9 22.5 4.335e-6 473 600 20e-6 20e-6 10e-6
+__LASER__
+fast_forward_search_window 1e-4
+stats            2e-4
+
+dump             dump.id.1 stitch __T1__ __STITCH__ i1 i2 d1 d2 d3 d4 d8 d9 d10
+dump_modify      dump.id.1 delay __T1__
+run              __T1__ upto

@@ -77,16 +77,8 @@ class RosenthalTemperatureSource : public TemperatureSource {
   // TemperatureSource interface
   virtual void setup_temperature_source(const std::vector<std::string> &args) override;
   virtual double get_temperature_at_xyz_and_time(double x, double y, double z, double time) override;
-  virtual void update_temperatures(double dt, double simulation_time) override;
-  virtual bool needs_data_refresh(double simulation_time) override;
-  virtual void cleanup() override;
-  virtual std::string get_source_type() const override { return "rosenthal"; }
   virtual void print_source_info() const override;
-
-  // Fast-forward support: the source declares it; the driving app
-  // implements the actual time prediction using path geometry.
-  virtual bool supports_time_queries() const override { return true; }
-  virtual double get_next_time_with_temperature(double current_time, double threshold_temp) override;
+  void cleanup();
 
   // Pool-local-frame query used by AppAdditiveTexture every step.
   // (xi, y_rel, z_rel) are coordinates of a lattice site relative to the
@@ -109,7 +101,19 @@ class RosenthalTemperatureSource : public TemperatureSource {
   // Set by the app from its lattice spacing dx.
   void set_r_min(double r) { r_min = r; }
 
-  RosenthalMode get_mode() const { return mode; }
+
+  // Export the material/source parameters needed to evaluate this source on a
+  // device (mode, lambda*Q, k, alpha, r_min, eta_y/eta_z; keyhole adds
+  // lambda_p*Q, lambda_l*Q, n_quad). The laser pose is filled separately by the
+  // driving app from its scan path. Returns true for all modes; KEYHOLE also
+  // needs copy_keyhole_quadrature() for the line-integral nodes.
+  bool fill_device_plan(struct RosenthalDevicePlan &plan) const;
+
+  // Copy the keyhole line-integral quadrature nodes/weights (length n_quad,
+  // already mapped to [-d,d] with the Jacobian in the weights) for device
+  // upload. Only meaningful in KEYHOLE mode.
+  void copy_keyhole_quadrature(std::vector<double> &nodes,
+                               std::vector<double> &weights) const;
 
  private:
   RosenthalMode mode;

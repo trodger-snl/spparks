@@ -461,6 +461,18 @@ int DumpText::parse_fields(int narg, char **arg)
       pack_choice[i] = &DumpText::pack_propensity;
       vtype[i] = DOUBLE;
 
+    // ipf = inverse-pole-figure colour from the site quaternion (dump image
+    // only); packs d1 as a placeholder, dump image reads d1-d4 itself
+
+    } else if (strcmp(arg[iarg],"ipf") == 0 && strcmp(style,"image") == 0) {
+      fields[i] = DARRAY;
+      pack_choice[i] = &DumpText::pack_darray;
+      vtype[i] = DOUBLE;
+      vindex[i] = 0;
+      if (!latticeflag || app->ndouble < 4)
+        error->all(FLERR,"Dump image ipf color requires a quaternion app "
+                   "(d1-d4)");
+
     // integer value = iN
     // double value = dN
 

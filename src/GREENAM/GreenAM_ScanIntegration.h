@@ -1,5 +1,6 @@
 #ifndef GREENAM_SCAN_INTEGRATION_H
 #define GREENAM_SCAN_INTEGRATION_H
+#include <algorithm>
 #include "GreenAM_Constants.h"
 #include "GreenAM_LaserScan.h"
 #include "GreenAM_GaussLegendre.h"
@@ -99,8 +100,8 @@ struct ScanIntegration
     RealType t, double char_length, unsigned * cnt = nullptr)
   {
     if(t==0.) return 0.;
-    unsigned end_idx = binary_search(scan.bounds.data(), t, scan.bounds.size());
-    if(std::fabs(t-scan.bounds(end_idx)) <= 4.*epsilon) end_idx--;
+    unsigned end_idx = std::upper_bound(scan.bounds.begin(), scan.bounds.end(), t) - scan.bounds.begin() - 1;
+    if(std::fabs(t-scan.bounds[end_idx]) <= 4.*epsilon) end_idx--;
 
     RealType res = 0.;
     RealType avg_sigma = 1./3.*(scan.eprop.sx+scan.eprop.sy+scan.eprop.sz);
@@ -108,20 +109,20 @@ struct ScanIntegration
 
     for(unsigned i=0; i<=end_idx; i++)
     {
-      if(std::fabs(scan.powers(i)) <= 4*sierra::greenam::epsilon) continue;
+      if(std::fabs(scan.powers[i]) <= 4*sierra::greenam::epsilon) continue;
       auto gge = scan.get_gg_ellipse_for_point(x, y, z, t, i);
       auto gge_cnt = CallCounter<GaussGreenEllips<RealType>>(gge, cnt);
       
-      RealType & tstart = scan.bounds(i);
+      RealType & tstart = scan.bounds[i];
       RealType tend = i+1 >= scan.bounds.size() ? t : 
-        (t <= scan.bounds(i+1) + 4.*epsilon ? t : scan.bounds(i+1));
+        (t <= scan.bounds[i+1] + 4.*epsilon ? t : scan.bounds[i+1]);
 
       RealType sigma_eff = 4.*gge.alpha*(t-tend)+avg_sigma_sq;
       RealType quad_size = char_length*char_length*sigma_eff/4./gge.alpha;
 
-      if(scan.speeds(i) > 4*sierra::greenam::epsilon)
+      if(scan.speeds[i] > 4*sierra::greenam::epsilon)
       {
-        quad_size = std::min(char_length*std::sqrt(sigma_eff)/scan.speeds(i),quad_size);
+        quad_size = std::min(char_length*std::sqrt(sigma_eff)/scan.speeds[i],quad_size);
       }
 
       RealType n_quad_pts = (tend-tstart)/quad_size;
@@ -158,16 +159,16 @@ struct ScanIntegration
   {
     if(order > MaxOrder) order = MaxOrder;
     if(t==0.) return 0.;
-    unsigned end_idx = binary_search(scan.bounds.data(), t, scan.bounds.size());
-    if(std::fabs(t-scan.bounds(end_idx)) <= 4.*epsilon) end_idx--;
+    unsigned end_idx = std::upper_bound(scan.bounds.begin(), scan.bounds.end(), t) - scan.bounds.begin() - 1;
+    if(std::fabs(t-scan.bounds[end_idx]) <= 4.*epsilon) end_idx--;
 
     RealType res = 0.;
     for(unsigned i=0; i<=end_idx; i++)
     {
-      if(std::fabs(scan.powers(i)) <= 4*sierra::greenam::epsilon) continue;
-      RealType & tstart = scan.bounds(i);
+      if(std::fabs(scan.powers[i]) <= 4*sierra::greenam::epsilon) continue;
+      RealType & tstart = scan.bounds[i];
       RealType tend = i+1 >= scan.bounds.size() ? t : 
-        (t <= scan.bounds(i+1) + 4.*epsilon ? t : scan.bounds(i+1));
+        (t <= scan.bounds[i+1] + 4.*epsilon ? t : scan.bounds[i+1]);
 
       auto gge = scan.get_gg_ellipse_for_point(x, y, z, t, i);
       auto gge_cnt = CallCounter<GaussGreenEllips<RealType>>(gge, cnt);

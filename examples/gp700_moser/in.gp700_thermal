@@ -1,0 +1,32 @@
+# Plan 2 5.1: one hatch on the init box, thermal check against Met Trans 2026
+# Fig. 3 (G ~3e7 K/m at the fusion boundary, V low then >1 m/s at the tail).
+app_style additive/texture/kk 1000000 3e-6 2e-6 2
+seed             12345
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 134 0 134 0 30
+boundary         n n n
+create_box       box
+create_sites     box
+set              site range 1 1000000
+set              i2 value 1
+set              d6 value 473
+sector           yes
+sweep            color
+diag_style       array d6 sum d6 max
+temperature      0.0
+liquidus         1646
+solidus          1592
+solid_front_vel  4 -3.6057e-7 3.68655e-4 7.7686e-3 0
+nucleation_density      1e6
+critical_undercooling   5
+undercooling_deviation  2
+mean_nuclei_volume      8.4375e-16
+nuclei_volume_deviation 1.5625e-17
+texture_parameters 1.0 2.5
+setup_temperature_source moser 176 0.9 22.5 4.335e-6 473 600 20e-6 20e-6 10e-6
+laser_path start -100e-6 200e-6 90e-6 end 502e-6 200e-6 speed 1.137 repeats 1
+fast_forward_search_window 1e-4
+stats            5e-5
+dump             1 text 5e-5 dump.thermal.* id i2 d6 d8 d9 x y z
+run              1.2e-3

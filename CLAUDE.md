@@ -2,415 +2,148 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Build System
+## What this checkout is
 
-SPPARKS supports both traditional Makefile and modern CMake build systems:
+SPPARKS (Stochastic Parallel PARticle Kinetic Simulator), a kinetic Monte Carlo
+code. This checkout (`/home/tron/spparks-kokkos`, branch **SURGE-kokkos**) is the
+GPU-acceleration line: it adds a Kokkos/HIP port of the additive-manufacturing
+`additive/texture` app, building for an **AMD gfx1151 (Strix Halo, RDNA 3.5)**
+APU with `hipcc`.
 
-## Repository Location
+Sibling repos: `/home/tron/spparks` (the non-GPU SURGE line), plus analysis
+tooling. The two SPPARKS repos share history; the CPU `additive/texture` app here
+is the correctness reference for the GPU port.
 
-Primary repository: `/Users/Tron/spparks`
+## Build & run
 
-**Related repositories:**
-- **Microstructure Analysis Scripts**: `/Users/Tron/spparks-micro-analysis`
-  - Previously located in `micro_analysis_scripts/` (extracted November 2025)
-  - Contains Python tools for analyzing SPPARKS output (IPF, KAM, GND, thermal analysis)
-  - Requires SPPARKS STITCH library
-  - See separate CLAUDE.md in that repository for analysis-specific guidance
-
-## Building to test Claude Code changes
-
-**Quick build for testing (Homebrew dependencies):**
-```bash
-cd /Users/Tron/spparks/src
-make -j12 mac_arm
-```
-
-**Full-featured build with all packages:**
-```bash
-cd /Users/Tron/spparks/src
-./build_cmake.sh --highfive --package stitch --hdf5 --jpeg -m mpi
-```
-
-**Test changes:**
-Use mpirun with 6 cores and the `/Users/Tron/spparks/examples/ReducedTempAM/QuatTest/in.additive` input file. Let tests run for at least 30 seconds.
-
-### CMake Build (Recommended)
+All builds use the **spack environment `spparks-dev`** (provides openmpi,
+HDF5+parallel, HighFive). Activate it first or commands fail:
 
 ```bash
-# Quick start - build with auto-detected settings
-./build_cmake.sh
-
-# Machine-specific builds
-./build_cmake.sh -m mac                    # macOS
-./build_cmake.sh -m mpi                    # MPI build
-./build_cmake.sh -m linux                  # Linux
-
-# Advanced options
-./build_cmake.sh -m mpi --package stitch   # With packages
-./build_cmake.sh --lib --shared            # Shared library
-./build_cmake.sh --clean -b Debug          # Debug build
-
-# Manual CMake
-mkdir build && cd build
-cmake -DSPPARKS_MACHINE=mpi -DSPPARKS_PACKAGE_STITCH=ON ..
-cmake --build .
+. /home/tron/spack/share/spack/setup-env.sh && spack env activate spparks-dev
 ```
 
-### Traditional Makefile Build
+The working GPU build is configured in `build-verify/` (hipcc, HighFive+HDF5+MPI,
+Kokkos HIP/gfx1151). Reconfigure + build:
 
 ```bash
-# Build for a specific machine configuration
-make machine
-
-# Common configurations:
-make mac          # macOS with no MPI
-make mac_mpi      # macOS with MPI
-make linux        # Linux
-make mpi          # Generic MPI build
-make serial       # Serial (no MPI) build
-
-# Build as library
-make mode=lib machine
-make mode=shlib machine    # shared library
-
-# Clean builds
-make clean-all             # delete all object files
-make clean-machine         # delete specific machine objects
+cmake -S src -B build-verify          # configure (also installs packages, see below)
+cmake --build build-verify -j 8       # build -> executable is build-verify/spparks
 ```
 
-### Build System Features
-
-Both systems support:
-- Auto-generation of `style_*.h` headers for dynamic class registration
-- Machine-specific compiler and library configurations
-- Package management (install/remove optional components)
-- Static and shared library builds
-- MPI and serial configurations
-
-CMake advantages:
-- Modern dependency management
-- Better IDE integration
-- Cross-platform compatibility
-- Package config file generation
-- Easier customization
-
-### Spack Environment Management
-
-SPPARKS includes `spack.yaml` for reproducible dependency management across systems.
-
-**Quick Start:**
-```bash
-# One-time setup (if Spack not installed)
-git clone https://github.com/spack/spack.git ~/spack
-source ~/spack/share/spack/setup-env.sh
-
-# Create and activate environment
-cd /Users/Tron/spparks
-spack env create spparks-dev spack.yaml
-spack env activate spparks-dev
-spack install -j 4  # Install all dependencies
-
-# Build SPPARKS with Spack dependencies
-cd src
-./build_cmake.sh --highfive --package stitch --hdf5 --jpeg -m mpi
-```
-
-**Python Compatibility:**
-- Spack 1.0.2 (Homebrew): Requires Python ≤ 3.12 (incompatible with 3.13+)
-- Spack develop (source): Compatible with Python 3.13+
-- Recommended: Use Python 3.10-3.12 for stability
-
-**Common Issues:**
-- If `berkeley-db` download stalls: `brew install berkeley-db && spack external find berkeley-db`
-- Increase download timeout: Add `connect_timeout: 120` to `spack config edit config`
-- Use Homebrew fallback: Install dependencies via Homebrew, then use `spack external find`
-
-**Deactivate environment:**
-```bash
-spack env deactivate
-```
-
-## Package Development Workflow
-
-SPPARKS uses a dual-directory package system inherited from LAMMPS:
-
-### ⚠️ CRITICAL: Two-Location System
-
-**Package files exist in TWO locations:**
-
-1. **`src/PACKAGE/`** - **Reference version** (tracked in git) ← **EDIT HERE!**
-2. **`src/`** - **Installed copy** (ignored by git) ← **DON'T EDIT!**
-
-### 🔑 GOLDEN RULE
-
-**ALWAYS edit `src/PACKAGE/` files, NEVER edit `src/` installed copies!**
-
-Changes to installed files (`src/*.cpp`, `src/*.h`) will be **LOST** on package reinstall.
-
-### How It Works
-
-1. **Package source** lives in `src/STITCH/`, `src/KOKKOS/`, etc.
-2. **Installation** copies files to `src/` for compilation
-3. **Git tracks** only `src/PACKAGE/` (installed files ignored via `.gitignore`)
-4. **Compilation** uses files from `src/`
-
-### Common Mistake (AVOID!)
+The executable is **`spparks`** (not `spk`). Run an input:
 
 ```bash
-# ❌ WRONG - editing installed file
-vim src/app_potts_kokkos.cpp
-
-# ✅ CORRECT - editing source file
-vim src/KOKKOS/app_potts_kokkos.cpp
+mpirun -np 1 build-verify/spparks < in.somefile     # -np N for multi-rank
 ```
 
-### Package Management Commands
+`src/build_cmake.sh` is the convenience wrapper (`--highfive --kokkos
+--kokkos-backend hip --package stitch --mpi` etc.); the raw `cmake -S src -B`
+form above is what's used day-to-day here. The Makefile build (`make mpi`) also
+exists but the CMake/HighFive path is the supported one for the additive apps.
 
-**CMake:**
-```bash
-# Install package (copies src/PACKAGE/ → src/)
-./build_cmake.sh --package stitch
+There is no unit-test harness for this work; correctness is verified by running
+inputs and comparing output — see "Validating the GPU port" below.
 
-# Check if files are in sync
-cmake --build build --target package-status
+## Packages and style headers
 
-# Show detailed differences
-cmake --build build --target package-diff
+Optional components (KOKKOS, STITCH) are *packages*: their sources live in
+`src/KOKKOS/` and `src/STITCH/` and compile from there when
+`SPPARKS_PACKAGE_KOKKOS` / `SPPARKS_PACKAGE_STITCH` are on (the package
+directory goes on the include path). Nothing is copied into `src/`; edit the
+package files in place and rebuild. Adding a *new* source or style header
+still needs a reconfigure (`cmake -S src -B build-verify`) because the source
+list and the style headers are built at configure time.
 
-# Reinstall package (updates installed copies)
-cmake ..
-```
+`style_*.h` headers are auto-generated (`src/cmake/generate_styles.cmake`) and
+register app/command/etc. classes via `AppStyle(...)` macros in the headers.
+The `additive/texture*` styles are gated on **MPI** only
+(`src/cmake/ConditionalSources.cmake`); HighFive (`--highfive`) adds the
+`hdf5_*` temperature sources, which otherwise error at input time
+(`#ifdef SPPARKS_HIGHFIVE` in `temperature_source_hdf5_*.cpp`). If a style is "not recognized" at
+runtime, the style header generation skipped it — check that gating, not the
+C++. Any `cmake -S src -B <dir>` rewrites the shared `src/style_*.h`, so a
+scratch configure with fewer features can deregister styles for a working
+build; reconfigure the real build dir afterwards.
 
-**Makefile:**
-```bash
-# Install package
-make yes-stitch
-make yes-kokkos
+## Core SPPARKS architecture (big picture)
 
-# Uninstall package
-make no-stitch
-make no-kokkos
+- `App` (pure virtual) → `AppLattice` (lattice sites + neighbors, sectors,
+  coloring) → `AppPotts` → `AppPottsQuaternion` → `AppAdditiveTexture`.
+  Apps implement `site_event*` / `app_update`; registered via `AppStyle`.
+- Per-site data: `iarray[]` (ints) and `darray[]` (doubles). The additive app
+  maps `active_flag = iarray[1]` (= `i2` in inputs) and `T = darray[5]` (= `d6`).
+- Parallelism: MPI domain decomposition with ghost-site exchange (`CommLattice`;
+  `comm->all_selective(...)` does index-selective ghost comm).
 
-# Check sync status
-make package-status
+## The additive/texture temperature-source architecture (the part to understand)
 
-# Show differences (after implementing Phase 1)
-make package-diff
-```
+This is where the non-obvious, multi-file design lives.
 
-### Development Workflow
+**Temperature I/O is factored out of the app into `ThermalManager`**
+(`src/thermal_manager.{h,cpp}`). It owns the modular `TemperatureSource`
+(Rosenthal analytic / Moser Green's-function / HDF5), the laser scan path,
+fast-forward predictors, and inter-pass pause/reset scheduling. `app_update`
+delegates to `thermal->advance(time, stoptime)` which returns
+`{new_time, activate_powder, end_run}`.
 
-**Typical development cycle:**
+`ThermalManager` reaches lattice state through a **`ThermalHost` POD snapshot**
+(`src/thermal_host.h`), populated by each app's `refresh_thermal_host()` — NOT a
+typed back-pointer. This decoupling is what lets BOTH the CPU app
+(`AppAdditiveTexture`, style `additive/texture`) and the Kokkos app
+(`AppAdditiveTextureKokkos`, style `additive/texture/kk`, inherits
+`AppPottsQuaternionKokkos`) reuse one `ThermalManager`.
 
-1. Edit source file: `src/KOKKOS/app_potts_kokkos.cpp`
-2. Reinstall package: `cmake ..` or `make yes-kokkos`
-3. Build: `cmake --build build` or `make`
-4. Test
-5. Commit (only `src/KOKKOS/` files are tracked)
+**GPU temperature evaluation.** The per-site temperature integral is the dominant
+cost, so it runs on the device. The host advances cheap scalar state (laser pose,
+pass scheduling) and produces a plan POD (`src/rosenthal_device.h`,
+`src/moser_device.h`); the Kokkos app fills `Kokkos::DualView<double*> k_T`
+directly in a `parallel_for` over all `nlocal+nghost` sites (positional, so
+ghosts compute their own T — no ghost temp comm). Covered on device: Rosenthal
+standard/anisotropic/keyhole; Moser standard/keyhole, stochastic fluctuations,
+static + dynamic multi-pass pause/reset. Dynamic pause/reset uses a **device-fill
+callback** (`set_moser_device_filler` + `moser_advance_device`): the host makes
+the per-pass firing decisions (they rebuild the scan), the device does every
+fill. Only `temperature_smooth` (solidification-band smoothing) deliberately
+falls back to the host path.
 
-**If you accidentally edited `src/` instead:**
+**Performance/consistency conventions in the Kokkos app** (`app_update`):
+- The app sets `app_update_only=1`, so it runs via
+  `AppLattice::iterate_app_update_only` (just `app_update(dt); time += dt;`) —
+  the rKMC color sweeps are skipped; all physics is in the `app_update` device
+  kernels (melt/nucleate/solidify/smooth). `time` is advanced once per step by
+  that loop — `app_update` must NOT also increment it.
+- Lazy device→host copy-back: device fills mark `host_T_stale`; host `T` is
+  synced only before a host consumer reads it (powder activation, the `d6`
+  diagnostic at output steps, `stats()`).
+- Global max temperature and powder activation run on the device
+  (`d_active_flag`/`d_xyz`), not host loops. Cached `d_xyz` must be built
+  layout-correctly (host `xyz` is row-major `[nall][3]`; a LayoutLeft device View
+  misreads it — use `ensure_device_xyz()`).
 
-1. Copy your changes to `src/PACKAGE/`
-2. Reconfigure to reinstall: `cmake ..`
-3. Verify with `cmake --build build --target package-status`
+## Validating the GPU port
 
-### Package Sync Detection
+Microstructure output is non-deterministic run-to-run (MC randomness). Only the
+**temperature field is deterministic** — validate by comparing the CPU app
+(`additive/texture`) against the Kokkos app (`additive/texture/kk`) on the
+temperature diagnostic columns (`diag_style array d6 sum d6 max`), expecting a
+bit-for-bit match. The Kokkos app requires `sweep color`. Base test inputs are in
+`examples/ReducedTempAM/` and the SURGE branch's `examples/{rosenthal,moser}_am/`.
 
-CMake automatically warns if installed files differ from package source:
+## Commits
 
-```
-╔═══════════════════════════════════════════════════════════════
-║ PACKAGE SYNC WARNING: kokkos package files differ!
-╠═══════════════════════════════════════════════════════════════
-║ The following installed files differ from package source:
-║   • app_potts_kokkos.cpp
-║   • app_potts_kokkos.h
-║
-║ GOLDEN RULE: Always edit src/KOKKOS/ files, not src/ copies!
-╚═══════════════════════════════════════════════════════════════
-```
+Commit each task as it completes (don't batch — interactive `git add -p` is
+unavailable here, so interleaved changes are painful to split). Exclude the
+`lib/kokkos` submodule pointer and `build-*/` artifacts unless asked. End commit messages with
+the `Co-Authored-By:` / `Claude-Session:` trailer the harness specifies for the
+current session.
 
-## Architecture Overview
+## Reference docs
 
-SPPARKS is a **Stochastic Parallel PARticle Kinetic Simulator** with a modular, object-oriented C++ design:
-
-### Core Class Hierarchy
-
-```
-SPPARKS (main simulation object)
-├── Universe (MPI communication management)  
-├── Input (command parsing)
-├── Memory (memory allocation)
-├── Error (error handling)
-├── Domain (spatial decomposition, regions, lattices)
-├── App (physics applications - pure virtual base)
-│   ├── AppLattice (lattice-based simulations)
-│   │   ├── AppPotts (Potts model grain growth)
-│   │   ├── AppIsing (Ising model)
-│   │   ├── AppDiffusion (diffusion processes)
-│   │   └── App*AM* (additive manufacturing models)
-│   └── AppOffLattice (off-lattice particle simulations)
-├── Solve (kinetic Monte Carlo solvers)
-├── Potential (interatomic potentials)
-├── Output (diagnostics and dump files)
-└── Timer (performance timing)
-```
-
-### Key Design Patterns
-
-1. **Plugin Architecture**: Apps, solvers, diagnostics registered via macros in `style_*.h` files
-2. **MPI Parallelization**: Domain decomposition with ghost site communication
-3. **Polymorphic Apps**: Three app classes (GENERAL, LATTICE, OFF_LATTICE) with virtual interfaces
-4. **KMC/rKMC Methods**: Both kinetic Monte Carlo and rejection kinetic Monte Carlo algorithms
-
-### App Types
-
-- **AppLattice**: Fixed lattice sites with neighbor connectivity
-  - Supports sectors, coloring, masking for parallel efficiency
-  - KMC and rejection KMC methods
-  - Examples: Potts, Ising, diffusion, additive manufacturing
-
-- **AppOffLattice**: Free particles in continuous space
-  - Spatial binning for neighbor finding
-  - Dynamic site creation/deletion
-  - Examples: molecular dynamics-like simulations
-
-## Key Concepts
-
-### Kinetic Monte Carlo (KMC)
-- **Propensity**: Event rates computed per site via `site_propensity()`
-- **Events**: State changes via `site_event()` 
-- **Solvers**: Tree, linear, group-based KMC algorithms
-- **Sectors**: Domain partitioning for parallel KMC
-
-### Site Management
-- **Sites**: Fundamental simulation entities with coordinates and properties
-- **Ghost Sites**: Boundary sites from neighboring processors
-- **Site Arrays**: `iarray` (integers), `darray` (doubles) per site
-
-### Time Integration
-- `dt_sweep`: Rejection KMC time per sweep
-- `dt_kmc`: KMC time per sector update  
-- `dt_step`: Time per global KMC step
-
-## Development Guidelines
-
-### Adding New Apps
-1. Inherit from `AppLattice` or `AppOffLattice`
-2. Implement pure virtual functions: `site_energy()`, `site_propensity()`, `site_event()`
-3. Register via `AppStyle(name,Class)` macro
-4. Override `init_app()`, `setup_app()` as needed
-
-### File Naming Conventions
-- Apps: `app_*.cpp/.h`
-- Solvers: `solve_*.cpp/.h` 
-- Diagnostics: `diag_*.cpp/.h`
-- Dumps: `dump_*.cpp/.h`
-- Regions: `region_*.cpp/.h`
-
-### Testing
-```bash
-# Run test suite (undocumented feature)
-make test
-```
-
-### Python environment
-
-Use ```conda activate WORK``` to activate the correct Python environment.
-
-cppyy can be used to test c++ code with Python if applicable.
-
-### Tool usage
-
-If a tool is not currently installed in the environment, ask the user to install it.
-
-### Common Commands
-
-**CMake Package Management:**
-```bash
-# Install/remove packages via CMake
-cmake -DSPPARKS_PACKAGE_STITCH=ON ..     # Enable STITCH
-cmake -DSPPARKS_PACKAGE_STITCH=OFF ..    # Disable STITCH
-
-# Using build script
-./build_cmake.sh --package stitch        # Enable package
-```
-
-**HighFive Usage:**
-```bash
-# CMake build with HighFive C++ HDF5 wrapper for improved chunk handling
-./build_cmake.sh --highfive              # Enable HighFive
-./build_cmake.sh --highfive --hdf5       # Enable both HDF5 and HighFive
-cmake -DSPPARKS_ENABLE_HIGHFIVE=ON ..    # Direct CMake option
-
-# Traditional Makefile build with HighFive (local installation)
-./install_highfive_local.sh              # Install HighFive locally (recommended)
-make mac_arm_highfive_local               # Build with local HighFive installation
-```
-
-**Makefile Package Management:**
-```bash
-# Package installation/removal
-make yes-stitch    # install STITCH package
-make no-stitch     # remove STITCH package
-
-# Style header generation (run automatically during build)
-sh Make.sh style
-
-# MPI stubs for serial builds
-make mpi-stubs
-```
-
-**CMake Configuration Options:**
-```bash
-# Feature toggles (ON = enabled by default if library found)
--DSPPARKS_ENABLE_MPI=ON/OFF              # MPI support (default: ON)
--DSPPARKS_ENABLE_GZIP=ON/OFF             # GZIP compression (default: ON)
--DSPPARKS_ENABLE_JPEG=ON/OFF             # JPEG image support (default: ON)
--DSPPARKS_ENABLE_PNG=ON/OFF              # PNG image support (default: OFF)
--DSPPARKS_ENABLE_HDF5=ON/OFF             # HDF5 data format support (default: OFF)
--DSPPARKS_ENABLE_HIGHFIVE=ON/OFF         # HighFive C++ HDF5 wrapper (default: OFF)
-
-# Integer size options
--DSPPARKS_SMALLSMALL=ON                  # 32-bit all integers
--DSPPARKS_BIGBIG=ON                      # 64-bit tagint/bigint
-# Default: SMALLBIG (32-bit smallint/tagint, 64-bit bigint)
-
-# Build options
--DBUILD_SHARED_LIBS=ON/OFF               # Shared vs static
--DSPPARKS_BUILD_EXECUTABLE=ON/OFF        # Build spk executable
--DSPPARKS_BUILD_LIB=ON/OFF               # Build library
-
-# Feature detection notes:
-# - JPEG: Automatically enabled if libjpeg found, disable with --no-jpeg
-# - HDF5: Automatically detects parallel vs serial HDF5
-# - HighFive: Modern C++ wrapper for HDF5, automatically enables HDF5
-# - MPI: Warns if MPI is enabled but HDF5 is not parallel
-# - Used by additive manufacturing applications for temperature data
-```
-
-## Important Files
-
-**Core Framework:**
-- `spparks.h/.cpp`: Main simulation driver
-- `app.h`: Base application class
-- `solve.h`: Base KMC solver class  
-- `domain.h`: Spatial domain management
-- `pointers.h`: Base class providing access to SPPARKS object
-- `spktype.h`: Type definitions (tagint, bigint, etc.)
-
-**Build System:**
-- `Makefile`: Traditional multi-machine build system
-- `CMakeLists.txt`: Modern CMake build configuration
-- `build_cmake.sh`: Convenient CMake build script
-- `Make.sh`: Dynamic header generation (Makefile)
-- `cmake/generate_styles.cmake`: Dynamic header generation (CMake)
-- `cmake/MachineConfigs.cmake`: Machine-specific settings
-- `cmake/PackageManager.cmake`: Package installation system
-- `style_*.h`: Auto-generated class registration headers
-
-**Package & Dependency Management:**
-- `STITCH/`: Optional STITCH package for external coupling
-- `Makefile.package*`: Package configuration for Makefile system
-- `spack.yaml`: Spack environment specification for reproducible dependency management
-- `README_SPACK.md`: Detailed Spack usage guide
+User-manual pages (txt2html: edit the `.txt`, regenerate with `python3 doc/txt2html.py`):
+`doc/app_additive_texture`, `setup_temperature_source`, `temperature_source_{rosenthal,moser,conduction,hdf5}`,
+`laser_path`, `laser_fluctuations`, `material`. Developer notes:
+`docs/AM_KOKKOS_PLAN.md` (the additive Kokkos plan/status),
+`docs/CONDUCTION_SOURCE.md` (the nonlinear conduction temperature source), `docs/MATERIAL_CARDS.md`
+(TOML material cards, `material` command, `tools/material_card.py`), plus
+`docs/KOKKOS_HOT_LOOP_OPTIMIZATION.md`, `docs/KOKKOS_MULTI_GPU.md`, `docs/EL_CAPITAN_BUILD.md`.

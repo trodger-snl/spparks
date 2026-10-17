@@ -26,6 +26,7 @@
 #define KDTREE_H_
 #include <cstddef>
 #include <algorithm>
+#include <iterator>
 #include <limits>
 #include <iostream>
 #include <vector>
@@ -40,6 +41,18 @@ using std::vector;
 
 
 using std::shared_ptr;
+
+// The traits std::iterator<std::forward_iterator_tag,T,D> supplied
+// (deprecated since C++17). A base class, because point_array::iterator
+// cannot declare a member named after its template parameter value_type.
+template<class T, class D>
+struct forward_iterator_base {
+	typedef std::forward_iterator_tag iterator_category;
+	typedef T value_type;
+	typedef D difference_type;
+	typedef T* pointer;
+	typedef T& reference;
+};
 
 template<class value_type, class ordinal_type>
 class array {
@@ -265,7 +278,7 @@ public:
 
 	class iterator;
 	friend class iterator;
-	class iterator : public std::iterator<std::forward_iterator_tag,value_type,ordinal_type> {
+	class iterator : public forward_iterator_base<value_type,ordinal_type> {
 	public:
 		iterator() : num_points(0), c(), component_map(),  P(0), p(0), start(0), end(0), data(0) {}
 		iterator

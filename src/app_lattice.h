@@ -112,6 +112,7 @@ class AppLattice : public App {
   int nsector_user;            // 0 if default, else 2,4,8
   int ncolors;                 // # of colors, depends on lattice
   int bothflag;                // 1 if both sectors and colors
+  int use_xyz_color;           // 1 if using xyz-based coloring (non-contiguous IDs)
   int app_update_only;         // 1 if skip KMC and rKMC updates
 
   class RandomPark *ranapp;    // RN generator for KMC and rejection KMC

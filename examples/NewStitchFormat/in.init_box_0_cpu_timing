@@ -1,0 +1,64 @@
+# SPPARKS CPU timing test - no dumps
+# Based on in.init_box_0 but with dumps removed for timing comparison
+
+variable DX equal 5e-6
+
+app_style additive_temperature_texture 1000000 5e-06 3e-6 2
+
+seed		 1760655727
+
+dimension	 3
+lattice	 	 sc/26n 1.0
+region box block -208 229 -115 159 -10 15 # Bounding box in voxels
+
+boundary 	 n n n
+
+create_box	 box
+create_sites box
+ set          site range 1 1000000
+ set          i2 value 0
+ set          d6 value 300
+ set          d7 value 0
+ set          d8 value 0
+ set          d9 value 0
+
+sector		 yes
+sweep		 random mask no
+
+
+########Setup temperature reading
+setup_temperature_source hdf5_unstructured /Users/Tron/spparks/examples/ReducedTempAM/unstructured/FixedInput/fixed_reduced_thermal_output.hdf5 5e-06 1563.0 300.0
+
+############# Outputs the total temperature sum as a stat. If this goes crazy, try reducing timestep.
+diag_style       array d6 sum d6 max
+#############
+
+############# Potts Monte Carlo temperature. Only affects grain boundary shape during grain coarsening.
+############# Use 0 for "austenitic" microstructures and "0.66" for ferritic
+temperature	 0.0
+#############
+
+
+############## AM specific parameters, optional inputs, default are for 304L SS
+liquidus                1623 #Liquidus temperature in Kelvin
+solidus                 1563 #Solidus temperature in Kelvin
+solid_front_vel         4 -1.0302e-7 1.0533e-4 2.2196e-3 0 #Polynomial degree, coefficient value (from high power to low)
+nucleation_density      1e11 #In number/m^3
+critical_undercooling   5 #Undercooling where nucleation starts (in Kelvin)
+undercooling_deviation  3 #Critical undercooling is sampled from normal distribution, this defines std dev.
+mean_nuclei_volume      8.4375e-16 #In m^3, center of normal distribution
+nuclei_volume_deviation 1.5625e-17 #In m^3, std dev of nuclei size distribution
+texture_parameters 0.1 0.9 2.5
+misorientation_diffusion 4.2e5 5
+fast_forward_search_window 0.001
+
+##############
+
+stats            2e-4
+
+# NO DUMPS - timing test only
+
+#Start simulation at new time
+reset_time 0.0001
+
+run   0.02 upto

@@ -1,0 +1,106 @@
+# Material parameter card: Inconel 718 (IN718).
+# Format: docs/MATERIAL_CARDS.md (schema 1). SI units; every value carries a ref.
+
+[card]
+schema_version = 1
+material = "IN718"
+designation = { UNS = "N07718", W_Nr = "2.4668", spec = "wrought per AMS 5596/5662; LPBF per ASTM F3055" }
+composition_wt_pct = { Ni_plus_Co = "50.0-55.0", Cr = "17.0-21.0", Fe = "bal", Nb_plus_Ta = "4.75-5.50", Mo = "2.80-3.30", Ti = "0.65-1.15", Al = "0.20-0.80", Co = "<1.0", C = "<0.08", Mn = "<0.35", Si = "<0.35", Cu = "<0.30", B = "<0.006", P = "<0.015", S = "<0.015", ref = "specialmetals_718", note = "UNS N07718 limiting composition (Special Metals SMC-045 Table 1), not a measured heat" }
+version = "1.0.0"
+created = 2026-10-17
+modified = 2026-10-17
+status = "draft"
+reviewed_by = ""
+
+[[changelog]]
+version = "1.0.0"
+date = 2026-10-17
+author = "research agent (Claude)"
+changes = "Initial card from the literature: Agazhanov 2019 (k, cp, density), Hosaeus 2001 (solidus, liquidus, liquid cp and k), Greene 1999/2000 (emissivity), Honda 2025 (powder absorptivity), Wei 2018 (powder conductivity), Yuan 2023 (tip kinetics), process sets from Weaver 2024 (AM Bench 2022) and Wang 2023."
+
+[references.agazhanov2019]
+citation = "A.Sh. Agazhanov, D.A. Samoshkin, Yu.M. Kozlovskii, Thermophysical properties of Inconel 718 alloy, J. Phys.: Conf. Ser. 1382 (2019) 012175"
+doi = "10.1088/1742-6596/1382/1/012175"
+
+[references.hosaeus2001]
+citation = "H. Hosaeus, A. Seifter, E. Kaschnitz, G. Pottlacher, Thermophysical properties of solid and liquid Inconel 718 alloy, High Temp. High Press. 33 (2001) 405-410"
+doi = "10.1068/htwu340"
+
+[references.greene2000]
+citation = "G.A. Greene, C.C. Finfrock, T.F. Irvine, Total hemispherical emissivity of oxidized Inconel 718 in the temperature range 300-1000 C, Exp. Therm. Fluid Sci. 22 (2000) 145-153; data read from the report version, BNL-52579 (1999)"
+doi = "10.1016/S0894-1777(00)00021-2"
+url = "https://www.osti.gov/servlets/purl/750781"
+
+[references.honda2025]
+citation = "H. Honda, M. Watanabe, Measurement of Laser Absorptivity of Inconel Powders with Additive Manufacturing Machine, Mater. Trans. 66 (2025) 107-112"
+doi = "10.2320/matertrans.MT-M2024124"
+
+[references.weaver2024]
+citation = "J.S. Weaver, D. Deisenroth, S. Mekhontsev, B.M. Lane, L.E. Levine, H. Yeung, Cross-Sectional Melt Pool Geometry of Laser Scanned Tracks and Pads on Nickel Alloy 718 for the 2022 Additive Manufacturing Benchmark Challenges, Integr. Mater. Manuf. Innov. 13 (2024) 363-379"
+doi = "10.1007/s40192-024-00355-5"
+url = "https://tsapps.nist.gov/publication/get_pdf.cfm?pub_id=957295"
+
+[references.wang2023]
+citation = "Q. Wang, P. Michaleris, Y. Ren, C. Dickman, E. Reutzel, Effect of interlayer temperature on melt-pool morphology in laser powder bed fusion, Addit. Manuf. Lett. 7 (2023) 100169"
+doi = "10.1016/j.addlet.2023.100169"
+url = "https://par.nsf.gov/servlets/purl/10533962"
+
+[references.yuan2023]
+citation = "L. Yuan, S. Ju, S. Huang, I. Spinelli, J. Yang, C. Shen, L. Mohr, H. Hosseinzadeh, A. Bhaduri, M. Brennan, C. Sun, A. Kitt, Validation and application of cellular automaton model for microstructure evolution in IN718 during directed energy deposition, Comput. Mater. Sci. 230 (2023) 112450"
+doi = "10.1016/j.commatsci.2023.112450"
+url = "https://www.osti.gov/pages/servlets/purl/2576517"
+
+[references.wei2018]
+citation = "L.C. Wei, L.E. Ehrlich, M.J. Powell-Palm, C. Montgomery, J. Beuth, J.A. Malen, Thermal conductivity of metal powders for powder bed additive manufacturing, Addit. Manuf. 21 (2018) 201-208"
+doi = "10.1016/j.addma.2018.02.002"
+
+[references.specialmetals_718]
+citation = "Special Metals Corporation, INCONEL alloy 718, Publication SMC-045 (2007), vendor datasheet"
+url = "https://www.specialmetals.com/documents/technical-bulletins/inconel/inconel-alloy-718.pdf"
+
+[thermal]
+density = { value = 8170, unit = "kg/m^3", ref = "agazhanov2019", uncertainty = [8090, 8250], uncertainty_type = "bounds", T_range = [298, 298], note = "room-temperature bar stock, 8.17 +/- 0.08 g/cm^3 (confidence level not stated); Hosaeus 2001 and SMC-045 quote 8190" }
+solidus = { value = 1528, unit = "K", ref = "hosaeus2001", uncertainty = [1528, 1538], uncertainty_type = "bounds", note = "DTA, 1255 C; Agazhanov 2019 DSC melting onset 1537.65 K; SMC-045 melting range starts at 1260 C (1533 K)" }
+liquidus = { value = 1610, unit = "K", ref = "hosaeus2001", note = "DTA, 1337 C; SMC-045 melting range ends at 1336 C (1609 K)" }
+latent_fusion = { value = 1.97e5, unit = "J/kg", ref = ["agazhanov2019", "hosaeus2001"], uncertainty = [1.97e5, 2.9e5], uncertainty_type = "bounds", note = "Agazhanov DSC solid-liquid enthalpy 196.85 J/g. Hosaeus pulse heating gives H(liquidus)-H(solidus) = 969-679 = 290 kJ/kg, which also holds the sensible heat over the 82 K melting range (about 58 kJ/kg at cp 634-775), so about 232 kJ/kg of fusion" }
+conductivity = { T = [298, 400, 500, 600, 700, 800, 1100, 1200, 1300, 1400, 1610], value = [9.94, 11.59, 13.24, 14.91, 16.61, 18.34, 22.72, 23.61, 24.47, 25.32, 26.8], unit = "W/(m K)", extrapolation = "clamp", ref = ["agazhanov2019", "hosaeus2001"], uncertainty = 0.05, uncertainty_type = "relative_1sigma", note = "298-1400 K: Agazhanov Table 2 (laser flash a x DSC cp x rho, stated error 3-5%, confidence level not stated). No values are recommended over the 800-1100 K solid-state transformation range, so it is interpolated. 1610 K: Wiedemann-Franz with L = 2.45e-8 W Ohm/K^2 on the Hosaeus Table 2 liquid resistivity 1.472 uOhm m (volume corrected); Hosaeus's solidus estimate with a 4.8 W/(m K) lattice term is 31 W/(m K)" }
+heat_capacity = { T = [298, 400, 500, 600, 700, 800, 1100, 1200, 1300, 1400, 1528, 1610], value = [425, 447, 468, 489, 510, 531, 635, 635, 635, 634, 634, 775], unit = "J/(kg K)", extrapolation = "clamp", ref = ["agazhanov2019", "hosaeus2001"], uncertainty = 0.03, uncertainty_type = "relative_1sigma", note = "298-1400 K: Agazhanov Table 2 (DSC, stated error 2-3%, confidence level not stated; J/(g K) x 1000); the DSC peaks of the 800-1100 K solid-state transformation (4.45 + 23.27 J/g on heating) are left out and the gap interpolated. 1528 K: Agazhanov eq. (3) extrapolated to the solidus (Hosaeus pulse heating gives 658 at 1423 K, DSC 659 extrapolated to 1528 K). 1610 K: Hosaeus liquid cp 775" }
+emissivity = { value = 0.33, unit = "1", ref = "greene2000", uncertainty = [0.24, 0.90], uncertainty_type = "bounds", T_range = [473, 1273], note = "total hemispherical, unoxidised as-received sheet, 0.24 at 200 C rising to 0.33 at 1000 C; air-oxidised surfaces 0.85-0.90. An Ar-shielded LPBF surface is taken as unoxidised; its roughness is not covered" }
+
+[thermal.linear]
+# Rosenthal/Moser need one k and cp: the tables evaluated at T_ref unless
+# conductivity/heat_capacity are given here.
+T_ref = { value = 1000, unit = "K", ref = "estimate", note = "between preheat and solidus" }
+
+[powder]
+conductivity = { value = 0.22, unit = "W/(m K)", ref = "wei2018", uncertainty = [0.21, 0.23], uncertainty_type = "bounds", T_range = [295, 295], note = "transient hot wire, EOS-supplied powders in Ar at 295 K: 'increases with Ar pressure up to 0.21-0.23 W/(m K)' across all five powders (IN718, 17-4, IN625, Ti-6Al-4V, 316L), so not an IN718-only value; read from the publisher abstract/text page (full text not reached). Weakly T dependent 295-470 K. Packing fraction and PSD not reached, so packing is omitted" }
+
+[optical]
+absorptivity = { value = 0.6, unit = "1", ref = "honda2025", T_range = [423, 673], note = "powder bed (Concept Laser CL 100NB), no melting: calorimetry in an SLM280 under Ar, 1070 nm Gaussian beam, 50 W, ~2.2 mm spot, ~16 m/s. No significant T dependence over 150-400 C. Not a melting-mode (conduction or keyhole) coupling; the same paper cites 0.30 for polished flat IN718 at 1.06 um and 300 C (Sainte-Catherine et al.)" }
+
+[microstructure]
+# Literature tip kinetics; nucleation records are left to the decks.
+front_velocity_source = { form = "power_law", a = 6.23e-7, n = 3.48, unit = "m/s", dT_unit = "K", ref = "yuan2023", note = "KGT (Ivantsov + marginal stability) on a ThermoCalc Scheil path shifted to Ts 1230 C / Tl 1337 C; least-squares power law, Eq. 14 and Fig. 5. The fitted points span about 4-31 K undercooling; the polynomial below extrapolates the power law to the full 82 K freezing range" }
+solid_front_vel = { coeffs = [7.08261e-12, -1.25031e-09, 1.07399e-07, 9.49718e-07, -5.85508e-07, 1.42099e-07, 0], unit = "m/s", dT_unit = "K", ref = "yuan2023", fit_of = "front_velocity_source", fit_range_K = [0, 82], max_rel_err = 0.057, note = "fit-front --degree 6, relative least squares with V(0) = 0: within 5.7% of the power law pointwise over (0, 82] K. A cubic cannot follow dT^3.48 at both ends (143% at small dT). The power law itself is fitted to about 4-31 K; beyond that both extrapolate" }
+
+# Process sets: published LPBF measurements. source_depth (a Moser calibration)
+# and convection are left out; no source gives them.
+
+[process.ambench2022_bare_plate_285W]
+note = "NIST AM Bench 2022 AMB2022-03 baseline (case 0): single laser tracks on a bare IN718 plate, no powder, so no hatch or layer thickness. The paper gives no absorptivity (it depends on the melting mode). Other cases on the same plate: spot 49/82 um, speed 0.8/1.2 m/s, power 245/325 W (Weaver Table 4)"
+machine = "NIST Additive Manufacturing Metrology Testbed (AMMT), CW Yb fibre laser, 1070 nm"
+power = { value = 285, unit = "W", ref = "weaver2024" }
+speed = { value = 0.96, unit = "m/s", ref = "weaver2024" }
+spot = { value = 67e-6, unit = "m", convention = "D4sigma", ref = "weaver2024", note = "Gaussian, D4sigma diameter; sigma = D4sigma/4" }
+preheat = { value = 296.65, unit = "K", ref = "weaver2024", uncertainty = [295.65, 297.65], uncertainty_type = "bounds", note = "substrate and chamber 23.5 C +/- 1 C" }
+validation = { melt_pool_width = 136.3e-6, melt_pool_depth = 139.7e-6, unit = "m", ref = "weaver2024", note = "mean of 6 cross-sections (3 tracks x 2); SD 2.9 / 1.9 um, expanded uncertainty U(k=2) 6.2 / 14.1 um (Table 4)" }
+
+[process.eos_m280_285W_960mms]
+note = "Multilayer powder-bed build, mid-of-hatch melt pools at layer 300 (interlayer temperature about 100 C; about 300 C at layer 876). Spot size and absorptivity not stated"
+machine = "EOS M280"
+power = { value = 285, unit = "W", ref = "wang2023" }
+speed = { value = 0.96, unit = "m/s", ref = "wang2023" }
+hatch = { value = 110e-6, unit = "m", ref = "wang2023", note = "10 mm stripes" }
+layer_thickness = { value = 40e-6, unit = "m", ref = "wang2023" }
+preheat = { value = 353, unit = "K", ref = "wang2023", note = "bottom centre of the substrate heated to 80 C" }
+validation = { melt_pool_width = 179.2e-6, melt_pool_depth = 173.9e-6, unit = "m", ref = "wang2023", note = "width = 2 x the reported half-width 89.6 +/- 5.5 um; depth 173.9 +/- 13.4 um (Table 1, layer 300, mid-of-hatch)" }

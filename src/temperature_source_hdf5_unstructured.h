@@ -52,12 +52,11 @@ namespace SPPARKS_NS {
 template <typename T>
 class Array2D {
 public:
-  Array2D() : ncols(0), nrows(0) {}
+  Array2D() : ncols(0) {}
   Array2D(unsigned ncols_, std::vector<T>&& data_) :
     ncols(ncols_), data(std::move(data_)) {
     if (data.size() % ncols != 0)
       throw std::runtime_error("Data size must be multiple of number of columns");
-    nrows = data.size() / ncols;
   }
 
   const T& operator()(unsigned i, unsigned j) const { return data[i*ncols + j]; }
@@ -68,7 +67,6 @@ public:
 
 private:
   unsigned ncols;
-  unsigned nrows;
   std::vector<T> data;
 };
 
@@ -78,29 +76,6 @@ template <typename T>
 class CompressedArray2D {
 public:
   CompressedArray2D() {}
-
-  // Construct from rectangular Array2D data by compacting rows in-place.
-  // ncols_rect: number of columns in the source rectangular layout
-  // rect_data:  row-major rectangular data (nrows * ncols_rect elements)
-  // row_lengths: actual element count per row (dataCounts)
-  CompressedArray2D(unsigned ncols_rect,
-                    std::vector<T>&& rect_data,
-                    const std::vector<unsigned>& row_lengths)
-  {
-    unsigned nrows = row_lengths.size();
-    offsets.resize(nrows + 1);
-    offsets[0] = 0;
-    for (unsigned i = 0; i < nrows; i++)
-      offsets[i + 1] = offsets[i] + row_lengths[i];
-
-    size_t total = offsets[nrows];
-    data.resize(total);
-    for (unsigned i = 0; i < nrows; i++) {
-      std::copy(rect_data.begin() + i * ncols_rect,
-                rect_data.begin() + i * ncols_rect + row_lengths[i],
-                data.begin() + offsets[i]);
-    }
-  }
 
   // Construct directly from flat CSR data (zero-copy move).
   CompressedArray2D(std::vector<T>&& flat_data,
@@ -113,7 +88,10 @@ public:
   auto row_iterator(unsigned i) { return data.begin() + offsets[i]; }
   const auto row_iterator(unsigned i) const { return data.begin() + offsets[i]; }
 
-  size_t total_elements() const { return data.size(); }
+
+  // Flat CSR accessors (for device upload of the whole array at once).
+  const std::vector<T>& flat() const { return data; }
+  const std::vector<size_t>& row_offsets() const { return offsets; }
 
 private:
   std::vector<T> data;
@@ -128,27 +106,16 @@ public:
   // Required virtual methods from base class
   virtual void setup_temperature_source(const std::vector<std::string> &args) override;
   virtual double get_temperature_at_xyz_and_time(double x, double y, double z, double time) override;
-  virtual void update_temperatures(double dt, double simulation_time) override;
-  virtual bool needs_data_refresh(double simulation_time) override;
-  virtual void cleanup() override;
-  virtual std::string get_source_type() const override { return "hdf5_unstructured"; }
   virtual void print_source_info() const override;
+  void cleanup();
 
   // Constants from reference implementation
   static constexpr unsigned NODES_PER_ELEM = 4;  // Tetrahedral elements
   static constexpr unsigned DIM = 3;             // 3D space
 
-  // Fast-forward capability methods
-  bool all_temperatures_below_threshold(double time);
   double get_fast_forward_threshold() const { return threshold_temp; }
-  double get_dx() const { return dx; }
 
-  // Optimization control flags
-  void set_use_spatial_grid(bool enable) { use_spatial_grid = enable; }
-  void set_use_element_cache(bool enable) { use_element_cache = enable; }
   
-  // Time query interface implementation
-  virtual bool supports_time_queries() const override { return true; }
   virtual double get_next_time_with_temperature(double current_time, double threshold_temp) override;
   
   // Thermal interval data structure
@@ -159,8 +126,6 @@ public:
     ThermalInterval(double start, double end) : start_time(start), end_time(end) {}
   };
 
-  // Site-based temperature access optimized for lattice
-  virtual double get_temperature_at_site(int site_index, double time) override;
 
   // Enable anisotropic mesh-Laplacian smoothing of the per-node temperature
   // field. Parameters are stored and the edge-weighted node adjacency is
@@ -186,9 +151,59 @@ public:
     std::array<unsigned, 4> nodeIndices;
     std::array<double, 3> weights;
     bool valid;
-    
+
     ElementCache() : nodeIndices{0,0,0,0}, weights{0.0,0.0,0.0}, valid(false) {}
   };
+
+  // ----- Device (Kokkos) evaluation support -----------------------------
+  // Generation counter; bumps whenever the per-site element cache is rebuilt
+  // (build_site_element_cache, i.e. at a layer boundary). A device caller
+  // re-uploads its static cache Views when this changes.
+  long cache_generation() const { return cache_generation_; }
+
+  // Number of loaded mesh nodes == length of the per-node temperature slice
+  // (cached_nodal_temps) that the device kernel indexes through the cache.
+  int num_loaded_nodes() const { return (int) dataCounts.size(); }
+
+  // Number of per-site cache entries (owned + ghost == nall). The device fill
+  // covers exactly this many sites positionally; ghosts have valid entries
+  // because the chunk-load pad covers them. See build_site_element_cache().
+  int num_cache_sites() const { return (int) site_element_cache.size(); }
+
+  // Ambient/default temperature used for sites with no containing element.
+  double get_default_temp() const { return default_temp; }
+
+  // Device-side time interpolation: when enabled, the per-step host
+  // precompute_nodal_temperatures() is SKIPPED -- the device fill instead
+  // interpolates each tet node's temperature from its raw time series at the
+  // current time (then barycentric-blends). These accessors expose the
+  // immutable-per-layer per-node time-series CSR (times.flat()/temperatures.flat()
+  // share the same row_offsets) for the device to upload once per layer.
+  // Device time interp can only run when nodal mesh-smoothing is OFF (the device
+  // does not reproduce smooth_nodal_temps()); otherwise it stays on the host.
+  void set_device_time_interp(bool b) { device_time_interp_ = b && !nodal_smooth_enabled; }
+  bool device_time_interp_active() const { return device_time_interp_; }
+  const std::vector<double>& timeseries_times() const { return times.flat(); }
+  const std::vector<double>& timeseries_temps() const { return temperatures.flat(); }
+  const std::vector<size_t>& timeseries_offsets() const { return times.row_offsets(); }
+  // The ~active nodes (tet nodes of valid sites) -- the only nodes the device
+  // blend reads, so the device only needs to interpolate these (matches the host
+  // precompute subset when nodal_smooth is off). Static per layer.
+  const std::vector<unsigned>& timeseries_active_nodes() const { return active_node_indices; }
+
+  // Copy the STATIC per-site element cache for device upload (call when
+  // cache_generation() changes). node_idx is flattened lobe-major
+  // [4*nlocal] (the 4 tet-node indices into the nodal-temp slice), weights is
+  // [3*nlocal] (the 3 barycentric weights), valid is [nlocal] (1/0). Invalid
+  // sites get node_idx 0 / weights 0 and valid 0 -> device yields default_temp.
+  void copy_device_cache(std::vector<int> &node_idx,
+                         std::vector<double> &weights,
+                         std::vector<int> &valid) const;
+
+  // The per-step, host-computed per-node temperature slice (time-interpolated,
+  // optionally nodal-smoothed). Indexed by the cache's node indices. Valid
+  // after prepare_for_timestep(); re-uploaded every step.
+  const std::vector<double> &nodal_temps() const { return cached_nodal_temps; }
 
 protected:
   // Data storage accessible to subclasses for CSR override
@@ -225,12 +240,12 @@ private:
   double dx;  // Grid spacing in meters
   double threshold_temp;  // Threshold temperature for fast-forward (K)
   double default_temp;    // Default/ambient temperature (K)
-  int bounds_check_mode;  // 0 = exact, 1 = subvolume
+  bool device_time_interp_ = false;  // skip host precompute; device interps in time
   double grid_cell_size_multiplier;  // Spatial grid cell size = dx * multiplier (default 50)
+  // Latches the "pad wider than the decomposed subdomain" warning in
+  // load_layer() so it is emitted once per run rather than once per layer.
+  mutable bool pad_vs_subdomain_warned = false;
 
-  // Optimization control flags
-  bool use_spatial_grid;   // Use spatial grid for element lookup (default: true)
-  bool use_element_cache;  // Use element cache per site (default: true)
 
   // Layer management
   std::vector<double> layerTimes;
@@ -295,6 +310,12 @@ private:
   // Helper methods from reference implementation
   void load_layer(unsigned layerIdx);
 
+  // Drop every piece of state that belongs to the currently loaded layer:
+  // mesh, per-node time series, spatial grid, nodal adjacency and the derived
+  // node sets. Used when a layer turns out to have no chunks overlapping this
+  // rank's subdomain, so the previous layer's field cannot leak into it.
+  void clear_layer_data();
+
   // Anonymous namespace functions (now as private methods)
   std::array<double, 3> get_parametric_coordinates_of_point(
     const std::vector<std::vector<double>>& tet_coords,
@@ -308,22 +329,12 @@ private:
   bool point_in_bbox(const std::array<double, 3>& pt,
                     const std::array<double, 6>& bbox) const;
 
+  // Locate the tet containing pt in the loaded layer (selected_chunks /
+  // node_offsets / elem_offsets / elemNode / nodeCoords / elem_bboxes).
   std::pair<std::array<unsigned, 4>, std::array<double, 3>>
-  find_element_point_is_in(const std::vector<unsigned>& selectedChunks,
-                          const std::vector<std::array<double, 6>>& chunkBboxes,
-                          const std::vector<unsigned>& nodeOffsets,
-                          const std::vector<unsigned>& elemOffsets,
-                          const Array2D<unsigned>& elemNode,
-                          const Array2D<double>& nodeCoords,
-                          const std::vector<std::array<double, 6>>& elemBboxes,
-                          const std::array<double, 3>& pt) const;
+  find_element_point_is_in(const std::array<double, 3>& pt) const;
 
-  std::vector<std::array<double, 6>> build_elem_bounding_boxes(
-    unsigned nChunks,
-    const std::vector<unsigned>& nodeOffsets,
-    const std::vector<unsigned>& elemOffsets,
-    const Array2D<unsigned>& elemNode,
-    const Array2D<double>& nodeCoords) const;
+  std::vector<std::array<double, 6>> build_elem_bounding_boxes() const;
 
   void build_spatial_grid(double target_cell_size);
 
@@ -349,11 +360,12 @@ private:
   mutable std::vector<unsigned> active_node_indices;  // Nodes actually used by cached sites
   mutable bool cache_valid;
 
+  // Generation counter bumped each time site_element_cache is rebuilt (layer
+  // boundary). Lets a device caller know its static cache Views are stale.
+  mutable long cache_generation_;
+
   // Build element cache for all sites
   void build_site_element_cache() const;
-
-  // Get cached element for a site
-  const ElementCache& get_cached_element(int site_index) const;
 
   // Nodal temperature cache - precomputed temps at all loaded nodes for current time
   // Eliminates redundant time interpolation (36x reduction in time searches)

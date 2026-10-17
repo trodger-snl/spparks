@@ -23,6 +23,7 @@
 #include "crystalline_orientations/hcp_symmetries.h"
 #include "crystalline_orientations/quaternion.h"
 #include "random_park.h"
+#include "random_mars.h"
 #include "stdlib.h"
 #include "string.h"
 #include <cmath>
@@ -96,10 +97,18 @@ void AppPottsQuaternion::init_app() {
 
   dt_sweep = 1.0 / maxneigh;
 
+  // Initial orientation field, keyed to each site's GLOBAL id. Same idiom as
+  // the color/strict per-site seeds in AppLattice::init(): the stream depends
+  // only on the deck's `seed` and the site id, so the field is repeatable run
+  // to run AND identical at any rank count. Derived from ranmaster's stored
+  // seed rather than ranmaster->uniform() so that no other stream shifts.
+  const uint64_t qseed = (uint64_t) ranmaster->initial_seed();
+
   int flag = 0;
   for (int i = 0; i < nlocal; i++) {
     // Create random orientation as each site
-    vector<double> uq = quaternion::generate_random_unit_quaternions(1);
+    quaternion::SiteOrientationRNG rng(qseed, (uint64_t) id[i]);
+    vector<double> uq = quaternion::generate_unit_quaternion(rng);
     q0[i] = uq[0];
     qx[i] = uq[1];
     qy[i] = uq[2];

@@ -1,7 +1,7 @@
 #ifndef GREENAM_PROPERTIES_H
 #define GREENAM_PROPERTIES_H
 
-#include "GreenAM_Util.h"
+#include "GreenAM_Constants.h"
 
 namespace Teuchos { class XMLObject; }
 

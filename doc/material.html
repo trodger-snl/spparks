@@ -1,0 +1,115 @@
+<HTML>
+<CENTER><A HREF = "https://spparks.github.io">SPPARKS Website</A> - <A HREF = "Manual.html">SPPARKS Documentation</A> - <A HREF = "Section_commands.html#comm">SPPARKS Commands</A> 
+</CENTER>
+
+
+
+
+
+
+<HR>
+
+<H3>material command 
+</H3>
+<P><B>Syntax:</B>
+</P>
+<PRE>material file keyword value 
+</PRE>
+<UL><LI>file = material card, a TOML file 
+
+<LI>zero or one keyword/value pair may be appended 
+
+<LI>keyword = <I>process</I> 
+
+<PRE>  <I>process</I> value = name
+    name = one of the card's [process.NAME] sets 
+</PRE>
+
+</UL>
+<P><B>Examples:</B>
+</P>
+<PRE>material ../../materials/316L.toml process single_track_340W
+setup_temperature_source conduction card margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 part part
+laser_path start 0.15e-3 0.10e-3 0.1475e-3 end 0.85e-3 0.10e-3 speed card hatch card 2 serpentine 
+</PRE>
+<PRE>material ../../materials/IN625.toml process amb2018_02_cbm_B
+nucleation_density      1e14
+critical_undercooling   5
+undercooling_deviation  3
+mean_nuclei_volume      8.4375e-16
+nuclei_volume_deviation 1.5625e-17
+setup_temperature_source moser card 
+</PRE>
+<P><B>Description:</B>
+</P>
+<P>This command loads a material parameter card for
+<A HREF = "app_additive_texture.html">app_style additive/texture</A> and
+<A HREF = "app_additive_texture.html">additive/texture/kk</A>, and selects one of its
+example process sets.  A card is a versioned TOML file holding a
+material's properties.  Each value carries its units, its citation and,
+where known, its uncertainty.  Cards for 316L, 304L, IN625, IN718 and
+Ti-6Al-4V are in the materials/ directory of the source tree; the format
+is specified in docs/MATERIAL_CARDS.md.
+</P>
+<P>The command sets <I>liquidus</I>, <I>solidus</I>, <I>solid_front_vel</I> and the
+nucleation values (<I>nucleation_density</I>, <I>critical_undercooling</I>,
+<I>undercooling_deviation</I>, <I>mean_nuclei_volume</I>,
+<I>nuclei_volume_deviation</I>) from the card.  It prints the card's name,
+version and modification date, then every value it read with its unit
+and reference, so the run's log records which data it used.
+</P>
+<P>The card is then used in two other places:
+</P>
+<UL><LI><A HREF = "setup_temperature_source.html">setup_temperature_source</A> <I>type</I>
+<I>card</I>, for the <I>rosenthal</I>, <I>moser</I> and
+<A HREF = "temperature_source_conduction.html">conduction</A> sources, builds the
+source's arguments from the card and the process set.  The expanded
+command is printed. 
+
+<LI><A HREF = "laser_path.html">laser_path</A> <I>speed card</I> and <I>hatch card N</I> take the
+process set's scan speed and hatch spacing. 
+</UL>
+<P>A command that comes after <I>material</I> in the input script overrides the
+card value, so put <I>material</I> first.  A command before it is
+overwritten.
+</P>
+<P><B>No built-in defaults.</B>  Once a card is loaded, every material value the
+model uses must come from the card or from an explicit command, or the
+run stops with an error naming what is missing.  The nucleation values
+are not in any card yet, so give them in the input script.  To turn a
+term off, say so explicitly, e.g. <I>convection 0 300</I> on the
+<I>setup_temperature_source</I> command.
+</P>
+<P><B>Process sets.</B>  A card holds zero or more example LPBF process sets
+(power, absorptivity, scan speed, hatch, layer thickness, spot size and
+its convention, preheat, and measured melt-pool sizes where published).
+Without <I>process</I>, only the material values are available, and a
+<I>setup_temperature_source ... card</I> must give Q, lambda and T0, and the
+spot for moser and conduction, on the command line.
+</P>
+<P>tools/material_card.py checks a card (units, references, changelog,
+DOIs) and converts literature solidification-front velocities into the
+polynomial form <I>solid_front_vel</I> uses.
+</P>
+<HR>
+
+<P><B>Restrictions:</B>
+</P>
+<P>This command is only available in the additive/texture apps, which
+require an MPI build.  Only schema version 1 cards are read.  The
+loader does not convert units: a card whose unit strings differ from
+the canonical SI units is rejected.
+</P>
+<P><B>Related commands:</B>
+</P>
+<P><A HREF = "setup_temperature_source.html">setup_temperature_source</A>,
+<A HREF = "temperature_source_conduction.html">temperature_source_conduction</A>,
+<A HREF = "laser_path.html">laser_path</A>,
+<A HREF = "app_additive_texture.html">app_style additive/texture</A>
+</P>
+<P><B>Default:</B>
+</P>
+<P>No card is loaded; every value comes from the input script or the
+app's built-in defaults.
+</P>
+</HTML>

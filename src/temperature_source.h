@@ -21,6 +21,10 @@
 
 namespace SPPARKS_NS {
 
+// One emitting segment of a laser scan: (x0,y0) -> (x1,y1) over [t0, t1]
+// at power fraction p (SI units).
+struct ScanSeg { double t0, t1, x0, y0, x1, y1, p; };
+
 /* ----------------------------------------------------------------------
    Abstract base class for temperature data sources
    
@@ -40,23 +44,13 @@ class TemperatureSource : protected Pointers {
   TemperatureSource(class SPPARKS *);
   virtual ~TemperatureSource() = default;
 
-  // Pure virtual interface methods that derived classes must implement
   virtual void setup_temperature_source(const std::vector<std::string> &args) = 0;
   virtual double get_temperature_at_xyz_and_time(double x, double y, double z, double time) = 0;
-  virtual void update_temperatures(double dt, double simulation_time) = 0;
-  virtual bool needs_data_refresh(double simulation_time) = 0;
-  virtual void cleanup() = 0;
-
-  // Convenience method for site-based access (can be overridden for optimization)
-  virtual double get_temperature_at_site(int site_index, double time);
-  
-  // Optional methods with default implementations
-  virtual void validate_setup() {}
-  virtual std::string get_source_type() const = 0;
   virtual void print_source_info() const {}
-  
-  // Time query interface for efficient fast forward
-  virtual bool supports_time_queries() const { return false; }
+
+  // Fast-forward: earliest time >= current_time at which any site could
+  // exceed threshold_temp (the generic path; Rosenthal/Moser use
+  // ThermalManager's geometry predictors instead).
   virtual double get_next_time_with_temperature(double current_time, double threshold_temp) { return current_time; }
 
   // Enable anisotropic Gaussian smoothing of nodal temperatures on the FEA
@@ -78,9 +72,7 @@ class TemperatureSource : protected Pointers {
   double ambient_temperature;
   bool source_initialized;
   
-  // Helper methods for common operations
   void check_initialization() const;
-  void error_not_implemented(const std::string &method_name) const;
 };
 
 /* ----------------------------------------------------------------------

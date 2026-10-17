@@ -18,9 +18,10 @@
 ------------------------------------------------------------------------- */
 
 #include "thermal_manager.h"
-#include "app_additive_texture.h"
+#include "thermal_host.h"
 #include "temperature_source_rosenthal.h"
 #include "temperature_source_moser.h"
+#include "temperature_source_conduction.h"
 #include "temperature_source_hdf5_unstructured.h"
 #include "comm_lattice.h"
 #include "domain.h"
@@ -34,18 +35,20 @@
 #include <cmath>
 #include <limits>
 #include <algorithm>
+#include <fstream>
+#include <iterator>
+#include <stdexcept>
 
 using namespace SPPARKS_NS;
 using namespace MathConst;
 
 /* ---------------------------------------------------------------------- */
 
-ThermalManager::ThermalManager(SPPARKS *spk, AppAdditiveTexture *app) :
-  Pointers(spk), app_(app)
+ThermalManager::ThermalManager(SPPARKS *spk, ThermalHost *host) :
+  Pointers(spk), host_(host)
 {
   // Initialize modular temperature source system
   temperature_source = nullptr;
-  use_temperature_source = true;     // Always use modular temperature system
   fast_forward_search_window = 0.1;  // Default 100ms search window
 
   // Rosenthal scan-path state (only used when temperature_source is Rosenthal)
@@ -61,10 +64,6 @@ ThermalManager::ThermalManager(SPPARKS *spk, AppAdditiveTexture *app) :
   laser_reset_temperature  = 0.0;
   pending_moser_passes     = 0;
 
-  // Temperature optimization flags (all enabled by default)
-  opt_use_spatial_grid = true;
-  opt_use_element_cache = true;
-  opt_use_nodal_precompute = true;
 
   // Solidification-band smoothing defaults (off until `temperature_smooth`)
   temperature_smooth_enabled = false;
@@ -76,17 +75,47 @@ ThermalManager::ThermalManager(SPPARKS *spk, AppAdditiveTexture *app) :
   smooth_alpha = 0.4;
   smooth_passes = 1;
   smooth_diag_interval = 0;
-
-  // Temperature-update timing accumulators
-  g_t_temp_prepare = 0.0;
-  g_t_temp_site_loop = 0.0;
-  g_t_cache_build = 0.0;
 }
 
 /* ----------------------------------------------------------------------
    setup_temperature_source command: instantiate a temperature source via
    the factory and configure it with the remaining arguments.
 ------------------------------------------------------------------------- */
+
+/* ----------------------------------------------------------------------
+   material <file> [process <name>]: load a material card (docs/MATERIAL_CARDS.md).
+   Rank 0 reads the file; every rank parses the broadcast text.
+------------------------------------------------------------------------- */
+
+void ThermalManager::material_cmd(int narg, char **arg)
+{
+  if (narg != 1 && !(narg == 3 && strcmp(arg[1],"process") == 0))
+    error->all(FLERR,"Illegal material command: material <file> [process <name>]");
+  std::string text;
+  int n = 0;
+  if (domain->me == 0) {
+    std::ifstream f(arg[0], std::ios::binary);
+    if (f) text.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    n = f ? (int) text.size() : -1;
+  }
+  MPI_Bcast(&n, 1, MPI_INT, 0, world);
+  if (n < 0) error->all(FLERR,(std::string("material: cannot open ") + arg[0]).c_str());
+  text.resize(n);
+  MPI_Bcast(text.data(), n, MPI_CHAR, 0, world);
+  try {
+    card_ = std::make_unique<MaterialCard>(
+      MaterialCard::parse(text, arg[0], narg == 3 ? arg[2] : ""));
+  } catch (const std::exception &e) {
+    error->all(FLERR, e.what());
+  }
+  if (domain->me == 0) {
+    std::cout << "material card " << arg[0] << ": " << card_->material << " version "
+              << card_->version << " modified " << card_->modified;
+    if (!card_->process.empty()) std::cout << ", process " << card_->process;
+    std::cout << std::endl;
+    for (const std::string &l : card_->summary) std::cout << "  " << l << std::endl;
+  }
+}
 
 void ThermalManager::setup_cmd(int narg, char **arg)
 {
@@ -102,25 +131,32 @@ void ThermalManager::setup_cmd(int narg, char **arg)
     source_args.push_back(std::string(arg[i]));
   }
 
+  // "card": the material card supplies the positional and material keywords
+  if (!source_args.empty() && source_args[0] == "card") {
+    if (!card_)
+      error->all(FLERR,"setup_temperature_source ... card: no material card (use the material command first)");
+    try {
+      source_args = card_->source_tokens(source_type,
+        std::vector<std::string>(source_args.begin() + 1, source_args.end()));
+    } catch (const std::exception &e) {
+      error->all(FLERR, e.what());
+    }
+    if (domain->me == 0) {
+      std::cout << "setup_temperature_source " << source_type << " from card " << card_->material
+                << " " << card_->version << ":";
+      for (const std::string &t : source_args) std::cout << " " << t;
+      std::cout << std::endl;
+    }
+  }
+
   // Create temperature source using factory
   temperature_source = SPPARKS_NS::create_temperature_source(source_type, spk);
   if (!temperature_source) {
     error->all(FLERR,"Failed to create temperature source");
   }
 
-  // Pass optimization flags to temperature source before setup
-  HDF5UnstructuredTemperatureSource* hdf5_source =
-    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-  if (hdf5_source) {
-    hdf5_source->set_use_spatial_grid(opt_use_spatial_grid);
-    hdf5_source->set_use_element_cache(opt_use_element_cache);
-  }
-
   // Setup the temperature source with provided arguments
   temperature_source->setup_temperature_source(source_args);
-
-  // Enable the new temperature source system
-  use_temperature_source = true;
 
   if (domain->me == 0) {
     std::cout << "Modular temperature source (" << source_type << ") enabled" << std::endl;
@@ -144,10 +180,32 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
       "<type> ...' line before 'laser_path'.");
 
   // Expected token layout (0-based, command name already stripped):
-  //   start X0 Y0 Z0 end X1 Y1 speed V [repeats N]
+  //   start X0 Y0 Z0 end X1 Y1 speed V [repeats N | hatch S N] [serpentine]
   //     [pause <T> | pause_below <Tk>]
+  // hatch S N: N passes, pass k offset by k*S along the line's in-plane
+  // normal; serpentine reverses the direction on odd passes.
+  // speed card / hatch card: the selected process set's value
+  std::vector<std::string> subst(arg, arg + narg);
+  std::vector<char *> argv_sub;
+  for (int i = 1; i < narg; i++) {
+    if (subst[i] != "card" || (subst[i-1] != "speed" && subst[i-1] != "hatch")) continue;
+    const MaterialCard::opt v = !card_ ? std::nullopt : subst[i-1] == "speed" ? card_->speed : card_->hatch;
+    if (!v)
+      error->all(FLERR,("laser_path: " + subst[i-1] + " card needs a material card with a process set "
+                        "giving " + subst[i-1]).c_str());
+    subst[i] = MaterialCard::num(*v);
+  }
+  for (std::string &t : subst) argv_sub.push_back(t.data());
+  arg = argv_sub.data();
+
+  if (narg >= 1 && strcmp(arg[0],"file") == 0) {
+    laser_path_file(narg - 1, arg + 1);
+    return;
+  }
+  path_layers.clear();
+
   if (narg < 9)
-    error->all(FLERR,"Illegal laser_path command: expected start X0 Y0 Z0 end X1 Y1 speed V [repeats N] [pause T | pause_below Tk]");
+    error->all(FLERR,"Illegal laser_path command: expected start X0 Y0 Z0 end X1 Y1 speed V [repeats N | hatch S N] [serpentine] [pause T | pause_below Tk]");
   if (strcmp(arg[0],"start") != 0)
     error->all(FLERR,"laser_path: expected keyword 'start'");
   const double x0 = atof(arg[1]);
@@ -164,6 +222,8 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
     error->all(FLERR,"laser_path: speed must be > 0");
 
   int repeats = 1;
+  double hatch = 0.0;
+  bool serpentine = false;
   double pause_constant   = 0.0;
   double pause_below_T    = 0.0;
   double reset_temperature_T = 0.0;
@@ -176,6 +236,19 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
       if (repeats < 1)
         error->all(FLERR,"laser_path: repeats must be >= 1");
       i += 2;
+    }
+    else if (strcmp(arg[i],"hatch") == 0) {
+      if (i + 2 >= narg)
+        error->all(FLERR,"laser_path: expected 'hatch <spacing_m> <n_passes>'");
+      hatch = atof(arg[i+1]);
+      repeats = atoi(arg[i+2]);
+      if (hatch <= 0.0 || repeats < 1)
+        error->all(FLERR,"laser_path: hatch spacing must be > 0 and n_passes >= 1");
+      i += 3;
+    }
+    else if (strcmp(arg[i],"serpentine") == 0) {
+      serpentine = true;
+      i += 1;
     }
     else if (strcmp(arg[i],"pause") == 0) {
       if (i + 1 >= narg)
@@ -202,7 +275,7 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
       i += 2;
     }
     else {
-      error->all(FLERR,"laser_path: unknown keyword (expected 'repeats', 'pause', 'pause_below', or 'reset_temperature')");
+      error->all(FLERR,"laser_path: unknown keyword (expected 'repeats', 'hatch', 'serpentine', 'pause', 'pause_below', or 'reset_temperature')");
     }
   }
 
@@ -215,19 +288,23 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
     error->all(FLERR,
       "laser_path: 'reset_temperature' requires either 'pause <T>' or "
       "'pause_below <Tk>' to define when the reset is applied.");
+  if (hatch > 0.0 && reset_temperature_T > 0.0)
+    error->all(FLERR,
+      "laser_path: 'hatch' and 'reset_temperature' cannot be combined "
+      "(a reset restarts the pass index at the base line).");
 
   // Both pause modes require a time-resolved source. Rosenthal is the
   // steady-state moving-point solution, so each pass is already independent
   // of every preceding pass; reject pause at parse time.
   const bool src_is_rosenthal =
-    (dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get()) != nullptr);
+    (rosenthal_source() != nullptr);
   if ((pause_constant > 0.0 || pause_below_T > 0.0) && src_is_rosenthal) {
     error->all(FLERR,
       "laser_path pause/pause_below: not supported for the Rosenthal "
       "source. Rosenthal is a steady-state moving-point solution; "
       "multi-pass repeats are already physically independent (no "
       "thermal history carries between passes). Use a time-resolved "
-      "source (moser, finitediff [planned]) if you need cooling "
+      "source (moser) if you need cooling "
       "between passes.");
   }
   if ((pause_constant > 0.0 || pause_below_T > 0.0) && repeats < 2) {
@@ -242,23 +319,32 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
   laser_pause_below       = pause_below_T;
   laser_reset_temperature = reset_temperature_T;
 
-  // Build N identical paths back-to-back in the Rosenthal scan_layer
-  // (Moser does not consume scan_layer).
-  RASTER::Point a(x0,y0,0.0), b(x1,y1,0.0);
+  // Build N paths back-to-back in the Rosenthal scan_layer (Moser does not
+  // consume scan_layer): the base line offset r*hatch along its in-plane
+  // normal, reversed on odd passes when serpentine.
   std::vector<RASTER::Path> paths;
   paths.reserve(repeats);
-  for (int r = 0; r < repeats; ++r) paths.emplace_back(a, b, v);
+  {
+    const double ddx = x1 - x0, ddy = y1 - y0, L = std::sqrt(ddx*ddx + ddy*ddy);
+    const double nx = (L > 0.0) ? -ddy / L : 0.0, ny = (L > 0.0) ? ddx / L : 0.0;
+    for (int r = 0; r < repeats; ++r) {
+      const double off = r * hatch;
+      RASTER::Point a(x0 + off*nx, y0 + off*ny, 0.0), b(x1 + off*nx, y1 + off*ny, 0.0);
+      if (serpentine && (r % 2 == 1)) paths.emplace_back(b, a, v);
+      else                            paths.emplace_back(a, b, v);
+    }
+  }
 
   scan_layer = RASTER::Layer(paths, /*thickness*/0);
   scan_layer_z = z0;
-  scan_layer_time = app_->time;  // anchor the layer pose to the current sim time
+  scan_layer_time = host_->time;  // anchor the layer pose to the current sim time
   scan_layer_active = true;
   laser_path_set = true;
 
   // Size the singularity cutoff to the lattice so the 1/R prefactor at the
   // laser site stays finite. Only meaningful for a Rosenthal source.
-  if (auto* ros = dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get())) {
-    ros->set_r_min(0.5 * app_->dx);
+  if (auto* ros = rosenthal_source()) {
+    ros->set_r_min(0.5 * host_->dx);
   }
 
   // Hand the path geometry to the Moser source so it can build its own
@@ -268,12 +354,14 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
   const bool dynamic_pass_scheduling =
     (pause_below_T > 0.0) ||
     (pause_constant > 0.0 && reset_temperature_T > 0.0);
-  if (auto* moser = dynamic_cast<MoserTemperatureSource*>(temperature_source.get())) {
+  if (auto* moser = moser_source()) {
     if (dynamic_pass_scheduling) {
-      moser->build_scan(app_->time, x0, y0, x1, y1, z0, v, /*repeats*/1, /*pause*/0.0);
+      moser->build_scan(host_->time, x0, y0, x1, y1, z0, v, /*repeats*/1, /*pause*/0.0,
+                        hatch, serpentine);
       pending_moser_passes = repeats - 1;
     } else {
-      moser->build_scan(app_->time, x0, y0, x1, y1, z0, v, repeats, pause_constant);
+      moser->build_scan(host_->time, x0, y0, x1, y1, z0, v, repeats, pause_constant,
+                        hatch, serpentine);
       pending_moser_passes = 0;
     }
   }
@@ -282,6 +370,8 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
     std::cout << "laser_path: (" << x0 << "," << y0 << "," << z0
               << ") -> (" << x1 << "," << y1 << "," << z0 << ")"
               << " speed=" << v << " m/s, repeats=" << repeats;
+    if (hatch > 0.0)
+      std::cout << ", hatch=" << hatch << " m" << (serpentine ? " serpentine" : "");
     if (pause_constant > 0.0)
       std::cout << ", pause=" << pause_constant << " s";
     if (pause_below_T > 0.0)
@@ -290,6 +380,127 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
       std::cout << ", reset_temperature=" << reset_temperature_T << " K";
     std::cout << std::endl;
   }
+}
+
+/* ----------------------------------------------------------------------
+   laser_path file F speed V [scale S] [shift DX DY DZ] [jump_speed V]
+     [jump_time T] [recoat T] [layers N]
+   Waypoint file, one row per point: x y z p [v] (whitespace or commas,
+   '#' comments). Each row is a move from the previous point at power
+   fraction p (0 = laser off) and speed v (default V). Off moves take
+   jump_time if given, else distance / jump_speed (default V). A change of
+   z starts a new layer at that point; layers run one after another, each
+   once the previous one has cooled below the solidus with no liquid left,
+   plus recoat seconds. Coordinates are file units * scale + shift (m).
+------------------------------------------------------------------------- */
+
+void ThermalManager::laser_path_file(int narg, char **arg)
+{
+  if (narg < 3 || strcmp(arg[1],"speed") != 0)
+    error->all(FLERR,"Illegal laser_path file command: expected file F speed V ...");
+  if (!moser_source() || rosenthal_source())
+    error->all(FLERR,"laser_path file: requires the moser or conduction source");
+  const double v = atof(arg[2]);
+  double scale = 1.0, shift[3] = {0.0, 0.0, 0.0}, jump_speed = v, jump_time = 0.0;
+  double recoat = 0.0;
+  int nlayers = 0;
+  for (int i = 3; i < narg; ) {
+    auto need = [&](int n) {
+      if (i + n >= narg) error->all(FLERR,"laser_path file: missing keyword value");
+    };
+    if (strcmp(arg[i],"scale") == 0) { need(1); scale = atof(arg[i+1]); i += 2; }
+    else if (strcmp(arg[i],"shift") == 0) {
+      need(3);
+      for (int d = 0; d < 3; d++) shift[d] = atof(arg[i+1+d]);
+      i += 4;
+    }
+    else if (strcmp(arg[i],"jump_speed") == 0) { need(1); jump_speed = atof(arg[i+1]); i += 2; }
+    else if (strcmp(arg[i],"jump_time") == 0) { need(1); jump_time = atof(arg[i+1]); i += 2; }
+    else if (strcmp(arg[i],"recoat") == 0) { need(1); recoat = atof(arg[i+1]); i += 2; }
+    else if (strcmp(arg[i],"layers") == 0) { need(1); nlayers = atoi(arg[i+1]); i += 2; }
+    else error->all(FLERR,"laser_path file: unknown keyword (expected scale, shift, "
+                    "jump_speed, jump_time, recoat or layers)");
+  }
+  if (v <= 0.0 || scale <= 0.0 || jump_speed <= 0.0 || jump_time < 0.0 ||
+      recoat < 0.0 || nlayers < 0)
+    error->all(FLERR,"laser_path file: speeds and scale must be > 0, times >= 0");
+
+  // Rank 0 reads rows of 5 values (v = 0 when absent) and broadcasts them.
+  std::vector<double> rows;
+  if (domain->me == 0) {
+    FILE *fp = fopen(arg[0], "r");
+    if (!fp) error->one(FLERR,"laser_path file: cannot open path file");
+    char line[1024];
+    while (fgets(line, sizeof(line), fp)) {
+      if (char *c = strchr(line, '#')) *c = '\0';
+      for (char *c = line; *c; c++) if (*c == ',') *c = ' ';
+      double r[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+      const int n = sscanf(line, "%lf %lf %lf %lf %lf", r, r+1, r+2, r+3, r+4);
+      if (n <= 0) continue;
+      if (n < 4) error->one(FLERR,"laser_path file: a row needs x y z p [v]");
+      rows.insert(rows.end(), r, r + 5);
+    }
+    fclose(fp);
+  }
+  int nr = (int) rows.size();
+  MPI_Bcast(&nr, 1, MPI_INT, 0, world);
+  rows.resize(nr);
+  MPI_Bcast(rows.data(), nr, MPI_DOUBLE, 0, world);
+  if (nr < 10) error->all(FLERR,"laser_path file: needs at least two points");
+
+  path_layers.clear();
+  double t = 0.0;
+  auto P = [&](int r, int d) { return rows[5*r+d] * scale + shift[d]; };
+  for (int r = 1; r < nr / 5; r++) {
+    const double x0 = P(r-1,0), y0 = P(r-1,1), z0 = P(r-1,2);
+    const double x1 = P(r,0), y1 = P(r,1), z1 = P(r,2);
+    const double p = rows[5*r+3], vr = rows[5*r+4] > 0.0 ? rows[5*r+4] : v;
+    if (path_layers.empty() || z1 != z0) {          // first point of a layer
+      if (!path_layers.empty() && path_layers.back().segs.empty()) path_layers.pop_back();
+      path_layers.push_back({z1, {}});
+      t = 0.0;
+      if (z1 != z0) continue;
+    }
+    const double d = std::sqrt((x1-x0)*(x1-x0) + (y1-y0)*(y1-y0));
+    if (p > 0.0) {
+      if (d <= 0.0) continue;
+      path_layers.back().segs.push_back({t, t + d / vr, x0, y0, x1, y1, p});
+      t += d / vr;
+    } else {
+      // floor keeps a zero-time jump from putting two waypoints at one time
+      t += std::max(jump_time > 0.0 ? jump_time : d / jump_speed, 1.0e-12);
+    }
+  }
+  if (!path_layers.empty() && path_layers.back().segs.empty()) path_layers.pop_back();
+  if (path_layers.empty()) error->all(FLERR,"laser_path file: no emitting move");
+  if (nlayers > 0 && (size_t) nlayers < path_layers.size()) path_layers.resize(nlayers);
+
+  laser_pause_constant = laser_pause_below = laser_reset_temperature = 0.0;
+  pending_moser_passes = 0;
+  path_recoat = recoat;
+  laser_path_set = true;
+  scan_layer_active = false;   // Rosenthal state; file paths are Moser-only
+  if (domain->me == 0) {
+    size_t nseg = 0;
+    for (const auto &L : path_layers) nseg += L.segs.size();
+    std::cout << "laser_path file " << arg[0] << ": " << path_layers.size()
+              << " layers, " << nseg << " emitting segments, z "
+              << path_layers.front().z << " .. " << path_layers.back().z
+              << " m, recoat " << recoat << " s" << std::endl;
+  }
+  start_path_layer(0, host_->time);
+}
+
+void ThermalManager::start_path_layer(size_t k, double t_start)
+{
+  path_layer = k;
+  const PathLayer &L = path_layers[k];
+  scan_layer_z = L.z;
+  moser_source()->build_scan_path(t_start, L.segs, L.z);
+  if (domain->me == 0)
+    std::cout << "laser_path file: layer " << k + 1 << " of " << path_layers.size()
+              << " at z=" << L.z << " m starts at t=" << t_start << " s ("
+              << L.segs.back().t1 << " s of scan)" << std::endl;
 }
 
 /* ----------------------------------------------------------------------
@@ -305,7 +516,7 @@ void ThermalManager::laser_fluctuations_cmd(int narg, char **arg)
     error->all(FLERR,"laser_fluctuations: setup_temperature_source must be called first");
   }
   MoserTemperatureSource *moser =
-    dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
+    moser_source();
   if (!moser) {
     error->all(FLERR,"laser_fluctuations: only the Moser unsteady Green's-function source supports fluctuations");
   }
@@ -399,62 +610,11 @@ void ThermalManager::laser_fluctuations_cmd(int narg, char **arg)
   }
 
   if (domain->me == 0) {
-    const char *sname = "white";
-    if      (spec.shape == MoserTemperatureSource::PsdShape::LORENTZIAN)  sname = "lorentzian";
-    else if (spec.shape == MoserTemperatureSource::PsdShape::PINK)        sname = "pink";
-    else if (spec.shape == MoserTemperatureSource::PsdShape::NARROW_BAND) sname = "narrow_band";
-    const char *wname = "single";
-    if      (which == Selector::TOP)  wname = "top";
-    else if (which == Selector::BOT)  wname = "bot";
-    else if (which == Selector::BOTH) wname = "both";
-    std::cout << "laser_fluctuations psd: lobe=" << wname
-              << " shape=" << sname
-              << " sigma_W=" << spec.sigma_W
-              << " sigma_D=" << spec.sigma_D
-              << " sigma_P=" << spec.sigma_P
-              << " rho="     << spec.rho
-              << " seed="    << spec.seed
-              << " dt="      << spec.dt_psd << " s";
-    if (spec.shape == MoserTemperatureSource::PsdShape::LORENTZIAN)
-      std::cout << " tau=" << spec.tau;
-    if (spec.shape == MoserTemperatureSource::PsdShape::NARROW_BAND)
-      std::cout << " f0=" << spec.f0 << " df=" << spec.df;
-    std::cout << std::endl;
-  }
-}
-
-/* ----------------------------------------------------------------------
-   temperature_optimization command: toggle HDF5 source performance paths.
-   Usage: temperature_optimization <option> <on|off>
-------------------------------------------------------------------------- */
-
-void ThermalManager::optimization_cmd(int narg, char **arg)
-{
-  if (narg != 2) error->all(FLERR,"Illegal temperature_optimization command: requires 2 args (option on/off)");
-  bool enable = (strcmp(arg[1],"on") == 0 || strcmp(arg[1],"1") == 0 || strcmp(arg[1],"true") == 0);
-
-  // Get HDF5 source if available to pass flags
-  HDF5UnstructuredTemperatureSource* hdf5_source = nullptr;
-  if (temperature_source) {
-    hdf5_source = dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-  }
-
-  if (strcmp(arg[0],"spatial_grid") == 0) {
-    opt_use_spatial_grid = enable;
-    if (hdf5_source) hdf5_source->set_use_spatial_grid(enable);
-    if (domain->me == 0) fprintf(screen,"Temperature optimization: spatial_grid = %s\n", enable ? "ON" : "OFF");
-  } else if (strcmp(arg[0],"element_cache") == 0) {
-    opt_use_element_cache = enable;
-    if (!enable) opt_use_nodal_precompute = false;  // nodal_precompute requires element_cache
-    if (hdf5_source) hdf5_source->set_use_element_cache(enable);
-    if (domain->me == 0) fprintf(screen,"Temperature optimization: element_cache = %s\n", enable ? "ON" : "OFF");
-  } else if (strcmp(arg[0],"nodal_precompute") == 0) {
-    if (enable && !opt_use_element_cache)
-      error->all(FLERR,"nodal_precompute requires element_cache to be enabled");
-    opt_use_nodal_precompute = enable;
-    if (domain->me == 0) fprintf(screen,"Temperature optimization: nodal_precompute = %s\n", enable ? "ON" : "OFF");
-  } else {
-    error->all(FLERR,"Unknown temperature_optimization option (use: spatial_grid, element_cache, nodal_precompute)");
+    std::cout << "laser_fluctuations psd:\n";
+    if (which != Selector::BOT) moser->print_lobe_info(MoserTemperatureSource::LOBE_TOP);
+    if (which == Selector::BOT || which == Selector::BOTH)
+      moser->print_lobe_info(MoserTemperatureSource::LOBE_BOT);
+    std::cout.flush();
   }
 }
 
@@ -548,68 +708,28 @@ void ThermalManager::update_temperatures(double simulation_time)
 {
   timer->stamp();
 
-  if (!use_temperature_source || !temperature_source) {
+  if (!temperature_source) {
     timer->stamp(TIME_APP);
     return; // No temperature source configured
   }
 
-  double *T = app_->T;
-  double **xyz = app_->xyz;
-  const int nlocal = app_->nlocal;
-  const double dx = app_->dx;
-
-  // Update temperature source (may load new data)
-  temperature_source->update_temperatures(app_->dt, simulation_time);
+  double *T = host_->T;
+  double **xyz = host_->xyz;
+  const int nlocal = host_->nlocal;
+  const double dx = host_->dx;
 
   // Cache the dynamic_cast results outside the loop.
-  HDF5UnstructuredTemperatureSource* hdf5_source =
-    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-  RosenthalTemperatureSource* ros_source =
-    hdf5_source ? nullptr
-                : dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
+  HDF5UnstructuredTemperatureSource* hdf5_source = this->hdf5_source();
+  RosenthalTemperatureSource* ros_source = hdf5_source ? nullptr : rosenthal_source();
 
   // -------------------------------------------------------------------
-  // HDF5 path: three optimization tiers.
+  // HDF5 path: per-site element cache + nodal precompute.
   // -------------------------------------------------------------------
-  if (hdf5_source && opt_use_element_cache && opt_use_nodal_precompute) {
-    // Path 3: Fast path with nodal precomputation
-    double t0 = MPI_Wtime();
+  if (hdf5_source) {
     hdf5_source->prepare_for_timestep(simulation_time);
-    double t1 = MPI_Wtime();
     for (int i = 0; i < nlocal; i++) {
       T[i] = hdf5_source->get_temperature_at_site_fast(i);
     }
-    double t2 = MPI_Wtime();
-
-    double prepare_time = t1 - t0;
-    if (prepare_time > 1.0) {
-      g_t_cache_build += prepare_time;
-    } else {
-      g_t_temp_prepare += prepare_time;
-    }
-    g_t_temp_site_loop += (t2 - t1);
-
-  } else if (hdf5_source && opt_use_element_cache) {
-    // Path 2: Lazy per-site lookup with element cache (no nodal precomputation)
-    double t0 = MPI_Wtime();
-    for (int i = 0; i < nlocal; i++) {
-      T[i] = hdf5_source->get_temperature_at_site(i, simulation_time);
-    }
-    double t1 = MPI_Wtime();
-    g_t_temp_site_loop += (t1 - t0);
-
-  } else if (hdf5_source) {
-    // Path 1: XYZ-based lookup (no element cache)
-    double t0 = MPI_Wtime();
-    const double src_dx = hdf5_source->get_dx();
-    for (int i = 0; i < nlocal; i++) {
-      double x_physical = xyz[i][0] * src_dx;
-      double y_physical = xyz[i][1] * src_dx;
-      double z_physical = xyz[i][2] * src_dx;
-      T[i] = temperature_source->get_temperature_at_xyz_and_time(x_physical, y_physical, z_physical, simulation_time);
-    }
-    double t1 = MPI_Wtime();
-    g_t_temp_site_loop += (t1 - t0);
 
   // -------------------------------------------------------------------
   // Rosenthal path: analytical evaluation in pool-local frame.
@@ -619,13 +739,11 @@ void ThermalManager::update_temperatures(double simulation_time)
       error->all(FLERR,"Rosenthal source selected but no laser_path defined");
     }
 
-    double t0 = MPI_Wtime();
-
     // Sync the laser pose to simulation_time, advancing in small dt-sized
     // chunks (move(dt) does not carry remainder across path boundaries).
     if (scan_layer_active) {
       double advance = simulation_time - scan_layer_time;
-      const double step = (app_->dt > 0.0) ? app_->dt : 1.0e-6;
+      const double step = (host_->dt > 0.0) ? host_->dt : 1.0e-6;
       while (advance > step) {
         if (!scan_layer.move(step)) { scan_layer_active = false; break; }
         advance -= step;
@@ -648,22 +766,17 @@ void ThermalManager::update_temperatures(double simulation_time)
                ? ros_source->rosenthal_pointwise(loc[0], loc[1], loc[2], v_laser, T0)
                : T0;
     }
-    double t1 = MPI_Wtime();
-    g_t_temp_site_loop += (t1 - t0);
 
   // -------------------------------------------------------------------
   // Generic xyz fallback for any other future source type.
   // -------------------------------------------------------------------
   } else {
-    double t0 = MPI_Wtime();
     for (int i = 0; i < nlocal; i++) {
       double x_physical = xyz[i][0] * dx;
       double y_physical = xyz[i][1] * dx;
       double z_physical = xyz[i][2] * dx;
       T[i] = temperature_source->get_temperature_at_xyz_and_time(x_physical, y_physical, z_physical, simulation_time);
     }
-    double t1 = MPI_Wtime();
-    g_t_temp_site_loop += (t1 - t0);
   }
 
   // Optional Gaussian smoothing of the solidification band.
@@ -680,36 +793,239 @@ void ThermalManager::update_temperatures(double simulation_time)
 
 ThermalManager::ThermalStep ThermalManager::advance(double current_time, double stoptime)
 {
+  // Moser: the per-pass pause/reset control flow is shared with the device
+  // path; the host refill fills T[] and reduces its peak.
+  if (moser_source()) {
+    return moser_advance(current_time, stoptime, [this](double t) {
+      update_temperatures(t);
+      double local_max = 0.0;
+      for (int i = 0; i < host_->nlocal; i++)
+        local_max = std::max(local_max, host_->T[i]);
+      double gmax;
+      MPI_Allreduce(&local_max, &gmax, 1, MPI_DOUBLE, MPI_MAX, world);
+      return gmax;
+    });
+  }
+
   ThermalStep step{current_time, false, false};
 
   // Update temperature first to get current temperatures
   update_temperatures(current_time);
 
-  // Check for active sites using temperature source's threshold. HDF5
-  // sources expose their own threshold; Rosenthal/Moser use liquidus tl
-  // (or pause_below override).
-  double fast_forward_threshold = app_->t_room; // Default to t_room
+  // Active-site threshold: HDF5 sources expose their own; Rosenthal uses the
+  // liquidus tl.
+  HDF5UnstructuredTemperatureSource* hdf5_source = this->hdf5_source();
+  RosenthalTemperatureSource* ros_source = hdf5_source ? nullptr : rosenthal_source();
+  double fast_forward_threshold = host_->t_room;
+  if (hdf5_source) fast_forward_threshold = hdf5_source->get_fast_forward_threshold();
+  else if (ros_source) fast_forward_threshold = host_->tl;
 
-  HDF5UnstructuredTemperatureSource* hdf5_source =
-    dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
-  RosenthalTemperatureSource* ros_source =
-    hdf5_source ? nullptr
-                : dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
-  MoserTemperatureSource* moser_source =
-    (hdf5_source || ros_source) ? nullptr
-                : dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
+  int t_active = 0;
+  for (int i = 0; i < host_->nlocal; i++) {
+    if (host_->T[i] > fast_forward_threshold) t_active = 1;
+  }
 
-  // Moser pause + reset_temperature: time-gated dynamic fire (unconditional
-  // on time, not gated on cool-state, so it lives outside the fast-forward
-  // block).
-  if (moser_source &&
-      laser_pause_constant > 0.0 &&
-      laser_reset_temperature > 0.0 &&
+  // Use MPI_Allreduce to check if t_active is 0 on all processors
+  int global_t_active;
+  MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, world);
+
+  // If no active sites, fast forward.
+  if (global_t_active == 0 && current_time > 1e-6) {
+    const double local_next_time = ros_source
+      ? rosenthal_next_active_time(current_time, fast_forward_threshold)
+      : temperature_source->get_next_time_with_temperature(current_time, fast_forward_threshold);
+    if (predict_skip(local_next_time, current_time, stoptime, fast_forward_threshold,
+                     "host", step))
+      update_temperatures(step.new_time);
+  }
+
+  return step;
+}
+
+bool ThermalManager::predict_skip(double local_next, double current_time,
+                                  double stoptime, double threshold,
+                                  const char *tag, ThermalStep &step)
+{
+  // Earliest wake-up across the entire MPI communicator is the single time we
+  // may safely advance to.
+  double next_thermal_time;
+  MPI_Allreduce(&local_next, &next_thermal_time, 1, MPI_DOUBLE, MPI_MIN, world);
+  if (!(next_thermal_time > current_time &&
+        next_thermal_time < std::numeric_limits<double>::max()))
+    return false;
+
+  // Skip to whichever comes first: next thermal activity or run end.
+  const double target_time = std::min(next_thermal_time, stoptime);
+  const double time_skip = target_time - current_time;
+  if (time_skip <= 1e-6) return false;   // only a meaningful skip
+
+  if (domain->me == 0) {
+    std::cout << "Fast-forward (" << tag << "): skipping " << time_skip
+              << " s from t=" << current_time << " to " << target_time
+              << " (all T < " << threshold << " K; next thermal activity at "
+              << next_thermal_time << ")" << std::endl;
+  }
+  step.new_time = target_time;
+  // Activate powder after a significant skip (new layer deposition).
+  if (time_skip > 1.0) step.activate_powder = true;
+  return true;
+}
+
+/* ----------------------------------------------------------------------
+   Build a RosenthalDevicePlan for the current step: advance the laser scan
+   path to simulation_time on the host and snapshot the laser pose + material
+   parameters so a device kernel can evaluate the temperature per site. See
+   rosenthal_device.h. The scan-path advance mirrors update_temperatures()'s
+   Rosenthal branch exactly, so the device fill matches the host fill.
+------------------------------------------------------------------------- */
+
+RosenthalDevicePlan ThermalManager::rosenthal_device_plan(double simulation_time)
+{
+  RosenthalDevicePlan plan;
+
+  RosenthalTemperatureSource* ros =
+    rosenthal_source();
+  if (!ros || !laser_path_set) return plan;  // plan.valid stays false
+
+  // Solidification-band smoothing is applied in update_temperatures(), which the
+  // device fill bypasses; keep smoothed runs on the host path.
+  if (temperature_smooth_enabled) return plan;
+
+  // Material parameters; all three modes (incl. KEYHOLE) are device-eligible.
+  if (!ros->fill_device_plan(plan)) { plan.valid = false; return plan; }
+
+  // Sync the laser pose to simulation_time in dt-sized chunks (move(dt) does
+  // not carry remainder across path boundaries) -- identical to the host loop.
+  if (scan_layer_active) {
+    double advance = simulation_time - scan_layer_time;
+    const double step = (host_->dt > 0.0) ? host_->dt : 1.0e-6;
+    while (advance > step) {
+      if (!scan_layer.move(step)) { scan_layer_active = false; break; }
+      advance -= step;
+    }
+    if (scan_layer_active && advance > 0.0) {
+      if (!scan_layer.move(advance)) scan_layer_active = false;
+    }
+  }
+  scan_layer_time = simulation_time;
+
+  const RASTER::Point pos = scan_layer.get_position();
+  const RASTER::Point dir = scan_layer.get_unit_dir();
+  plan.px = pos[0];
+  plan.py = pos[1];
+  plan.layer_z = scan_layer_z;
+  plan.ux = dir[0];
+  plan.uy = dir[1];
+  plan.v = scan_layer.get_speed();
+  plan.scan_active = scan_layer_active;
+  plan.T0 = ros->get_ambient_temperature();
+  plan.valid = true;
+  return plan;
+}
+
+/* ----------------------------------------------------------------------
+   Fast-forward decision for the Rosenthal device path. Same logic as the
+   Rosenthal branch of advance(), but the active-site test uses the device-
+   computed global max temperature instead of a host T scan, and temperatures
+   are NOT refilled here (the caller refills its device view at new_time).
+------------------------------------------------------------------------- */
+
+ThermalManager::ThermalStep
+ThermalManager::rosenthal_fast_forward(double current_time, double stoptime,
+                                       double global_max_T)
+{
+  ThermalStep step;
+  step.new_time = current_time;
+  step.activate_powder = false;
+  step.end_run = false;
+
+  RosenthalTemperatureSource* ros =
+    rosenthal_source();
+  if (!ros) return step;
+
+  // `laser_path ... pause_below <Tk>` overrides the default liquidus threshold.
+  const double fast_forward_threshold =
+    (laser_pause_below > 0.0) ? laser_pause_below : host_->tl;
+
+  // global_max_T is already reduced across ranks, so this test is consistent
+  // on every rank -> all ranks take the same branch (keeps the MIN reduce
+  // below collective-safe).
+  const bool any_active = (global_max_T > fast_forward_threshold);
+
+  if (!any_active && current_time > 1e-6) {
+    predict_skip(rosenthal_next_active_time(current_time, fast_forward_threshold),
+                 current_time, stoptime, fast_forward_threshold, "device", step);
+  }
+  return step;
+}
+
+/* ----------------------------------------------------------------------
+   Device (Kokkos) Moser path: build a MoserDevicePlan for the current step.
+   Unlike Rosenthal there is no scan-path pose to advance (the Moser source
+   integrates over its own absolute-time path history); we just let the source
+   do any per-step bookkeeping and snapshot its scalar parameters. Returns an
+   invalid plan (host path) for non-Moser sources or under temperature_smooth;
+   keyhole, fluctuations and dynamic pause/reset all run on the device.
+------------------------------------------------------------------------- */
+
+MoserDevicePlan ThermalManager::moser_device_plan(double simulation_time)
+{
+  MoserDevicePlan plan;
+
+  MoserTemperatureSource* moser =
+    moser_source();
+  if (!moser) return plan;  // plan.valid stays false
+
+  // Solidification-band smoothing is applied in update_temperatures(), which the
+  // device fill bypasses; keep smoothed runs on the host path. (Dynamic
+  // inter-pass pause/reset is handled on the device via moser_advance_device.)
+  if (temperature_smooth_enabled) return plan;
+
+  if (!moser->fill_device_plan(plan)) { plan.valid = false; return plan; }
+  plan.time = simulation_time;
+  return plan;
+}
+
+/* ----------------------------------------------------------------------
+   Moser driver: time-gated pause+reset firing, pause_below dynamic firing /
+   clean exit, and the fast-forward predictor, shared by the host path
+   (advance(), refill = update_temperatures + max scan) and the device path
+   (moser_advance_device(), refill = the registered device filler). The
+   pause/reset firings (reset_history_and_start / append_pass) rebuild the
+   scan from temperature feedback on the host; each is followed by a refill.
+   The static (no-pause) case falls straight through to the predictor. The
+   global max is MPI-reduced, so the active-site test is consistent on every
+   rank and all ranks make the same collective calls.
+------------------------------------------------------------------------- */
+
+ThermalManager::ThermalStep
+ThermalManager::moser_advance_device(double current_time, double stoptime)
+{
+  if (!moser_source() || !moser_device_filler_)
+    return ThermalStep{current_time, false, false};
+  if (temperature_smooth_enabled && conduction_source())
+    error->all(FLERR,"temperature_smooth is not supported with the conduction source");
+  return moser_advance(current_time, stoptime, moser_device_filler_);
+}
+
+ThermalManager::ThermalStep
+ThermalManager::moser_advance(double current_time, double stoptime,
+                              const std::function<double(double)> &refill)
+{
+  ThermalStep step{current_time, false, false};
+  MoserTemperatureSource* moser = moser_source();
+
+  // Fill the field at current_time and get the global peak temperature.
+  double gmax = refill(current_time);
+
+  // Moser pause + reset_temperature: time-gated dynamic fire (fires on elapsed
+  // time since the last pass end, independent of temperature).
+  if (laser_pause_constant > 0.0 && laser_reset_temperature > 0.0 &&
       pending_moser_passes > 0) {
     const double next_fire =
-      moser_source->get_last_pass_end_time() + laser_pause_constant;
+      moser->get_last_pass_end_time() + laser_pause_constant;
     if (current_time >= next_fire) {
-      moser_source->reset_history_and_start(current_time, laser_reset_temperature);
+      moser->reset_history_and_start(current_time, laser_reset_temperature);
       --pending_moser_passes;
       if (domain->me == 0) {
         std::cout << "pause+reset: gap of " << laser_pause_constant
@@ -718,39 +1034,24 @@ ThermalManager::ThermalStep ThermalManager::advance(double current_time, double 
                   << laser_reset_temperature << " K, "
                   << pending_moser_passes << " more queued)" << std::endl;
       }
-      update_temperatures(current_time);
+      gmax = refill(current_time);   // scan changed -> refill
     }
   }
 
-  if (hdf5_source) {
-    fast_forward_threshold = hdf5_source->get_fast_forward_threshold();
-  } else if (ros_source || moser_source) {
-    // `laser_path ... pause_below <Tk>` overrides the default liquidus-based
-    // threshold.
-    fast_forward_threshold = (laser_pause_below > 0.0) ? laser_pause_below : app_->tl;
-  }
+  const double fast_forward_threshold =
+    (laser_pause_below > 0.0) ? laser_pause_below : host_->tl;
 
-  int t_active = 0;
-  for (int i = 0; i < app_->nlocal; i++) {
-    if (app_->T[i] > fast_forward_threshold) t_active = 1;
-  }
-
-  // Use MPI_Allreduce to check if t_active is 0 on all processors
-  int global_t_active;
-  MPI_Allreduce(&t_active, &global_t_active, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-
-  // If no active sites and the source supports time queries, fast forward.
-  if (global_t_active == 0 && current_time > 1e-6 && temperature_source->supports_time_queries()) {
-    // Moser pause_below: fire a pending pass once the global peak temperature
-    // first drops below threshold AFTER the current pass has finished.
+  if (gmax <= fast_forward_threshold && current_time > 1e-6) {
     bool dynamic_fire = false;
-    if (moser_source && laser_pause_below > 0.0 && pending_moser_passes > 0) {
-      if (current_time >= moser_source->get_last_pass_end_time()) {
-        if (laser_reset_temperature > 0.0) {
-          moser_source->reset_history_and_start(current_time, laser_reset_temperature);
-        } else {
-          moser_source->append_pass(current_time);
-        }
+
+    // pause_below: fire a pending pass once the peak temperature drops below
+    // threshold AFTER the current pass has finished emitting.
+    if (laser_pause_below > 0.0 && pending_moser_passes > 0) {
+      if (current_time >= moser->get_last_pass_end_time()) {
+        if (laser_reset_temperature > 0.0)
+          moser->reset_history_and_start(current_time, laser_reset_temperature);
+        else
+          moser->append_pass(current_time);
         --pending_moser_passes;
         dynamic_fire = true;
         if (domain->me == 0) {
@@ -761,16 +1062,45 @@ ThermalManager::ThermalStep ThermalManager::advance(double current_time, double 
             std::cout << "reset to " << laser_reset_temperature << " K, ";
           std::cout << pending_moser_passes << " more queued)" << std::endl;
         }
-        // Refresh temperatures to reflect the just-fired pass.
-        update_temperatures(current_time);
+        gmax = refill(current_time);   // scan changed -> refill
       }
     }
-    // pause_below: once the FINAL pass has finished emitting and the global
-    // peak temperature has dropped below threshold, end the run early by
-    // advancing time to stoptime.
-    if (!dynamic_fire && moser_source && laser_pause_below > 0.0 &&
+
+    // Layer finished: the last segment has emitted, the field is below the
+    // solidus and no site is liquid (any_liquid is collective; every
+    // condition before it is rank-uniform). A path file starts its next
+    // layer after the recoat time, from a fresh field (Moser: new history;
+    // conduction: the new plane rebuilds the grid at T0), as am/finitediff.
+    // Conduction with no layer left resets to ambient and skips to stoptime.
+    ConductionTemperatureSource *cond = conduction_source();
+    const bool more_layers = path_layer + 1 < path_layers.size();
+    if ((cond || more_layers) && !dynamic_fire && pending_moser_passes == 0 &&
+        current_time >= moser->get_last_pass_end_time() &&
+        (!cond || cond->next_laser_on(current_time) == std::numeric_limits<double>::max()) &&
+        gmax < host_->ts && current_time < stoptime &&
+        !(host_->any_liquid && host_->any_liquid())) {
+      if (more_layers) {
+        const double t_next = current_time + path_recoat;
+        start_path_layer(path_layer + 1, t_next);
+        step.new_time = std::min(t_next, stoptime);
+      } else {
+        if (domain->me == 0)
+          std::cout << "Fast-forward (conduction): layer done, max(T) < "
+                    << host_->ts << " K and no liquid at t=" << current_time
+                    << " s; field reset to " << cond->ambient()
+                    << " K, skipping to stoptime=" << stoptime << " s" << std::endl;
+        cond->request_reset(cond->ambient());
+        step.new_time = stoptime;
+      }
+      refill(step.new_time);
+      return step;
+    }
+
+    // pause_below: once the FINAL pass has finished and the peak has dropped
+    // below threshold, advance to stoptime for a clean early exit.
+    if (!dynamic_fire && laser_pause_below > 0.0 &&
         pending_moser_passes == 0 &&
-        current_time >= moser_source->get_last_pass_end_time() &&
+        current_time >= moser->get_last_pass_end_time() &&
         current_time < stoptime) {
       if (domain->me == 0) {
         std::cout << "pause_below: final pass complete and max(T) < "
@@ -782,54 +1112,111 @@ ThermalManager::ThermalStep ThermalManager::advance(double current_time, double 
       step.end_run = true;
       return step;
     }
-    if (!dynamic_fire) {
-      double local_next_time;
-      if (ros_source) {
-        local_next_time = rosenthal_next_active_time(current_time, fast_forward_threshold);
-      } else if (moser_source) {
-        local_next_time = moser_next_active_time(current_time, fast_forward_threshold);
-      } else {
-        local_next_time = temperature_source->get_next_time_with_temperature(current_time, fast_forward_threshold);
-      }
 
-      // Earliest wake-up across the entire MPI communicator is the single
-      // time we may safely advance to.
-      double next_thermal_time;
-      MPI_Allreduce(&local_next_time, &next_thermal_time, 1, MPI_DOUBLE,
-                    MPI_MIN, world);
-
-      if (next_thermal_time > current_time && next_thermal_time < std::numeric_limits<double>::max()) {
-        // Fast-forward to whichever comes first: next thermal activity or run end.
-        double target_time = std::min(next_thermal_time, stoptime);
-        double time_skip = target_time - current_time;
-
-        if (time_skip > 1e-6) {  // Only skip if meaningful time difference
-          if (domain->me == 0) {
-            if (target_time < next_thermal_time) {
-              std::cout << "Fast-forward: Skipping " << time_skip << " seconds from time "
-                        << current_time << " to run end " << target_time
-                        << " (next thermal activity at " << next_thermal_time << ")" << std::endl;
-            } else {
-              std::cout << "Fast-forward: Skipping " << time_skip << " seconds from time "
-                        << current_time << " to " << target_time
-                        << " (all temperatures < " << fast_forward_threshold << "K)" << std::endl;
-            }
-          }
-
-          step.new_time = target_time;
-
-          // Update temperatures at new time
-          update_temperatures(target_time);
-
-          // Activate powder after significant time skip (new layer deposition)
-          if (time_skip > 1.0) {
-            step.activate_powder = true;
-          }
-        }
-      }
-    }
+    // Fast-forward predict-skip (also the sole behavior in the static case).
+    // The conduction source skips to the next laser-on time; its refill
+    // integrates the gap (RKL2 super-steps), so only the app steps are saved.
+    const double next = cond ? cond->next_laser_on(current_time)
+                             : moser_next_active_time(current_time, fast_forward_threshold);
+    if (!dynamic_fire &&
+        predict_skip(next, current_time, stoptime, fast_forward_threshold,
+                     cond ? "conduction" : "Moser", step))
+      refill(step.new_time);   // refill at the advanced time
   }
+  return step;
+}
 
+/* ----------------------------------------------------------------------
+   Device (Kokkos) HDF5 unstructured-mesh path. The expensive host work --
+   HDF5 reads, layer load, per-site element search -- stays on the host; only
+   the per-site barycentric interpolation moves to the device. See hdf5_device.h.
+------------------------------------------------------------------------- */
+
+bool ThermalManager::hdf5_device_eligible() const
+{
+  if (!temperature_source) return false;
+  // Solidification-band smoothing is applied in update_temperatures(), which the
+  // device fill bypasses; keep smoothed runs on the host path.
+  if (temperature_smooth_enabled) return false;
+  return dynamic_cast<HDF5UnstructuredTemperatureSource*>(
+             temperature_source.get()) != nullptr;
+}
+
+HDF5DevicePlan ThermalManager::hdf5_device_plan(double simulation_time)
+{
+  HDF5DevicePlan plan;
+
+  HDF5UnstructuredTemperatureSource* hdf5 =
+    hdf5_source();
+  if (!hdf5 || temperature_smooth_enabled) return plan;  // plan.valid stays false
+
+  // Per-step host prep: advance source state, load the layer if needed, rebuild
+  // the per-site element cache at a layer boundary (bumps cache_generation), and
+  // precompute the nodal-temperature slice (time interpolation + optional nodal
+  // mesh smoothing). This is exactly the host fast path (update_temperatures
+  // Path 3) minus the per-site T loop -- that loop is what moves to the device.
+  hdf5->prepare_for_timestep(simulation_time);
+
+  plan.version = hdf5->cache_generation();
+  plan.nsites = hdf5->num_cache_sites();   // nall (owned + ghost); fills positionally
+  plan.n_nodes = hdf5->num_loaded_nodes();
+  plan.default_temp = hdf5->get_default_temp();
+  plan.sim_time = simulation_time;          // device-side time interpolation
+  plan.valid = true;
+  return plan;
+}
+
+RosenthalTemperatureSource *ThermalManager::rosenthal_source() const
+{
+  return dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
+}
+
+MoserTemperatureSource *ThermalManager::moser_source() const
+{
+  return dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
+}
+
+HDF5UnstructuredTemperatureSource *ThermalManager::hdf5_source() const
+{
+  return dynamic_cast<HDF5UnstructuredTemperatureSource*>(temperature_source.get());
+}
+
+ConductionTemperatureSource *ThermalManager::conduction_source() const
+{
+  return dynamic_cast<ConductionTemperatureSource*>(temperature_source.get());
+}
+
+/* ----------------------------------------------------------------------
+   Device HDF5 driver. Mirrors the HDF5 branch of advance() -- the global
+   active-site reduction (here via the device-computed global max) and the
+   generic fast-forward predictor (get_next_time_with_temperature) -- but
+   replaces the host per-site fill + host-temperature scan with the registered
+   device filler. HDF5 has no pause/reset, so this is fill + predict-skip. The
+   global max is already MPI-reduced, so the active-site test is consistent on
+   every rank and all ranks make the same collective calls.
+------------------------------------------------------------------------- */
+
+ThermalManager::ThermalStep
+ThermalManager::hdf5_advance_device(double current_time, double stoptime)
+{
+  ThermalStep step;
+  step.new_time = current_time;
+  step.activate_powder = false;
+  step.end_run = false;
+
+  HDF5UnstructuredTemperatureSource* hdf5 =
+    hdf5_source();
+  if (!hdf5 || !hdf5_device_filler_) return step;
+
+  // Fill the device field at current_time and get the global peak temperature.
+  double gmax = hdf5_device_filler_(current_time);
+
+  const double fast_forward_threshold = hdf5->get_fast_forward_threshold();
+
+  if (gmax <= fast_forward_threshold && current_time > 1e-6 &&
+      predict_skip(hdf5->get_next_time_with_temperature(current_time, fast_forward_threshold),
+                   current_time, stoptime, fast_forward_threshold, "device HDF5", step))
+    hdf5_device_filler_(step.new_time);   // refill at the advanced time
   return step;
 }
 
@@ -857,26 +1244,11 @@ double ThermalManager::rosenthal_next_active_time(double current_time, double th
   if (!laser_path_set || !scan_layer_active)
     return std::numeric_limits<double>::max();
 
-  auto* ros = dynamic_cast<RosenthalTemperatureSource*>(temperature_source.get());
+  auto* ros = rosenthal_source();
   if (!ros) return std::numeric_limits<double>::max();
 
-  const int nlocal = app_->nlocal;
-  double **xyz = app_->xyz;
-  const double dx = app_->dx;
-
-  // Local domain bounding box in physical (meters) coordinates.
-  if (nlocal == 0) return std::numeric_limits<double>::max();
-  double xmin = xyz[0][0]*dx, xmax = xmin;
-  double ymin = xyz[0][1]*dx, ymax = ymin;
-  double zmin = xyz[0][2]*dx, zmax = zmin;
-  for (int i = 1; i < nlocal; ++i) {
-    const double sx = xyz[i][0]*dx;
-    const double sy = xyz[i][1]*dx;
-    const double sz = xyz[i][2]*dx;
-    if (sx < xmin) xmin = sx; else if (sx > xmax) xmax = sx;
-    if (sy < ymin) ymin = sy; else if (sy > ymax) ymax = sy;
-    if (sz < zmin) zmin = sz; else if (sz > zmax) zmax = sz;
-  }
+  double lo[3], hi[3];
+  if (!local_bbox(lo, hi)) return std::numeric_limits<double>::max();
 
   const double T0 = ros->get_ambient_temperature();
   // Cheap early-out: if even the unmodulated peak at r_min can't reach the
@@ -900,15 +1272,9 @@ double ThermalManager::rosenthal_next_active_time(double current_time, double th
   while (t < t_stop) {
     // Closest point on the local box to the current laser position.
     const RASTER::Point laser = probe.get_position();
-    const double lx = laser[0];
-    const double ly = laser[1];
-    const double lz = scan_layer_z;
-    const double cx = (lx < xmin) ? xmin : (lx > xmax ? xmax : lx);
-    const double cy = (ly < ymin) ? ymin : (ly > ymax ? ymax : ly);
-    const double cz = (lz < zmin) ? zmin : (lz > zmax ? zmax : lz);
-    const double dxr = cx - lx;
-    const double dyr = cy - ly;
-    const double dzr = cz - lz;
+    const double dxr = std::clamp(laser[0], lo[0], hi[0]) - laser[0];
+    const double dyr = std::clamp(laser[1], lo[1], hi[1]) - laser[1];
+    const double dzr = std::clamp(scan_layer_z, lo[2], hi[2]) - scan_layer_z;
     const double R_min_box = std::sqrt(dxr*dxr + dyr*dyr + dzr*dzr);
 
     const double T_upper = ros->rosenthal_peak_at_distance(R_min_box, T0);
@@ -931,61 +1297,47 @@ double ThermalManager::moser_next_active_time(double current_time, double thresh
 {
   if (!laser_path_set) return std::numeric_limits<double>::max();
 
-  auto* moser = dynamic_cast<MoserTemperatureSource*>(temperature_source.get());
+  auto* moser = moser_source();
   if (!moser || !moser->has_scan()) return std::numeric_limits<double>::max();
 
-  const int nlocal = app_->nlocal;
-  double **xyz = app_->xyz;
-  const double dx = app_->dx;
-  if (nlocal == 0) return std::numeric_limits<double>::max();
+  double lo[3], hi[3];
+  if (!local_bbox(lo, hi)) return std::numeric_limits<double>::max();
 
-  // Local domain bounding box in physical (meters) coordinates.
-  double xmin = xyz[0][0]*dx, xmax = xmin;
-  double ymin = xyz[0][1]*dx, ymax = ymin;
-  double zmin = xyz[0][2]*dx, zmax = zmin;
-  for (int i = 1; i < nlocal; ++i) {
-    const double sx = xyz[i][0]*dx;
-    const double sy = xyz[i][1]*dx;
-    const double sz = xyz[i][2]*dx;
-    if (sx < xmin) xmin = sx; else if (sx > xmax) xmax = sx;
-    if (sy < ymin) ymin = sy; else if (sy > ymax) ymax = sy;
-    if (sz < zmin) zmin = sz; else if (sz > zmax) zmax = sz;
-  }
-
-  const double t_origin    = moser->get_scan_t_origin();
-  const double pass_dur    = moser->get_scan_pass_duration();
-  const double pause_gap   = moser->get_scan_pause();
-  const int    n_reps      = moser->get_scan_repeats();
-  const double x0          = moser->get_scan_x0();
-  const double y0          = moser->get_scan_y0();
-  const double x1          = moser->get_scan_x1();
-  const double y1          = moser->get_scan_y1();
-  const double laser_z     = moser->get_scan_laser_plane_z();
-
+  const double laser_z = moser->get_scan_laser_plane_z();
   const double ddt = (fast_forward_search_window > 0.0)
                        ? fast_forward_search_window : 0.01;
-  for (int r = 0; r < n_reps; ++r) {
-    const double t_r_start = t_origin + r * pass_dur + r * pause_gap;
-    const double t_r_end   = t_r_start + pass_dur;
-    if (t_r_end <= current_time) continue;  // pass already completed
-
-    double t = std::max(current_time, t_r_start);
-    while (t <= t_r_end) {
-      // Lerp laser (x,y) along this pass.
-      const double s = (t - t_r_start) / pass_dur;
-      const double lx = x0 + s * (x1 - x0);
-      const double ly = y0 + s * (y1 - y0);
-      const double lz = laser_z;
+  for (const auto &g : moser->segments()) {
+    if (g.t1 <= current_time || g.p <= 0.0) continue;  // done or dark
+    double t = std::max(current_time, g.t0);
+    while (t <= g.t1) {
+      // Lerp laser (x,y) along this segment.
+      const double s = (t - g.t0) / (g.t1 - g.t0);
       // Closest point on local box to laser.
-      const double cx = (lx < xmin) ? xmin : (lx > xmax ? xmax : lx);
-      const double cy = (ly < ymin) ? ymin : (ly > ymax ? ymax : ly);
-      const double cz = (lz < zmin) ? zmin : (lz > zmax ? zmax : lz);
+      const double cx = std::clamp(g.x0 + s * (g.x1 - g.x0), lo[0], hi[0]);
+      const double cy = std::clamp(g.y0 + s * (g.y1 - g.y0), lo[1], hi[1]);
+      const double cz = std::clamp(laser_z, lo[2], hi[2]);
       const double T_probe = moser->get_temperature_at_xyz_and_time(cx, cy, cz, t);
       if (T_probe >= threshold_temp) return t;
       t += ddt;
     }
   }
   return std::numeric_limits<double>::max();
+}
+
+bool ThermalManager::local_bbox(double lo[3], double hi[3]) const
+{
+  const int nlocal = host_->nlocal;
+  if (nlocal == 0) return false;
+  double **xyz = host_->xyz;
+  const double dx = host_->dx;
+  for (int d = 0; d < 3; ++d) lo[d] = hi[d] = xyz[0][d] * dx;
+  for (int i = 1; i < nlocal; ++i)
+    for (int d = 0; d < 3; ++d) {
+      const double v = xyz[i][d] * dx;
+      lo[d] = std::min(lo[d], v);
+      hi[d] = std::max(hi[d], v);
+    }
+  return true;
 }
 
 /* ----------------------------------------------------------------------
@@ -995,11 +1347,11 @@ double ThermalManager::moser_next_active_time(double current_time, double thresh
 
 void ThermalManager::apply_smoothing()
 {
-  double *T = app_->T;
-  double **xyz = app_->xyz;
-  int *numneigh = app_->numneigh;
-  int **neighbor = app_->neighbor;
-  const int nlocal = app_->nlocal;
+  double *T = host_->T;
+  double **xyz = host_->xyz;
+  int *numneigh = host_->numneigh;
+  int **neighbor = host_->neighbor;
+  const int nlocal = host_->nlocal;
 
   const double two_sxy2 = 2.0 * smooth_sigma_xy * smooth_sigma_xy;
   const double two_sz2  = 2.0 * smooth_sigma_z  * smooth_sigma_z;
@@ -1037,8 +1389,8 @@ void ThermalManager::apply_smoothing()
 
   for (int pass = 0; pass < smooth_passes; pass++) {
     // Ghosts need current T before each pass.
-    app_->comm->all_selective(app_->ghost_iindices, app_->nghost_iarray,
-                              app_->ghost_dindices, app_->nghost_darray);
+    host_->comm->all_selective(host_->ghost_iindices, host_->nghost_iarray,
+                              host_->ghost_dindices, host_->nghost_darray);
 
     for (int i = 0; i < nlocal; i++) {
       const double Ti = T[i];
@@ -1099,8 +1451,8 @@ void ThermalManager::apply_smoothing()
   }
 
   // Leave ghosts consistent with the final committed T.
-  app_->comm->all_selective(app_->ghost_iindices, app_->nghost_iarray,
-                            app_->ghost_dindices, app_->nghost_darray);
+  host_->comm->all_selective(host_->ghost_iindices, host_->nghost_iarray,
+                            host_->ghost_dindices, host_->nghost_darray);
 }
 
 /* ----------------------------------------------------------------------
@@ -1110,11 +1462,11 @@ void ThermalManager::apply_smoothing()
 
 void ThermalManager::compute_diagnostics()
 {
-  double *T = app_->T;
-  int *numneigh = app_->numneigh;
-  int **neighbor = app_->neighbor;
-  const int nlocal = app_->nlocal;
-  const double tl = app_->tl;
+  double *T = host_->T;
+  int *numneigh = host_->numneigh;
+  int **neighbor = host_->neighbor;
+  const int nlocal = host_->nlocal;
+  const double tl = host_->tl;
 
   bigint V_local = 0, S_local = 0;
   double sumT_local = 0.0;

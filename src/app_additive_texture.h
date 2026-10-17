@@ -24,6 +24,8 @@ AppStyle(additive_temperature_texture,AppAdditiveTextureDeprecated)
 #define SPK_APP_ADDITIVE_TEXTURE_H
 
 #include "app_potts_quaternion.h"
+#include "thermal_host.h"
+#include "additive_params.h"
 #include <stdlib.h>
 #include <unordered_map>
 #include <vector>
@@ -34,18 +36,8 @@ namespace SPPARKS_NS {
 
 class ThermalManager;
 
-class AppAdditiveTexture : public AppPottsQuaternion {
-  // ThermalManager owns the temperature-I/O orchestration and reaches the
-  // app's lattice/state arrays (T, xyz, neighbor lists, ghost-comm config,
-  // alloy thresholds) through a typed back-pointer.
-  friend class ThermalManager;
+class AppAdditiveTexture : public AppPottsQuaternion, public AdditiveParams {
  public:
-  enum MisorientationTargetMode {
-    MISORI_TARGET_GRADIENT = 0,
-    MISORI_TARGET_RANDOM = 1,
-    MISORI_TARGET_RANDOM_ROTATION = 2
-  };
-
   enum NucleationMode {
     NUCLEATION_THRESHOLD = 0,   // Existing binary threshold
     NUCLEATION_CONTINUOUS = 1   // Continuous Gaussian probability
@@ -60,14 +52,29 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   virtual void nucleation_spins(class RandomPark *);
   virtual void  input_app(char *, int , char **);
   virtual void nucleation_init();
-  virtual void nucleation_particle_flipper(int, int,class RandomPark *);
+  // Grow a nucleus from site i to partRad sites. seed/Tcool: the seed voxel
+  // every claimed site inherits from and the undercooling of the nucleation
+  // event (recursion re-roots i, never seed).
+  virtual void nucleation_particle_flipper(int i, int partRad, class RandomPark *,
+                                           int seed, double Tcool);
   virtual void mushy_phase(int, class RandomPark *);
   virtual double site_energy(int);
   void site_event_solidification(int, double, class RandomPark *);
   void execute_nucleation_event(int, double);
   std::vector<double> normal_finder(int);
 	double melt_misorientation(int, double, double, double);
-  void apply_misorientation(int, double, class RandomPark *);
+  double mobility_of_orientation(const std::vector<double> &q, const std::vector<double> &grad_full);
+  void apply_misorientation(int, int, double, class RandomPark *);
+  // Per-hop rotation angle (rad) of the misorientation random walk:
+  // sqrt(D_eff * hop_m), D_eff = mis_diffusion * g(Tcool)^2 with the
+  // exponential undercooling shape g when misorient_alpha > 0, else
+  // mis_diffusion. Scaling as sqrt(hop) makes the accumulated misorientation
+  // (RMS^2 = D * distance) independent of the lattice spacing.
+  double diffusion_angle(double Tcool, double hop_m) const;
+  // Rotate site i by mis_angle per the target mode, then apply the
+  // mis_thresh new-grain check. Shared by the solidification path
+  // (apply_misorientation) and the nucleation flipper.
+  void rotate_toward_target(int, double, int, class RandomPark *);
   std::vector<double> get_average_neighbor_quaternion(int site, int target_spin);
   void smooth_site(int site);
   double site_energy_smooth(int site);
@@ -106,32 +113,16 @@ class AppAdditiveTexture : public AppPottsQuaternion {
 	double *T;
   double *G; //Temperature gradient at solidification
   double *V; //Solidification rate at solidification.
-	double time_step;
+  double *spath; // d10: inheritance path length from the grain origin, lattice units (grain walk 'path' mode)
 	int nrefine;
 	// Physical and simulation parameters
 	double dt;
-	double no;
-	double tc;
-	double tsig;
 	double dx;
- 	double tl; // Liquidus temperature
- 	double ts; // Solidus temperature
   double t_room;
-  double *unique_dot;
     
     
   // Nucleation and growth parameters
-  double size_norm;
-	double size_sig;
-	double *solid_front_coeffs;
-	int    solid_front_length;
-  // Texture model parameters
-	double c1, c2, c3;
-  double max_misorient;
   double t_cool_max;
-  double mis_thresh;
-  double misorient_alpha;
-  int misorientation_target_mode;
 
  	// Monte Carlo nucleation model parameters
 	int *nucleation_flags;
@@ -155,6 +146,12 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   // solidification-band temperature smoothing + diagnostics all live here.
   std::unique_ptr<ThermalManager> thermal;
 
+  // Lattice-state snapshot ThermalManager reads/writes. Populated by
+  // refresh_thermal_host() at the top of app_update() and before dispatching
+  // any thermal command in input_app(). See thermal_host.h.
+  ThermalHost thermal_host_;
+  void refresh_thermal_host();
+
   // Index-based selective ghost communication.
   // Only the specified iarray/darray indices are communicated to ghost sites;
   // remaining arrays are local-only (used for I/O, physics, not by KMC neighbors).
@@ -174,22 +171,6 @@ class AppAdditiveTexture : public AppPottsQuaternion {
   bool      single_voxel_cleanup_enabled;
   long long n_single_voxel_flips;  // counter reset each app_update() call
 
-  // When true, smooth_site() evaluates every distinct neighbor spin per
-  // pass and adopts the energy-minimizing one (steepest descent), rather
-  // than the default behavior of testing a single random proposal. Tied
-  // to the input command `smooth_greedy_multiproposal on|off`. Has no
-  // effect on the Boltzmann acceptance gate, so a non-zero `temperature`
-  // setting is still respected for the uphill branch.
-  bool      smooth_greedy_multiproposal_enabled;
-
-  // When true, nucleation events initialize solid_d[i] = -1 for both the
-  // seed site (execute_nucleation_event) and the captured shell sites
-  // (nucleation_particle_flipper) so they enter the same smoothing window
-  // as epitaxially solidified sites. When false (default) the historical
-  // sentinel values (-nrefine-2 for the seed, -nrefine-3 for the shell)
-  // are used, which excludes nuclei from smooth_site() and the greedy
-  // variant. Tied to the input command `nuclei_smooth on|off`.
-  bool      nuclei_smooth_enabled;
 
 };
 

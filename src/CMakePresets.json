@@ -1,91 +1,94 @@
 {
-  "version": 2,
-  "cmakeMinimumRequired": {
-    "major": 3,
-    "minor": 20,
-    "patch": 0
-  },
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+
   "configurePresets": [
     {
-      "name": "base",
+      "name": "_base",
       "hidden": true,
-      "generator": "Unix Makefiles",
-      "binaryDir": "${sourceDir}/build/${presetName}",
+      "description": "Common SPPARKS options: Release, MPI, HighFive/HDF5, image output.",
+      "binaryDir": "${sourceDir}/../build-${presetName}",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Release",
+        "SPPARKS_ENABLE_MPI": "ON",
+        "SPPARKS_PACKAGE_STITCH": "ON",
+        "SPPARKS_ENABLE_HIGHFIVE": "ON",
+        "SPPARKS_ENABLE_JPEG": "ON",
+        "SPPARKS_ENABLE_PNG": "ON",
+        "SPPARKS_ENABLE_GZIP": "ON"
       }
     },
+
     {
-      "name": "mac",
-      "inherits": "base",
-      "displayName": "macOS (no MPI)",
-      "description": "macOS build, no MPI. Mirrors SPPARKS_MACHINE=mac.",
-      "cacheVariables": { "SPPARKS_MACHINE": "mac" }
-    },
-    {
-      "name": "mac_mpi",
-      "inherits": "base",
-      "displayName": "macOS with MPI",
-      "description": "macOS build with MPI. Mirrors SPPARKS_MACHINE=mac_mpi.",
-      "cacheVariables": { "SPPARKS_MACHINE": "mac_mpi" }
-    },
-    {
-      "name": "mac_arm",
-      "inherits": "base",
-      "displayName": "Apple Silicon (MPI)",
-      "description": "Apple Silicon Mac with MPI. Add -DSPPARKS_ENABLE_HDF5=ON for HDF5.",
-      "cacheVariables": { "SPPARKS_MACHINE": "mac_arm" }
-    },
-    {
-      "name": "linux",
-      "inherits": "base",
-      "displayName": "Linux (no MPI)",
-      "description": "Generic Linux build, no MPI. Mirrors SPPARKS_MACHINE=linux.",
-      "cacheVariables": { "SPPARKS_MACHINE": "linux" }
-    },
-    {
-      "name": "mpi",
-      "inherits": "base",
-      "displayName": "Generic MPI",
-      "description": "Generic MPI build. Mirrors SPPARKS_MACHINE=mpi.",
-      "cacheVariables": { "SPPARKS_MACHINE": "mpi" }
-    },
-    {
-      "name": "serial",
-      "inherits": "base",
-      "displayName": "Serial (no MPI)",
-      "description": "Serial build using MPI stubs. Mirrors SPPARKS_MACHINE=serial.",
-      "cacheVariables": { "SPPARKS_MACHINE": "serial" }
-    },
-    {
-      "name": "debug",
-      "inherits": "base",
-      "displayName": "Debug (no MPI)",
-      "description": "Debug build, no MPI. Mirrors SPPARKS_MACHINE=debug.",
+      "name": "_kokkos-hip",
+      "hidden": true,
+      "inherits": "_base",
+      "description": "Kokkos HIP backend. Concrete presets must set SPPARKS_KOKKOS_ARCH.",
       "cacheVariables": {
-        "SPPARKS_MACHINE": "debug",
-        "CMAKE_BUILD_TYPE": "Debug"
+        "SPPARKS_PACKAGE_KOKKOS": "ON",
+        "SPPARKS_KOKKOS_BACKEND": "HIP"
       }
     },
+
     {
-      "name": "mpi_debug",
-      "inherits": "base",
-      "displayName": "Debug with MPI",
-      "description": "Debug build with MPI. Mirrors SPPARKS_MACHINE=mpi_debug.",
+      "name": "mi300a",
+      "inherits": "_kokkos-hip",
+      "displayName": "AMD MI300A APU (HPE Cray EX)",
+      "description": "MI300A APU nodes behind a Cray programming environment (El Capitan, Tuolumne, El Dorado, RZAdams, ...). Load rocmcc/<ver>-magic + cray-mpich first. There is NO hdf5 module on these systems, so HDF5_ROOT is pinned below to the Cray parallel install; override with -DHDF5_ROOT=<prefix> if your site differs (a stale version is re-globbed, not fatal -- see cmake/FindHDF5Enhanced.cmake). --disable-new-dtags goes with that pin: it emits DT_RPATH instead of DT_RUNPATH, and only DT_RPATH outranks LD_LIBRARY_PATH. Without it a conda env on the run node can shadow the parallel HDF5 this was built against with a serial one, which surfaces as an undefined H5Pset_fapl_mpio inside HighFive::MPIOFileAccess(). The cost is that LD_LIBRARY_PATH can no longer redirect HDF5 at runtime -- rebuild, or drop this flag, if you need that. AMD_GFX942_APU (not AMD_GFX942) is required: it is what defines KOKKOS_IMPL_HIP_UNIFIED_MEMORY, so HIPSpace uses the APU's unified HBM. Needs HSA_XNACK=1 at RUNTIME. -march=native assumes you configure on a node matching the run node, which is the intended workflow; set SPPARKS_NATIVE_OPTIMIZATION=OFF if you ever configure on a login node instead.",
       "cacheVariables": {
-        "SPPARKS_MACHINE": "mpi_debug",
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_CXX_COMPILER": "amdclang++",
+        "CMAKE_C_COMPILER": "amdclang",
+        "MPI_CXX_COMPILER": "mpiamdclang++",
+        "MPI_C_COMPILER": "mpiamdclang",
+        "HDF5_ROOT": "/opt/cray/pe/hdf5-parallel/1.14.3.5/amd/6.0",
+        "CMAKE_EXE_LINKER_FLAGS": "-Wl,--disable-new-dtags",
+        "CMAKE_SHARED_LINKER_FLAGS": "-Wl,--disable-new-dtags",
+        "SPPARKS_KOKKOS_ARCH": "AMD_GFX942_APU",
+        "SPPARKS_KOKKOS_HOST_OPENMP": "ON",
+        "SPPARKS_NATIVE_OPTIMIZATION": "ON",
+        "SPPARKS_AGGRESSIVE_OPTIMIZATION": "ON"
+      }
+    },
+
+    {
+      "name": "mi300a-discrete",
+      "inherits": "mi300a",
+      "displayName": "AMD MI300A APU, unified memory DISABLED (A/B control)",
+      "description": "Same hardware and same --offload-arch=gfx942 as the mi300a preset, but the non-APU arch token leaves KOKKOS_IMPL_HIP_UNIFIED_MEMORY undefined. HIPSpace then reports accessible=false to HostSpace and uses a host-inaccessible SharedAllocationRecord, so DualView keeps a distinct host mirror and deep_copy does real work -- the same code path strix-halo takes. The allocator is hipMalloc either way, so this isolates the cost of the explicit copy machinery with hardware held constant. Run WITHOUT HSA_XNACK=1 to match. Keep this in its own build dir: Kokkos_ARCH_* is cached with FORCE, so two arch tokens in one directory both stay ON and Kokkos errors out.",
+      "cacheVariables": {
+        "SPPARKS_KOKKOS_ARCH": "AMD_GFX942"
+      }
+    },
+
+    {
+      "name": "strix-halo",
+      "inherits": "_kokkos-hip",
+      "displayName": "AMD Strix Halo / RDNA 3.5 (gfx1151)",
+      "description": "Local development APU (Radeon 8050S/8060S). Physically an APU, but Kokkos classifies gfx1151 as UNABLE to access system allocations (Kokkos_HIP_IsXnack.hpp) and gives it ordinary discrete HIPSpace -- so this preset does NOT exercise the unified-memory path the mi300a preset takes.",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "hipcc",
+        "SPPARKS_KOKKOS_ARCH": "AMD_GFX1151",
+        "SPPARKS_NATIVE_OPTIMIZATION": "ON",
+        "SPPARKS_AGGRESSIVE_OPTIMIZATION": "ON"
+      }
+    },
+
+    {
+      "name": "openmp",
+      "inherits": "_base",
+      "displayName": "Kokkos OpenMP host backend (CPU)",
+      "description": "CPU reference/validation build. Safe to interrupt, unlike a HIP job. Note that OpenMP's static scheduling structurally hides GPU races -- a green result here does not clear the device path.",
+      "cacheVariables": {
+        "SPPARKS_PACKAGE_KOKKOS": "ON",
+        "SPPARKS_KOKKOS_BACKEND": "OPENMP"
       }
     }
   ],
+
   "buildPresets": [
-    { "name": "mac", "configurePreset": "mac" },
-    { "name": "mac_mpi", "configurePreset": "mac_mpi" },
-    { "name": "mac_arm", "configurePreset": "mac_arm" },
-    { "name": "linux", "configurePreset": "linux" },
-    { "name": "mpi", "configurePreset": "mpi" },
-    { "name": "serial", "configurePreset": "serial" },
-    { "name": "debug", "configurePreset": "debug" },
-    { "name": "mpi_debug", "configurePreset": "mpi_debug" }
+    { "name": "mi300a",          "configurePreset": "mi300a" },
+    { "name": "mi300a-discrete", "configurePreset": "mi300a-discrete" },
+    { "name": "strix-halo", "configurePreset": "strix-halo" },
+    { "name": "openmp",     "configurePreset": "openmp" }
   ]
 }

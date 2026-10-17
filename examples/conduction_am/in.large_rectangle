@@ -1,0 +1,61 @@
+# am/finitediff's LargerRectangle example (github/am_finitedifference,
+# examples/am_finitediff/LargerRectangle) on the conduction source: its
+# 21-layer raster path read with `laser_path file`. Layer 1 rasters along
+# x, layer 2 along y, 50 um hatch. The original jumps 2e-7 s between
+# rasters, which piles heat up raster after raster (melt depth 65 -> 110 um
+# across a layer); here each jump waits 5 ms (65 -> 75 um), covered by RKL2
+# super-steps (`sts 128`). As in the
+# original, the 30-site box holds the first two layers (`layers 2`); a
+# taller box and a longer run take more.
+# Path in lattice units: scale by dx, laser plane half a site above the
+# top site of each layer. One process, ~0.29 s with the pauses.
+app_style        additive/texture/kk 1000000 5e-6 5e-6 1
+seed             56789
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 360 0 250 0 30
+boundary         n n n
+create_box       box
+create_sites     box
+set site range 1 1000000
+region           substrate block 0 360 0 250 0 18.5
+set i2 value 3 region substrate
+region           plate block -200 560 -200 450 -200 18.5
+set i1 value 42 region substrate
+set d1 value 1.0 region substrate
+set d2 value 0.0 region substrate
+set d3 value 0.0 region substrate
+set d4 value 0.0 region substrate
+sector           yes
+sweep            color
+diag_style       array d6 sum d6 max
+temperature      0.0
+misorientation_target random_rotation
+liquidus         1708
+solidus          1675
+solid_front_vel  4 1.091e-5 -2.034e-4 2.74e-3 1.151e-4
+nucleation_density      1e14
+critical_undercooling   5
+undercooling_deviation  3
+mean_nuclei_volume      8.4375e-16
+nuclei_volume_deviation 1.5625e-17
+smooth_greedy_multiproposal on
+smooth_orientation copy
+nuclei_smooth off
+
+# 150 W absorbed, k 30, rho 5706 (alpha = k/(rho cp0)), T0 300 K. Spot sigma
+# 42 um (x, y) / 70 um (z) in am/finitediff's exp(-r^2/2 sigma^2), i.e.
+# s = sqrt(2) sigma here: re-tuned with the energy-conserving am/finitediff
+# (its 137d5948) to the original ThinWall pool, ~100 um wide x 60 um deep.
+setup_temperature_source conduction 150.0 1.0 13.8 3.6166e-6 300.0 483.0 59.4e-6 59.4e-6 99.0e-6 &
+    k_powder 0.3 k_table 6 300 13.8 600 20.0 900 24.8 1200 28.4 1500 30.6 1675 31.3 &
+    cp_table 7 300 483 473 528 873 595 1073 611 1253 624 1675 714 1708 847 &
+    latent 2.9e5 convection 25 300 emissivity 0.4 &
+    margin 0.5e-3 0.5e-3 0.5e-3 0.5e-3 plate 0.5e-3 part plate far_bc fixed sts 128
+
+laser_path file large_rectangle.path speed 1.4 scale 5e-6 shift 0 0 2.5e-6 &
+    jump_time 5e-3 layers 2
+stats            1e-3
+dump             1 text 0.3 dump.large_rectangle.* id i1 i2 x y z
+dump_modify      1 thresh i2 > 2
+run              0.3

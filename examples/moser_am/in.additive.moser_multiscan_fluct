@@ -71,8 +71,7 @@ sweep            random mask no
 diag_style       array d6 sum
 
 temperature      0.0
-misorientation_target gradient
-
+misorientation_target random_rotation   # gradient was removed (see doc/app_additive_texture)
 # AM-specific (IN718-like)
 liquidus         1573
 solidus          1523

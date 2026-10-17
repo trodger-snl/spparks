@@ -12,13 +12,13 @@
 ------------------------------------------------------------------------- */
 
 #include "temperature_source_moser.h"
+#include "moser_device.h"
 #include "error.h"
 #include "domain.h"
 #include "math_const.h"
 
 #include "GREENAM/GreenAM_Constants.h"
 #include "GREENAM/GreenAM_Properties.h"
-#include "GREENAM/GreenAM_Util.h"
 #include "GREENAM/GreenAM_LaserScan.h"
 #include "GREENAM/GreenAM_ScanIntegration.h"
 
@@ -248,7 +248,9 @@ void MoserTemperatureSource::build_scan(double start_time,
                                              double laser_plane_z,
                                              double speed,
                                              int repeats,
-                                             double pause_between_repeats)
+                                             double pause_between_repeats,
+                                             double hatch,
+                                             bool serpentine)
 {
   if (!source_initialized)
     error->all(FLERR,"moser build_scan: source must be set up first");
@@ -256,11 +258,14 @@ void MoserTemperatureSource::build_scan(double start_time,
   if (speed <= 0.0)
     error->all(FLERR,"moser build_scan: speed must be > 0");
 
+  path_mode_ = false;
   scan_t_origin = start_time;
   scan_x0 = x0;  scan_y0 = y0;
   scan_x1 = x1;  scan_y1 = y1;
   scan_laser_plane_z = laser_plane_z;
   scan_speed = speed;
+  scan_hatch = hatch;
+  scan_serpentine = serpentine;
   scan_repeats = repeats;
   scan_pause_between_repeats = pause_between_repeats;
 
@@ -299,8 +304,33 @@ void MoserTemperatureSource::build_scan(double start_time,
    No-op if the scan has not yet been built.
 ------------------------------------------------------------------------- */
 
+void MoserTemperatureSource::build_scan_path(double t_start,
+                                             const std::vector<Seg> &segs,
+                                             double laser_plane_z)
+{
+  if (!source_initialized)
+    error->all(FLERR,"moser build_scan_path: source must be set up first");
+  if (segs.empty())
+    error->all(FLERR,"moser build_scan_path: path has no emitting segment");
+  path_mode_ = true;
+  segs_ = segs;
+  for (Seg &s : segs_) { s.t0 += t_start; s.t1 += t_start; }
+  scan_t_origin = t_start;
+  scan_laser_plane_z = laser_plane_z;
+  scan_x0 = segs_.front().x0;  scan_y0 = segs_.front().y0;
+  scan_x1 = segs_.back().x1;   scan_y1 = segs_.back().y1;
+  scan_speed = 0.0;
+  scan_repeats = 1;
+  scan_pause_between_repeats = 0.0;
+  scan_pass_duration = segs_.back().t1 - t_start;
+  pass_start_times_.assign(1, t_start);
+  rebuild_scan_from_pass_list_();
+}
+
 void MoserTemperatureSource::append_pass(double t_start)
 {
+  if (path_mode_)
+    error->all(FLERR,"moser append_pass: not available for a path-file scan");
   if (!scan_built) {
     error->all(FLERR,
       "moser append_pass: cannot extend before initial build_scan has run");
@@ -344,6 +374,8 @@ void MoserTemperatureSource::reset_history_and_start(double t_start,
     error->all(FLERR,
       "moser reset_history_and_start: cannot reset before initial build_scan has run");
   }
+  if (path_mode_)
+    error->all(FLERR,"moser reset_history_and_start: not available for a path-file scan");
   pass_start_times_.clear();
   pass_start_times_.push_back(t_start);
   scan_t_origin = t_start;
@@ -366,49 +398,43 @@ void MoserTemperatureSource::rebuild_scan_from_pass_list_()
   if (repeats < 1)
     error->all(FLERR,"moser rebuild_scan: pass list is empty");
 
-  const double L = std::sqrt((scan_x1-scan_x0)*(scan_x1-scan_x0)
-                             + (scan_y1-scan_y0)*(scan_y1-scan_y0));
-  const double dt_scan = L / scan_speed;
+  if (!path_mode_) {
+    const double L = std::sqrt((scan_x1-scan_x0)*(scan_x1-scan_x0)
+                               + (scan_y1-scan_y0)*(scan_y1-scan_y0));
+    const double dt_scan = L / scan_speed;
+    segs_.clear();
+    double px0, py0, px1, py1;
+    for (int r = 0; r < repeats; ++r) {
+      pass_geometry(r, px0, py0, px1, py1);
+      segs_.push_back({pass_start_times_[r], pass_start_times_[r] + dt_scan,
+                       px0, py0, px1, py1, 1.0});
+    }
+  }
 
-  // Each pass = 1 active waypoint + 1 transit waypoint. Plus a final
-  // velocity-calc sentinel waypoint far in the future.
-  const int nlines = 2 * repeats;
-  const int nwp    = nlines + 1;
-
-  sierra::greenam::VectorWrapper<double> ts("Time",  nwp);
-  sierra::greenam::VectorWrapper<double> xs("XLaser", nwp);
-  sierra::greenam::VectorWrapper<double> ys("YLaser", nwp);
-
-  int wp = 0;
-  for (int r = 0; r < repeats; ++r) {
-    ts(wp) = pass_start_times_[r];
-    xs(wp) = scan_x0;
-    ys(wp) = scan_y0;
-    ++wp;
-
-    ts(wp) = pass_start_times_[r] + dt_scan;
-    xs(wp) = scan_x1;
-    ys(wp) = scan_y1;
-    ++wp;
+  // Waypoints: a segment starts at a new waypoint unless it continues the
+  // previous one (same time and position); the waypoint at a segment end
+  // carries power 0 (transit/stop) until a following segment overwrites it.
+  // A final velocity-calc sentinel waypoint lies far in the future.
+  std::vector<double> ts, xs, ys, pf;
+  for (const Seg &g : segs_) {
+    const bool cont = !ts.empty() && ts.back() == g.t0 &&
+                      xs.back() == g.x0 && ys.back() == g.y0;
+    if (cont) pf.back() = g.p;
+    else { ts.push_back(g.t0); xs.push_back(g.x0); ys.push_back(g.y0); pf.push_back(g.p); }
+    ts.push_back(g.t1); xs.push_back(g.x1); ys.push_back(g.y1); pf.push_back(0.0);
   }
 
   // End time of the last active emission. The fluctuation table only
-  // needs to span [pass_start_times_[0], t_end_active]; anything past
-  // this is in a 0-power stop segment.
-  const double t_end_active = pass_start_times_.back() + dt_scan;
+  // needs to span [first start, t_end_active]; anything past this is in a
+  // 0-power stop segment.
+  const double t_end_active = segs_.back().t1;
+  ts.push_back(t_end_active + 1.0e6); xs.push_back(xs.back());
+  ys.push_back(ys.back()); pf.push_back(0.0);
+  const int nwp = (int) ts.size();
+  const double L = std::sqrt((scan_x1-scan_x0)*(scan_x1-scan_x0)
+                             + (scan_y1-scan_y0)*(scan_y1-scan_y0));
+  const double dt_scan = scan_pass_duration;
 
-  ts(wp) = t_end_active + 1.0e6;
-  xs(wp) = scan_x1;
-  ys(wp) = scan_y1;
-  ++wp;
-
-  if (wp != nwp) {
-    error->all(FLERR,"moser rebuild_scan: internal waypoint count mismatch");
-  }
-
-  ts.commit();
-  xs.commit();
-  ys.commit();
 
   sierra::greenam::ThermalProperties<double> th{k_th, rho, cp};
   const double abs_power = lambda * Q;
@@ -419,14 +445,8 @@ void MoserTemperatureSource::rebuild_scan_from_pass_list_()
     // Per-lobe waypoint power array (path geometry is shared, but power
     // is scaled by f_lobe so each LaserScan is self-describing for
     // total-absorbed-power audits).
-    sierra::greenam::VectorWrapper<double> ps("Power", nwp);
-    int wp2 = 0;
-    for (int r = 0; r < repeats; ++r) {
-      ps(wp2++) = abs_power * L_ref.power_fraction;   // active scan
-      ps(wp2++) = 0.0;                                 // transit/stop
-    }
-    ps(wp2++) = 0.0;                                   // sentinel
-    ps.commit();
+    std::vector<double> ps(nwp);
+    for (int w = 0; w < nwp; ++w) ps[w] = abs_power * L_ref.power_fraction * pf[w];
 
     sierra::greenam::EllipsoidProperties<double> ep{L_ref.sx, L_ref.sy, L_ref.sz};
     const double zl_eff = scan_laser_plane_z - L_ref.z_offset;
@@ -441,7 +461,7 @@ void MoserTemperatureSource::rebuild_scan_from_pass_list_()
     L_ref.integrator = std::make_shared<GREENAM_Integ>(*L_ref.scan);
 
     if (L_ref.psd_spec_set) {
-      populate_fluctuation_table(L_ref, pass_start_times_.front(), t_end_active);
+      populate_fluctuation_table(L_ref, segs_.front().t0, t_end_active);
       L_ref.scan->set_fluctuation_table(&L_ref.fluct_table);
     }
   }
@@ -476,6 +496,94 @@ void MoserTemperatureSource::rebuild_scan_from_pass_list_()
       }
     }
   }
+
+  // Segment arrays changed; invalidate any device-side cached copy.
+  ++scan_version_;
+}
+
+/* ----------------------------------------------------------------------
+   Endpoints of pass r: the base line shifted r*hatch along its in-plane
+   normal, direction reversed on odd passes when serpentine. hatch == 0
+   returns the base line for every r.
+------------------------------------------------------------------------- */
+
+void MoserTemperatureSource::pass_geometry(int r, double &x0, double &y0,
+                                           double &x1, double &y1) const
+{
+  const double ddx = scan_x1 - scan_x0, ddy = scan_y1 - scan_y0;
+  const double L = std::sqrt(ddx*ddx + ddy*ddy);
+  const double off = (L > 0.0) ? r * scan_hatch : 0.0;
+  const double nx = (L > 0.0) ? -ddy / L : 0.0, ny = (L > 0.0) ? ddx / L : 0.0;
+  x0 = scan_x0 + off * nx;  y0 = scan_y0 + off * ny;
+  x1 = scan_x1 + off * nx;  y1 = scan_y1 + off * ny;
+  if (scan_serpentine && (r % 2 == 1)) {
+    std::swap(x0, x1);
+    std::swap(y0, y1);
+  }
+}
+
+/* ----------------------------------------------------------------------
+   Device (Kokkos) evaluation support. STANDARD (1 lobe) and KEYHOLE (2 lobes),
+   with or without stochastic fluctuations.
+------------------------------------------------------------------------- */
+
+bool MoserTemperatureSource::fill_device_plan(MoserDevicePlan &plan) const
+{
+  if (!scan_built || !lobes_[0].scan) return false;
+  if (n_lobes_ > MoserDevicePlan::MAX_LOBES) return false;
+
+  plan.T0 = T0_default;
+  plan.alpha = alpha;
+  plan.c = cp * rho;               // volumetric heat capacity rho*cp
+  plan.char_length = char_length;
+  plan.n_lobes = n_lobes_;
+  plan.nseg = static_cast<int>(lobes_[0].scan->bounds.size());
+
+  for (int li = 0; li < n_lobes_; ++li) {
+    plan.sx[li] = lobes_[li].sx;
+    plan.sy[li] = lobes_[li].sy;
+    plan.sz[li] = lobes_[li].sz;
+    // Per-lobe effective laser-plane z (top lobe z_offset = 0). The vacuum
+    // cutoff is still the real free surface scan_laser_plane_z; the kernel
+    // applies it before summing lobes.
+    plan.zl[li] = scan_laser_plane_z - lobes_[li].z_offset;
+    plan.fluct_n[li] = static_cast<int>(lobes_[li].fluct_table.size());
+  }
+
+  plan.version = scan_version_;
+  plan.valid = (plan.nseg > 0);
+  return plan.valid;
+}
+
+MoserTemperatureSource::DeviceArrays MoserTemperatureSource::copy_device_data() const
+{
+  DeviceArrays a;
+  // Shared path geometry from lobe 0 (identical across lobes).
+  const auto &geom = *lobes_[0].scan;
+  const int n = static_cast<int>(geom.bounds.size());
+  auto load = [n](std::vector<double> &dst, double *src) {
+    dst.assign(src, src + n);
+  };
+  auto &g = const_cast<GREENAM_Scan &>(geom);
+  load(a.bounds, g.bounds.data());
+  load(a.xl, g.xl.data());
+  load(a.yl, g.yl.data());
+  load(a.normals_x, g.normals_x.data());
+  load(a.normals_y, g.normals_y.data());
+  load(a.speeds, g.speeds.data());
+
+  // Per-lobe powers (lobe-major: lobe 0 segments, then lobe 1 segments) and
+  // per-lobe fluctuation tables (concatenated).
+  for (int li = 0; li < n_lobes_; ++li) {
+    auto &s = const_cast<GREENAM_Scan &>(*lobes_[li].scan);
+    a.powers.insert(a.powers.end(), s.powers.data(), s.powers.data() + n);
+    const auto &ft = lobes_[li].fluct_table;
+    a.fluct_t.insert(a.fluct_t.end(), ft.t_grid.begin(),   ft.t_grid.end());
+    a.fluct_w.insert(a.fluct_w.end(), ft.factor_W.begin(), ft.factor_W.end());
+    a.fluct_d.insert(a.fluct_d.end(), ft.factor_D.begin(), ft.factor_D.end());
+    a.fluct_p.insert(a.fluct_p.end(), ft.factor_P.begin(), ft.factor_P.end());
+  }
+  return a;
 }
 
 /* ----------------------------------------------------------------------
@@ -515,20 +623,6 @@ double MoserTemperatureSource::get_temperature_at_xyz_and_time(double x, double 
 
 /* ---------------------------------------------------------------------- */
 
-void MoserTemperatureSource::update_temperatures(double /*dt*/, double /*simulation_time*/)
-{
-  // Analytic Green's function: nothing to refresh per timestep.
-}
-
-/* ---------------------------------------------------------------------- */
-
-bool MoserTemperatureSource::needs_data_refresh(double /*simulation_time*/)
-{
-  return false;
-}
-
-/* ---------------------------------------------------------------------- */
-
 void MoserTemperatureSource::cleanup()
 {
   for (int li = 0; li < 2; ++li) {
@@ -539,16 +633,6 @@ void MoserTemperatureSource::cleanup()
   }
   scan_built = false;
   source_initialized = false;
-}
-
-/* ---------------------------------------------------------------------- */
-
-bool MoserTemperatureSource::has_fluctuations() const
-{
-  for (int li = 0; li < n_lobes_; ++li) {
-    if (lobes_[li].psd_spec_set) return true;
-  }
-  return false;
 }
 
 /* ---------------------------------------------------------------------- */

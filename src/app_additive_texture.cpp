@@ -33,10 +33,12 @@
 #include "math.h"
 #include "math_const.h"
 #include "app_additive_texture.h"
+#include "grain_walk.h"
 #include "comm_lattice.h"
 #include "lattice.h"
 #include "timer.h"
 #include "random_park.h"
+#include "random_mars.h"
 #include "error.h"
 #include "domain.h"
 #include "crystalline_orientations/cubic_symmetries.h"
@@ -91,7 +93,7 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
     // Integer arrays (iarray): 0=spin, 1=active_flag
     // Double arrays (darray):  0=q0, 1=qx, 2=qy, 3=qz,
     //   4=mobility_out, 5=T, 6=solid_d, 7=G, 8=V
-    ndouble = 9;
+    ndouble = 10;
     allow_app_update = 1;
     app_update_only = 1; //Skip solid-state growth for now.
     ninteger = 2;
@@ -109,16 +111,16 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
     gi[1] = 1;  // active_flag
     ghost_iindices = gi;
 
-    nghost_darray = 5;
+    nghost_darray = 6;
     int *gd = new int[nghost_darray];
     gd[0] = 0;  // q0
     gd[1] = 1;  // qx
     gd[2] = 2;  // qy
     gd[3] = 3;  // qz
     gd[4] = 5;  // T (needed by normal_finder on ghost neighbors)
+    gd[5] = 9;  // spath (d10): a ghost parent's path length feeds the grain walk
     ghost_dindices = gd;
     sites = unique = NULL;
-    unique_dot = NULL;
     neigh_dist = NULL;
     nucleation_flags = NULL;
     nucleation_temps = NULL;
@@ -144,12 +146,12 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
     c1 = 0.5;
     c2 = 0.5;
     c3 = 2.5;
-    time_step = dt;
     t_room = 300;
-    max_misorient = 0;
-    mis_thresh = 2.0 * MY_PI / 180.0; // Default 2 degrees converted to radians
-    misorient_alpha = 5.0; // Default exponential steepness parameter
-    misorientation_target_mode = MISORI_TARGET_GRADIENT;
+    mis_diffusion = 0.0;               // rotation off until misorientation_diffusion
+    mis_thresh = 2.0 * MY_PI / 180.0;  // Default 2 degrees converted to radians
+    misorient_alpha = 0.0;             // constant D
+    misorientation_target_mode = MISORI_TARGET_RANDOM_ROTATION;
+    nucleation_misorient_enabled = true;
     nucleation_mode = NUCLEATION_THRESHOLD;
 
     // Void generation defaults
@@ -166,7 +168,7 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
     // Temperature-I/O orchestration (source setup/update, laser scan path,
     // pause/reset scheduling, fast-forward predictors, smoothing) lives in
     // the ThermalManager. It initializes its own defaults in its ctor.
-    thermal = std::unique_ptr<ThermalManager>(new ThermalManager(spk, this));
+    thermal = std::unique_ptr<ThermalManager>(new ThermalManager(spk, &thermal_host_));
 
     // Initialize powder activation tracking
     last_powder_activation_time = -1.0;  // Force activation at init
@@ -188,12 +190,10 @@ AppAdditiveTexture::~AppAdditiveTexture()
 {
   // Only delete arrays that are specific to this class
   // Parent class destructors will handle sites, unique, unique_neigh
-  if (unique_dot) delete[] unique_dot;
   if (neigh_dist) delete[] neigh_dist;
   if (nucleation_flags) delete[] nucleation_flags;
   if (nucleation_temps) delete[] nucleation_temps;
   if (nucleation_sizes) delete[] nucleation_sizes;
-  if (solid_front_coeffs) delete[] solid_front_coeffs;
   if (ghost_iindices) delete [] ghost_iindices;
   if (ghost_dindices) delete [] ghost_dindices;
 }
@@ -202,166 +202,37 @@ AppAdditiveTexture::~AppAdditiveTexture()
    input script commands unique to this app
 ------------------------------------------------------------------------- */
 
+// Populate the ThermalHost snapshot ThermalManager reads/writes. Cheap pointer
+// and scalar copies; called before any thermal-> use so the manager sees the
+// current lattice state without a typed back-pointer into this app.
+void AppAdditiveTexture::refresh_thermal_host()
+{
+  thermal_host_.T = T;
+  thermal_host_.xyz = xyz;
+  thermal_host_.numneigh = numneigh;
+  thermal_host_.neighbor = neighbor;
+  thermal_host_.nlocal = nlocal;
+  thermal_host_.dx = dx;
+  thermal_host_.tl = tl;
+  thermal_host_.ts = ts;
+  thermal_host_.t_room = t_room;
+  thermal_host_.time = time;
+  thermal_host_.dt = dt;
+  thermal_host_.comm = comm;
+  thermal_host_.ghost_iindices = ghost_iindices;
+  thermal_host_.nghost_iarray = nghost_iarray;
+  thermal_host_.ghost_dindices = ghost_dindices;
+  thermal_host_.nghost_darray = nghost_darray;
+}
+
 void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
 {
-  if (strcmp(command,"liquidus") == 0) {
-    if (narg != 1) error->all(FLERR,"Illegal liquidus command");
-    tl = atof(arg[0]);
-    if (tl <= 0) 
-      error->all(FLERR,"Illegal liquidus temperature");
-  }
-  else if (strcmp(command,"solidus") == 0) {
-    if (narg != 1) error->all(FLERR,"Illegal solidus command");
-    ts = atof(arg[0]);
-    if (ts <= 0) 
-      error->all(FLERR,"Illegal solidus temperature");
-  }
-  else if (strcmp(command,"nucleation_density") == 0) {
-    if (narg != 1) error->all(FLERR,"Illegal nucleation density command");
-    no = atof(arg[0]);
-    if (no < 0) 
-      error->all(FLERR,"Illegal nucleation density");
-  }
-  else if (strcmp(command,"critical_undercooling") == 0) {
-    if (narg != 1) error->all(FLERR,"Illegal critical_undercooling command");
-    tc = atof(arg[0]);
-    if (tc < 0) 
-      error->all(FLERR,"Illegal critical undercooling");
-  }
-  else if (strcmp(command,"undercooling_deviation") == 0) {
-    if (narg != 1) error->all(FLERR,"Illegal undercooling_deviation command");
-    tsig = atof(arg[0]);
-    if (tsig < 0) 
-      error->all(FLERR,"Illegal undercooling standard deviation");
-  }
-  else if (strcmp(command,"mean_nuclei_volume") == 0) {
-    if (narg !=1) error->all(FLERR,"Illegal mean_nuclei_volume command");
-    size_norm = atof(arg[0]);
-    if (size_norm < 0) 
-      error->all(FLERR,"Illegal mean nuclei volume");
-  }
-  else if (strcmp(command,"nuclei_volume_deviation") == 0) {
-    if (narg != 1) error->all(FLERR,"Illegal nuclei_volume_deviation command");
-    size_sig = atof(arg[0]);
-    if (size_sig < 0) 
-      error->all(FLERR,"Illegal nuclei volume standard deviation");
-  }
-  else if (strcmp(command,"solid_front_vel") == 0) {
-    delete [] solid_front_coeffs;
-    if (narg < 1) error->all(FLERR,"Illegal solid_front_vel command");
-    int nVel;
-    nVel = atoi(arg[0]);
-    if (nVel <= 0) {
-      error->all(FLERR,"Illegal solidification front velocity specification");
-    }
-    solid_front_coeffs = new double [nVel];
-    int j = 0;
-    for(int i = 1; i < nVel + 1; i++) {
-        solid_front_coeffs[j] = atof(arg[i]);
-        j++;
-    }
-  }
-  else if (strcmp(command,"texture_parameters") == 0) {
-     if (narg == 3)
-       error->all(FLERR,
-         "texture_parameters now takes 2 arguments (c2 c3), not 3. "
-         "The baseline coefficient c1 has been fixed at 1.0 because "
-         "only mobility ratios affect selection. To migrate an old "
-         "input file: texture_parameters c2/c1 c3 (divide old c2 by "
-         "old c1, drop old c1)");
-     if (narg != 2) error->all(FLERR,"Illegal texture_parameters command");
+  // Keep the thermal snapshot current before any thermal command handler
+  // (e.g. laser_path reads host->time/dx when building the scan path).
+  refresh_thermal_host();
+  if (parse_command(command, narg, arg, error, screen, domain->me, *thermal)) return;
 
-     // c1 is fixed at 1.0 by normalization convention. The roulette-wheel
-     // selection in site_event_solidification is invariant under uniform
-     // scaling of mobility (only ratios matter), so c1 is mathematically
-     // non-identifiable. Hardcoding it here removes the degenerate
-     // parameter and makes input files unambiguous.
-     c1 = 1.0;
-     c2 = atof(arg[0]);
-     c3 = atof(arg[1]);
-
-     // -------- Validation --------
-     // Mobility model:  mob(theta) = 1 + c2 * cos(c3 * theta)
-     // theta is the misorientation angle between the grain's <100> family
-     // and the local thermal gradient, folded into the cubic fundamental
-     // zone by get_cosine_of_minumum_angle_between_q_and_u.
-     const double theta_max = std::acos(1.0 / std::sqrt(3.0));  // ~0.9553 rad
-
-     // Rule 1: signs.  c2 < 0 reverses the physical meaning (misaligned
-     // grains preferred), which is unphysical for cubic solidification.
-     // c3 < 0 is mathematically redundant since cosine is even.
-     if (c2 < 0.0) {
-       error->all(FLERR,
-         "texture_parameters: c2 must be >= 0 (negative amplitude "
-         "would mean misaligned grains grow faster than aligned ones, "
-         "which is unphysical for cubic solidification)");
-     }
-     if (c3 < 0.0) {
-       error->all(FLERR,
-         "texture_parameters: c3 must be >= 0");
-     }
-
-     // Rule 2: monotonicity of mob(theta) on [0, theta_max].
-     //   d/dtheta mob = -c2 * c3 * sin(c3 * theta) <= 0
-     //   requires c3 * theta_max <= pi (with c2 >= 0 from Rule 1).
-     if (c3 * theta_max > MY_PI + 1.0e-12) {
-       char msg[256];
-       snprintf(msg, sizeof(msg),
-         "texture_parameters: c3 = %g exceeds monotonicity limit "
-         "pi/theta_max ~ %g; mobility would be non-monotonic in "
-         "misorientation angle",
-         c3, MY_PI / theta_max);
-       error->all(FLERR, msg);
-     }
-
-     // Rule 3: positivity of mobility at every angle in [0, theta_max].
-     //   With c2 >= 0 and c3 * theta_max <= pi, the binding angle is
-     //   theta = theta_max where cos is most negative on the interval.
-     double mob_min = 1.0 + c2 * std::cos(c3 * theta_max);
-     if (mob_min < -1.0e-12) {
-       char msg[256];
-       snprintf(msg, sizeof(msg),
-         "texture_parameters: minimum mobility = %g < 0 at theta = "
-         "theta_max (= %g rad); roulette-wheel selection in "
-         "site_event_solidification requires non-negative mobility",
-         mob_min, theta_max);
-       error->all(FLERR, msg);
-     }
-
-     // -------- Soft warning --------
-     if (c2 == 0.0 && screen) {
-       fprintf(screen,
-         "WARNING: texture_parameters c2 = 0; mobility has no "
-         "orientation dependence\n");
-     }
-  }
-  else if (strcmp(command,"misorientation_function") == 0) {
-     if (narg < 1 || narg > 3) error->all(FLERR,"Illegal misorientation_function command");
-     max_misorient = atof(arg[0]);
-     if (narg >= 2) mis_thresh = atof(arg[1]) * MY_PI / 180.0; // Convert from degrees to radians
-     if (narg == 3) {
-       misorient_alpha = atof(arg[2]);
-       if (misorient_alpha <= 0)
-         error->all(FLERR,"Illegal misorientation_function alpha value: must be greater than 0");
-     }
-     if (max_misorient < 0) 
-       error->all(FLERR,"Illegal misorientation_function maximum value: must be greater than 0");
-     if (mis_thresh < 0)
-       error->all(FLERR,"Illegal misorientation_function threshold value: must be greater than 0");
-  }
-  else if (strcmp(command,"misorientation_target") == 0) {
-     if (narg != 1) error->all(FLERR,"Illegal misorientation_target command");
-     if (strcmp(arg[0],"gradient") == 0) {
-       misorientation_target_mode = MISORI_TARGET_GRADIENT;
-     } else if (strcmp(arg[0],"random") == 0) {
-       misorientation_target_mode = MISORI_TARGET_RANDOM;
-     } else if (strcmp(arg[0],"random_rotation") == 0) {
-       misorientation_target_mode = MISORI_TARGET_RANDOM_ROTATION;
-     } else {
-       error->all(FLERR,"Illegal misorientation_target value: use gradient, random, or random_rotation");
-     }
-  }
-  else if (strcmp(command,"nucleation_mode") == 0) {
+  if (strcmp(command,"nucleation_mode") == 0) {
     if (narg != 1) error->all(FLERR,"Illegal nucleation_mode command");
     if (strcmp(arg[0],"threshold") == 0) {
       nucleation_mode = NUCLEATION_THRESHOLD;
@@ -371,16 +242,6 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
       error->all(FLERR,"Illegal nucleation_mode value: use threshold or continuous");
     }
   }
-  else if (strcmp(command,"fast_forward_search_window") == 0) {
-     if (narg != 1) error->all(FLERR,"Illegal fast_forward_search_window command");
-     thermal->set_fast_forward_search_window(atof(arg[0]));
-  }
-  else if (strcmp(command,"temperature_optimization") == 0) {
-     // Usage: temperature_optimization <option> <on|off>
-     // Options: spatial_grid, element_cache, nodal_precompute
-     thermal->optimization_cmd(narg, arg);
-  }
-
   // Void generation commands
   else if (strcmp(command,"void_density") == 0) {
     if (narg != 1) error->all(FLERR,"Illegal void_density command");
@@ -418,27 +279,6 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
       error->all(FLERR,"Illegal void_size_distribution: max must be > min");
   }
 
-  // Modular temperature source commands (delegated to the ThermalManager)
-  else if (strcmp(command,"setup_temperature_source") == 0) {
-    thermal->setup_cmd(narg, arg);
-  }
-  else if (strcmp(command,"laser_path") == 0) {
-    thermal->laser_path_cmd(narg, arg);
-  }
-  else if (strcmp(command,"laser_fluctuations") == 0) {
-    thermal->laser_fluctuations_cmd(narg, arg);
-  }
-
-  else if (strcmp(command,"temperature_smooth") == 0) {
-    // Solidification-band Gaussian smoothing of T[]. See ThermalManager.
-    thermal->smooth_cmd(narg, arg);
-  }
-
-  else if (strcmp(command,"nodal_smooth") == 0) {
-    // Mesh-Laplacian smoothing forwarded to the temperature source.
-    thermal->nodal_smooth_cmd(narg, arg);
-  }
-
   else if (strcmp(command,"single_voxel_cleanup") == 0) {
     // Usage: single_voxel_cleanup on|off
     // Post-smoothing pass that flips 1-voxel grains into the
@@ -453,40 +293,6 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
               single_voxel_cleanup_enabled ? "enabled" : "disabled");
   }
 
-  else if (strcmp(command,"smooth_greedy_multiproposal") == 0) {
-    // Usage: smooth_greedy_multiproposal on|off
-    // When on, smooth_site() picks the energy-minimizing distinct
-    // neighbor spin instead of testing one random proposal per pass.
-    // Each nrefine pass becomes a steepest-descent step. Default off
-    // (preserves the historical single-random-proposal behavior).
-    if (narg != 1)
-      error->all(FLERR,"Illegal smooth_greedy_multiproposal command");
-    if (strcmp(arg[0],"on") == 0) smooth_greedy_multiproposal_enabled = true;
-    else if (strcmp(arg[0],"off") == 0) smooth_greedy_multiproposal_enabled = false;
-    else error->all(FLERR,"smooth_greedy_multiproposal: argument must be on or off");
-    if (domain->me == 0)
-      fprintf(screen,"smooth_greedy_multiproposal %s\n",
-              smooth_greedy_multiproposal_enabled ? "enabled" : "disabled");
-  }
-
-  else if (strcmp(command,"nuclei_smooth") == 0) {
-    // Usage: nuclei_smooth on|off
-    // When on, nucleation events (both the seed and the captured shell)
-    // initialize solid_d to -1 instead of the lock-out sentinels
-    // (-nrefine-2 / -nrefine-3), making nucleated sites eligible for
-    // smooth_site() and the greedy multiproposal variant just like
-    // epitaxially solidified sites. Default off preserves the historical
-    // behavior where nuclei skip smoothing entirely.
-    if (narg != 1)
-      error->all(FLERR,"Illegal nuclei_smooth command");
-    if (strcmp(arg[0],"on") == 0) nuclei_smooth_enabled = true;
-    else if (strcmp(arg[0],"off") == 0) nuclei_smooth_enabled = false;
-    else error->all(FLERR,"nuclei_smooth: argument must be on or off");
-    if (domain->me == 0)
-      fprintf(screen,"nuclei_smooth %s\n",
-              nuclei_smooth_enabled ? "enabled" : "disabled");
-  }
-
   else error->all(FLERR,"Unrecognized command");
 }
 
@@ -495,16 +301,15 @@ void AppAdditiveTexture::input_app(char *command, int narg, char **arg)
  ------------------------------------------------------------------------- */
 void AppAdditiveTexture::app_update(double dt)
 {
-  // CPU Performance Timing Instrumentation
-  static int step_count = 0;
-  static double t_temp_update = 0.0;
-  static double t_melting = 0.0, t_mushy = 0.0, t_smoothing = 0.0;
-  static double t_comm = 0.0;
-  double t_start, t_end;
+  static int step_count = 0;   // cadence for maybe_run_diagnostics
   step_count++;
 
   // Reset per-call single-voxel cleanup counter
   n_single_voxel_flips = 0;
+
+  // Refresh the ThermalHost snapshot so the manager sees the current lattice
+  // pointers, sim time, and dt for this step.
+  refresh_thermal_host();
 
   // Update the temperature field and run fast-forward, delegated to the
   // ThermalManager. advance() fills T[] from the modular source, runs the
@@ -513,11 +318,7 @@ void AppAdditiveTexture::app_update(double dt)
   // powder after a large skip, or end the run early. The app-level effects
   // (sim time, powder activation) stay in the app.
   if (thermal->enabled()) {
-    t_start = MPI_Wtime();
     ThermalManager::ThermalStep s = thermal->advance(time, stoptime);
-    t_end = MPI_Wtime();
-    t_temp_update += (t_end - t_start);
-
     if (s.end_run) { time = s.new_time; return; }
     if (s.new_time > time) {
       time = s.new_time;
@@ -534,12 +335,6 @@ void AppAdditiveTexture::app_update(double dt)
   bool melting_occurred = false;
 
   //iterate through all the sites for phase transitions (applies to both systems)
-  // Time each phase-transition category around the loop, not per-site
-  double t_melt_start = 0, t_melt_accum = 0;
-  double t_mushy_start = 0, t_mushy_accum = 0;
-  double t_smooth_start = 0, t_smooth_accum = 0;
-  bool in_melting = false, in_mushy = false, in_smoothing = false;
-
   for (int i=0; i<nlocal; i++) {
     // Skip void sites - they never change state
     if (active_flag[i] == 5) continue;
@@ -549,7 +344,6 @@ void AppAdditiveTexture::app_update(double dt)
     //to avoid repeated initialization
     if( (T[i] >= tl) && active_flag[i] != 2) {
         melting_occurred = true;
-        if (!in_melting) { t_melt_start = MPI_Wtime(); in_melting = true; }
         active_flag[i] = 2;
         spin[i] = (int) (nspins * ranapp->uniform());
         // Create random orientation as each site
@@ -561,15 +355,13 @@ void AppAdditiveTexture::app_update(double dt)
         solid_d[i] = 0;
         G[i] = 0;
         V[i] = 0;
+        spath[i] = 0;
         if (nucleation_mode == NUCLEATION_CONTINUOUS) {
           T_prev_map[i] = T[i];
         }
     }
     //If we're molten, call the mushy_phase function to figure out any phase change
     else if (active_flag[i] == 2 && T[i] <= tl) {
-        // Flush melting timer if switching categories
-        if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
-        if (!in_mushy) { t_mushy_start = MPI_Wtime(); in_mushy = true; }
         mushy_phase(i, ranapp);
         if (nucleation_mode == NUCLEATION_CONTINUOUS && active_flag[i] == 2) {
           T_prev_map[i] = T[i];
@@ -577,10 +369,6 @@ void AppAdditiveTexture::app_update(double dt)
     }
     //Call smoothing
     else if(solid_d[i] < 0 && solid_d[i] > -nrefine -1 && active_flag[i] == 3)    {
-            // Flush prior timers if switching categories
-            if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
-            if (in_mushy) { t_mushy_accum += MPI_Wtime() - t_mushy_start; in_mushy = false; }
-            if (!in_smoothing) { t_smooth_start = MPI_Wtime(); in_smoothing = true; }
             mobility_out[i] = 1;
             smooth_site(i);
             solid_d[i]--;
@@ -594,27 +382,11 @@ void AppAdditiveTexture::app_update(double dt)
              active_flag[i] == 3 &&
              solid_d[i] <= -nrefine - 1 &&
              solid_d[i] >  -nrefine - 3) {
-            if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
-            if (in_mushy) { t_mushy_accum += MPI_Wtime() - t_mushy_start; in_mushy = false; }
-            if (in_smoothing) { t_smooth_accum += MPI_Wtime() - t_smooth_start; in_smoothing = false; }
             if (flip_single_voxel_grain(i)) {
                 solid_d[i] = -nrefine - 3;
             }
     }
-    else {
-        // Non-transition site: flush any open timer
-        if (in_melting) { t_melt_accum += MPI_Wtime() - t_melt_start; in_melting = false; }
-        if (in_mushy) { t_mushy_accum += MPI_Wtime() - t_mushy_start; in_mushy = false; }
-        if (in_smoothing) { t_smooth_accum += MPI_Wtime() - t_smooth_start; in_smoothing = false; }
-    }
   }
-  // Flush any timer still open after the loop
-  if (in_melting) t_melt_accum += MPI_Wtime() - t_melt_start;
-  if (in_mushy) t_mushy_accum += MPI_Wtime() - t_mushy_start;
-  if (in_smoothing) t_smooth_accum += MPI_Wtime() - t_smooth_start;
-  t_melting += t_melt_accum;
-  t_mushy += t_mushy_accum;
-  t_smoothing += t_smooth_accum;
 
   // Activate powder once when melting first occurs
   // CRITICAL: Use MPI_Allreduce to check if ANY rank has melting, so all ranks call activate_powder_sites()
@@ -631,13 +403,10 @@ void AppAdditiveTexture::app_update(double dt)
   }
 
   // Communicate only KMC-relevant ghost arrays via index-based selection
-  t_start = MPI_Wtime();
   timer->stamp();
   comm->all_selective(ghost_iindices, nghost_iarray,
                       ghost_dindices, nghost_darray);
   timer->stamp(TIME_COMM);
-  t_end = MPI_Wtime();
-  t_comm += (t_end - t_start);
 
   // Optional isotherm-compactness diagnostic for tuning smoothing.
   // Ghosts are guaranteed fresh here (just synced above).
@@ -653,45 +422,6 @@ void AppAdditiveTexture::app_update(double dt)
       fprintf(screen,"single_voxel_cleanup: flipped %lld voxels this step\n",
               global_flips);
     }
-  }
-
-  // Print timing summary every 100 steps (on rank 0 only)
-  if (step_count % 100 == 0 && domain->me == 0) {
-    const double g_t_cache_build  = thermal->cache_build_time();
-    const double g_t_temp_prepare = thermal->prepare_time();
-    const double g_t_temp_site_loop = thermal->site_loop_time();
-    double total_time = t_temp_update + t_melting + t_mushy + t_smoothing + t_comm;
-    double t_temp_other = t_temp_update - g_t_temp_prepare - g_t_temp_site_loop - g_t_cache_build;
-    double steady_state_time = total_time - g_t_cache_build;
-
-    fprintf(screen, "\n=== CPU Timing Summary (after %d steps, %.4f total sec) ===\n",
-            step_count, total_time);
-    fprintf(screen, "  Temperature update:   %8.3f s (%5.1f%%)\n",
-            t_temp_update, 100.0*t_temp_update/total_time);
-    if (g_t_cache_build > 0.001) {
-      fprintf(screen, "    - Cache build:      %8.3f s (%5.1f%%)  [One-time per layer]\n",
-              g_t_cache_build, 100.0*g_t_cache_build/total_time);
-    }
-    fprintf(screen, "    - Prepare:          %8.3f s (%5.1f%%)  [Nodal temp precompute]\n",
-            g_t_temp_prepare, 100.0*g_t_temp_prepare/total_time);
-    fprintf(screen, "    - Site loop:        %8.3f s (%5.1f%%)  [Per-site interpolation]\n",
-            g_t_temp_site_loop, 100.0*g_t_temp_site_loop/total_time);
-    if (t_temp_other > 0.001) {
-      fprintf(screen, "    - Other:            %8.3f s (%5.1f%%)  [Layer load, etc.]\n",
-              t_temp_other, 100.0*t_temp_other/total_time);
-    }
-    fprintf(screen, "  Melting:              %8.3f s (%5.1f%%)  [T >= Tl transitions]\n",
-            t_melting, 100.0*t_melting/total_time);
-    fprintf(screen, "  Mushy phase:          %8.3f s (%5.1f%%)  [Nucleation + solidification + gradients]\n",
-            t_mushy, 100.0*t_mushy/total_time);
-    fprintf(screen, "  Smoothing:            %8.3f s (%5.1f%%)  [Grain boundary smoothing]\n",
-            t_smoothing, 100.0*t_smoothing/total_time);
-    fprintf(screen, "  Communication:        %8.3f s (%5.1f%%)  [MPI comm]\n",
-            t_comm, 100.0*t_comm/total_time);
-    fprintf(screen, "  --------------------------------------------------------\n");
-    fprintf(screen, "  Average time/step:    %8.4f s (overall)\n", total_time / step_count);
-    fprintf(screen, "  Steady-state avg:     %8.4f s (excl. cache build)\n", steady_state_time / step_count);
-    fprintf(screen, "=========================================================\n\n");
   }
 
     timer->stamp(TIME_UPDATE);
@@ -750,6 +480,7 @@ void AppAdditiveTexture::grow_app()
   solid_d = darray[6];
   G = darray[7];
   V = darray[8];
+  spath = darray[9];
 }
 
 
@@ -760,6 +491,9 @@ void AppAdditiveTexture::grow_app()
 
 void AppAdditiveTexture::init_app()
 {
+  check_misorientation_step(dx, error, domain->me);
+  check_material_complete(error, *thermal);
+
   // Duplicate parent's array allocation logic without quaternion randomization
   delete[] sites;
   delete[] unique;
@@ -767,20 +501,10 @@ void AppAdditiveTexture::init_app()
   sites = new int[1 + maxneigh];
   unique = new int[1 + maxneigh];
   unique_neigh = new int[1 + maxneigh];
-  int invalid_count = 0;
-  
-  dt_sweep = 1.0 / maxneigh;
-  
-  // Clean up our own arrays
-  if (unique_dot) delete [] unique_dot;
   if (neigh_dist) delete [] neigh_dist;
-  
-  // Allocate our own arrays
-  unique_dot = new double[1 + maxneigh];
-  
+
   double sqrt2 = 1.4142135624;
   double sqrt3 = 1.7320508076;
-  RandomPark random(3000);
 
   dt_sweep = dt;
 
@@ -791,6 +515,10 @@ void AppAdditiveTexture::init_app()
   nucleation_temps = new double[nspins];
 	nucleation_sizes = new double[nspins];
 
+  // Per-site orientation stream keyed to the deck seed only (not drawn from
+  // ranmaster, which would shift every stream seeded after it).
+  const uint64_t qseed = (uint64_t) ranmaster->initial_seed();
+
   int flag = 0;
 	int flagall;
     for (int i = 0; i < nlocal; i++) {
@@ -798,10 +526,16 @@ void AppAdditiveTexture::init_app()
 				flag = 1;
         fprintf(screen,"Bad spin %i\n",spin[i]);
 			}
-      if (active_flag[i] != 3) { 
-        // Create random orientation at each site that wasn't read as solid from input file
-        vector<double> uq = quaternion::generate_random_unit_quaternions(1);
-        // std::cout << "Generating new quaternions" << std::endl;
+      if (active_flag[i] != 3) {
+        // Create random orientation at each site that wasn't read as solid from
+        // input file. Keyed to the site's GLOBAL id (see ranquat above), so the
+        // starting field is repeatable and decomposition-independent. NOTE the
+        // per-melt redraw in app_update() is deliberately left on the
+        // wall-clock generator -- a site re-melts many times and would need a
+        // per-site event counter to stay keyed, and this app is non-reproducible
+        // anyway once nucleation/solidification start sharing an RNG.
+        quaternion::SiteOrientationRNG rng(qseed, (uint64_t) id[i]);
+        vector<double> uq = quaternion::generate_unit_quaternion(rng);
         q0[i] = uq[0];
         qx[i] = uq[1];
         qy[i] = uq[2];
@@ -837,7 +571,7 @@ void AppAdditiveTexture::init_app()
 	if (nucleation_mode == NUCLEATION_CONTINUOUS) {
 	  if (tsig <= 0.0)
 	    error->all(FLERR, "undercooling_deviation must be > 0 for continuous nucleation mode");
-	  if (!thermal->uses_temperature_source())
+	  if (!thermal->enabled())
 	    error->all(FLERR, "continuous nucleation mode requires a temperature source");
 	}
 
@@ -879,22 +613,6 @@ void AppAdditiveTexture::init_app()
 	neigh_dist[25] = sqrt3 * dx;
 
   t_cool_max = tl - ts;
-
-  // Warn when the misorientation step reaches mis_thresh over most of the
-  // undercooling range: nearly every solidifying site then starts a new grain.
-  // The step is max_misorient * (exp(alpha*x) - 1) / (exp(alpha) - 1), x = Tcool/t_cool_max.
-  if (domain->me == 0 && max_misorient > 0) {
-    double r = mis_thresh * 180.0 / MY_PI / max_misorient;
-    double xstar = log(1.0 + r * (exp(misorient_alpha) - 1.0)) / misorient_alpha;
-    if (r < 1.0 && xstar <= 0.5) {
-      char msg[256];
-      snprintf(msg, sizeof msg,
-               "misorientation_function step reaches the %g deg new-grain threshold "
-               "for undercooling above %g of t_cool_max: nearly every solidifying "
-               "site will start a new grain", mis_thresh * 180.0 / MY_PI, xstar);
-      error->warning(FLERR, msg);
-    }
-  }
 
   //Check that our timestep is small enough	
   double max_front_vel = 0;
@@ -1024,7 +742,7 @@ void AppAdditiveTexture::execute_nucleation_event(int i, double Tcool) {
     }
 
     naccept++;
-    nucleation_particle_flipper(i, round(nucleation_sizes[spin[i]] / pow(dx, 3)), ranapp);
+    nucleation_particle_flipper(i, round(nucleation_sizes[spin[i]] / pow(dx, 3)), ranapp, i, Tcool);
 
     if (nucleation_mode == NUCLEATION_CONTINUOUS) {
       T_prev_map.erase(i);
@@ -1118,38 +836,68 @@ void AppAdditiveTexture::site_event_solidification(int i, double Tcool, RandomPa
     if(solidNeigh == 1) {
       int power = solid_front_length - 1;
       for(int k = 0; k < solid_front_length; k++) {
-          solid_d[i] = solid_d[i] + solid_front_coeffs[k] * pow(Tcool, power) * time_step;
+          solid_d[i] = solid_d[i] + solid_front_coeffs[k] * pow(Tcool, power) * dt;
           power--;
       }
     
-      //Go through neighbor list and add them to possible switches
+      //Go through neighbor list and collect the eligible solid parents
       for (int j = 0; j < numneigh[i]; j++) {
           // Exclude void neighbors
           if(active_flag[neighbor[i][j]] == 5) continue;
           if(neigh_dist[2] <= solid_d[i] && (active_flag[neighbor[i][j]] == 1 || active_flag[neighbor[i][j]] == 3)) {
-              // Calculate temperature gradient/grain misorientation and store in array
-              // Use cumulative probability for random sampling
-              //Exclude gas or molten sites from the Potts neighbor tally
-              double melt_misori_val = melt_misorientation(neighbor[i][j],c1,c2,c3);
-              dotValue += melt_misori_val;
-              unique_dot[nevent] = dotValue;
-              value = spin[neighbor[i][j]];
-              unique[nevent] = value;
               unique_neigh[nevent] = neighbor[i][j];
+              unique[nevent] = spin[neighbor[i][j]];
               nevent++;
           }
       }
     }
     //If no neighbor is eligible, return before changing anything. Will try next sweep.
     if (nevent == 0) return;
-    
-    // unique_dot[nevent - 1] is the total cumulative mobility (last entry).
-    double dran = (unique_dot[nevent - 1]*random->uniform());
-    // Roulette-wheel selection: find the first j with dran <= unique_dot[j].
-    // Loop must run through j = nevent - 1 so the last neighbor is reachable;
-    // the early return after flip_site keeps the body single-shot.
+
+    // Parent selection is per GRAIN, not per voxel. Weighting each candidate
+    // voxel by its own orientation let the mobility select, among the
+    // randomly rotated voxels of ONE grain, the ones rotated toward gradient
+    // alignment, so whole grains drifted toward <001>||BD with height (12-16
+    // deg over 240-360 um on the GP700 build; Lamb et al. see no such drift).
+    // Now: group the candidates by spin, weight each grain by the mobility of
+    // the sign-aligned mean orientation of its candidate voxels against the
+    // gradient at this site, draw the grain, then draw the parent voxel
+    // uniformly within it. Grain-vs-grain competition (the <001> fibre) is kept.
+    int gspin[27]; double gcum[27]; int ngr = 0; double gtotal = 0.0;
+    std::vector<double> grad_full = normal_finder(i);   // [nx, ny, nz, magnitude]
+    for (int k = 0; k < nevent; k++) {
+        bool seen = false;
+        for (int g = 0; g < ngr; g++) if (gspin[g] == unique[k]) { seen = true; break; }
+        if (seen) continue;
+        std::vector<double> qm = {0.0, 0.0, 0.0, 0.0}, qr;
+        for (int m = 0; m < nevent; m++) {
+            if (unique[m] != unique[k]) continue;
+            int n = unique_neigh[m];
+            std::vector<double> qn = {q0[n], qx[n], qy[n], qz[n]};
+            if (qr.empty()) qr = qn;
+            else if (qr[0]*qn[0] + qr[1]*qn[1] + qr[2]*qn[2] + qr[3]*qn[3] < 0.0)
+                for (int c = 0; c < 4; c++) qn[c] = -qn[c];   // q and -q are one orientation
+            for (int c = 0; c < 4; c++) qm[c] += qn[c];
+        }
+        double nrm = sqrt(qm[0]*qm[0] + qm[1]*qm[1] + qm[2]*qm[2] + qm[3]*qm[3]);
+        if (nrm > 0.0) for (int c = 0; c < 4; c++) qm[c] /= nrm;
+        gtotal += mobility_of_orientation(qm, grad_full);
+        gspin[ngr] = unique[k]; gcum[ngr] = gtotal; ngr++;
+    }
+    int g = 0;
+    if (gtotal > 0.0) {
+        double dran = gtotal * random->uniform();
+        while (g < ngr - 1 && dran > gcum[g]) g++;
+    } else {
+        g = (int)(ngr * random->uniform()); if (g >= ngr) g = ngr - 1;
+    }
+    int nsame = 0;
+    for (int m = 0; m < nevent; m++) if (unique[m] == gspin[g]) nsame++;
+    int pick = (int)(nsame * random->uniform()); if (pick >= nsame) pick = nsame - 1;
     for( int j = 0; j < nevent; j++) {
-        if(dran <= unique_dot[j]) {
+        if (unique[j] != gspin[g]) continue;
+        if (pick-- > 0) continue;
+        {
             int neighran = unique_neigh[j];
             SiteState s1(unique[j],{q0[neighran],qx[neighran],qy[neighran],qz[neighran]});
             flip_site(i,s1);
@@ -1171,7 +919,7 @@ void AppAdditiveTexture::site_event_solidification(int i, double Tcool, RandomPa
             naccept++;
 
             // Apply misorientation based on temperature gradient
-            apply_misorientation(i, Tcool, ranapp);
+            apply_misorientation(i, neighran, Tcool, ranapp);
             return;
         }
     }
@@ -1180,13 +928,50 @@ void AppAdditiveTexture::site_event_solidification(int i, double Tcool, RandomPa
 /* ----------------------------------------------------------------------
     Apply misorientation based on temperature gradient and cooling rate
 ------------------------------------------------------------------------- */
-void AppAdditiveTexture::apply_misorientation(int i, double Tcool, RandomPark *ranapp) {
-    if(max_misorient <= 0) return;
-    
-    // Exponential function: grows slowly initially, then rapidly in last ~10%
-    double normalized_temp = Tcool / t_cool_max;
-    double mis_angle = max_misorient * (exp(misorient_alpha * normalized_temp) - 1.0) / (exp(misorient_alpha) - 1.0) * MY_PI/180;
+double AppAdditiveTexture::diffusion_angle(double Tcool, double hop_m) const {
+    double D = mis_diffusion;
+    if (misorient_alpha > 0.0) {
+        double x = Tcool / t_cool_max;
+        if (x < 0.0) x = 0.0;
+        if (x > 1.0) x = 1.0;
+        double g = (exp(misorient_alpha * x) - 1.0) / (exp(misorient_alpha) - 1.0);
+        D *= g * g;
+    }
+    return sqrt(D * hop_m);
+}
 
+void AppAdditiveTexture::apply_misorientation(int i, int parent, double Tcool, RandomPark *ranapp) {
+    // Hop to the inheritance parent. Coordinate differences are in lattice
+    // units; the sqrt(3) clamp guards against a periodic-wrap neighbor pair
+    // reading as a box-length hop (the true SC_26N stencil distance is at
+    // most sqrt(3)).
+    double ddx = xyz[i][0] - xyz[parent][0];
+    double ddy = xyz[i][1] - xyz[parent][1];
+    double ddz = xyz[i][2] - xyz[parent][2];
+    double hop_lat = sqrt(ddx*ddx + ddy*ddy + ddz*ddz);
+    if (hop_lat > 1.7320508076) hop_lat = 1.7320508076;
+    spath[i] = spath[parent] + hop_lat;       // inheritance path length (d10)
+
+    if (grain_walk_D > 0.0) {   // coherent grain rotation between the parent's level and this one
+        double q[4] = {q0[i], qx[i], qy[i], qz[i]};
+        if (grain_walk_path) grain_walk_apply(spin[parent], spath[parent], spath[i], sqrt(grain_walk_D * dx), grain_walk_rho, q);
+        else                 grain_walk_apply(spin[parent], xyz[parent][2], xyz[i][2], sqrt(grain_walk_D * dx), grain_walk_rho, q);
+        q0[i] = q[0]; qx[i] = q[1]; qy[i] = q[2]; qz[i] = q[3];
+    }
+    if (mis_diffusion <= 0.0) return;
+
+    rotate_toward_target(i, diffusion_angle(Tcool, hop_lat * dx),
+                         misorientation_target_mode, ranapp);
+}
+
+
+/* ----------------------------------------------------------------------
+    Rotate site i's orientation by mis_angle per the given target mode, then
+    apply the mis_thresh new-grain check. Shared by the solidification path
+    and the nucleation particle flipper.
+------------------------------------------------------------------------- */
+void AppAdditiveTexture::rotate_toward_target(int i, double mis_angle, int target_mode,
+                                              RandomPark *ranapp) {
     // Create quaternion vector from site's orientation
     vector<double> q_site = {q0[i], qx[i], qy[i], qz[i]};
 
@@ -1200,7 +985,7 @@ void AppAdditiveTexture::apply_misorientation(int i, double Tcool, RandomPark *r
     }
 
     vector<double> q_new;
-    if (misorientation_target_mode == MISORI_TARGET_RANDOM_ROTATION) {
+    if (target_mode == MISORI_TARGET_RANDOM_ROTATION) {
         // Apply a rotation by mis_angle about a uniformly-random axis,
         // composed with the existing site quaternion. No <100>-toward-target
         // alignment step.
@@ -1214,17 +999,8 @@ void AppAdditiveTexture::apply_misorientation(int i, double Tcool, RandomPark *r
         if (m > 1e-15) {
             q_new[0] /= m; q_new[1] /= m; q_new[2] /= m; q_new[3] /= m;
         }
-    } else {
-        vector<double> target_dir;
-        if (misorientation_target_mode == MISORI_TARGET_GRADIENT) {
-            // Calculate the unit-vector surface norm (use voxel counting)
-            vector<double> grad_full = normal_finder(i);  // Returns [norm_x, norm_y, norm_z, magnitude]
-            target_dir = {grad_full[0], grad_full[1], grad_full[2]};
-        } else if (misorientation_target_mode == MISORI_TARGET_RANDOM) {
-            target_dir = sample_random_unit_vector(ranapp);
-        } else {
-            error->all(FLERR,"Unknown misorientation target mode");
-        }
+    } else {  // MISORI_TARGET_RANDOM: rotate the nearest <100> toward a random direction
+        vector<double> target_dir = sample_random_unit_vector(ranapp);
         q_new = quaternion::rotate_q_towards_u(q_site, target_dir, mis_angle);
     }
 
@@ -1254,7 +1030,8 @@ void AppAdditiveTexture::apply_misorientation(int i, double Tcool, RandomPark *r
     Only nucleating one site at a time introduce lattice size dependency. Here we will
     use a user-defined nucleation particle size and flip neighboring sites until that size is met
 ------------------------------------------------------------------------- */
-void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomPark *random) {
+void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomPark *random,
+                                                     int seed, double Tcool) {
     
     //If one site is big enough to satisfy, skip evertyhing
     if(partRad <= 0) return;
@@ -1266,9 +1043,23 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
     int third_nearest [ ] = {0,25,23,2,6,19,17,8};
     int nneigh = 0;
     int possible_neigh[26];
-    SiteState s_in(spin[i],{q0[i], qx[i], qy[i], qz[i]});
+    // Every claimed site inherits the SEED orientation (not the current
+    // growth center's, which the recursion re-roots on) and takes one walk
+    // step of sqrt(D_eff * distance_from_seed) about a random axis -- the
+    // random walk's RMS for that growth distance, so nuclei and epitaxial
+    // growth obey one law. Same rule as the kk particle_flipper_kernel.
+    SiteState s_in(spin[seed],{q0[seed], qx[seed], qy[seed], qz[seed]});
+    bool nucl_rotate = (mis_diffusion > 0.0 && nucleation_misorient_enabled);
+    auto rotate_flipped = [&](int i_chosen) {
+        if (!nucl_rotate) return;
+        double ddx = xyz[i_chosen][0] - xyz[seed][0];
+        double ddy = xyz[i_chosen][1] - xyz[seed][1];
+        double ddz = xyz[i_chosen][2] - xyz[seed][2];
+        double r_m = sqrt(ddx*ddx + ddy*ddy + ddz*ddz) * dx;
+        rotate_toward_target(i_chosen, diffusion_angle(Tcool, r_m),
+                             misorientation_target_mode, random);
+    };
 
-    
 
     // Only OWNED sites are claimed: a ghost flipped here would never reach its
     // owning rank (the next ghost exchange overwrites it), yet this rank's
@@ -1286,6 +1077,8 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
                 int i_chosen = neighbor[i][j];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
+                spath[i_chosen] = 0.0;
+                rotate_flipped(i_chosen);
                 solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
                 G[i_chosen] = G[i];
                 V[i_chosen] = V[i];
@@ -1335,6 +1128,8 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
                 int i_chosen = neighbor[i][nearest_neigh[idx]];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
+                spath[i_chosen] = 0.0;
+                rotate_flipped(i_chosen);
                 solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
                 G[i_chosen] = G[i];
                 V[i_chosen] = V[i];
@@ -1352,6 +1147,8 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
                 int i_chosen = neighbor[i][second_nearest[idx]];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
+                spath[i_chosen] = 0.0;
+                rotate_flipped(i_chosen);
                 solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
                 G[i_chosen] = G[i];
                 V[i_chosen] = V[i];
@@ -1369,6 +1166,8 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
                 int i_chosen = neighbor[i][third_nearest[idx]];
                 flip_site(i_chosen, s_in);
                 active_flag[i_chosen] = 3;
+                spath[i_chosen] = 0.0;
+                rotate_flipped(i_chosen);
                 solid_d[i_chosen] = nuclei_smooth_enabled ? -1 : -nrefine -3;
                 G[i_chosen] = G[i];
                 V[i_chosen] = V[i];
@@ -1404,7 +1203,7 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
     
     int next_site = neighbor[i][possible_neigh[neighran]];
     if (next_site < nlocal)
-        nucleation_particle_flipper(next_site, nSites, random);
+        nucleation_particle_flipper(next_site, nSites, random, seed, Tcool);
     return;
     
 }
@@ -1424,9 +1223,7 @@ std::vector<double> AppAdditiveTexture::normal_finder(int site)
 	// use only neighbours at or below the site's z. The +z neighbour is found
 	// by its coordinates, not by slot 13: a boundary site's neighbour list is
 	// compacted, so slot n is the n-th existing neighbour, not the n-th
-	// SC_26N stencil position. For the same reason each neighbour's offset
-	// comes from the coordinates, not a fixed stencil table (identical for
-	// interior sites).
+	// SC_26N stencil position.
 	int above = -1;
 	for (int n = 0; n < numneigh[site]; n++) {
 		const int nb = neighbor[site][n];
@@ -1434,140 +1231,49 @@ std::vector<double> AppAdditiveTexture::normal_finder(int site)
 		    xyz[nb][2] == xyz[site][2] + 1.0) { above = nb; break; }
 	}
 	bool is_melt_surface = (above < 0) || (active_flag[above] <= 1);
+	double site_z = xyz[site][2];
 
-	if (is_melt_surface) {
-		// Filter neighbors to only include those at or below current z-level
-		double site_z = xyz[site][2];
-		
-		// Weighted least squares with z-filtered neighbors
-		double AtA[9] = {0}; // 3x3 matrix A^T * W * A
-		double Atb[3] = {0}; // 3x1 vector A^T * W * b
-		double T_center = T[site];
-		int valid_neighbors = 0;
-		
-		for (int n = 0; n < numneigh[site] && n < 26; n++) {
-			int neighbor_site = neighbor[site][n];
-			
-			// Skip invalid neighbors
-			if (neighbor_site < 0 || neighbor_site >= app->nlocal + app->nghost) continue;
-			
-			// Only use neighbors at or below current site's z-coordinate
-			if (xyz[neighbor_site][2] > site_z) continue;
-			
-			// Get neighbor offset coordinates
-			double dx_n = (xyz[neighbor_site][0] - xyz[site][0]) * dx;
-			double dy_n = (xyz[neighbor_site][1] - xyz[site][1]) * dx;
-			double dz_n = (xyz[neighbor_site][2] - xyz[site][2]) * dx;
-			
-			// Temperature difference
-			double dT = T[neighbor_site] - T_center;
-			
-			// Distance and weight
-			double dist = sqrt(dx_n*dx_n + dy_n*dy_n + dz_n*dz_n);
-			double weight = 1.0 / (dist*dist + 1e-12);
-			
-			// Build weighted normal equations
-			AtA[0] += weight * dx_n * dx_n;  // AtA[0,0]
-			AtA[1] += weight * dx_n * dy_n;  // AtA[0,1]
-			AtA[2] += weight * dx_n * dz_n;  // AtA[0,2]
-			AtA[3] += weight * dy_n * dx_n;  // AtA[1,0] 
-			AtA[4] += weight * dy_n * dy_n;  // AtA[1,1]
-			AtA[5] += weight * dy_n * dz_n;  // AtA[1,2]
-			AtA[6] += weight * dz_n * dx_n;  // AtA[2,0]
-			AtA[7] += weight * dz_n * dy_n;  // AtA[2,1]
-			AtA[8] += weight * dz_n * dz_n;  // AtA[2,2]
-			
-			Atb[0] += weight * dx_n * dT;
-			Atb[1] += weight * dy_n * dT;
-			Atb[2] += weight * dz_n * dT;
-			
-			valid_neighbors++;
-		}
-
-		// Compute gradient using weighted least squares with Cramer's rule
-		// Note: Diagnostics (2M+ calls) showed matrix always non-singular and valid_neighbors always >= 3
-		double det = AtA[0]*(AtA[4]*AtA[8] - AtA[5]*AtA[7]) -
-		             AtA[1]*(AtA[3]*AtA[8] - AtA[5]*AtA[6]) +
-		             AtA[2]*(AtA[3]*AtA[7] - AtA[4]*AtA[6]);
-
-		grad_x = (Atb[0]*(AtA[4]*AtA[8] - AtA[5]*AtA[7]) -
-		          AtA[1]*(Atb[1]*AtA[8] - AtA[5]*Atb[2]) +
-		          AtA[2]*(Atb[1]*AtA[7] - AtA[4]*Atb[2])) / det;
-
-		grad_y = (AtA[0]*(Atb[1]*AtA[8] - AtA[5]*Atb[2]) -
-		          Atb[0]*(AtA[3]*AtA[8] - AtA[5]*AtA[6]) +
-		          AtA[2]*(AtA[3]*Atb[2] - Atb[1]*AtA[6])) / det;
-
-		grad_z = (AtA[0]*(AtA[4]*Atb[2] - Atb[1]*AtA[7]) -
-		          AtA[1]*(AtA[3]*Atb[2] - Atb[1]*AtA[6]) +
-		          Atb[0]*(AtA[3]*AtA[7] - AtA[4]*AtA[6])) / det;
-		
-		// Normalize and return (with magnitude as 4th element)
-		// Note: Diagnostics (2M+ calls) showed norm always > 1e-12
-		double norm = sqrt(grad_x*grad_x + grad_y*grad_y + grad_z*grad_z);
-		std::vector<double> result(4);  // 4 elements: [norm_x, norm_y, norm_z, magnitude]
-
-		result[0] = fabs(grad_x)/norm;
-		result[1] = fabs(grad_y)/norm;
-		result[2] = fabs(grad_z)/norm;
-		result[3] = norm;  // Store the actual gradient magnitude
-
-		return result;
-	}
-
-	// Use weighted least squares with all available neighbors
-	
-	// Weighted least squares matrices: A*grad = b
-	// A is 26x3 matrix of [dx dy dz] for each neighbor
-	// b is 26x1 vector of temperature differences
-	// weights based on inverse distance
+	// Weighted least squares: A*grad = b, A rows [dx dy dz] per neighbor, b the
+	// temperature differences, weights inverse distance squared. At the melt
+	// surface only neighbors at or below the site's z-level contribute.
 	double AtA[9] = {0}; // 3x3 matrix A^T * W * A
 	double Atb[3] = {0}; // 3x1 vector A^T * W * b
-	
 	double T_center = T[site];
-	
+
 	for (int n = 0; n < numneigh[site] && n < 26; n++) {
 		int neighbor_site = neighbor[site][n];
-		
-		// Skip invalid neighbors
 		if (neighbor_site < 0 || neighbor_site >= app->nlocal + app->nghost) continue;
-		
-		// Get neighbor offset coordinates
+		if (is_melt_surface && xyz[neighbor_site][2] > site_z) continue;
+
+		// Offset from the coordinates (slot n is not stencil position n at a
+		// boundary site; identical to the stencil for interior sites).
 		double dx_n = (xyz[neighbor_site][0] - xyz[site][0]) * dx;
 		double dy_n = (xyz[neighbor_site][1] - xyz[site][1]) * dx;
 		double dz_n = (xyz[neighbor_site][2] - xyz[site][2]) * dx;
-		
-		// Temperature difference
 		double dT = T[neighbor_site] - T_center;
-		
-		// Distance and weight (inverse distance squared with small regularization)
 		double dist = sqrt(dx_n*dx_n + dy_n*dy_n + dz_n*dz_n);
 		double weight = 1.0 / (dist*dist + 1e-12);
-		
-		// Build weighted normal equations: AtA * grad = Atb
-		// A matrix row: [dx_n, dy_n, dz_n]
+
 		AtA[0] += weight * dx_n * dx_n;  // AtA[0,0]
 		AtA[1] += weight * dx_n * dy_n;  // AtA[0,1]
 		AtA[2] += weight * dx_n * dz_n;  // AtA[0,2]
-		AtA[3] += weight * dy_n * dx_n;  // AtA[1,0] 
+		AtA[3] += weight * dy_n * dx_n;  // AtA[1,0]
 		AtA[4] += weight * dy_n * dy_n;  // AtA[1,1]
 		AtA[5] += weight * dy_n * dz_n;  // AtA[1,2]
 		AtA[6] += weight * dz_n * dx_n;  // AtA[2,0]
 		AtA[7] += weight * dz_n * dy_n;  // AtA[2,1]
 		AtA[8] += weight * dz_n * dz_n;  // AtA[2,2]
-		
-		Atb[0] += weight * dx_n * dT;    // Atb[0]
-		Atb[1] += weight * dy_n * dT;    // Atb[1] 
-		Atb[2] += weight * dz_n * dT;    // Atb[2]
+		Atb[0] += weight * dx_n * dT;
+		Atb[1] += weight * dy_n * dT;
+		Atb[2] += weight * dz_n * dT;
 	}
-	
-	// Solve 3x3 system AtA * grad = Atb using Cramer's rule
+
+	// Solve the 3x3 system with Cramer's rule.
 	// Note: Diagnostics (2M+ calls) showed matrix always non-singular
 	double det = AtA[0]*(AtA[4]*AtA[8] - AtA[5]*AtA[7]) -
 	             AtA[1]*(AtA[3]*AtA[8] - AtA[5]*AtA[6]) +
 	             AtA[2]*(AtA[3]*AtA[7] - AtA[4]*AtA[6]);
 
-	// Compute gradient using Cramer's rule
 	grad_x = (Atb[0]*(AtA[4]*AtA[8] - AtA[5]*AtA[7]) -
 	          AtA[1]*(Atb[1]*AtA[8] - AtA[5]*Atb[2]) +
 	          AtA[2]*(Atb[1]*AtA[7] - AtA[4]*Atb[2])) / det;
@@ -1583,13 +1289,11 @@ std::vector<double> AppAdditiveTexture::normal_finder(int site)
 	// Normalize and return gradient direction (with magnitude as 4th element)
 	// Note: Diagnostics (2M+ calls) showed norm always > 1e-12
 	double norm = sqrt(grad_x*grad_x + grad_y*grad_y + grad_z*grad_z);
-	std::vector<double> result(4);  // 4 elements: [norm_x, norm_y, norm_z, magnitude]
-
+	std::vector<double> result(4);  // [norm_x, norm_y, norm_z, magnitude]
 	result[0] = fabs(grad_x)/norm;
 	result[1] = fabs(grad_y)/norm;
 	result[2] = fabs(grad_z)/norm;
-	result[3] = norm;  // Store the actual gradient magnitude
-
+	result[3] = norm;
 	return result;
 }
 
@@ -1631,6 +1335,18 @@ std::vector<double> AppAdditiveTexture::normal_finder(int site)
 ------------------------------------------------------------------------- */
 std::vector<double> AppAdditiveTexture::get_average_neighbor_quaternion(int site, int target_spin)
 {
+    if (smooth_orientation_copy) {   // one random neighbour of the new grain
+        int cand[27]; int nc = 0;
+        for (int j = 0; j < numneigh[site]; j++)
+            if (spin[neighbor[site][j]] == target_spin) cand[nc++] = neighbor[site][j];
+        if (nc == 0) error->all(FLERR,"get_average_neighbor_quaternion: no neighbor with target spin");
+        int k = (int)(nc * ranapp->uniform()); if (k >= nc) k = nc - 1;
+        double q[4] = {q0[cand[k]], qx[cand[k]], qy[cand[k]], qz[cand[k]]};
+        spath[site] = spath[cand[k]];   // copy the path length with the orientation
+        if (grain_walk_D > 0.0 && !grain_walk_path)   // height mode: the copied neighbour may sit on another level
+            grain_walk_apply(target_spin, xyz[cand[k]][2], xyz[site][2], sqrt(grain_walk_D * dx), grain_walk_rho, q);
+        return {q[0], q[1], q[2], q[3]};
+    }
     // Initialize storage for first quaternion as reference
     double ref_q0 = 0.0, ref_qx = 0.0, ref_qy = 0.0, ref_qz = 0.0;
     bool first_found = false;
@@ -1724,6 +1440,22 @@ std::vector<double> AppAdditiveTexture::get_average_neighbor_quaternion(int site
    Inputs: lattice site :: site
    Outputs: double of max dot product
 ------------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------
+   Mobility c1 + c2*cos(c3*theta) of an orientation q against a gradient
+   [nx,ny,nz,magnitude]; theta = angle between the nearest <100> and the
+   gradient. Zero gradient => no preferred direction => full mobility.
+   Negative values clamp to 0 (zero-weight candidate).
+------------------------------------------------------------------------- */
+double AppAdditiveTexture::mobility_of_orientation(const std::vector<double> &q,
+                                                   const std::vector<double> &grad_full)
+{
+	if (grad_full[3] <= 0.0) return c1 + c2;
+	std::vector<double> dir = {grad_full[0], grad_full[1], grad_full[2]};
+	double theta = acos(quaternion::get_cosine_of_minumum_angle_between_q_and_u(q, dir));
+	double mob = c1 + c2 * cos(c3 * theta);
+	return mob < 0.0 ? 0.0 : mob;
+}
+
 double AppAdditiveTexture::melt_misorientation(int site, double c1, double c2, double c3)
 {
 	double dotMax;
@@ -1732,6 +1464,11 @@ double AppAdditiveTexture::melt_misorientation(int site, double c1, double c2, d
 
 	//Calculate the unit-vector surface norm (use voxel counting)
 	vector<double> grad_full = normal_finder(site);  // Returns [norm_x, norm_y, norm_z, magnitude]
+	// A zero gradient (flat field) has no preferred growth direction: full
+	// mobility for every candidate. The cosine helper returns 0 for a zero
+	// vector (a bogus 90 deg), which with c3 = 2.5 can go negative. Same rule
+	// as the kk SolidificationKernel.
+	if (grad_full[3] <= 0.0) return c1 + c2;
 	vector<double> grad_vector = {grad_full[0], grad_full[1], grad_full[2]};  // Extract direction only
 	
 	// Create quaternion vector from site's orientation
@@ -1744,8 +1481,10 @@ double AppAdditiveTexture::melt_misorientation(int site, double c1, double c2, d
 	// Calculate angle from cosine
 	theta = acos(dotMax);
 	
-	// Apply texture mobility model
+	// Apply texture mobility model; a negative mobility is a zero-weight
+	// candidate (the roulette wheel below needs monotone cumulative weights).
 	mobOut = c1 + c2 * cos(c3 * theta);
+	if (mobOut < 0.0) mobOut = 0.0;
 	
 	return mobOut;
 }

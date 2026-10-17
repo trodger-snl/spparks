@@ -63,7 +63,7 @@ keyword = {vtk} :l
     minval,maxval = min/max of any site's value :pre
 these keywords apply only to the {image} "style"_dump_image.html :l
 keyword = {backcolor} or {boundcolor} or {boxcolor} or {color} or {cwrap} or 
-{dwrap} or {scolor} or {sdiam} or {smap} :l
+{dwrap} or {ipf} or {scolor} or {sdiam} or {smap} :l
   {backcolor} arg = color
     color = name of color for background
   {boundcolor} arg = color
@@ -77,6 +77,8 @@ keyword = {backcolor} or {boundcolor} or {boxcolor} or {color} or {cwrap} or
     yes/no = do or do not wrap out-of-range color values into the defined crange
   {dwrap} arg = {yes} or {no}
     yes/no = do or do not wrap out-of-range diameter values into the defined drange
+  {ipf} args = Dx Dy Dz
+    Dx,Dy,Dz = sample direction for inverse-pole-figure coloring (default 0 0 1)
   {scolor} args = I color
     I = integer value or range of values (see below)
     color = name of color or color1/color2/... or {random}
@@ -408,6 +410,13 @@ It's purpose and the way it operates on diamenters is exactly the same
 as how the {cwrap} keyword operates of colors, as described above.
 
 :line
+
+The {ipf} keyword sets the reference sample direction used when the
+"dump image"_dump_image.html {color} setting is {ipf}.  The vector need
+not be normalized.  The default is 0 0 1, i.e. the color of each site
+shows which crystal direction points along +z (the build direction in
+the additive apps).  The coloring assumes cubic crystal symmetry; see
+the "dump image"_dump_image.html doc page.
 
 The {scolor} keyword can be used with the "dump image"_dump_image.html
 command, when its site color setting is an integer attribute, and a

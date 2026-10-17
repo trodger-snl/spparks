@@ -122,6 +122,33 @@ typedef int bigint;
 
 #endif
 
+// fastreal = precision of selected hot-kernel floating-point math. double by
+//   default; float when built with SPPARKS_FP32 (CMake -DSPPARKS_FP32=ON).
+//   Production runs are always FP64. FP32 is a testing/development build
+//   for desktop GPUs with a reduced FP64 rate (RDNA/consumer parts), at the
+//   cost of bit-exact match against FP64 runs and the CPU apps. It is one
+//   switch on purpose: a dev build narrows every fastreal user together.
+//   Code using it must reproduce its previous arithmetic exactly when
+//   fastreal == double. Current users:
+//   - additive/texture/kk device temperature math: Rosenthal/Moser kernels
+//     and the HDF5 gather-and-blend (weights, nodal slice, raw samples).
+//     The k_T field, plan PODs, site-minus-laser differences and absolute
+//     simulation times stay double (~4e4 s on a 3e-6 s step: float cannot
+//     bracket it).
+//   - conduction temperature source (ConductionSolverKokkos): fluxes, the
+//     H update, T(H) and the stored state (H, T, RKL2 buffers). Under FP32
+//     H is stored relative to H(T0) so float resolves small increments near
+//     ambient; the offset is 0 in FP64.
+//   - potts/quaternion/kk disorientation + Read-Shockley energy
+//     (QuaternionOps::compute_disorientation / read_shockley), device and
+//     host. Stored quaternions, symmetry table, energy sums stay double.
+
+#ifdef SPPARKS_FP32
+typedef float fastreal;
+#else
+typedef double fastreal;
+#endif
+
 }
 
 #endif

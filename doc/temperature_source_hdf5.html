@@ -13,123 +13,108 @@
 </H3>
 <P><B>Syntax:</B>
 </P>
-<PRE>setup_temperature_source hdf5_unstructured filename dx threshold_temp default_temp <B>bounds_check_mode</B> <B>grid_cell_mult</B>
-setup_temperature_source hdf5_csr          filename dx threshold_temp default_temp <B>bounds_check_mode</B> <B>grid_cell_mult</B> 
+<PRE>setup_temperature_source hdf5_unstructured filename dx threshold_temp default_temp [unused] [grid_cell_mult]
+setup_temperature_source hdf5_csr          filename dx threshold_temp default_temp [unused] [grid_cell_mult] 
 </PRE>
-<UL><LI>filename = path to an HDF5 file containing the unstructured FE thermal trace 
+<UL><LI>filename = path to the HDF5 file holding the FE temperature history 
 
-<LI>dx = SPPARKS lattice spacing in meters (must match <I>app_style</I> dx) 
+<LI>dx = lattice spacing in meters (the app's dx); converts site coordinates to meters 
 
-<LI>threshold_temp = temperature (K) above which a site is considered "active";
-                 used by the fast-forward predictor to skip cool periods 
+<LI>threshold_temp = temperature (K) above which a site counts as "active";
+                 the fast-forward predictor skips periods with no active site 
 
-<LI>default_temp = ambient / fall-back temperature (K) returned at sites
-               outside the FE mesh and at nodes whose recorded time
-               trace does not cover the current time 
+<LI>default_temp = temperature (K) of sites not covered by the mesh of the
+               current layer 
 
-<LI>bounds_check_mode = optional integer; parsed but currently unused.
-                    Default 0. 
+<LI>unused = optional placeholder (formerly bounds_check_mode); read and ignored,
+         kept so decks that give grid_cell_mult in this position still work 
 
-<LI>grid_cell_mult = optional positive double, in units of dx: the
-                 spatial-grid bin size used for fast point-in-element
-                 lookup, and also the padding added to each rank's
-                 subdomain when selecting FE chunks to load.
-                 Default 100.0. 
+<LI>grid_cell_mult = optional positive number, in units of dx (default 100.0):
+                 the padding around each rank's subdomain when loading mesh
+                 chunks, and the bin size of the element-search grid 
 </UL>
 <P><B>Examples:</B>
 </P>
-<PRE>setup_temperature_source hdf5_unstructured thermal_trace.h5 5e-6 1500.0 300.0
-setup_temperature_source hdf5_csr           thermal_trace_csr.h5 5e-6 1500.0 300.0 1 50.0 
+<PRE>setup_temperature_source hdf5_csr "stale_layer_test.hdf5" 5e-06 250.0 300.0
+setup_temperature_source hdf5_unstructured thermal_trace.h5 5e-6 1500.0 300.0 0 50.0 
 </PRE>
+<P>See examples/ReducedTempAM/StaleLayerTest/in.stale_layer.
+</P>
 <P><B>Description:</B>
 </P>
-<P>Loads a time-resolved unstructured finite-element temperature trace
-from an HDF5 file written by an external thermal solver (e.g. Sierra
-Aria, Diablo, Albany), and interpolates it onto SPPARKS lattice sites
-each timestep.  Selected via
+<P>Reads a time-resolved temperature history on an unstructured
+tetrahedral finite-element mesh from an HDF5 file written by an
+external thermal solver, and interpolates it onto the lattice sites
+each step.  Selected via
 <A HREF = "setup_temperature_source.html">setup_temperature_source</A> with type
 <I>hdf5_unstructured</I> or <I>hdf5_csr</I>.
 </P>
-<P>The HDF5 file is organized as a sequence of <I>layers</I> (one HDF5 group
-per pass / scan-line / pause) containing:
+<P>The file holds a root dataset <I>layerTimes</I> (non-negative, strictly
+increasing start times in seconds; trailing zeros are trimmed) and one
+group per layer, named "0", "1", ...  Layer <I>i</I> is active from
+<I>layerTimes[i]</I> until the next layer starts.  Each group holds the
+chunk bounding boxes and pointers (<I>boundingBoxes</I>, <I>elemPtrs</I>,
+<I>nodePtrs</I>), the mesh (<I>nodeCoords</I>, <I>elementToNode</I>) and the per-node
+time series (<I>dataCounts</I>, <I>times</I>, <I>temperatures</I>).
 </P>
-<UL><LI><I>layerTimes</I> : monotonically-increasing array of layer activation
-times (seconds). 
+<P>When a layer becomes active, each rank loads only the mesh chunks that
+overlap its subdomain padded by <I>grid_cell_mult * dx</I>, finds the
+tetrahedron containing each of its sites (owned and ghost), and caches
+the element and its barycentric weights.  Each step the node
+temperatures are interpolated in time and the site temperature is the
+barycentric blend of its element's nodes.  Sites outside the loaded
+mesh get <I>default_temp</I>.  The per-site temperature intervals above
+<I>threshold_temp</I> are precomputed per layer and drive the fast-forward
+predictor, which skips to the next interval when no site is active.
+</P>
+<P>The two variants differ only in how the per-node time series are
+stored:
+</P>
+<UL><LI><I>hdf5_unstructured</I> : <I>times</I> and <I>temperatures</I> are rectangular
+<I>(nodes, max samples)</I> arrays, padded to the longest series. 
 
-<LI>per-layer datasets: nodal coordinates, element connectivity, and the
-nodal time-temperature traces for the nodes touched in that layer. 
+<LI><I>hdf5_csr</I> : <I>times</I> and <I>temperatures</I> are flat arrays indexed by a
+<I>nodeOffsets</I> dataset (compressed sparse row), so ragged series need
+no padding.  Use it for large files, where the padded arrays exhaust
+memory. 
 </UL>
-<P>For each lattice site the source caches the FE element it falls inside
-(or "outside mesh" if it falls outside any element in the active
-layers) and interpolates the four tetrahedral node temperatures with
-barycentric (linear tet) weights; each node's trace is interpolated
-linearly in time.  A simulation time before the first or after the
-last <I>layerTimes</I> entry is an error.  A fast-forward predictor
-<I>get_next_time_with_temperature(current_time, threshold)</I> walks the
-layer table forward to find the earliest time at which any node's
-temperature exceeds <I>threshold_temp</I>, so the simulation can skip
-periods when the laser is off the local subdomain.
+<P>With a parallel HDF5 build, the file is opened with MPI-IO and each
+rank reads only its own chunks.  Collective metadata is deliberately
+not used, because a rank with no overlapping chunk skips reads that
+other ranks make.
 </P>
-<P>The two variants share identical setup, lookup, and interpolation
-logic, and differ only in HDF5 storage format:
-</P>
-<LI><UL><I>hdf5_unstructured</I> : node temperatures are stored per layer as a
-rectangular <I>(nodes, times)</I> array.  Simpler format; pads to the
-longest per-node trace and is read one chunk at a time, stripping the
-padding as it goes. 
-
-<LI><I>hdf5_csr</I> : node temperatures are stored in compressed sparse-row
-form (<I>nodeOffsets</I> + flat <I>times</I> + flat <I>temperatures</I>) so that
-ragged per-node traces incur no padding.  Reads merged hyperslabs to
-amortize HDF5 metadata cost.  Recommended for sparse / highly-ragged
-thermal traces. 
-</UL>
-<P>When SPPARKS is built against parallel HDF5 (<I>HighFive</I> +
-<I>H5_HAVE_PARALLEL</I>), the source uses MPI-IO so each rank reads only
-the slabs of nodes that intersect its local subdomain.  Per-rank chunk
-filtering is the dominant I/O optimization for large simulations;
-collective metadata is intentionally disabled because some ranks may
-load zero chunks for a given layer and would deadlock under collective
-metadata access.
+<P>The optional <I>nodal_smooth</I> command (see
+<A HREF = "app_additive_texture.html">app_style additive/texture</A>) smooths the
+node temperatures over the mesh before interpolation; it applies only
+to the HDF5 sources.
 </P>
 <HR>
 
-<P><B>Optimizations:</B>
+<P><B>GPU support:</B>
 </P>
-<P>The HDF5 sources expose three independent performance toggles via the
-<A HREF = "app_additive_texture.html">app_style additive/texture</A>
-<I>temperature_optimization</I> command:
-</P>
-<UL><LI><I>spatial_grid</I> : bin elements into a uniform grid for O(1) point-in-element
-queries instead of brute-force O(N_elem). Default on. 
-
-<LI><I>element_cache</I> : cache the containing element ID per site between
-timesteps.  Most sites stay in the same element across consecutive
-queries.  Default on. 
-
-<LI><I>nodal_precompute</I> : precompute the per-node temperature at the
-current simulation time once per step, then interpolate sites against
-those precomputed values.  Requires <I>element_cache</I>.  Default on. 
-</UL>
-<P>The <I>grid_cell_mult</I> setup-time argument tunes the spatial-grid bin
-size; smaller values create more, smaller bins and trade memory for
-faster lookup.  It also sets the chunk-load padding, so smaller values
-load fewer elements beyond each rank's subdomain.
+<P>Both variants run in <I>additive/texture</I> and <I>additive/texture/kk</I>.  In
+the Kokkos app the host still reads the file, loads layers and builds
+the per-site element cache; the device does the per-node time
+interpolation (or, with <I>nodal_smooth</I>, receives the host's smoothed
+node values) and the per-site barycentric blend for owned and ghost
+sites, so no ghost temperature communication is needed.  With
+<I>temperature_smooth</I> enabled the Kokkos app uses the host path.
 </P>
 <HR>
 
 <P><B>Restrictions:</B>
 </P>
-<P>The HDF5 sources require SPPARKS to be built with HDF5 and HighFive
-support; see <A HREF = "Section_start.html">Section_start</A> for build options.
-Without HighFive (and MPI) neither variant is available: the
-additive/texture app and all of its temperature sources are left out
-of the build.
+<P>The HDF5 sources need a build with HDF5 and HighFive
+(-DSPPARKS_ENABLE_HIGHFIVE=ON); without it, both stop with an error at
+setup.
 </P>
-<P>The HDF5 sources are not path-aware in the SPPARKS sense
-(<I>laser_path</I> has no effect, and <I>laser_fluctuations</I> is rejected with
-an error): the laser trajectory is implicitly encoded in the FE
-temperature trace.
+<P>The simulation time must stay within [<I>layerTimes</I> first, last]; a
+time outside that range is an error.
+</P>
+<P>The laser path is implicit in the temperature history:
+<A HREF = "laser_path.html">laser_path</A> in its line form has no effect, its
+<I>file</I> form is an error, and
+<A HREF = "laser_fluctuations.html">laser_fluctuations</A> is an error.
 </P>
 <P><B>Related commands:</B>
 </P>
@@ -140,10 +125,6 @@ temperature trace.
 </P>
 <P><B>Default:</B>
 </P>
-<P>bounds_check_mode = 0
-grid_cell_mult = 100.0
-spatial_grid = on
-element_cache = on
-nodal_precompute = on
+<P>grid_cell_mult = 100.0
 </P>
 </HTML>

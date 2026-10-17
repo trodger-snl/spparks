@@ -14,7 +14,9 @@
 #include "temperature_source_hdf5_csr.h"
 #include "universe.h"
 #include "error.h"
+#ifdef SPPARKS_HIGHFIVE
 #include "highfive/highfive.hpp"
+#endif
 #include <numeric>
 
 using namespace SPPARKS_NS;
@@ -32,8 +34,11 @@ void HDF5CSRTemperatureSource::read_time_temperature_data(
   HighFive::Group& grp,
   const std::vector<std::array<size_t, 2>>& nodeSlices)
 {
-  auto t_start = std::chrono::high_resolution_clock::now();
-
+#ifndef SPPARKS_HIGHFIVE
+  (void)grp;
+  (void)nodeSlices;
+  error->all(FLERR, "HDF5 temperature sources need a build with HighFive (-DSPPARKS_ENABLE_HIGHFIVE=ON)");
+#else
   // ------------------------------------------------------------------
   // 1. Build offset slices from nodeSlices.  Each node slice [a,b)
   //    needs nodeOffsets[a..b] (inclusive), i.e. range [a, b+1).
@@ -114,33 +119,15 @@ void HDF5CSRTemperatureSource::read_time_temperature_data(
   // 5. Build local row offsets from dataCounts (already loaded by
   //    load_layer before this method is called).
   // ------------------------------------------------------------------
-  size_t nrows = dataCounts.size();
-  std::vector<size_t> localOffsets(nrows + 1);
-  localOffsets[0] = 0;
-  for (size_t i = 0; i < nrows; i++) {
-    localOffsets[i + 1] = localOffsets[i] + dataCounts[i];
-  }
+  std::vector<size_t> localOffsets(dataCounts.size() + 1, 0);
+  std::inclusive_scan(dataCounts.begin(), dataCounts.end(), localOffsets.begin() + 1,
+                      std::plus<size_t>(), size_t{0});
 
   // ------------------------------------------------------------------
   // 6. Construct CompressedArray2D directly — zero expansion.
   // ------------------------------------------------------------------
+  std::vector<size_t> localOffsets2 = localOffsets;
   times = CompressedArray2D<double>(std::move(timesFlat), std::move(localOffsets));
-
-  // Rebuild localOffsets for temperatures (moved away above)
-  std::vector<size_t> localOffsets2(nrows + 1);
-  localOffsets2[0] = 0;
-  for (size_t i = 0; i < nrows; i++) {
-    localOffsets2[i + 1] = localOffsets2[i] + dataCounts[i];
-  }
   temperatures = CompressedArray2D<double>(std::move(tempsFlat), std::move(localOffsets2));
-
-  auto t_end = std::chrono::high_resolution_clock::now();
-  double elapsed = std::chrono::duration<double>(t_end - t_start).count();
-
-  if (universe->me == 0) {
-    fprintf(screen, "  CSR read: %zu data elements (no rectangular expansion)\n",
-            totalDataElements);
-    fprintf(screen, "  [TIMING] CSR read: %.3f s (%zu elements)\n",
-            elapsed, totalDataElements);
-  }
+#endif
 }

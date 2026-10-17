@@ -4,41 +4,42 @@
 function(configure_conditional_sources)
     # Start with base sources (already set in main CMakeLists.txt)
     
-    # Add additive/texture sources.
+    # Add additive/texture sources (needs MPI only).
     #
-    # NOTE: These are gated on HighFive (NOT bare HDF5). app_additive_texture and its
-    # temperature sources are written entirely against the HighFive C++ API
-    # (#include "highfive/highfive.hpp") rather than the raw HDF5 C API, and the HDF5
-    # readers call HighFive::MPIOFileAccess(...) unconditionally -- so they require
-    # HighFive built with parallel HDF5, i.e. HighFive AND MPI. HighFive itself
-    # auto-enables HDF5 (see CMakeLists.txt), so HighFive implies HDF5_FOUND.
+    # HighFive is optional. Only temperature_source_hdf5_{unstructured,csr}.cpp
+    # include it (headers forward-declare the HighFive types), and those two TUs
+    # compile in every build: without HighFive their HighFive-using functions are
+    # #ifdef SPPARKS_HIGHFIVE'd out and setup_temperature_source() errors, so the
+    # additive apps run Rosenthal/Moser sources and reject hdf5_* at input time.
+    # With HighFive they read through HighFive::MPIOFileAccess (parallel HDF5).
     #
-    # Gating on HDF5_FOUND alone is wrong: an env can have HDF5 but not HighFive (e.g.
-    # `--hdf5` without `--highfive`), which passes that check and then fails to compile
-    # temperature_source_hdf5_unstructured.cpp on the missing highfive header.
-    #
-    # app_additive_texture.cpp references HDF5UnstructuredTemperatureSource via
-    # forward-declared HighFive types, so it must be linked together with the two
-    # *_hdf5_*.cpp TUs; we therefore add the whole set together (no serial subset).
-    if(SPPARKS_ENABLE_HIGHFIVE AND SPPARKS_ENABLE_MPI)
+    # Gate on HighFive, NOT bare HDF5, for the HDF5 sources: an env can have HDF5
+    # but not HighFive (`--hdf5` without `--highfive`).
+    if(SPPARKS_ENABLE_MPI)
         list(APPEND SPPARKS_SOURCES
             app_additive_texture.cpp
             thermal_manager.cpp
+            additive_params.cpp
+            material_card.cpp
             temperature_source.cpp
             temperature_source_rosenthal.cpp
             temperature_source_moser.cpp
+            temperature_source_conduction.cpp
             temperature_source_hdf5_unstructured.cpp
             temperature_source_hdf5_csr.cpp
         )
-        message(STATUS "Added HighFive+MPI temperature source files (additive/texture)")
+        if(SPPARKS_ENABLE_HIGHFIVE)
+            message(STATUS "Added additive/texture sources (HDF5 temperature sources: ON)")
+        else()
+            message(STATUS "Added additive/texture sources (HDF5 temperature sources: OFF, needs HighFive)")
+        endif()
     endif()
-    
-    # Add the HDF5 dump style. Unlike the temperature sources above this one has
-    # a serial fallback (it only reaches for HighFive::MPIOFileAccess under
-    # H5_HAVE_PARALLEL), so it is gated on HighFive alone rather than HighFive+MPI.
+
+    # The HDF5 dump style (dump hdf5 / set hdf5 / reset_time hdf5) has a serial
+    # fallback, so it needs HighFive but not MPI. dump_hdf5.h guards its
+    # DumpStyle with SPPARKS_HIGHFIVE.
     if(SPPARKS_ENABLE_HIGHFIVE)
         list(APPEND SPPARKS_SOURCES dump_hdf5.cpp)
-        message(STATUS "Added HighFive dump style (dump hdf5)")
     endif()
 
     # Add image-dependent sources
@@ -46,99 +47,81 @@ function(configure_conditional_sources)
         list(APPEND SPPARKS_SOURCES dump_image.cpp image.cpp)
         message(STATUS "Added image-dependent sources")
     endif()
-    
+
+    # Package sources compile in place from src/KOKKOS/ and src/STITCH/ (those
+    # directories are on the include path when the package is on).
+    if(SPPARKS_PACKAGE_KOKKOS)
+        list(APPEND SPPARKS_SOURCES
+            KOKKOS/app_lattice_kokkos.cpp
+            KOKKOS/app_potts_kokkos.cpp
+            KOKKOS/app_potts_neigh_kokkos.cpp
+            KOKKOS/app_potts_neighonly_kokkos.cpp
+            KOKKOS/app_potts_quaternion_kokkos.cpp
+        )
+        # The Kokkos additive/texture app shares the CPU app's temperature
+        # sources, so it has the same MPI-only gate.
+        if(SPPARKS_ENABLE_MPI)
+            list(APPEND SPPARKS_SOURCES KOKKOS/app_additive_texture_kokkos.cpp
+                                        KOKKOS/conduction_solver_kokkos.cpp)
+        endif()
+        message(STATUS "Added KOKKOS package sources")
+    endif()
+    if(SPPARKS_PACKAGE_STITCH)
+        list(APPEND SPPARKS_SOURCES STITCH/dump_stitch.cpp)
+    endif()
+
     # Update the parent scope
     set(SPPARKS_SOURCES "${SPPARKS_SOURCES}" PARENT_SCOPE)
     
-    # Create a feature status file for style generation
-    set(FEATURE_STATUS_FILE "${CMAKE_CURRENT_BINARY_DIR}/feature_status.cmake")
-
-    # Determine if STITCH library was found
-    if(STITCH_LIBRARY)
-        set(STITCH_LIBRARY_FOUND TRUE)
-    else()
-        set(STITCH_LIBRARY_FOUND FALSE)
-    endif()
-
-    file(WRITE "${FEATURE_STATUS_FILE}"
-        "# Auto-generated feature status for style generation\n"
-        "set(SPPARKS_HAS_HDF5 ${SPPARKS_ENABLE_HDF5})\n"
-        "set(SPPARKS_HAS_HIGHFIVE ${SPPARKS_ENABLE_HIGHFIVE})\n"
-        "set(SPPARKS_HAS_MPI ${SPPARKS_ENABLE_MPI})\n"
-        "set(SPPARKS_HAS_JPEG ${JPEG_FOUND})\n"
-        "set(SPPARKS_HAS_PNG ${PNG_FOUND})\n"
-        "set(SPPARKS_HAS_HDF5_FOUND ${HDF5_FOUND})\n"
-        "set(SPPARKS_HAS_STITCH ${SPPARKS_PACKAGE_STITCH})\n"
-        "set(SPPARKS_HAS_STITCH_FOUND ${STITCH_LIBRARY_FOUND})\n"
-    )
+    # Feature flags for cmake -P regeneration of the style headers (see
+    # generate_styles.cmake); at configure time should_include_header() reads
+    # the same variables straight from this scope.
+    set(_status "# Auto-generated feature status for style generation\n")
+    foreach(_v SPPARKS_ENABLE_HIGHFIVE SPPARKS_ENABLE_MPI JPEG_FOUND PNG_FOUND
+                SPPARKS_PACKAGE_STITCH SPPARKS_PACKAGE_KOKKOS)
+        string(APPEND _status "set(${_v} \"${${_v}}\")\n")
+    endforeach()
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/feature_status.cmake" "${_status}")
 
     # Collect optional styles that were NOT built because their feature is off, so the
     # configuration summary can tell the user exactly how to enable each one. This must
     # stay in sync with the gating above and with should_include_header() below.
     set(_skipped_styles "")
-    if(NOT (SPPARKS_ENABLE_HIGHFIVE AND SPPARKS_ENABLE_MPI))
-        list(APPEND _skipped_styles "additive/texture (app)    needs HighFive+MPI → add --highfive -m mpi")
+    if(NOT SPPARKS_ENABLE_MPI)
+        list(APPEND _skipped_styles "additive/texture (app)    needs MPI        → add -m mpi")
+    elseif(NOT SPPARKS_ENABLE_HIGHFIVE)
+        list(APPEND _skipped_styles "hdf5_* temperature source needs HighFive   → add --highfive")
     endif()
     if(NOT ((SPPARKS_ENABLE_JPEG AND JPEG_FOUND) OR (SPPARKS_ENABLE_PNG AND PNG_FOUND)))
         list(APPEND _skipped_styles "image (dump)              needs JPEG/PNG   → add --jpeg")
     endif()
-    if(NOT (SPPARKS_PACKAGE_STITCH AND STITCH_LIBRARY))
+    if(NOT SPPARKS_PACKAGE_STITCH)
         list(APPEND _skipped_styles "stitch (dump)             needs STITCH pkg → add --package stitch")
-    endif()
-    if(NOT SPPARKS_ENABLE_HIGHFIVE)
-        list(APPEND _skipped_styles "hdf5 (dump)               needs HighFive   → add --highfive")
     endif()
     set(SPPARKS_SKIPPED_STYLES "${_skipped_styles}" PARENT_SCOPE)
 endfunction()
 
-# Function to check if a header should be included based on features
-function(should_include_header HEADER_NAME RESULT_VAR)
-    set(INCLUDE_IT TRUE)
-
-    # Load feature status. When invoked from a cmake -P script (e.g.
-    # regenerate_single_style.cmake), CMAKE_CURRENT_BINARY_DIR points at the working
-    # directory rather than the real build dir, so prefer SPK_BINARY_DIR when the caller
-    # provides it.
-    if(DEFINED SPK_BINARY_DIR)
-        set(FEATURE_STATUS_FILE "${SPK_BINARY_DIR}/feature_status.cmake")
-    else()
-        set(FEATURE_STATUS_FILE "${CMAKE_CURRENT_BINARY_DIR}/feature_status.cmake")
+# should_include_header(<header> <result_var> <reason_var>)
+#
+# Feature gating for style registration. The reason is printed by the caller so
+# a build log copied off a remote machine says WHICH feature was missing; the
+# symptom otherwise shows up much later as "style not recognized" at runtime.
+# Must stay in sync with the source gating in configure_conditional_sources().
+function(should_include_header HEADER_NAME RESULT_VAR REASON_VAR)
+    set(ok TRUE)
+    set(why "")
+    if(HEADER_NAME MATCHES "dump_image\\.h|image\\.h" AND NOT (JPEG_FOUND OR PNG_FOUND))
+        set(ok FALSE)
+        set(why "needs JPEG or PNG -- -DSPPARKS_ENABLE_JPEG=ON plus libjpeg headers")
+    elseif(HEADER_NAME MATCHES "app_additive_texture(_kokkos)?\\.h"
+           AND NOT SPPARKS_ENABLE_MPI)
+        set(ok FALSE)
+        set(why "needs MPI -- -DSPPARKS_ENABLE_MPI=ON")
+    elseif(HEADER_NAME MATCHES "dump_stitch\\.h" AND NOT SPPARKS_PACKAGE_STITCH)
+        set(ok FALSE)
+        set(why "needs the STITCH package -- -DSPPARKS_PACKAGE_STITCH=ON")
     endif()
-    if(EXISTS "${FEATURE_STATUS_FILE}")
-        include("${FEATURE_STATUS_FILE}")
-    endif()
-    
-    # Check image-related headers
-    if(HEADER_NAME MATCHES "dump_image\\.h|image\\.h")
-        if(NOT (SPPARKS_HAS_JPEG OR SPPARKS_HAS_PNG))
-            set(INCLUDE_IT FALSE)
-        endif()
-    endif()
-    
-    # Check HighFive-related headers. additive/texture links against the HighFive-based
-    # HDF5 temperature sources and uses parallel (MPIO) reads, so it is only registered
-    # when both HighFive and MPI are enabled -- matching the source gating in
-    # configure_conditional_sources() above. (HighFive implies HDF5.)
-    if(HEADER_NAME MATCHES "app_additive_texture\\.h")
-        if(NOT (SPPARKS_HAS_HIGHFIVE AND SPPARKS_HAS_MPI))
-            set(INCLUDE_IT FALSE)
-        endif()
-    endif()
-
-    # The HDF5 dump style needs only HighFive (it has a serial fallback), so it
-    # is gated more loosely than app_additive_texture above.
-    if(HEADER_NAME MATCHES "dump_hdf5\\.h")
-        if(NOT SPPARKS_HAS_HIGHFIVE)
-            set(INCLUDE_IT FALSE)
-        endif()
-    endif()
-
-    # Check STITCH-related headers
-    if(HEADER_NAME MATCHES "dump_stitch\\.h")
-        if(NOT (SPPARKS_HAS_STITCH AND SPPARKS_HAS_STITCH_FOUND))
-            set(INCLUDE_IT FALSE)
-        endif()
-    endif()
-
-    set(${RESULT_VAR} ${INCLUDE_IT} PARENT_SCOPE)
+    set(${RESULT_VAR} ${ok} PARENT_SCOPE)
+    string(REPLACE ";" "" why "${why}")
+    set(${REASON_VAR} "${why}" PARENT_SCOPE)
 endfunction()

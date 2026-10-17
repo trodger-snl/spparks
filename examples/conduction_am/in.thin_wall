@@ -1,0 +1,64 @@
+# Four-layer thin wall in one process: am/finitediff's ThinWall example
+# (github/am_finitedifference, examples/am_finitediff/ThinWall) on the
+# conduction source. Each layer is its own laser_path + run. New layers are
+# left at i2 = 0 and become powder once the laser plane rises over them;
+# after a layer's track the field cools below the solidus, is reset to T0,
+# and the rest of the run is skipped (the recoat).
+# Units: lattice 5 um; track x 50-850 um at y 187.5 um; substrate z <= 18,
+# layer tops at z = 21, 27, 33, 39.
+app_style        additive/texture/kk 1000000 5e-6 5e-6 1
+seed             56789
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 180 0 75 0 50
+boundary         n n n
+create_box       box
+create_sites     box
+set site range 1 1000000
+region           substrate block 0 180 0 75 0 18.5
+set i2 value 3 region substrate
+region           plate block -400 580 -400 475 -400 18.5
+set i1 value 42 region substrate
+set d1 value 1.0 region substrate
+set d2 value 0.0 region substrate
+set d3 value 0.0 region substrate
+set d4 value 0.0 region substrate
+sector           yes
+sweep            color
+diag_style       array d6 sum d6 max
+temperature      0.0
+misorientation_target random_rotation
+liquidus         1708
+solidus          1675
+solid_front_vel  4 1.091e-5 -2.034e-4 2.74e-3 1.151e-4
+nucleation_density      1e14
+critical_undercooling   5
+undercooling_deviation  3
+mean_nuclei_volume      8.4375e-16
+nuclei_volume_deviation 1.5625e-17
+smooth_greedy_multiproposal on
+smooth_orientation copy
+nuclei_smooth off
+
+# 150 W absorbed, k 30, rho 5706 (alpha = k/(rho cp0)), T0 300 K. Spot sigma
+# 42 um (x, y) / 70 um (z) in am/finitediff's exp(-r^2/2 sigma^2), i.e.
+# s = sqrt(2) sigma here: re-tuned with the energy-conserving am/finitediff
+# (its 137d5948) to the original ThinWall pool, ~100 um wide x 60 um deep.
+setup_temperature_source conduction 150.0 1.0 13.8 3.6166e-6 300.0 483.0 59.4e-6 59.4e-6 99.0e-6 &
+    k_powder 0.3 k_table 6 300 13.8 600 20.0 900 24.8 1200 28.4 1500 30.6 1675 31.3 &
+    cp_table 7 300 483 473 528 873 595 1073 611 1253 624 1675 714 1708 847 &
+    latent 2.9e5 convection 25 300 emissivity 0.4 &
+    margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 part plate far_bc fixed
+stats            1e-4
+
+# layer tops at sites 21/27/33/39: laser plane on the top face
+laser_path start 0.05e-3 0.1875e-3 0.1075e-3 end 0.85e-3 0.1875e-3 speed 1.4
+run              2.0e-3
+laser_path start 0.85e-3 0.1875e-3 0.1375e-3 end 0.05e-3 0.1875e-3 speed 1.4
+run              2.0e-3
+laser_path start 0.05e-3 0.1875e-3 0.1675e-3 end 0.85e-3 0.1875e-3 speed 1.4
+run              2.0e-3
+laser_path start 0.85e-3 0.1875e-3 0.1975e-3 end 0.05e-3 0.1875e-3 speed 1.4
+dump             1 text 2.0e-3 dump.thin_wall.* id i1 i2 x y z
+dump_modify      1 thresh i2 > 2
+run              2.0e-3

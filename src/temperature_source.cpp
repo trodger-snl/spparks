@@ -14,6 +14,7 @@
 #include "temperature_source.h"
 #include "temperature_source_rosenthal.h"
 #include "temperature_source_moser.h"
+#include "temperature_source_conduction.h"
 #include "temperature_source_hdf5_unstructured.h"
 #include "temperature_source_hdf5_csr.h"
 #include "domain.h"
@@ -32,21 +33,6 @@ TemperatureSource::TemperatureSource(SPPARKS *spk) : Pointers(spk)
 }
 
 /* ----------------------------------------------------------------------
-   Default implementation for site-based temperature access
-   Gets site coordinates and calls xyz-based method
-------------------------------------------------------------------------- */
-
-double TemperatureSource::get_temperature_at_site(int site_index, double time)
-{
-  check_initialization();
-  
-  // This default implementation should be overridden by derived classes
-  // that have access to the specific app's coordinate arrays
-  error->one(FLERR,"get_temperature_at_site must be overridden by derived temperature source classes");
-  return ambient_temperature;
-}
-
-/* ----------------------------------------------------------------------
    Check if temperature source has been properly initialized
 ------------------------------------------------------------------------- */
 
@@ -55,16 +41,6 @@ void TemperatureSource::check_initialization() const
   if (!source_initialized) {
     error->one(FLERR,"Temperature source not initialized - call setup_temperature_source first");
   }
-}
-
-/* ----------------------------------------------------------------------
-   Helper method for derived classes to indicate unimplemented methods
-------------------------------------------------------------------------- */
-
-void TemperatureSource::error_not_implemented(const std::string &method_name) const
-{
-  std::string msg = "Method " + method_name + " not implemented in " + get_source_type() + " temperature source";
-  error->one(FLERR,msg.c_str());
 }
 
 /* ----------------------------------------------------------------------
@@ -77,16 +53,14 @@ std::unique_ptr<TemperatureSource> SPPARKS_NS::create_temperature_source(
 {
   if (type == "rosenthal") {
     return std::make_unique<RosenthalTemperatureSource>(spk);
+  } else if (type == "conduction") {
+    return std::make_unique<ConductionTemperatureSource>(spk);
   } else if (type == "moser") {
     return std::make_unique<MoserTemperatureSource>(spk);
   } else if (type == "hdf5_unstructured") {
     return std::make_unique<HDF5UnstructuredTemperatureSource>(spk);
   } else if (type == "hdf5_csr") {
     return std::make_unique<HDF5CSRTemperatureSource>(spk);
-  } else if (type == "finitediff") {
-    // Will be implemented when FiniteDifferenceTemperatureSource is extracted
-    spk->error->all(FLERR,"Finite difference temperature source not yet implemented");
-    return nullptr;
   } else {
     std::string msg = "Unknown temperature source type: " + type;
     spk->error->all(FLERR,msg.c_str());

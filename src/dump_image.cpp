@@ -21,6 +21,7 @@
 #include "stdlib.h"
 #include "string.h"
 #include "dump_image.h"
+#include "ipf_color.h"
 #include "image.h"
 #include "app.h"
 #include "app_lattice.h"
@@ -43,7 +44,7 @@ using namespace MathConst;
 
 enum{PPM,JPG};
 enum{SPHERE,CUBE};
-enum{NUMERIC,IATTRIBUTE,DATTRIBUTE};
+enum{NUMERIC,IATTRIBUTE,DATTRIBUTE,IPF};
 enum{STATIC,DYNAMIC};
 enum{NO,YES};
 enum{ID,SITE,X,Y,Z,ENERGY,PROPENSITY,IARRAY,DARRAY};  // in other dump files
@@ -73,7 +74,8 @@ DumpImage::DumpImage(SPPARKS *spk, int narg, char **arg) :
 
   if (size_one != 2) error->all(FLERR,"Illegal dump image command");
 
-  if (vtype[0] == INT) scolor = IATTRIBUTE;
+  if (strcmp(arg[4],"ipf") == 0) scolor = IPF;
+  else if (vtype[0] == INT) scolor = IATTRIBUTE;
   else scolor = DATTRIBUTE;
 
   if (vtype[1] == INT) sdiam = IATTRIBUTE;
@@ -93,6 +95,7 @@ DumpImage::DumpImage(SPPARKS *spk, int narg, char **arg) :
   cx = cy = cz = 0.5;
   cxstr = cystr = czstr = NULL;
   cwrap = dwrap = 0;
+  ipfdir[0] = ipfdir[1] = 0.0; ipfdir[2] = 1.0;
 
   if (domain->dimension == 3) {
     image->up[0] = 0.0; image->up[1] = 0.0; image->up[2] = 1.0;
@@ -596,6 +599,7 @@ void DumpImage::create_image()
   int i,j,m,n,ivalue,nc,nd;
   double diameter;
   double *color;
+  double ipfrgb[3];
 
   // render my sites
 
@@ -618,6 +622,9 @@ void DumpImage::create_image()
       color = colorattribute[ivalue-clo];
     } else if (scolor == DATTRIBUTE) {
       color = image->value2color(buf[m]);
+    } else if (scolor == IPF) {
+      ipf_color(j,ipfrgb);
+      color = ipfrgb;
     }
 
     if (sdiam == NUMERIC) {
@@ -824,6 +831,17 @@ int DumpImage::modify_param(int narg, char **arg)
     return 5;
   }
 
+  if (strcmp(arg[0],"ipf") == 0) {
+    if (narg < 4) error->all(FLERR,"Illegal dump_modify command");
+    if (scolor != IPF)
+      error->all(FLERR,"Dump_modify ipf requires ipf color for dump image");
+    ipfdir[0] = atof(arg[1]); ipfdir[1] = atof(arg[2]); ipfdir[2] = atof(arg[3]);
+    double n = sqrt(ipfdir[0]*ipfdir[0]+ipfdir[1]*ipfdir[1]+ipfdir[2]*ipfdir[2]);
+    if (n == 0.0) error->all(FLERR,"Illegal dump_modify command");
+    ipfdir[0] /= n; ipfdir[1] /= n; ipfdir[2] /= n;
+    return 4;
+  }
+
   if (strcmp(arg[0],"cwrap") == 0) {
     if (narg < 2) error->all(FLERR,"Illegal dump_modify command");
     if (strcmp(arg[1],"yes") == 0) cwrap = 1;
@@ -961,4 +979,18 @@ void DumpImage::bounds(char *str, int lo, int hi, int &nlo, int &nhi)
     nlo = MAX(atoi(str),lo);
     nhi = MIN(atoi(ptr+1),hi);
   }
+}
+
+/* ----------------------------------------------------------------------
+   inverse-pole-figure colour of site i for the sample direction ipfdir
+   quaternion (w,x,y,z) = d1-d4; cubic symmetry; EDAX/TSL colour key as in
+   MTEX/orix (see ipf_color.h), the key spparks-micro-analysis
+   generate_ipf_colors uses, so images match that tooling
+------------------------------------------------------------------------- */
+
+void DumpImage::ipf_color(int i, double *rgb)
+{
+  double **darray = app->darray;
+  ipf::quaternion_rgb(darray[0][i],darray[1][i],darray[2][i],darray[3][i],
+                      ipfdir,rgb);
 }

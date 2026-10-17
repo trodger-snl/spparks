@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.22)  # Kokkos >= 5.0 (bundled submodule) requires CMake >= 3.22
 
 # Set project name and version
 project(SPPARKS 
@@ -7,36 +7,24 @@ project(SPPARKS
     LANGUAGES CXX C)
 
 # Set C++ standard
-set(CMAKE_CXX_STANDARD 17)
+# Kokkos >= 5.0 requires C++20; older SPPARKS/Kokkos 4.x built with C++17.
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-
-# Compiler version validation for C++17 support
-if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.0)
-        message(WARNING "GCC ${CMAKE_CXX_COMPILER_VERSION} may not fully support C++17. "
-                        "GCC 7.0 or later is recommended. Build may fail.")
-    endif()
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang")
-    if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-        # Apple Clang 11+ (Xcode 11+) supports C++17
-        if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 11.0)
-            message(WARNING "Apple Clang ${CMAKE_CXX_COMPILER_VERSION} may not fully support C++17. "
-                            "Apple Clang 11.0 (Xcode 11) or later is recommended. Build may fail.")
-        endif()
-    else()
-        # Regular Clang 5+ supports C++17
-        if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 5.0)
-            message(WARNING "Clang ${CMAKE_CXX_COMPILER_VERSION} may not fully support C++17. "
-                            "Clang 5.0 or later is recommended. Build may fail.")
-        endif()
-    endif()
-endif()
 
 # Set default build type
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
+
+# Performance options. These MUST be declared before the Release block below,
+# which reads them. Declared after it, a fresh configure evaluated them as empty
+# (option() had not run yet) and silently produced -O2 with no -march=native and
+# no LTO, while re-configuring the same directory picked the values up from the
+# cache and produced -O3 -march=native -flto. The optimization level therefore
+# depended on whether the build directory was new.
+option(SPPARKS_AGGRESSIVE_OPTIMIZATION "Enable aggressive optimizations (may increase compile time)" ON)
+option(SPPARKS_NATIVE_OPTIMIZATION "Enable native CPU optimizations (-march=native)" ON)
 
 # Enhanced optimization flags for different build types
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
@@ -57,8 +45,13 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
         message(STATUS "Enabled native CPU optimizations (-march=native)")
     endif()
     
-    # Add Link Time Optimization (LTO) for better performance
-    if(SPPARKS_AGGRESSIVE_OPTIMIZATION)
+    # Add Link Time Optimization (LTO) for better performance. An explicit
+    # -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON/OFF takes over (CMake's own IPO).
+    # Not for CUDA: nvcc_wrapper reports as GNU but nvcc rejects -flto.
+    # Not CMake IPO by default: its Clang rule archives with llvm-ar from the
+    # compiler's dir, which ROCm's hipcc does not have, and libspparks.a fails.
+    if(SPPARKS_AGGRESSIVE_OPTIMIZATION AND NOT DEFINED CMAKE_INTERPROCEDURAL_OPTIMIZATION
+       AND NOT (SPPARKS_PACKAGE_KOKKOS AND SPPARKS_KOKKOS_BACKEND STREQUAL "CUDA"))
         if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
             # Apple Silicon specific LTO
             set(OPT_FLAGS "${OPT_FLAGS} -flto=thin")
@@ -91,50 +84,8 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
     message(STATUS "RelWithDebInfo: Using -O2 -g optimizations")
 endif()
 
-# Automatic CPU detection and parallel build optimization
-include(ProcessorCount)
-ProcessorCount(N)
-if(NOT N EQUAL 0)
-    # On Apple Silicon, use all available cores for compilation
-    if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
-        message(STATUS "Apple Silicon detected: Using all ${N} cores for parallel compilation")
-        set(CMAKE_BUILD_PARALLEL_LEVEL ${N} CACHE STRING "Number of parallel jobs")
-        # Set make flags for parallel builds
-        set(CMAKE_MAKE_PROGRAM_ARGS "-j${N}" CACHE STRING "Make parallel arguments")
-    else()
-        # For other systems, use most cores but leave one free
-        math(EXPR PARALLEL_JOBS "${N} - 1")
-        if(PARALLEL_JOBS LESS 1)
-            set(PARALLEL_JOBS 1)
-        endif()
-        message(STATUS "Using ${PARALLEL_JOBS} of ${N} available cores for parallel compilation")
-        set(CMAKE_BUILD_PARALLEL_LEVEL ${PARALLEL_JOBS} CACHE STRING "Number of parallel jobs")
-        set(CMAKE_MAKE_PROGRAM_ARGS "-j${PARALLEL_JOBS}" CACHE STRING "Make parallel arguments")
-    endif()
-else()
-    message(WARNING "Could not detect CPU count, using single-threaded build")
-    set(CMAKE_BUILD_PARALLEL_LEVEL 1 CACHE STRING "Number of parallel jobs")
-endif()
-
-# WSL2 Detection (Windows Subsystem for Linux)
-if(UNIX AND NOT APPLE)
-    execute_process(
-        COMMAND uname -r
-        OUTPUT_VARIABLE UNAME_R
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET
-    )
-    if(UNAME_R MATCHES "microsoft|WSL")
-        set(WSL_BUILD ON CACHE BOOL "Building in Windows Subsystem for Linux")
-        message(STATUS "Windows Subsystem for Linux (WSL2) detected")
-        message(STATUS "  Using Linux build configuration within WSL environment")
-    endif()
-endif()
-
 # Build options
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
-option(SPPARKS_BUILD_EXECUTABLE "Build spparks executable" ON)
-option(SPPARKS_BUILD_LIB "Build spparks library" OFF)
 option(SPPARKS_ENABLE_MPI "Enable MPI support" ON)
 option(SPPARKS_ENABLE_GZIP "Enable GZIP support" ON)
 option(SPPARKS_ENABLE_JPEG "Enable JPEG support" ON)
@@ -142,11 +93,33 @@ option(SPPARKS_ENABLE_PNG "Enable PNG support" OFF)
 option(SPPARKS_ENABLE_HDF5 "Enable HDF5 support" OFF)
 option(SPPARKS_ENABLE_HIGHFIVE "Enable HighFive C++ HDF5 wrapper" OFF)
 option(SPPARKS_USE_EXTERNAL_HIGHFIVE "Use system-provided HighFive instead of FetchContent" OFF)
-option(SPPARKS_UNORDERED_MAP "Use unordered_map" OFF)
 
-# Performance options
-option(SPPARKS_AGGRESSIVE_OPTIMIZATION "Enable aggressive optimizations (may increase compile time)" ON)
-option(SPPARKS_NATIVE_OPTIMIZATION "Enable native CPU optimizations (-march=native)" ON)
+# Packages: optional components whose sources live in src/KOKKOS/ and src/STITCH/
+# and compile from there (no copying into src/).
+option(SPPARKS_PACKAGE_STITCH "Enable STITCH package (dump stitch)" OFF)
+option(SPPARKS_PACKAGE_KOKKOS "Enable KOKKOS package for GPU acceleration" OFF)
+set(SPPARKS_KOKKOS_BACKEND "OPENMP" CACHE STRING "Kokkos backend (OPENMP, CUDA, HIP, SYCL, SERIAL)")
+set_property(CACHE SPPARKS_KOKKOS_BACKEND PROPERTY STRINGS OPENMP CUDA HIP SYCL SERIAL)
+# GPU architecture for the CUDA/HIP backends. Kokkos does NOT auto-detect this,
+# so it must be set explicitly or the device build silently produces no GPU code.
+# Examples: AMD_GFX1151 (Strix Halo / Radeon 8050S/8060S, RDNA 3.5) for HIP,
+#           AMPERE80 (A100) or ADA89 (RTX 40xx) for CUDA.
+set(SPPARKS_KOKKOS_ARCH "" CACHE STRING "Kokkos GPU architecture token (e.g. AMD_GFX1151, AMPERE80)")
+
+# Enable OpenMP as the Kokkos HOST execution space alongside a GPU DEVICE backend
+# (HIP/CUDA/SYCL). With this ON, Kokkos::DefaultExecutionSpace stays the GPU while
+# Kokkos::DefaultHostExecutionSpace becomes OpenMP instead of Serial -- so
+# host-side Kokkos parallel_for loops run multithreaded. (The non-Kokkos
+# #pragma omp host loops in the HDF5 source are already threaded via the
+# find_package(OpenMP) link below regardless of this option; this option adds
+# threading for the Kokkos host space itself.) Ignored for the OPENMP/SERIAL
+# backends. Intended for multi-GPU HPC nodes with many host cores per GPU
+# (e.g. 4xH100 + 112 cores: 1 rank/GPU x N host threads) and usable on this APU
+# (HIP + OpenMP) for the same host-threading benefit.
+option(SPPARKS_KOKKOS_HOST_OPENMP "Use OpenMP (not Serial) as the Kokkos host space for GPU backends" OFF)
+
+# Performance options are declared near the top of this file, before the
+# Release flag block that reads them.
 
 # Integer size options
 option(SPPARKS_SMALLSMALL "Use 32-bit for all integers" OFF)
@@ -162,43 +135,35 @@ else()
     add_compile_definitions(SPPARKS_SMALLBIG)
 endif()
 
+# Hot-kernel floating-point precision (fastreal, src/spktype.h). Default OFF =>
+# FP64: production precision (production always runs FP64) and the
+# bit-for-bit CPU-validation reference. ON => FP32 everywhere code opts in via
+# fastreal: a testing/development build for desktop GPUs (gfx1151) whose FP64
+# rate is heavily reduced. One switch on purpose. Measured gains:
+#   * additive/texture/kk Rosenthal/Moser: compute-bound transcendental kernels.
+#   * additive/texture/kk HDF5 unstructured: memory-bound gather-and-blend;
+#     halved traffic (ct15 10-layer decks: that fill is ~33% of per-box wall,
+#     flat across OMP_NUM_THREADS 1/4/16).
+#   * potts/quaternion/kk: 256^3 sweep color/strict loop 59.5 -> 32.4 s
+#     (cubic), 40.9 -> 21.1 s (hcp); disorientation within ~2e-5 deg of FP64.
+option(SPPARKS_FP32 "Use FP32 for hot-kernel math that opts in via fastreal (additive/texture/kk temperature incl. conduction fluxes, potts/quaternion/kk disorientation)" OFF)
+foreach(_old SPPARKS_AM_TEMP_FP32 SPPARKS_QUAT_FP32)
+    if(${_old})
+        message(FATAL_ERROR "${_old} was replaced by SPPARKS_FP32 (one switch for all fastreal code)")
+    endif()
+endforeach()
+if(SPPARKS_FP32)
+    add_compile_definitions(SPPARKS_FP32)
+endif()
+
 # Configure features
 if(SPPARKS_ENABLE_GZIP)
     add_compile_definitions(SPPARKS_GZIP)
 endif()
 
-if(SPPARKS_UNORDERED_MAP)
-    add_compile_definitions(SPPARKS_UNORDERED_MAP)
-endif()
-
-# Move MPI configuration after machine config application
 
 if(SPPARKS_ENABLE_JPEG)
-    # First try standard CMake FindJPEG
     find_package(JPEG QUIET)
-    
-    if(NOT JPEG_FOUND)
-        # Try manual detection for common paths (especially Homebrew on macOS)
-        find_path(JPEG_INCLUDE_DIR_MANUAL jpeglib.h
-            PATHS /opt/homebrew/include /usr/local/include
-            NO_DEFAULT_PATH
-        )
-        find_library(JPEG_LIBRARY_MANUAL jpeg
-            PATHS /opt/homebrew/lib /usr/local/lib
-            NO_DEFAULT_PATH
-        )
-        
-        if(JPEG_INCLUDE_DIR_MANUAL AND JPEG_LIBRARY_MANUAL)
-            set(JPEG_FOUND TRUE)
-            set(JPEG_INCLUDE_DIR ${JPEG_INCLUDE_DIR_MANUAL})
-            set(JPEG_LIBRARIES ${JPEG_LIBRARY_MANUAL})
-            message(STATUS "Found JPEG library (manual): ${JPEG_LIBRARIES}")
-            message(STATUS "JPEG include dir (manual): ${JPEG_INCLUDE_DIR}")
-        endif()
-    else()
-        message(STATUS "Found JPEG library: ${JPEG_LIBRARIES}")
-        message(STATUS "JPEG include dir: ${JPEG_INCLUDE_DIR}")
-    endif()
     
     if(JPEG_FOUND)
         add_compile_definitions(SPPARKS_JPEG)
@@ -222,6 +187,12 @@ if(SPPARKS_ENABLE_PNG)
     endif()
 endif()
 
+# HighFive is a C++ wrapper over HDF5, so it implies HDF5.
+if(SPPARKS_ENABLE_HIGHFIVE AND NOT SPPARKS_ENABLE_HDF5)
+    message(STATUS "HighFive requires HDF5 - enabling HDF5 automatically")
+    set(SPPARKS_ENABLE_HDF5 ON CACHE BOOL "Enable HDF5 support" FORCE)
+endif()
+
 if(SPPARKS_ENABLE_HDF5)
     # Add cmake module path for enhanced HDF5 finder
     list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -234,7 +205,23 @@ if(SPPARKS_ENABLE_HDF5)
             message(STATUS "Found parallel HDF5 (MPI-enabled)")
             add_compile_definitions(H5_HAVE_PARALLEL)
         elseif(SPPARKS_ENABLE_MPI AND NOT HDF5_IS_PARALLEL)
-            message(WARNING "MPI is enabled but HDF5 is not parallel. Consider using parallel HDF5 for better performance.")
+            # Not a performance note. The HDF5 temperature sources call
+            # HighFive::MPIOFileAccess(...) unconditionally, so serial HDF5 with
+            # HighFive+MPI is a compile failure in
+            # temperature_source_hdf5_unstructured.cpp, not a slow build.
+            if(SPPARKS_ENABLE_HIGHFIVE)
+                message(FATAL_ERROR
+                    "MPI is enabled but the HDF5 found at ${HDF5_INCLUDE_DIRS} is serial.\n"
+                    "The additive/texture temperature sources call HighFive::MPIOFileAccess() "
+                    "unconditionally, so this will fail to compile rather than run slowly.\n"
+                    "Load a parallel HDF5 (on a Cray system: module load cray-hdf5-parallel) "
+                    "and point at it with -DHDF5_ROOT=<prefix>, or configure with "
+                    "-DSPPARKS_ENABLE_HIGHFIVE=OFF to drop the additive/texture styles.")
+            else()
+                message(WARNING
+                    "MPI is enabled but the HDF5 found at ${HDF5_INCLUDE_DIRS} is serial. "
+                    "Parallel I/O will be unavailable.")
+            endif()
         endif()
     else()
         message(FATAL_ERROR "HDF5 was requested but not found")
@@ -242,29 +229,6 @@ if(SPPARKS_ENABLE_HDF5)
 endif()
 
 if(SPPARKS_ENABLE_HIGHFIVE)
-    # Ensure HDF5 is also enabled for HighFive
-    if(NOT SPPARKS_ENABLE_HDF5)
-        message(STATUS "HighFive requires HDF5 - enabling HDF5 automatically")
-        set(SPPARKS_ENABLE_HDF5 ON CACHE BOOL "Enable HDF5 support" FORCE)
-
-        # Add cmake module path for enhanced HDF5 finder
-        list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-
-        find_package(HDF5Enhanced REQUIRED)
-        if(HDF5_FOUND)
-            add_compile_definitions(SPPARKS_HDF)
-            # Check if HDF5 is parallel (MPI-enabled)
-            if(HDF5_IS_PARALLEL AND SPPARKS_ENABLE_MPI)
-                message(STATUS "Found parallel HDF5 (MPI-enabled)")
-                add_compile_definitions(H5_HAVE_PARALLEL)
-            elseif(SPPARKS_ENABLE_MPI AND NOT HDF5_IS_PARALLEL)
-                message(WARNING "MPI is enabled but HDF5 is not parallel. Consider using parallel HDF5 for better performance.")
-            endif()
-        else()
-            message(FATAL_ERROR "HDF5 was requested but not found")
-        endif()
-    endif()
-
     # Use external HighFive or fetch from source
     if(SPPARKS_USE_EXTERNAL_HIGHFIVE)
         # Try to find system-provided HighFive (e.g., from Spack, Homebrew, or system package manager)
@@ -320,6 +284,39 @@ if(SPPARKS_ENABLE_HIGHFIVE)
         set(HIGHFIVE_USE_OPENCV OFF CACHE BOOL "Enable OpenCV support in HighFive")
 
         # Make HighFive available
+        # HighFive requires a FULL MPI when HDF5 is parallel, including the C
+        # component we deliberately do not require ourselves. Its
+        # CMake/HighFiveTargetDeps.cmake:111-112 does
+        #
+        #   if(HIGHFIVE_PARALLEL_HDF5 OR HDF5_IS_PARALLEL)
+        #     find_package(MPI REQUIRED)        # all enabled languages
+        #
+        # and then uses only MPI_CXX_*. So on a machine where FindMPI cannot
+        # validate the C wrapper, configure dies inside third-party code with
+        # "Could NOT find MPI_C (missing: MPI_C_WORKS)" and a trace into
+        # HighFiveTargetDeps.cmake, which reads like a HighFive problem and is
+        # not. The same file is included by the installed HighFiveConfig.cmake,
+        # so SPPARKS_USE_EXTERNAL_HIGHFIVE does not avoid it either.
+        #
+        # Say so before it happens, with the fix.
+        if(SPPARKS_ENABLE_MPI AND HDF5_IS_PARALLEL)
+            find_package(MPI QUIET COMPONENTS C)
+            if(NOT MPI_C_FOUND)
+                message(WARNING
+                    "Parallel HDF5 is in use and MPI's C component was not usable "
+                    "(MPI_C_FOUND is false). SPPARKS itself does not need MPI C -- "
+                    "it has no C sources -- but HighFive requires it unconditionally "
+                    "in CMake/HighFiveTargetDeps.cmake, so configure is likely to "
+                    "fail there next with 'Could NOT find MPI_C (missing: "
+                    "MPI_C_WORKS)'.\n"
+                    "Fix by pointing FindMPI at a working MPI C wrapper, e.g.\n"
+                    "  -DMPI_C_COMPILER=cc              (Cray PE C wrapper)\n"
+                    "  -DMPI_C_COMPILER=mpiamdclang     (LLNL magic-module wrapper)\n"
+                    "  -DMPI_C_COMPILER=mpicc\n"
+                    "Pick whichever exists in your environment: `which cc mpiamdclang mpicc`.")
+            endif()
+        endif()
+
         FetchContent_MakeAvailable(HighFive)
     endif()
 
@@ -327,66 +324,180 @@ if(SPPARKS_ENABLE_HIGHFIVE)
     message(STATUS "HighFive C++ HDF5 wrapper enabled")
 endif()
 
-# Include helper modules
-include(cmake/MachineConfigs.cmake)
-include(cmake/PackageManager.cmake)
+# Configure Kokkos if enabled
+if(SPPARKS_PACKAGE_KOKKOS)
+    message(STATUS "Kokkos package enabled")
+    message(STATUS "Kokkos backend: ${SPPARKS_KOKKOS_BACKEND}")
 
-# Apply machine configuration if specified
-setup_machine_presets()
-setup_hpc_configs()  # Enable HPC system configurations
-auto_detect_machine()
+    # Set Kokkos options before adding subdirectory
+    # Enable the selected backend
+    if(SPPARKS_KOKKOS_BACKEND STREQUAL "OPENMP")
+        set(Kokkos_ENABLE_OPENMP ON CACHE BOOL "Enable OpenMP backend" FORCE)
+        set(Kokkos_ENABLE_SERIAL OFF CACHE BOOL "Disable Serial backend" FORCE)
+        message(STATUS "Kokkos: OpenMP backend enabled (CPU multi-threading)")
+    elseif(SPPARKS_KOKKOS_BACKEND STREQUAL "CUDA")
+        set(Kokkos_ENABLE_CUDA ON CACHE BOOL "Enable CUDA backend" FORCE)
+        set(Kokkos_ENABLE_SERIAL ON CACHE BOOL "Enable Serial for host execution" FORCE)
+        if(NOT SPPARKS_KOKKOS_ARCH)
+            message(FATAL_ERROR "CUDA backend requires SPPARKS_KOKKOS_ARCH (e.g. AMPERE80, ADA89)")
+        endif()
+        set(Kokkos_ARCH_${SPPARKS_KOKKOS_ARCH} ON CACHE BOOL "Kokkos GPU arch" FORCE)
+        message(STATUS "Kokkos: CUDA backend enabled (NVIDIA GPUs), arch ${SPPARKS_KOKKOS_ARCH}")
+    elseif(SPPARKS_KOKKOS_BACKEND STREQUAL "HIP")
+        set(Kokkos_ENABLE_HIP ON CACHE BOOL "Enable HIP backend" FORCE)
+        set(Kokkos_ENABLE_SERIAL ON CACHE BOOL "Enable Serial for host execution" FORCE)
+        # AMD GPUs are NOT auto-detected; the gfx target must be set explicitly.
+        if(NOT SPPARKS_KOKKOS_ARCH)
+            message(FATAL_ERROR
+                "HIP backend requires SPPARKS_KOKKOS_ARCH.\n"
+                "  AMD_GFX942_APU  MI300A APU (El Capitan and similar; unified memory)\n"
+                "  AMD_GFX942      MI300X, or MI300A with unified memory disabled\n"
+                "  AMD_GFX90A      MI200 series\n"
+                "  AMD_GFX1151     Strix Halo / RDNA 3.5 APU\n"
+                "Set it with -DSPPARKS_KOKKOS_ARCH=<token>, or use a preset from "
+                "src/CMakePresets.json (cmake --list-presets).")
+        endif()
+        set(Kokkos_ARCH_${SPPARKS_KOKKOS_ARCH} ON CACHE BOOL "Kokkos GPU arch" FORCE)
+        message(STATUS "Kokkos: HIP backend enabled (AMD GPUs), arch ${SPPARKS_KOKKOS_ARCH}")
+    elseif(SPPARKS_KOKKOS_BACKEND STREQUAL "SYCL")
+        set(Kokkos_ENABLE_SYCL ON CACHE BOOL "Enable SYCL backend" FORCE)
+        set(Kokkos_ENABLE_SERIAL ON CACHE BOOL "Enable Serial for host execution" FORCE)
+        message(STATUS "Kokkos: SYCL backend enabled (Intel GPUs)")
+    elseif(SPPARKS_KOKKOS_BACKEND STREQUAL "SERIAL")
+        set(Kokkos_ENABLE_SERIAL ON CACHE BOOL "Enable Serial backend" FORCE)
+        message(STATUS "Kokkos: Serial backend enabled (single-threaded)")
+    else()
+        message(FATAL_ERROR "Unknown Kokkos backend: ${SPPARKS_KOKKOS_BACKEND}")
+    endif()
 
-if(SPPARKS_MACHINE)
-    apply_machine_config("${SPPARKS_MACHINE}")
+    # Disable backends we don't want.
+    # OpenMP is special: besides being a standalone device backend, it can serve
+    # as the HOST execution space for a GPU device backend. Keep it enabled when
+    # SPPARKS_KOKKOS_HOST_OPENMP is requested (Serial stays enabled too, but
+    # Kokkos picks OpenMP as DefaultHostExecutionSpace -- OpenMP outranks Serial).
+    if(SPPARKS_KOKKOS_BACKEND STREQUAL "OPENMP")
+        # OpenMP is the device backend; leave it enabled.
+    elseif(SPPARKS_KOKKOS_HOST_OPENMP)
+        set(Kokkos_ENABLE_OPENMP ON CACHE BOOL "OpenMP as Kokkos host space" FORCE)
+        message(STATUS "Kokkos: OpenMP host execution space enabled alongside "
+                       "${SPPARKS_KOKKOS_BACKEND} device (DefaultHostExecutionSpace=OpenMP)")
+    else()
+        set(Kokkos_ENABLE_OPENMP OFF CACHE BOOL "Disable OpenMP backend" FORCE)
+    endif()
+    if(NOT SPPARKS_KOKKOS_BACKEND STREQUAL "CUDA")
+        set(Kokkos_ENABLE_CUDA OFF CACHE BOOL "Disable CUDA backend" FORCE)
+    endif()
+    if(NOT SPPARKS_KOKKOS_BACKEND STREQUAL "HIP")
+        set(Kokkos_ENABLE_HIP OFF CACHE BOOL "Disable HIP backend" FORCE)
+    endif()
+    if(NOT SPPARKS_KOKKOS_BACKEND STREQUAL "SYCL")
+        set(Kokkos_ENABLE_SYCL OFF CACHE BOOL "Disable SYCL backend" FORCE)
+    endif()
+    # Disable Kokkos tests and examples
+    set(Kokkos_ENABLE_TESTS OFF CACHE BOOL "Disable Kokkos tests" FORCE)
+    set(Kokkos_ENABLE_EXAMPLES OFF CACHE BOOL "Disable Kokkos examples" FORCE)
+    set(Kokkos_ENABLE_BENCHMARKS OFF CACHE BOOL "Disable Kokkos benchmarks" FORCE)
+
+    # Check if bundled Kokkos exists
+    set(KOKKOS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../lib/kokkos")
+    if(NOT EXISTS "${KOKKOS_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "Kokkos not found at ${KOKKOS_DIR}\n"
+            "\n"
+            "Normally:\n"
+            "  git submodule update --init --recursive\n"
+            "\n"
+            "If that fails -- no submodule metadata (source copied rather than\n"
+            "cloned), or the submodule fetch is blocked -- clone it directly. This\n"
+            "check only requires the directory to exist with a CMakeLists.txt; a\n"
+            "registered submodule is not needed:\n"
+            "  rm -rf ${KOKKOS_DIR}\n"
+            "  git clone --depth 1 --branch 5.2.2 \\\n"
+            "      https://github.com/kokkos/kokkos.git ${KOKKOS_DIR}\n"
+            "\n"
+            "Tag 5.2.2 is the pinned commit\n"
+            "(8e15454876298832f013ebcaf08d53825b5bda40). If the machine has no\n"
+            "outbound network, clone elsewhere and copy the tree in.\n")
+    endif()
+
+    # Validate the arch token against the bundled Kokkos before handing off. We set
+    # Kokkos_ARCH_${SPPARKS_KOKKOS_ARCH} unconditionally above, so a typo produces a
+    # cache entry Kokkos simply never reads: the configure succeeds, no arch is
+    # selected, and the failure surfaces as an unrelated compile or link error much
+    # later. Catch it here, where we can name the valid tokens.
+    if(SPPARKS_KOKKOS_ARCH)
+        file(READ "${KOKKOS_DIR}/cmake/kokkos_arch.cmake" _kokkos_arch_list)
+        if(NOT _kokkos_arch_list MATCHES "[ \t(]${SPPARKS_KOKKOS_ARCH}[ \t)\n]")
+            string(REGEX MATCHALL "SUPPORTED_AMD_ARCHS ([A-Z0-9_ ]+)" _amd_arch_lines "${_kokkos_arch_list}")
+            string(REGEX REPLACE "SUPPORTED_AMD_ARCHS " "" _amd_tokens "${_amd_arch_lines}")
+            string(REPLACE ";" " " _amd_tokens "${_amd_tokens}")
+            string(REGEX REPLACE " +" " " _amd_tokens "${_amd_tokens}")
+            message(FATAL_ERROR
+                "SPPARKS_KOKKOS_ARCH='${SPPARKS_KOKKOS_ARCH}' is not a token known to the "
+                "bundled Kokkos at ${KOKKOS_DIR}.\n"
+                "This would otherwise configure cleanly and fail later with an unrelated error.\n"
+                "AMD tokens this Kokkos accepts:\n  ${_amd_tokens}\n"
+                "Run 'cmake --list-presets' in src/ for the configurations already defined here.")
+        endif()
+    endif()
+
+    # Add bundled Kokkos
+    message(STATUS "Using bundled Kokkos from: ${KOKKOS_DIR}")
+    add_subdirectory(${KOKKOS_DIR} kokkos)
+
+    # Add Kokkos compile definition
+    add_compile_definitions(SPK_KOKKOS)
+    message(STATUS "Kokkos configured successfully")
 endif()
 
-# Note: Machine configs use set(... PARENT_SCOPE) which creates normal variables
-# that shadow cache variables. auto_detect_machine() accounts for explicit flags
-# like --mpi to select the correct machine config.
-
-# Configure MPI after machine configuration
-# Note: This ordering is intentional - machine configs can set SPPARKS_ENABLE_MPI,
-# but the actual find_package(MPI) happens here to use the updated settings.
-# This allows machine presets to control MPI enablement while keeping the
-# MPI detection logic centralized.
 if(SPPARKS_ENABLE_MPI)
-    find_package(MPI REQUIRED)
+    # COMPONENTS CXX, not a bare find_package(MPI REQUIRED).
+    #
+    # project() above declares LANGUAGES CXX C, and a bare find_package(MPI)
+    # requires EVERY enabled language, so it demanded a working MPI C as well.
+    # SPPARKS has no C sources (src/ contains zero .c files) and links only
+    # MPI::MPI_CXX, so MPI C was never used -- it was purely an extra way to
+    # fail. On a Cray machine whose C wrapper FindMPI cannot exercise, that
+    # showed up as
+    #
+    #   Could NOT find MPI_C (missing: MPI_C_WORKS)
+    #   Could NOT find MPI (missing: MPI_C_FOUND) (found version "4.0")
+    #
+    # -- note MPI CXX had been found fine; only the unused C component failed.
+    find_package(MPI REQUIRED COMPONENTS CXX)
     if(MPI_CXX_FOUND)
         add_compile_definitions(SPPARKS_MPI)
     endif()
 else()
-    # Use MPI stubs for serial builds
-    set(MPI_STUB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/STUBS")
-    if(NOT EXISTS "${MPI_STUB_DIR}/libmpi.a")
-        message(STATUS "Building MPI stubs...")
-        execute_process(
-            COMMAND make clean
-            WORKING_DIRECTORY ${MPI_STUB_DIR}
-            RESULT_VARIABLE CLEAN_RESULT
-        )
-        execute_process(
-            COMMAND make
-            WORKING_DIRECTORY ${MPI_STUB_DIR}
-            RESULT_VARIABLE BUILD_RESULT
-        )
-        if(NOT BUILD_RESULT EQUAL 0)
-            message(FATAL_ERROR "Failed to build MPI stubs")
-        endif()
+    # Serial builds link the MPI stubs; every source includes "mpi.h".
+    add_library(mpi_stubs STATIC STUBS/mpi.cpp)
+    include_directories("${CMAKE_CURRENT_SOURCE_DIR}/STUBS")
+endif()
+
+# STITCH package: libstitch (stitch.c + bundled sqlite3) is a plain static
+# library target; dump_stitch compiles from src/STITCH/. stitch.c includes mpi.h
+# under STITCH_PARALLEL, so it borrows the include path FindMPI found for C++
+# (the C component is deliberately not required -- see the MPI note above).
+if(SPPARKS_PACKAGE_STITCH)
+    set(_stitch_dir "${CMAKE_CURRENT_SOURCE_DIR}/../lib/stitch/src/stitch/libstitch")
+    add_library(stitch STATIC "${_stitch_dir}/stitch.c" "${_stitch_dir}/sqlite3.c")
+    target_include_directories(stitch PUBLIC "${_stitch_dir}")
+    target_compile_definitions(stitch PUBLIC STITCH_PARALLEL SPK_STITCH)
+    set_target_properties(stitch PROPERTIES C_STANDARD 99 C_EXTENSIONS ON
+                                            POSITION_INDEPENDENT_CODE ON)
+    find_package(Threads REQUIRED)
+    target_link_libraries(stitch PUBLIC ${CMAKE_DL_LIBS} Threads::Threads)
+    if(SPPARKS_ENABLE_MPI)
+        target_include_directories(stitch PRIVATE ${MPI_CXX_INCLUDE_DIRS})
     endif()
-    
-    # Create MPI stub library target
-    add_library(mpi_stubs STATIC IMPORTED)
-    set_target_properties(mpi_stubs PROPERTIES
-        IMPORTED_LOCATION "${MPI_STUB_DIR}/libmpi.a"
-        INTERFACE_INCLUDE_DIRECTORIES "${MPI_STUB_DIR}"
-    )
-    message(STATUS "Using MPI stubs from: ${MPI_STUB_DIR}/libmpi.a")
-    # Add to global include directories as fallback
-    include_directories("${MPI_STUB_DIR}")
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/STITCH)
 endif()
 
 # Include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+if(SPPARKS_PACKAGE_KOKKOS)
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/KOKKOS)
+endif()
 
 # Source files (base list - conditional sources added below)
 set(SPPARKS_SOURCES
@@ -480,229 +591,82 @@ set(SPPARKS_SOURCES
 include(cmake/ConditionalSources.cmake)
 configure_conditional_sources()
 
-# Add package-specific sources
-if(SPPARKS_PACKAGE_STITCH AND STITCH_LIBRARY)
-    list(APPEND SPPARKS_SOURCES STITCH/dump_stitch.cpp)
-    message(STATUS "Added STITCH/dump_stitch.cpp to sources")
-elseif(SPPARKS_PACKAGE_STITCH)
-    message(WARNING "STITCH package enabled but library not found at '${STITCH_LIBRARY}' - dump_stitch not added to sources")
-endif()
-
 # Generate style headers after all dependencies are resolved
 include(cmake/generate_styles.cmake)
-generate_style_headers()
 
-# Header files for style generation
-file(GLOB SPPARKS_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
 
-# Create library targets
-if(SPPARKS_BUILD_LIB OR NOT SPPARKS_BUILD_EXECUTABLE)
-    add_library(spparks_lib ${SPPARKS_SOURCES})
-    set_target_properties(spparks_lib PROPERTIES
-        OUTPUT_NAME "spparks"
-        VERSION ${PROJECT_VERSION}
-        SOVERSION ${PROJECT_VERSION_MAJOR}
-    )
-    
-    # Link dependencies to library
-    if(SPPARKS_ENABLE_MPI AND MPI_CXX_FOUND)
-        target_link_libraries(spparks_lib PUBLIC MPI::MPI_CXX)
-    elseif(NOT SPPARKS_ENABLE_MPI)
-        target_link_libraries(spparks_lib PUBLIC mpi_stubs)
-    endif()
-    
-    if(SPPARKS_ENABLE_JPEG AND JPEG_FOUND)
-        target_link_libraries(spparks_lib PUBLIC ${JPEG_LIBRARIES})
-        target_include_directories(spparks_lib PUBLIC ${JPEG_INCLUDE_DIR})
-    endif()
-    
-    if(SPPARKS_ENABLE_PNG AND PNG_FOUND)
-        target_link_libraries(spparks_lib PUBLIC PNG::PNG)
-    endif()
-    
-    if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
-        target_link_libraries(spparks_lib PUBLIC ${HDF5_LIBRARIES})
-        target_include_directories(spparks_lib PUBLIC ${HDF5_INCLUDE_DIRS})
-        target_compile_definitions(spparks_lib PUBLIC ${HDF5_DEFINITIONS})
-    endif()
-    
-    if(SPPARKS_ENABLE_HIGHFIVE)
-        target_link_libraries(spparks_lib PUBLIC HighFive)
-    endif()
+# One static library holding every source; the executable is main.cpp on top
+# of it. Dependencies are PUBLIC so the executable inherits them.
+add_library(spparks_lib STATIC ${SPPARKS_SOURCES})
+set_target_properties(spparks_lib PROPERTIES OUTPUT_NAME spparks)
+add_dependencies(spparks_lib style_headers)
+target_include_directories(spparks_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-    # Add STITCH package support
-    if(SPPARKS_PACKAGE_STITCH AND STITCH_LIBRARY)
-        target_link_libraries(spparks_lib PUBLIC ${STITCH_LIBRARY})
-        target_include_directories(spparks_lib PUBLIC ${STITCH_INCLUDE_DIR})
-        target_compile_definitions(spparks_lib PUBLIC STITCH_PARALLEL SPK_STITCH)
-    endif()
-
-    # Add GZIP support
-    if(SPPARKS_ENABLE_GZIP)
-        find_package(ZLIB)
-        if(ZLIB_FOUND)
-            target_link_libraries(spparks_lib PUBLIC ZLIB::ZLIB)
-        endif()
-    endif()
-    
-    # Set include directories for library
-    target_include_directories(spparks_lib PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
-        $<INSTALL_INTERFACE:include>
-    )
-    
-    # Add dependency on style headers and validation
-    if(TARGET style_headers)
-        add_dependencies(spparks_lib style_headers)
-    endif()
-    if(TARGET validate_styles)
-        add_dependencies(spparks_lib validate_styles)
-    endif()
-    
-    # Add alias for easier linking
-    add_library(SPPARKS::spparks ALIAS spparks_lib)
+if(SPPARKS_ENABLE_MPI AND MPI_CXX_FOUND)
+    target_link_libraries(spparks_lib PUBLIC MPI::MPI_CXX)
+elseif(NOT SPPARKS_ENABLE_MPI)
+    target_link_libraries(spparks_lib PUBLIC mpi_stubs)
+endif()
+if(SPPARKS_ENABLE_JPEG AND JPEG_FOUND)
+    target_link_libraries(spparks_lib PUBLIC ${JPEG_LIBRARIES})
+    target_include_directories(spparks_lib PUBLIC ${JPEG_INCLUDE_DIR})
+endif()
+if(SPPARKS_ENABLE_PNG AND PNG_FOUND)
+    target_link_libraries(spparks_lib PUBLIC PNG::PNG)
+endif()
+if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
+    target_link_libraries(spparks_lib PUBLIC ${HDF5_LIBRARIES})
+    target_include_directories(spparks_lib PUBLIC ${HDF5_INCLUDE_DIRS})
+    target_compile_definitions(spparks_lib PUBLIC ${HDF5_DEFINITIONS})
+endif()
+if(SPPARKS_ENABLE_HIGHFIVE)
+    target_link_libraries(spparks_lib PUBLIC HighFive)
 endif()
 
-# Create executable target
-if(SPPARKS_BUILD_EXECUTABLE)
-    add_executable(spparks main.cpp)
-    
-    # Add dependency on style headers and validation  
-    if(TARGET style_headers)
-        add_dependencies(spparks style_headers)
-    endif()
-    if(TARGET validate_styles)
-        add_dependencies(spparks validate_styles)
-    endif()
-    
-    if(TARGET spparks_lib)
-        target_link_libraries(spparks spparks_lib)
-    else()
-        # Link sources directly if not building library
-        target_sources(spparks PRIVATE ${SPPARKS_SOURCES})
-        
-        # Link dependencies to executable
-        if(SPPARKS_ENABLE_MPI AND MPI_CXX_FOUND)
-            target_link_libraries(spparks MPI::MPI_CXX)
-        elseif(NOT SPPARKS_ENABLE_MPI)
-            target_link_libraries(spparks mpi_stubs)
-        endif()
-        
-        if(SPPARKS_ENABLE_JPEG AND JPEG_FOUND)
-            target_link_libraries(spparks ${JPEG_LIBRARIES})
-            target_include_directories(spparks PRIVATE ${JPEG_INCLUDE_DIR})
-        endif()
-        
-        if(SPPARKS_ENABLE_PNG AND PNG_FOUND)
-            target_link_libraries(spparks PNG::PNG)
-        endif()
-        
-        if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
-            target_link_libraries(spparks ${HDF5_LIBRARIES})
-            target_include_directories(spparks PRIVATE ${HDF5_INCLUDE_DIRS})
-            target_compile_definitions(spparks PRIVATE ${HDF5_DEFINITIONS})
-        endif()
-        
-        if(SPPARKS_ENABLE_HIGHFIVE)
-            target_link_libraries(spparks HighFive)
-        endif()
+# Host OpenMP for the non-Kokkos per-site layer-cache loops in the HDF5
+# temperature source (build_site_element_cache / compute_site_thermal_intervals,
+# ~40 s/layer serial on a 5M-site box). The OpenMP Kokkos backend already
+# compiles with -fopenmp; for the HIP/CUDA backends this adds host threading for
+# those loops. Harmless (loops just run serially) if OpenMP is unavailable.
+find_package(OpenMP QUIET)
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(spparks_lib PUBLIC OpenMP::OpenMP_CXX)
+else()
+    message(STATUS "OpenMP not found; HDF5 layer-cache loops will run serially")
+endif()
 
-        # Add STITCH package support
-        if(SPPARKS_PACKAGE_STITCH AND STITCH_LIBRARY)
-            target_link_libraries(spparks ${STITCH_LIBRARY})
-            target_include_directories(spparks PRIVATE ${STITCH_INCLUDE_DIR})
-            target_compile_definitions(spparks PRIVATE STITCH_PARALLEL SPK_STITCH)
-        endif()
-
-        if(SPPARKS_ENABLE_GZIP)
-            find_package(ZLIB)
-            if(ZLIB_FOUND)
-                target_link_libraries(spparks ZLIB::ZLIB)
-            endif()
-        endif()
+if(SPPARKS_PACKAGE_KOKKOS)
+    target_link_libraries(spparks_lib PUBLIC Kokkos::kokkos)
+endif()
+if(SPPARKS_PACKAGE_STITCH)
+    target_link_libraries(spparks_lib PUBLIC stitch)
+endif()
+if(SPPARKS_ENABLE_GZIP)
+    find_package(ZLIB)
+    if(ZLIB_FOUND)
+        target_link_libraries(spparks_lib PUBLIC ZLIB::ZLIB)
     endif()
 endif()
 
-# Compiler flags - applied per-target for better isolation
+add_executable(spparks main.cpp)
+target_link_libraries(spparks PRIVATE spparks_lib)
+
+# Compiler flags, per target
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        target_compile_options(spparks PRIVATE -g -Wall -Wextra)
-        if(TARGET spparks_lib)
-            target_compile_options(spparks_lib PRIVATE -g -Wall -Wextra)
-        endif()
+        set(_spk_flags -g -Wall -Wextra)
     else()
-        # Apply all optimization flags from OPT_FLAGS (defined earlier)
-        # Convert string to list for target_compile_options
-        separate_arguments(OPT_FLAGS_LIST UNIX_COMMAND "${OPT_FLAGS}")
-        target_compile_options(spparks PRIVATE ${OPT_FLAGS_LIST})
-        if(TARGET spparks_lib)
-            target_compile_options(spparks_lib PRIVATE ${OPT_FLAGS_LIST})
-        endif()
+        separate_arguments(_spk_flags UNIX_COMMAND "${OPT_FLAGS}")
     endif()
+    target_compile_options(spparks_lib PRIVATE ${_spk_flags})
+    target_compile_options(spparks PRIVATE ${_spk_flags})
 endif()
 
-# Installation
-if(SPPARKS_BUILD_LIB)
-    install(TARGETS spparks_lib
-        EXPORT SpparksTargets
-        LIBRARY DESTINATION lib
-        ARCHIVE DESTINATION lib
-        RUNTIME DESTINATION bin
-    )
-
-    # Install public headers
-    file(GLOB SPPARKS_PUBLIC_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
-    install(FILES ${SPPARKS_PUBLIC_HEADERS}
-        DESTINATION include/spparks
-    )
-endif()
-
-if(SPPARKS_BUILD_EXECUTABLE)
-    install(TARGETS spparks
-        RUNTIME DESTINATION bin
-    )
-endif()
-
-# Package configuration
-include(CMakePackageConfigHelpers)
-if(SPPARKS_BUILD_LIB)
-    write_basic_package_version_file(
-        "${CMAKE_CURRENT_BINARY_DIR}/SpparksConfigVersion.cmake"
-        VERSION ${PROJECT_VERSION}
-        COMPATIBILITY AnyNewerVersion
-    )
-    
-    export(EXPORT SpparksTargets
-        FILE "${CMAKE_CURRENT_BINARY_DIR}/SpparksTargets.cmake"
-        NAMESPACE Spparks::
-    )
-    
-    configure_file(cmake/SpparksConfig.cmake.in SpparksConfig.cmake @ONLY)
-    
-    install(EXPORT SpparksTargets
-        FILE SpparksTargets.cmake
-        NAMESPACE Spparks::
-        DESTINATION lib/cmake/spparks
-    )
-    
-    install(FILES
-        "${CMAKE_CURRENT_BINARY_DIR}/SpparksConfig.cmake"
-        "${CMAKE_CURRENT_BINARY_DIR}/SpparksConfigVersion.cmake"
-        DESTINATION lib/cmake/spparks
-    )
-endif()
-
-# Testing support
-enable_testing()
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
-    add_subdirectory(tests)
-endif()
+install(TARGETS spparks RUNTIME DESTINATION bin)
 
 # Print configuration summary
 message(STATUS "=== SPPARKS Configuration Summary ===")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
-message(STATUS "Build executable: ${SPPARKS_BUILD_EXECUTABLE}")
-message(STATUS "Build library: ${SPPARKS_BUILD_LIB}")
 message(STATUS "MPI support: ${SPPARKS_ENABLE_MPI}")
 message(STATUS "GZIP support: ${SPPARKS_ENABLE_GZIP}")
 message(STATUS "JPEG support: ${SPPARKS_ENABLE_JPEG}")
@@ -713,6 +677,32 @@ if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
     message(STATUS "HDF5 is parallel: ${HDF5_IS_PARALLEL}")
 endif()
 message(STATUS "HighFive support: ${SPPARKS_ENABLE_HIGHFIVE}")
+if(SPPARKS_ENABLE_HIGHFIVE)
+    if(SPPARKS_USE_EXTERNAL_HIGHFIVE)
+        message(STATUS "  HighFive source: external (${HighFive_DIR})")
+    else()
+        message(STATUS "  HighFive source: FetchContent from github.com (needs network at configure time)")
+    endif()
+endif()
+message(STATUS "Kokkos support: ${SPPARKS_PACKAGE_KOKKOS}")
+if(SPPARKS_PACKAGE_KOKKOS)
+    message(STATUS "  Kokkos backend: ${SPPARKS_KOKKOS_BACKEND}")
+    if(SPPARKS_KOKKOS_ARCH)
+        message(STATUS "  Kokkos arch: ${SPPARKS_KOKKOS_ARCH}")
+    endif()
+    if(SPPARKS_KOKKOS_HOST_OPENMP)
+        message(STATUS "  Kokkos host space: OpenMP")
+    endif()
+    # Unified memory is the single behavioural difference between the MI300A APU
+    # token and the plain gfx942 token, and it changes whether DualView keeps a
+    # distinct host mirror. State it explicitly: it is otherwise invisible in the
+    # log, and it decides whether HSA_XNACK=1 is needed at runtime.
+    if(SPPARKS_KOKKOS_ARCH STREQUAL "AMD_GFX942_APU")
+        message(STATUS "  Unified memory: ON (KOKKOS_IMPL_HIP_UNIFIED_MEMORY) -- export HSA_XNACK=1 to run")
+    elseif(SPPARKS_KOKKOS_BACKEND STREQUAL "HIP")
+        message(STATUS "  Unified memory: OFF -- HIPSpace is host-inaccessible, deep_copy does real work")
+    endif()
+endif()
 if(SPPARKS_SMALLSMALL)
     message(STATUS "Integer types: 32-bit (SMALLSMALL)")
 elseif(SPPARKS_BIGBIG)
@@ -720,16 +710,51 @@ elseif(SPPARKS_BIGBIG)
 else()
     message(STATUS "Integer types: 64-bit bigint (SMALLBIG)")
 endif()
-message(STATUS "=====================================")
 
-# Notify the user about optional app/command/dump styles that were excluded because
-# their feature flag is off (collected in configure_conditional_sources). These styles
-# are silently absent from the build otherwise, and requesting one yields only a generic
-# runtime error -- so surface them here with the flag needed to enable each.
+# Optional styles that were NOT registered, with the flag that would enable each.
+# SPPARKS_SKIPPED_STYLES is built in configure_conditional_sources(). A style that
+# is silently absent here surfaces much later as "style not recognized" at runtime,
+# with nothing in the C++ to explain it, so it is worth stating at configure time.
 if(SPPARKS_SKIPPED_STYLES)
-    message(STATUS "┌─ Optional styles NOT built (missing features) ─────────────")
-    foreach(_style IN LISTS SPPARKS_SKIPPED_STYLES)
-        message(STATUS "│  ${_style}")
+    message(STATUS "")
+    message(STATUS "Styles NOT built (each needs the feature shown):")
+    foreach(_skipped IN LISTS SPPARKS_SKIPPED_STYLES)
+        message(STATUS "  ${_skipped}")
     endforeach()
-    message(STATUS "└─ Re-run build_cmake.sh with the flag(s) above to enable these.")
 endif()
+
+# Environment block. This exists so that a build log copied off a remote machine
+# carries everything needed to diagnose it without an interactive session.
+message(STATUS "")
+message(STATUS "--- Environment (include this when reporting a build problem) ---")
+message(STATUS "CMake: ${CMAKE_VERSION} (${CMAKE_GENERATOR})")
+message(STATUS "System: ${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_VERSION} ${CMAKE_SYSTEM_PROCESSOR}")
+message(STATUS "CXX: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
+message(STATUS "CXX path: ${CMAKE_CXX_COMPILER}")
+message(STATUS "CXX standard: ${CMAKE_CXX_STANDARD}")
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    message(STATUS "Release flags: ${OPT_FLAGS}")
+endif()
+if(SPPARKS_ENABLE_MPI)
+    if(MPI_CXX_FOUND)
+        # MPI_CXX_LIBRARY_VERSION_STRING is only populated when FindMPI could run a
+        # probe binary, which does not happen on machines that forbid launching MPI
+        # from a login node. Fall back to the standard version so the line is never
+        # blank in a log someone pastes back.
+        if(MPI_CXX_LIBRARY_VERSION_STRING)
+            string(REGEX REPLACE "\n.*" "" _mpi_impl "${MPI_CXX_LIBRARY_VERSION_STRING}")
+            message(STATUS "MPI: ${_mpi_impl}")
+        else()
+            message(STATUS "MPI: implementation string unavailable (MPI standard ${MPI_CXX_VERSION})")
+        endif()
+        message(STATUS "MPI compiler: ${MPI_CXX_COMPILER}")
+    else()
+        message(STATUS "MPI: requested but MPI_CXX_FOUND is false")
+    endif()
+endif()
+if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
+    message(STATUS "HDF5 include: ${HDF5_INCLUDE_DIRS}")
+endif()
+message(STATUS "Source dir: ${CMAKE_CURRENT_SOURCE_DIR}")
+message(STATUS "Binary dir: ${CMAKE_CURRENT_BINARY_DIR}")
+message(STATUS "=====================================")

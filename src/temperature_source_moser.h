@@ -29,7 +29,6 @@
 #include "GREENAM/GreenAM_Fluctuations.h"
 
 namespace sierra { namespace greenam {
-  template <typename RealType> struct VectorWrapper;
   template <typename RealType, typename ArrayType> struct LaserScan;
   template <typename RealType, typename ArrayType, unsigned MaxOrder> struct ScanIntegration;
 }}
@@ -108,10 +107,7 @@ class MoserTemperatureSource : public TemperatureSource {
   // TemperatureSource interface
   virtual void setup_temperature_source(const std::vector<std::string> &args) override;
   virtual double get_temperature_at_xyz_and_time(double x, double y, double z, double time) override;
-  virtual void update_temperatures(double dt, double simulation_time) override;
-  virtual bool needs_data_refresh(double simulation_time) override;
-  virtual void cleanup() override;
-  virtual std::string get_source_type() const override { return "moser"; }
+  void cleanup();
   virtual void print_source_info() const override;
 
   // Build scans from a RASTER-style straight-line repeated path. Called
@@ -126,13 +122,35 @@ class MoserTemperatureSource : public TemperatureSource {
   // back to a numerical floor that keeps the waypoint velocity calc
   // well-defined; pass 0 (default) for the legacy near-instant repeat
   // behavior.
+  // hatch != 0: pass r is the base line offset by r*hatch along the in-plane
+  // normal (-dy, dx)/L; serpentine reverses the direction on odd passes.
+  // hatch == 0 repeats the base line in place (legacy behaviour).
   void build_scan(double start_time,
                   double x0, double y0,
                   double x1, double y1,
                   double laser_plane_z,
                   double speed,
                   int repeats,
-                  double pause_between_repeats = 0.0);
+                  double pause_between_repeats = 0.0,
+                  double hatch = 0.0,
+                  bool serpentine = false);
+
+  // One emitting segment of the scan: the laser moves (x0,y0) -> (x1,y1)
+  // over [t0, t1] at power fraction p of lambda*Q. Line scans are one
+  // segment per pass; a path file is a polyline of them.
+  using Seg = ScanSeg;
+
+  // Generic scan: segments with times relative to t_start (sorted,
+  // disjoint; touching segments are a continuous polyline). Replaces any
+  // line scan. append_pass / reset_history_and_start are not available.
+  void build_scan_path(double t_start, const std::vector<Seg> &segs,
+                       double laser_plane_z);
+
+  // Emitting segments in absolute time (pass mode included).
+  const std::vector<Seg> &segments() const { return segs_; }
+
+  // Endpoints of pass r under the hatch/serpentine rule (r >= 0).
+  void pass_geometry(int r, double &x0, double &y0, double &x1, double &y1) const;
 
   // Append a single new pass to an already-built scan starting at
   // t_start. Reuses the path geometry (x0..y1, plane_z, speed) stashed
@@ -150,7 +168,8 @@ class MoserTemperatureSource : public TemperatureSource {
   // passes). After this call, get_temperature_at_xyz_and_time(...)
   // integrates only over the new pass (no contribution from earlier
   // passes), and the prefactor ambient is `new_ambient`.
-  void reset_history_and_start(double t_start, double new_ambient);
+  // Virtual: the conduction source also reinitialises its solver state.
+  virtual void reset_history_and_start(double t_start, double new_ambient);
 
   bool has_scan() const { return scan_built; }
 
@@ -163,31 +182,36 @@ class MoserTemperatureSource : public TemperatureSource {
   double get_scan_pause() const { return scan_pause_between_repeats; }
   int    get_scan_repeats() const { return scan_repeats; }
   double get_scan_laser_plane_z() const { return scan_laser_plane_z; }
-  double get_scan_x0() const { return scan_x0; }
-  double get_scan_y0() const { return scan_y0; }
-  double get_scan_x1() const { return scan_x1; }
-  double get_scan_y1() const { return scan_y1; }
-  double get_T0() const { return T0_default; }
   // End time of the most-recently-scheduled active emission window. The
   // app's pause_below logic uses this to gate `append_pass` on "the
   // current pass has actually finished emitting" so it doesn't drain
   // all queued passes during the laser's initial warm-up.
   double get_last_pass_end_time() const {
-    return pass_start_times_.empty()
-             ? scan_t_origin
-             : pass_start_times_.back() + scan_pass_duration;
+    return segs_.empty() ? scan_t_origin : segs_.back().t1;
   }
 
-  // Time-resolved source: peak local cooling between passes is meaningful,
-  // so the app's fast-forward path can call its Moser predictor.
-  virtual bool supports_time_queries() const override { return true; }
-
-  // Quadrature character length (Moser's `char_length`); 0.5 gives
-  // ~1e-4 fractional integration error per the GREENAM comments.
-  void set_char_length(double cl) { char_length = cl; }
-
   MoserMode get_mode() const { return mode; }
-  int  num_lobes() const { return n_lobes_; }
+
+  // Diagnostic print of one lobe's geometry and fluctuation spec.
+  void print_lobe_info(int idx) const;
+
+  // ----- Device (Kokkos) evaluation support -----------------------------
+  // Fill the scalar device plan (per-lobe ellipsoid / zl / fluct sizes,
+  // material params, segment count). Supports STANDARD (1 lobe) and KEYHOLE
+  // (2 lobes), with or without fluctuations. Returns true if the scan is built;
+  // false otherwise (host path). plan.time is set by the caller.
+  bool fill_device_plan(struct MoserDevicePlan &plan) const;
+
+  // The variable-length device data for upload. The path geometry
+  // (bounds/xl/yl/normals/speeds, length nseg) is shared across lobes; `powers`
+  // is concatenated per lobe (length n_lobes*nseg, lobe-major); the fluctuation
+  // arrays are concatenated per lobe (length sum of fluct_n). Only valid after
+  // a successful fill_device_plan.
+  struct DeviceArrays {
+    std::vector<double> bounds, xl, yl, normals_x, normals_y, speeds, powers;
+    std::vector<double> fluct_t, fluct_w, fluct_d, fluct_p;
+  };
+  DeviceArrays copy_device_data() const;
 
   // ----- Stochastic ΔW/W, ΔD/D, ΔP/P fluctuations -----------------------
   // Time-domain recursive PSD generator. Pre-builds an emission-time-keyed
@@ -233,13 +257,11 @@ class MoserTemperatureSource : public TemperatureSource {
   //   idx = 1  -> bottom lobe (KEYHOLE only)
   void set_psd_spec(int idx, const PsdSpec &spec);
 
-  bool has_fluctuations() const;
-
   // Lobe indices (also available to the parser).
   static constexpr int LOBE_TOP = 0;
   static constexpr int LOBE_BOT = 1;
 
- private:
+ protected:   // the conduction source reuses the material, lobe and pass state
   // Material / source parameters
   double Q;          // total laser power [W]
   double lambda;     // absorption efficiency
@@ -260,6 +282,8 @@ class MoserTemperatureSource : public TemperatureSource {
   double scan_x0, scan_y0, scan_x1, scan_y1;
   double scan_laser_plane_z;   // actual free surface; lobe zl_eff differ in KEYHOLE
   double scan_speed;
+  double scan_hatch = 0.0;       // per-pass lateral offset [m]; 0 = repeat in place
+  bool   scan_serpentine = false;
   int    scan_repeats;
   bool   scan_built;
   // Multi-pass timing (consumed by the app-level inter-pass predictor).
@@ -271,11 +295,15 @@ class MoserTemperatureSource : public TemperatureSource {
   // (start_time, repeats, pause) spec, or grown by append_pass when the
   // app's pause_below path decides the threshold has been met.
   std::vector<double> pass_start_times_;
+  // Emitting segments, absolute times. Pass mode derives them from
+  // pass_start_times_ in rebuild_scan_from_pass_list_; path mode sets them.
+  std::vector<Seg> segs_;
+  bool path_mode_ = false;
 
   // GREENAM integrator pointers (instantiated in the cpp file via
   // forward-declared templates so the GREENAM headers are pulled into
   // exactly one translation unit).
-  using GREENAM_Array  = sierra::greenam::VectorWrapper<double>;
+  using GREENAM_Array  = std::vector<double>;
   using GREENAM_Scan   = sierra::greenam::LaserScan<double, GREENAM_Array>;
   using GREENAM_Integ  = sierra::greenam::ScanIntegration<double, GREENAM_Array, 30>;
 
@@ -330,6 +358,10 @@ class MoserTemperatureSource : public TemperatureSource {
   std::array<Lobe, 2> lobes_;
   int n_lobes_;        // 1 for STANDARD, 2 for KEYHOLE
 
+  // Generation counter, bumped by rebuild_scan_from_pass_list_(); lets a
+  // device caller cache the uploaded segment arrays and refresh only on change.
+  long scan_version_ = 0;
+
   // PSD helpers (operate on a Lobe by reference)
   void psd_reset_filter_state(Lobe &lobe);
   void psd_warmup(Lobe &lobe, int n_steps);
@@ -342,8 +374,6 @@ class MoserTemperatureSource : public TemperatureSource {
   // Idempotent; called from build_scan and append_pass.
   void rebuild_scan_from_pass_list_();
 
-  // Diagnostic print helper for a single lobe.
-  void print_lobe_info(int idx) const;
 };
 
 }

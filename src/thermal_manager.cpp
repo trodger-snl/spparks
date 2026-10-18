@@ -943,9 +943,8 @@ ThermalManager::rosenthal_fast_forward(double current_time, double stoptime,
     rosenthal_source();
   if (!ros) return step;
 
-  // `laser_path ... pause_below <Tk>` overrides the default liquidus threshold.
-  const double fast_forward_threshold =
-    (laser_pause_below > 0.0) ? laser_pause_below : host_->tl;
+  // The liquidus, as in advance(); laser_path rejects pause_below for Rosenthal.
+  const double fast_forward_threshold = host_->tl;
 
   // global_max_T is already reduced across ranks, so this test is consistent
   // on every rank -> all ranks take the same branch (keeps the MIN reduce

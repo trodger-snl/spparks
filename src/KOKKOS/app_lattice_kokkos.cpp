@@ -263,6 +263,10 @@ void AppLatticeKokkos::iterate_rejection(double stoptime)
   host_data_stale = true;
   timer->stamp(TIME_SOLVE);
 
+  // `sector nstop/tstop` sweeps each colour nloop times per pass; setup()
+  // gives every active set the same nloop and folds it into dt_rkmc.
+  const int nloop = set[bothflag ? nsector : 0].nloop;
+
   int done = 0;
   while (!done) {
     // For each sector (or single pass if no sectors)
@@ -326,17 +330,18 @@ void AppLatticeKokkos::iterate_rejection(double stoptime)
         int color_count = h_offsets[icolor + 1] - color_start;
 
         if (color_count > 0) {
-          // Derived class implements the actual sweep kernel
-          sweep_color_kokkos(icolor, color_start, color_count);
-
-          // CRITICAL: Fence before next color to ensure writes are visible
-          Kokkos::fence();
+          // Derived class implements the actual sweep kernel; fence so each
+          // pass sees the previous one's writes
+          for (int iloop = 0; iloop < nloop; iloop++) {
+            sweep_color_kokkos(icolor, color_start, color_count);
+            Kokkos::fence();
+          }
           host_data_stale = true;
 
           // Count the sites this kernel actually attempted. Adding nlocal once
           // per sector instead overcounted by nsector (each sector's lists hold
           // only its share of the sites), inflating Nreject ~nsector-fold.
-          nattempt += color_count;
+          nattempt += (bigint) nloop * color_count;
         }
       }
 

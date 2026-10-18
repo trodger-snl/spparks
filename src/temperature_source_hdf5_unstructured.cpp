@@ -1740,20 +1740,20 @@ void HDF5UnstructuredTemperatureSource::compute_site_thermal_intervals(double th
   // Aggregate per-rank counts so the diagnostic reflects the whole
   // communicator, not just rank 0's subdomain.  Build time is reduced with
   // MAX so the reported elapsed is the slowest rank (the actual bottleneck).
-  long local_site_count = static_cast<long>(current_layer_site_intervals.size());
-  long local_raw_count  = static_cast<long>(raw.size());
-  long local_node_count = (active_layer < layer_thermal_intervals.size())
-    ? static_cast<long>(layer_thermal_intervals[active_layer].size()) : 0L;
-  long total_site_count = 0, total_raw_count = 0, total_node_count = 0;
+  bigint local_site_count = current_layer_site_intervals.size();
+  bigint local_raw_count  = raw.size();
+  bigint local_node_count = (active_layer < layer_thermal_intervals.size())
+    ? layer_thermal_intervals[active_layer].size() : 0;
+  bigint total_site_count = 0, total_raw_count = 0, total_node_count = 0;
   double max_elapsed = 0.0;
-  MPI_Reduce(&local_site_count, &total_site_count, 1, MPI_LONG, MPI_SUM, 0, world);
-  MPI_Reduce(&local_raw_count,  &total_raw_count,  1, MPI_LONG, MPI_SUM, 0, world);
-  MPI_Reduce(&local_node_count, &total_node_count, 1, MPI_LONG, MPI_SUM, 0, world);
+  MPI_Reduce(&local_site_count, &total_site_count, 1, MPI_SPK_BIGINT, MPI_SUM, 0, world);
+  MPI_Reduce(&local_raw_count,  &total_raw_count,  1, MPI_SPK_BIGINT, MPI_SUM, 0, world);
+  MPI_Reduce(&local_node_count, &total_node_count, 1, MPI_SPK_BIGINT, MPI_SUM, 0, world);
   MPI_Reduce(&elapsed, &max_elapsed, 1, MPI_DOUBLE, MPI_MAX, 0, world);
 
   if (universe->me == 0) {
-    fprintf(screen, "  Layer %u: Found %ld site-level thermal intervals "
-            "(vs %ld node-level, %ld raw sites) across %d ranks in %.3f s\n",
+    fprintf(screen, "  Layer %u: Found " BIGINT_FORMAT " site-level thermal intervals "
+            "(vs " BIGINT_FORMAT " node-level, " BIGINT_FORMAT " raw sites) across %d ranks in %.3f s\n",
             active_layer,
             total_site_count,
             total_node_count,

@@ -615,12 +615,7 @@ void AppAdditiveTexture::init_app()
   t_cool_max = tl - ts;
 
   //Check that our timestep is small enough	
-  double max_front_vel = 0;
-	int power = solid_front_length -1;
-	for(int k = 0; k < solid_front_length; k++) {
-		max_front_vel = max_front_vel + solid_front_coeffs[k] * pow(tl - ts, power);
-		power--;
-	}
+  double max_front_vel = front_velocity(tl - ts);
 
   
   if(dt > dx/max_front_vel) {
@@ -735,11 +730,7 @@ void AppAdditiveTexture::execute_nucleation_event(int i, double Tcool) {
     solid_G = normal_finder(i);
     G[i] = solid_G[3];
 
-    int power = solid_front_length - 1;
-    for (int k = 0; k < solid_front_length; k++) {
-        V[i] = V[i] + solid_front_coeffs[k] * pow(Tcool, power);
-        power--;
-    }
+    V[i] = V[i] + front_velocity(Tcool);
 
     naccept++;
     nucleation_particle_flipper(i, round(nucleation_sizes[spin[i]] / pow(dx, 3)), ranapp, i, Tcool);
@@ -834,11 +825,7 @@ void AppAdditiveTexture::site_event_solidification(int i, double Tcool, RandomPa
     }
 
     if(solidNeigh == 1) {
-      int power = solid_front_length - 1;
-      for(int k = 0; k < solid_front_length; k++) {
-          solid_d[i] = solid_d[i] + solid_front_coeffs[k] * pow(Tcool, power) * dt;
-          power--;
-      }
+      solid_d[i] = solid_d[i] + front_velocity(Tcool) * dt;
     
       //Go through neighbor list and collect the eligible solid parents
       for (int j = 0; j < numneigh[i]; j++) {
@@ -911,11 +898,7 @@ void AppAdditiveTexture::site_event_solidification(int i, double Tcool, RandomPa
             solid_G = normal_finder(i); //Update gradient
             G[i] = solid_G[3];  // Use the actual gradient magnitude directly
 
-            int power = solid_front_length - 1;
-            for(int k = 0; k < solid_front_length; k++) {
-               V[i] = V[i] + solid_front_coeffs[k] * pow(Tcool, power); //Update solidification rate
-                power--;
-            }
+            V[i] = V[i] + front_velocity(Tcool); //Update solidification rate
             naccept++;
 
             // Apply misorientation based on temperature gradient

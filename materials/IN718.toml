@@ -6,7 +6,7 @@ schema_version = 1
 material = "IN718"
 designation = { UNS = "N07718", W_Nr = "2.4668", spec = "wrought per AMS 5596/5662; LPBF per ASTM F3055" }
 composition_wt_pct = { Ni_plus_Co = "50.0-55.0", Cr = "17.0-21.0", Fe = "bal", Nb_plus_Ta = "4.75-5.50", Mo = "2.80-3.30", Ti = "0.65-1.15", Al = "0.20-0.80", Co = "<1.0", C = "<0.08", Mn = "<0.35", Si = "<0.35", Cu = "<0.30", B = "<0.006", P = "<0.015", S = "<0.015", ref = "specialmetals_718", note = "UNS N07718 limiting composition (Special Metals SMC-045 Table 1), not a measured heat" }
-version = "1.0.0"
+version = "2.0.0"
 created = 2026-10-17
 modified = 2026-10-17
 status = "draft"
@@ -17,6 +17,12 @@ version = "1.0.0"
 date = 2026-10-17
 author = "research agent (Claude)"
 changes = "Initial card from the literature: Agazhanov 2019 (k, cp, density), Hosaeus 2001 (solidus, liquidus, liquid cp and k), Greene 1999/2000 (emissivity), Honda 2025 (powder absorptivity), Wei 2018 (powder conductivity), Yuan 2023 (tip kinetics), process sets from Weaver 2024 (AM Bench 2022) and Wang 2023."
+
+[[changelog]]
+version = "2.0.0"
+date = 2026-10-17
+author = "T. Rodgers"
+changes = "solid_front_vel is now the front_velocity_source power law itself, which SPPARKS reads directly, instead of a degree-6 polynomial fit (5.7% max error); front velocities change by up to that error."
 
 [references.agazhanov2019]
 citation = "A.Sh. Agazhanov, D.A. Samoshkin, Yu.M. Kozlovskii, Thermophysical properties of Inconel 718 alloy, J. Phys.: Conf. Ser. 1382 (2019) 012175"
@@ -81,7 +87,7 @@ absorptivity = { value = 0.6, unit = "1", ref = "honda2025", T_range = [423, 673
 [microstructure]
 # Literature tip kinetics; nucleation records are left to the decks.
 front_velocity_source = { form = "power_law", a = 6.23e-7, n = 3.48, unit = "m/s", dT_unit = "K", ref = "yuan2023", note = "KGT (Ivantsov + marginal stability) on a ThermoCalc Scheil path shifted to Ts 1230 C / Tl 1337 C; least-squares power law, Eq. 14 and Fig. 5. The fitted points span about 4-31 K undercooling; the polynomial below extrapolates the power law to the full 82 K freezing range" }
-solid_front_vel = { coeffs = [7.08261e-12, -1.25031e-09, 1.07399e-07, 9.49718e-07, -5.85508e-07, 1.42099e-07, 0], unit = "m/s", dT_unit = "K", ref = "yuan2023", fit_of = "front_velocity_source", fit_range_K = [0, 82], max_rel_err = 0.057, note = "fit-front --degree 6, relative least squares with V(0) = 0: within 5.7% of the power law pointwise over (0, 82] K. A cubic cannot follow dT^3.48 at both ends (143% at small dT). The power law itself is fitted to about 4-31 K; beyond that both extrapolate" }
+solid_front_vel = { a = 6.23e-7, n = 3.48, unit = "m/s", dT_unit = "K", ref = "yuan2023", fit_of = "front_velocity_source", max_rel_err = 1e-9, note = "the front_velocity_source power law, read directly (solid_front_vel power a n). The power law itself is fitted to about 4-31 K; beyond that it extrapolates" }
 
 # Process sets: published LPBF measurements. source_depth (a Moser calibration)
 # and convection are left out; no source gives them.

@@ -351,10 +351,12 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
     return 2.0 * Kokkos::acos(dot);
   }
 
-  // Solid-front velocity polynomial V = sum_k coeffs[k] * Tcool^(n-1-k).
+  // Device twin of AdditiveParams::front_velocity: n == 0 is the power law
+  // a * Tcool^p, otherwise the polynomial coeffs (highest power first).
   KOKKOS_INLINE_FUNCTION
   static double solid_front_velocity(const Kokkos::View<double*> &coeffs, int n,
-                                     double Tcool) {
+                                     double a, double p, double Tcool) {
+    if (n == 0) return a * Kokkos::pow(Tcool, p);
     double V = 0.0, Tcool_power = 1.0;
     for (int k = n - 1; k >= 0; k--) {
       V += coeffs(k) * Tcool_power;

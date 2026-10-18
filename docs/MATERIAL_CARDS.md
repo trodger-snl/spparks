@@ -139,22 +139,25 @@ the table below exactly; it never converts units.
 | `process.<set>.convection` | `W/(m^2 K)`, as `{ h, T_inf }` |
 
 **Front velocity.**
-- `solid_front_vel = { coeffs = [...] }` is SPPARKS's polynomial, highest
-  power first, in undercooling ΔT = liquidus − T.
-  Any number of coefficients is allowed.
+- `solid_front_vel` is what SPPARKS evaluates, in undercooling
+  ΔT = liquidus − T, in one of two forms:
+  - `{ coeffs = [...] }`: a polynomial, highest power first, any number of
+    coefficients;
+  - `{ a, n }`: the power law V = a ΔT^n (a, n > 0).
 - Literature data go in `front_velocity_source`, with their ref, in one of
   three forms:
-  - `{ form = "power_law", a, n }` (V = a ΔT^n);
+  - `{ form = "power_law", a, n }` (V = a ΔT^n; copy a and n exactly into
+    `solid_front_vel`);
   - `{ form = "polynomial", coeffs = [...] }` (a KGT polynomial; copy it
     exactly into `solid_front_vel`);
   - `{ form = "points", dT = [...], V = [...] }`.
-- `tools/material_card.py fit-front [--degree N]` turns the source into
-  `coeffs`. It is a relative least-squares fit with V(0) = 0, so slow fronts
+- For `points`, `tools/material_card.py fit-front [--degree N]` turns the
+  source into `coeffs`. It is a relative least-squares fit with V(0) = 0, so slow fronts
   at small undercooling count as much as fast ones. A cubic is off by 30 to
   140 % for ΔT^3.1 to ΔT^3.5 laws; degree 5 or 6 gets within about 5 %.
-- `lint` checks that the polynomial stays within `max_rel_err` (default 0.1)
-  of the source at every point of (0, `fit_range_K` max]. It also checks that
-  the polynomial is non-negative over (0, liquidus − solidus].
+- `lint` checks that `solid_front_vel` stays within `max_rel_err` (default
+  0.1) of the source at every point of (0, `fit_range_K` max]. It also checks
+  that it is non-negative over (0, liquidus − solidus].
 
 **Process sets.**
 - `[process.<name>]` holds the records in the table above, plus free-form

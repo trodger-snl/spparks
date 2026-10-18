@@ -97,7 +97,7 @@ liquidus, giving it a random spin and orientation; (3) for liquid
 sites below the liquidus, either nucleates a new grain (when the
 site's spin is a nucleation spin and the undercooling exceeds that
 spin's critical undercooling) or advances a solidification front by
-v(dT)*dt, where v is the {solid_front_vel} polynomial; once the front
+v(dT)*dt, where v is the {solid_front_vel} velocity; once the front
 has crossed the voxel, the site copies the orientation of a solid
 parent grain chosen with probability weighted by the gradient-aligned
 mobility (see {texture_parameters}); (4) applies one boundary-smoothing
@@ -144,9 +144,10 @@ Thermal and material properties:
 
 {liquidus} {Tl} : liquidus temperature in K (> 0). :ulb,l
 {solidus} {Ts} : solidus temperature in K (> 0). :l
-{solid_front_vel} {N c0 c1 ... cN-1} : solidification-front velocity
-v(dT) = c0*dT^(N-1) + c1*dT^(N-2) + ... + cN-1 in m/s, with dT the
-undercooling below the liquidus in K. :l
+{solid_front_vel} {N c0 c1 ... cN-1} or {power a n} : solidification-front
+velocity in m/s, with dT the undercooling below the liquidus in K: the
+polynomial v(dT) = c0*dT^(N-1) + c1*dT^(N-2) + ... + cN-1, or the power
+law v(dT) = a*dT^n (a > 0, n > 0). :l
 "material"_material.html {file} \[process {name}\] : load a material
 card; sets the values above and the nucleation values below from the
 card, and supplies {card} values to

@@ -323,9 +323,7 @@ void AppAdditiveTextureKokkos::init_app()
   // 2 vs 4 us comparison on the GP700 build agreed within seed noise
   // (docs/GP700_MOSER_SROD_DECK_PLAN.md). The reach-based bound is printed too.
   {
-    double vmax = 0.0;
-    for (int k = 0; k < solid_front_length; k++)
-      vmax += solid_front_coeffs[k] * pow(tl - ts, solid_front_length - 1 - k);
+    const double vmax = front_velocity(tl - ts);
     if (vmax > 0.0 && domain->me == 0 && screen) {
       const double dt_cpu = dx / vmax, dt_reach = 1.7320508075688772 * dx / vmax;
       if (dt > dt_cpu)
@@ -1382,6 +1380,7 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
   auto d_nucleation_temps_local = this->d_nucleation_temps;
   auto d_solid_front_coeffs_local = this->d_solid_front_coeffs;
   int solid_front_length_local = this->solid_front_length;
+  const double solid_front_a_local = this->solid_front_a, solid_front_n_local = this->solid_front_n;
   auto d_V_local = this->d_V;
   auto d_G_local = this->d_G;
   auto k_numneigh_d = d_numneigh;
@@ -1432,7 +1431,8 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
             rand_pool_local.free_state(generator);
 
             d_V_local(i) = solid_front_velocity(d_solid_front_coeffs_local,
-                                                solid_front_length_local, Tcool);
+                                                solid_front_length_local, solid_front_a_local,
+                                                solid_front_n_local, Tcool);
 
             // Gradient magnitude, as the CPU's normal_finder in
             // execute_nucleation_event; the flipper copies it to the nucleus.
@@ -1709,6 +1709,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
   double dx_local = this->dx;
   auto d_solid_front_coeffs_local = this->d_solid_front_coeffs;
   int solid_front_length_local = this->solid_front_length;
+  const double solid_front_a_local = this->solid_front_a, solid_front_n_local = this->solid_front_n;
   const double c1_local = c1, c2_local = c2, c3_local = c3;
   auto d_G_local = this->d_G;
   auto d_V_local = this->d_V;
@@ -1775,7 +1776,8 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
 
         // Advance solid front distance: solid_d += V(Tcool) * dt
         const double V_advance = solid_front_velocity(d_solid_front_coeffs_local,
-                                                      solid_front_length_local, Tcool);
+                                                      solid_front_length_local, solid_front_a_local,
+                                                      solid_front_n_local, Tcool);
         solid_d_i += V_advance * dt_local;
 
         // Find solid neighbors within reach; weights are computed per GRAIN below

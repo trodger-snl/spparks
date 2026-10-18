@@ -80,8 +80,9 @@ Without {process}, only the material values are available, and a
 spot for moser and conduction, on the command line.
 
 tools/material_card.py checks a card (units, references, changelog,
-DOIs) and converts literature solidification-front velocities into the
-polynomial form {solid_front_vel} uses.
+DOIs) and fits tabulated solidification-front velocities with the
+polynomial form of {solid_front_vel}; power-law and polynomial
+velocities are copied into the card as they are published.
 
 :line
 

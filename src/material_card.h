@@ -40,7 +40,8 @@ struct MaterialCard {
   opt k_powder, packing, absorptivity;
 
   // [microstructure]
-  std::vector<double> front;   // solid_front_vel coefficients, highest power first
+  std::vector<double> front;   // solid_front_vel coefficients, highest power first,
+  opt front_a, front_n;        // or the power law a * dT^n (front empty)
   opt nucleation_density, critical_undercooling, undercooling_deviation,
       mean_nuclei_volume, nuclei_volume_deviation;
 

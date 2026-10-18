@@ -176,10 +176,21 @@ MaterialCard MaterialCard::parse(const std::string &text, const std::string &pat
   if (const toml::table *rec = record(root, "microstructure.solid_front_vel", "m/s")) {
     if ((*rec)["dT_unit"].value<std::string>() != std::optional<std::string>("K"))
       fail("microstructure.solid_front_vel", "dT_unit must be \"K\"");
-    c.front = numbers(*rec, "coeffs", "microstructure.solid_front_vel");
+    const std::string where = "microstructure.solid_front_vel";
     std::string s;
-    for (double v : c.front) s += (s.empty() ? "" : " ") + num(v);
-    rd.note("microstructure.solid_front_vel", "[" + s + "] (dT in K)", "m/s", *rec);
+    if (rec->contains("coeffs") == rec->contains("a"))
+      fail(where, "give either coeffs = [...] (polynomial) or a and n (power law a*dT^n)");
+    if (rec->contains("coeffs")) {
+      c.front = numbers(*rec, "coeffs", where);
+      for (double v : c.front) s += (s.empty() ? "" : " ") + num(v);
+      s = "[" + s + "]";
+    } else {
+      c.front_a = number(*rec, "a", where);
+      c.front_n = number(*rec, "n", where);
+      if (*c.front_a <= 0 || *c.front_n <= 0) fail(where, "power law needs a > 0 and n > 0");
+      s = num(*c.front_a) + " * dT^" + num(*c.front_n);
+    }
+    rd.note(where, s + " (dT in K)", "m/s", *rec);
   }
   c.nucleation_density      = rd.scalar("microstructure.nucleation_density", "1/m^3");
   c.critical_undercooling   = rd.scalar("microstructure.critical_undercooling", "K");

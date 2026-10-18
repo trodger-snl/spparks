@@ -80,6 +80,13 @@ bool AdditiveParams::parse_command(const char *command, int narg, char **arg,
       solid_front_length = (int) c.front.size();
       solid_front_coeffs = new double[solid_front_length];
       std::copy(c.front.begin(), c.front.end(), solid_front_coeffs);
+    } else if (c.front_a) {
+      material_given.insert("solid_front_vel");
+      delete[] solid_front_coeffs;
+      solid_front_coeffs = nullptr;
+      solid_front_length = 0;
+      solid_front_a = *c.front_a;
+      solid_front_n = *c.front_n;
     }
   }
   else if (strcmp(command, "setup_temperature_source") == 0) thermal.setup_cmd(narg, arg);
@@ -93,6 +100,18 @@ bool AdditiveParams::parse_command(const char *command, int narg, char **arg,
 
   } else if (strcmp(command, "solid_front_vel") == 0) {
     if (narg < 1) error->all(FLERR, "Illegal solid_front_vel command");
+    if (strcmp(arg[0], "power") == 0) {
+      if (narg != 3) error->all(FLERR, "Illegal solid_front_vel command: expected power a n");
+      solid_front_a = atof(arg[1]);
+      solid_front_n = atof(arg[2]);
+      if (solid_front_a <= 0 || solid_front_n <= 0)
+        error->all(FLERR, "Illegal solid_front_vel command: power a n needs a > 0 and n > 0");
+      delete[] solid_front_coeffs;
+      solid_front_coeffs = nullptr;
+      solid_front_length = 0;
+      material_given.insert("solid_front_vel");
+      return true;
+    }
     int n = atoi(arg[0]);
     if (n <= 0) error->all(FLERR, "Illegal solidification front velocity specification");
     if (narg != n + 1)
@@ -255,6 +274,18 @@ void AdditiveParams::check_misorientation_step(double dx, Error *error, int me) 
            "%g deg new-grain threshold: nearly every solidifying site will start "
            "a new grain", step * 180.0 / MY_PI, mis_thresh * 180.0 / MY_PI);
   error->warning(FLERR, msg);
+}
+
+/* ---------------------------------------------------------------------- */
+
+double AdditiveParams::front_velocity(double Tcool) const
+{
+  if (solid_front_length == 0) return solid_front_a * pow(Tcool, solid_front_n);
+  double V = 0.0;
+  int power = solid_front_length - 1;
+  for (int k = 0; k < solid_front_length; k++, power--)
+    V += solid_front_coeffs[k] * pow(Tcool, power);
+  return V;
 }
 
 /* ---------------------------------------------------------------------- */

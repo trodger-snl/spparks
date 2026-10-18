@@ -46,8 +46,13 @@ struct AdditiveParams {
   double tsig;  // undercooling standard deviation
   double size_norm;  // mean nuclei volume
   double size_sig;   // nuclei volume standard deviation
+  // Front velocity V(Tcool) in m/s, Tcool = tl - T in K: the polynomial
+  // solid_front_coeffs (highest power first), or, when solid_front_length
+  // is 0, the power law solid_front_a * Tcool^solid_front_n.
   double *solid_front_coeffs = nullptr;
   int solid_front_length = 0;
+  double solid_front_a = 0.0, solid_front_n = 0.0;
+  double front_velocity(double Tcool) const;
 
   // Texture model: mobility = c1 + c2*cos(c3*theta), c1 fixed at 1.0.
   double c1, c2, c3;

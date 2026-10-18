@@ -12,7 +12,8 @@ fit-front  relative least-squares polynomial with V(0) = 0 (SPPARKS order, highe
            power first, in undercooling dT = liquidus - T) to
            [microstructure].front_velocity_source over [0, liquidus - solidus]; prints a
            solid_front_vel line whose max_rel_err is the largest pointwise |fit/source - 1|.
-           A non-integer power law needs --degree 5 or 6 to get within a few %.
+           Only for tabulated sources: a polynomial or power_law source is copied
+           into solid_front_vel exactly (coeffs, or a and n).
 Python 3.11+ standard library only.
 """
 import json, math, sys, tomllib, urllib.error, urllib.request
@@ -42,6 +43,11 @@ UNCERTAINTY_TYPES = {'1sigma', '2sigma', 'bounds', 'relative_1sigma'}
 
 def polyval(c, x):
     return sum(a * x ** (len(c) - 1 - i) for i, a in enumerate(c))
+
+
+def front_vel(sf, dT):
+    """V(dT) of solid_front_vel: polynomial coeffs, or the power law a*dT^n."""
+    return polyval(sf['coeffs'], dT) if 'coeffs' in sf else sf['a'] * dT ** sf['n']
 
 
 def front_source(rec, dT):
@@ -82,9 +88,10 @@ def fit_poly(f, lo, hi, degree, n=200):
 
 
 def max_rel_err(c, f, lo, hi, n=200):
-    """Largest pointwise |poly/f - 1| on (lo, hi] where f > 0."""
+    """Largest pointwise |g/f - 1| on (lo, hi] where f > 0; g is c(x), or polynomial coeffs c."""
+    g = c if callable(c) else (lambda x: polyval(c, x))
     xs = [lo + (hi - lo) * i / n for i in range(1, n + 1)]
-    return max(abs(polyval(c, x) / f(x) - 1) for x in xs if f(x) > 0)
+    return max(abs(g(x) / f(x) - 1) for x in xs if f(x) > 0)
 
 
 def ceil2(x):
@@ -144,12 +151,12 @@ def lint(card, check_doi=False):
     if 'solid_front_vel' in mi and 'front_velocity_source' in mi:
         sf, src = mi['solid_front_vel'], mi['front_velocity_source']
         lo, hi = sf.get('fit_range_K', [0, th['liquidus']['value'] - th['solidus']['value']])
-        e = max_rel_err(sf['coeffs'], lambda x: front_source(src, x), lo, hi)
+        e = max_rel_err(lambda x: front_vel(sf, x), lambda x: front_source(src, x), lo, hi)
         if e > sf.get('max_rel_err', 0.1):
             errs.append(f'microstructure.solid_front_vel: {e:.3g} max relative error vs front_velocity_source')
     if 'solid_front_vel' in mi and 'solidus' in th and 'liquidus' in th:
         hi = th['liquidus']['value'] - th['solidus']['value']
-        neg = [x for x in (hi * i / 200 for i in range(1, 201)) if polyval(mi['solid_front_vel']['coeffs'], x) < 0]
+        neg = [x for x in (hi * i / 200 for i in range(1, 201)) if front_vel(mi['solid_front_vel'], x) < 0]
         if neg: errs.append(f'microstructure.solid_front_vel: negative velocity at dT = {neg[0]:.3g} K (range 0-{hi:g} K)')
     if check_doi:
         for key, r in refs.items():
@@ -184,6 +191,11 @@ def selftest():
     src = {'form': 'power_law', 'a': 1e-4, 'n': 2.0}       # a quadratic is fitted exactly
     c = fit_poly(lambda x: front_source(src, x), 0, 33, 3)
     assert max_rel_err(c, lambda x: front_source(src, x), 0, 33) < 1e-9 and c[-1] == 0.0, c
+    mi = dict(card['microstructure'], front_velocity_source=dict(src, unit='m/s', dT_unit='K', ref='estimate'),
+              solid_front_vel={'a': 1e-4, 'n': 2.0, 'unit': 'm/s', 'dT_unit': 'K', 'ref': 'estimate'})
+    assert lint(dict(card, microstructure=mi)) == [], lint(dict(card, microstructure=mi))
+    mi['solid_front_vel'] = dict(mi['solid_front_vel'], a=2e-4)   # doubles V: fails the source check
+    assert any('max relative error' in e for e in lint(dict(card, microstructure=mi)))
     pts = {'form': 'points', 'dT': [0, 10, 20], 'V': [0, 1, 3]}
     assert front_source(pts, 15) == 2.0 and front_source(pts, 30) == 3
     assert ceil2(0.00103) >= 0.00103 and ceil2(0.00103) <= 0.0011 + 1e-12

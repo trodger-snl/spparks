@@ -15,17 +15,24 @@
 </H3>
 <H3>app_style potts/neighonly command 
 </H3>
+<H3>app_style potts/kk command 
+</H3>
+<H3>app_style potts/neigh/kk command 
+</H3>
+<H3>app_style potts/neighonly/kk command 
+</H3>
 <P><B>Syntax:</B>
 </P>
 <PRE>app_style style Q 
 </PRE>
-<UL><LI>style = <I>potts</I> or <I>potts/neigh</I> or <I>potts/neighonly</I>
+<UL><LI>style = <I>potts</I> or <I>potts/neigh</I> or <I>potts/neighonly</I> or <I>potts/kk</I> or <I>potts/neigh/kk</I> or <I>potts/neighonly/kk</I>
 <LI>Q = number of spin states 
 </UL>
 <P><B>Examples:</B>
 </P>
 <PRE>app_style potts 100
-app_style potts/neigh 20 
+app_style potts/neigh 20
+app_style potts/kk 100 
 </PRE>
 <P><B>Description:</B>
 </P>
@@ -88,6 +95,21 @@ have a non-zero probability of occurring.
 </P>
 <HR>
 
+<P>Styles with a <I>/kk</I> suffix are Kokkos versions of the same models,
+which run the rKMC sweep in parallel on a GPU or with OpenMP threads.
+They take the same arguments and commands.  See <A HREF = "Section_start.html#start_3">Section
+2.3</A> for building and running them.
+They sweep the lattice only with <A HREF = "sweep.html">sweep color</A> or
+<A HREF = "sweep.html">sweep color/strict</A>.  With <I>color/strict</I>, <I>potts/kk</I> gives
+the same answer as <I>potts</I>.  <I>potts/neigh/kk</I> and <I>potts/neighonly/kk</I>
+draw from a shared random pool even with <I>color/strict</I>, so their
+results depend on GPU thread scheduling: they are not guaranteed to be
+repeatable, nor to match the CPU styles.  With a KMC solver
+(<A HREF = "solve_style.html">solve_style</A>), the <I>/kk</I> styles run the same host
+code as their CPU versions, with no GPU acceleration.
+</P>
+<HR>
+
 <P>The following additional commands are defined by these applications:
 </P>
 <DIV ALIGN=center><TABLE  BORDER=1 >
@@ -96,7 +118,11 @@ have a non-zero probability of occurring.
 
 <HR>
 
-<P><B>Restrictions:</B> none
+<P><B>Restrictions:</B>
+</P>
+<P>The <I>/kk</I> styles are part of the KOKKOS package.  They are only
+enabled if SPPARKS was built with that package.  See the <A HREF = "Section_start.html#start_3">Making
+SPPARKS</A> section for more info.
 </P>
 <P><B>Related commands:</B>
 </P>

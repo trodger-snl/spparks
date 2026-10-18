@@ -47,6 +47,11 @@ the list of on-lattice applications SPPARKS currently includes:
 "potts"_app_potts.html = Potts model for grain growth
 "potts/neigh"_app_potts.html = variant Potts model
 "potts/neighonly"_app_potts.html = variant Potts model
+"potts/kk"_app_potts.html = Kokkos (GPU) variant of potts
+"potts/neigh/kk"_app_potts.html = Kokkos (GPU) variant of potts/neigh
+"potts/neighonly/kk"_app_potts.html = Kokkos (GPU) variant of potts/neighonly
+"potts/quaternion"_app_potts_quaternion.html = Potts model with crystal orientations
+"potts/quaternion/kk"_app_potts_quaternion.html = Kokkos (GPU) variant of potts/quaternion
 "potts/grad"_app_potts_grad.html = Potts model with temperature gradient
 "potts/pin"_app_potts_pin.html = Potts model with pinning sites
 "potts/strain"_app_potts_strain.html = Potts model with per-site strain  :ul

@@ -127,7 +127,8 @@ If sectors are turned off via the {no} setting, then the {nstop} or
 "sweep"_sweep.html style is set to {color}.  They determine how many
 times the sites associated with each color are looped over before
 moving to the next color.  Normally, this should just be 1, which is
-the {nstop} default, but this can be changed if desired.
+the {nstop} default, but this can be changed if desired.  The Kokkos
+({/kk}) application styles treat {nstop} and {tstop} the same way.
 
 [Restrictions:]
 

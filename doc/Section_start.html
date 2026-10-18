@@ -158,13 +158,14 @@ cmake --build . -j12
 <P>WARNING: Native optimization (-march=native) produces non-portable
 binaries. Disable for cluster builds or binary distribution.
 </P>
-<P>Machine presets live in src/CMakePresets.json (<I>cmake --list-presets</I>).
-</P>
+<PRE>Machine presets live in src/CMakePresets.json ("cmake --list-presets"). 
+</PRE>
 <P>Package Management:
 </P>
 <P>Install optional packages via CMake:
 </P>
-<PRE>cmake -DSPPARKS_PACKAGE_STITCH=ON ..    # Enable STITCH package 
+<PRE>cmake -DSPPARKS_PACKAGE_STITCH=ON ..    # Enable STITCH package
+cmake -DSPPARKS_PACKAGE_KOKKOS=ON ..    # Enable KOKKOS package (see 2.3.2) 
 </PRE>
 <P>Building with External Dependencies:
 </P>
@@ -500,8 +501,8 @@ which are always used, plus optional packages, which are groups of
 files that enable a specific set of features.  You can see the list of
 both standard and user-contributed packages by typing "make package".
 </P>
-<P>Currently there is only one optional package: STITCH.  It is dicussed
-more below.
+<P>There are two optional packages, STITCH and KOKKOS, discussed below.
+KOKKOS can only be built with CMake.
 </P>
 <P>Any or all packages can be included or excluded when SPPARKS is built.
 You may wish to exclude certain packages if you will never run certain
@@ -613,6 +614,99 @@ library.
 % make no-stitch     # un-install the STITCH package files
 % make mpi           # re-build SPPARKS w/out the STITCH package 
 </PRE>
+<P>2.3.2 KOKKOS package
+</P>
+<P>The KOKKOS package adds versions of several applications written with
+the <A HREF = "https://kokkos.org">Kokkos</A> performance-portability library, so
+that their sweeps run on a GPU (CUDA, HIP or SYCL backend) or on CPU
+threads (OpenMP backend).  Their style names end in <I>/kk</I>:
+</P>
+<UL><LI><A HREF = "app_additive_texture.html">additive/texture/kk</A>
+<LI><A HREF = "app_potts.html">potts/kk</A>
+<LI><A HREF = "app_potts.html">potts/neigh/kk</A>
+<LI><A HREF = "app_potts.html">potts/neighonly/kk</A>
+<LI><A HREF = "app_potts_quaternion.html">potts/quaternion/kk</A> 
+</UL>
+<P>An input deck selects one by name in its <A HREF = "app_style.html">app_style</A>
+command; no command-line switch substitutes them for the CPU styles,
+which stay available in a KOKKOS build.  Each takes the same arguments
+and commands as its CPU style; the differences are listed below and on
+each style's page.
+</P>
+<P><B>Building:</B>
+</P>
+<P>KOKKOS is built with CMake only.  Kokkos itself is bundled as a git
+submodule in lib/kokkos; fetch it once with
+</P>
+<PRE>git submodule update --init lib/kokkos 
+</PRE>
+<P>and enable the package with these options:
+</P>
+<PRE>-DSPPARKS_PACKAGE_KOKKOS=ON       # enable the package (default: OFF)
+-DSPPARKS_KOKKOS_BACKEND=name     # OPENMP (default), CUDA, HIP, SYCL or SERIAL
+-DSPPARKS_KOKKOS_ARCH=token       # GPU architecture; required by CUDA and HIP
+-DSPPARKS_KOKKOS_HOST_OPENMP=ON   # OpenMP host threads with a GPU backend (default: OFF)
+-DSPPARKS_FP32=ON                 # single precision in the hot kernels (default: OFF) 
+</PRE>
+<P>The architecture token is the Kokkos name of the GPU: for example
+AMD_GFX942_APU (MI300A), AMD_GFX942 (MI300X), AMD_GFX90A (MI200),
+AMD_GFX1151 (Strix Halo), AMPERE80 (A100) or HOPPER90 (H100).  AMD
+GPUs are not auto-detected.  The C++ compiler must be hipcc for HIP
+and Kokkos' lib/kokkos/bin/nvcc_wrapper for CUDA; src/build_cmake.sh
+picks them when CXX is not set.  src/CMakePresets.json holds presets
+for MI300A, Strix Halo and OpenMP ("cmake --list-presets").  For
+example:
+</P>
+<PRE>cmake -S src -B build-hip -DCMAKE_CXX_COMPILER=hipcc   -DSPPARKS_PACKAGE_KOKKOS=ON -DSPPARKS_KOKKOS_BACKEND=HIP   -DSPPARKS_KOKKOS_ARCH=AMD_GFX1151
+cmake --build build-hip -j 
+</PRE>
+<P>or, with the build script:
+</P>
+<PRE>cd src
+./build_cmake.sh --kokkos --kokkos-backend HIP --kokkos-arch AMD_GFX1151 
+</PRE>
+<P>SPPARKS_FP32 computes the temperature fields of additive/texture/kk and
+the disorientation angle of potts/quaternion/kk in single precision.
+It is meant for testing on GPUs with a reduced FP64 rate; results
+differ from the default double-precision build in the low bits.
+</P>
+<P><B>Running:</B>
+</P>
+<P>Kokkos reads its own --kokkos-* command-line switches and removes
+them before SPPARKS parses the rest; for example
+</P>
+<PRE>spparks -in in.potts --kokkos-device-id=1
+spparks -in in.potts --kokkos-num-threads=8 
+</PRE>
+<P>With more than one visible GPU, SPPARKS binds each MPI rank to GPU
+(node-local rank mod number of GPUs), unless the device was chosen with
+the KOKKOS_DEVICE_ID or KOKKOS_MAP_DEVICE_ID_BY environment variable or
+with --kokkos-device-id.  With the OpenMP backend, launch MPI so that
+each rank's threads are not pinned to one core (for example "mpirun
+--bind-to none" with Open MPI) and set OMP_NUM_THREADS.
+</P>
+<P>When SPPARKS is used as a library (<A HREF = "#start_4">Section 2.4</A> and the
+<A HREF = "Section_python.html">Python interface</A>), the first SPPARKS instance
+initializes Kokkos and it is finalized when the process exits, so
+several instances can be created one after another in one process.
+</P>
+<P><B>Restrictions:</B>
+</P>
+<P>The <I>/kk</I> styles run rejection KMC with <A HREF = "sweep.html">sweep color</A> or
+<A HREF = "sweep.html">sweep color/strict</A> only.  With a KMC solver
+(<A HREF = "solve_style.html">solve_style</A>) the Potts <I>/kk</I> styles run the CPU
+code on the host.
+</P>
+<P>With <A HREF = "sweep.html">sweep color/strict</A>, potts/kk gives the same answer as
+potts at any number of processors, and potts/quaternion/kk is
+repeatable run to run and independent of the number of processors.
+potts/neigh/kk and potts/neighonly/kk use a shared random pool, so
+their results depend on GPU thread scheduling.
+</P>
+<P>additive/texture/kk needs a lattice with unit spacing ("lattice sc/26n
+1.0"); see <A HREF = "app_additive_texture.html">its page</A> for the commands only
+one of the two additive styles accepts.
+</P>
 <HR>
 
 <H4><A NAME = "start_4"></A>2.4 Building SPPARKS as a library 

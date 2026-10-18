@@ -9,18 +9,22 @@
 app_style potts command :h3
 app_style potts/neigh command :h3
 app_style potts/neighonly command :h3
+app_style potts/kk command :h3
+app_style potts/neigh/kk command :h3
+app_style potts/neighonly/kk command :h3
 
 [Syntax:]
 
 app_style style Q :pre
 
-style = {potts} or {potts/neigh} or {potts/neighonly}
+style = {potts} or {potts/neigh} or {potts/neighonly} or {potts/kk} or {potts/neigh/kk} or {potts/neighonly/kk}
 Q = number of spin states :ul
 
 [Examples:]
 
 app_style potts 100
-app_style potts/neigh 20 :pre
+app_style potts/neigh 20
+app_style potts/kk 100 :pre
 
 [Description:]
 
@@ -83,13 +87,32 @@ have a non-zero probability of occurring.
 
 :line
 
+Styles with a {/kk} suffix are Kokkos versions of the same models,
+which run the rKMC sweep in parallel on a GPU or with OpenMP threads.
+They take the same arguments and commands.  See "Section
+2.3"_Section_start.html#start_3 for building and running them.
+They sweep the lattice only with "sweep color"_sweep.html or
+"sweep color/strict"_sweep.html.  With {color/strict}, {potts/kk} gives
+the same answer as {potts}.  {potts/neigh/kk} and {potts/neighonly/kk}
+draw from a shared random pool even with {color/strict}, so their
+results depend on GPU thread scheduling: they are not guaranteed to be
+repeatable, nor to match the CPU styles.  With a KMC solver
+("solve_style"_solve_style.html), the {/kk} styles run the same host
+code as their CPU versions, with no GPU acceleration.
+
+:line
+
 The following additional commands are defined by these applications:
 
 "temperature"_temperature.html : set Monte Carlo temperature :tb(s=:)
 
 :line
 
-[Restrictions:] none
+[Restrictions:]
+
+The {/kk} styles are part of the KOKKOS package.  They are only
+enabled if SPPARKS was built with that package.  See the "Making
+SPPARKS"_Section_start.html#start_3 section for more info.
 
 [Related commands:]
 

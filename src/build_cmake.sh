@@ -75,8 +75,8 @@ Examples:
 
     Kokkos GPU acceleration:
       $0 --kokkos                         # Build with Kokkos (OpenMP backend)
-      $0 --kokkos --kokkos-backend cuda   # Build with Kokkos CUDA (NVIDIA GPUs)
-      $0 --kokkos --kokkos-backend hip    # Build with Kokkos HIP (AMD GPUs)
+      $0 --kokkos --kokkos-backend cuda --kokkos-arch AMPERE80      # Kokkos CUDA (NVIDIA A100)
+      $0 --kokkos --kokkos-backend hip --kokkos-arch AMD_GFX942_APU # Kokkos HIP (AMD MI300A)
 
     Additive (additive/texture, additive/texture/kk):
       $0 --mpi --highfive                 # with HDF5 temperature sources (parallel HDF5)

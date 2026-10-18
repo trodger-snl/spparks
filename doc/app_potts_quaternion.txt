@@ -7,12 +7,13 @@
 :line
 
 app_style potts/quaternion command :h3
+app_style potts/quaternion/kk command :h3
 
 [Syntax:]
 
 app_style style Q crystal theta_cut :pre
 
-style = {potts/quaternion}
+style = {potts/quaternion} or {potts/quaternion/kk}
 Q = number of spin states
 crystal = {cubic} or {hcp} 
 theta_cut = optional positive cutoff angle (default=15.0) for Read-Shockley energy model :ul
@@ -79,7 +80,24 @@ to the Read-Shockley model.
 
 :line
 
-[Restrictions:] none
+Style {potts/quaternion/kk} is the Kokkos version, which runs the
+rKMC sweep in parallel on a GPU or with OpenMP threads.  It takes the
+same arguments and sweeps the lattice only with "sweep
+color"_sweep.html or "sweep color/strict"_sweep.html.  With
+{color/strict} it is repeatable run to run.  Building with
+SPPARKS_FP32 computes its disorientation angle in single precision.
+See "Section 2.3"_Section_start.html#start_3 for building and running
+it.
+
+The initial orientation of each site is drawn from a random stream
+keyed to the "seed"_seed.html and the site ID, so it is the same for
+any number of processors.
+
+[Restrictions:]
+
+Style {potts/quaternion/kk} is part of the KOKKOS package.  It is only
+enabled if SPPARKS was built with that package.  See the "Making
+SPPARKS"_Section_start.html#start_3 section for more info.
 
 [Related commands:]
 

@@ -65,6 +65,14 @@ same color can be attempted simultaneously.  Similar to sectors, the
 colors are looped over, interleaved by communication of lattice
 values inbetween.
 </P>
+<P>Colors are assigned from the site IDs when the sites fill a fully
+periodic box (as made by <A HREF = "create_sites.html">create_sites box</A>), and
+from the site coordinates otherwise (a non-periodic dimension, sites
+created in a region, or sites read from a file).  Either way, each
+periodic dimension must hold a whole number of color periods (2 lattice
+cells for most lattices), or the wrap would put two neighbors on one
+color; SPPARKS stops with an error if it does not.
+</P>
 <P>The <I>color/strict</I> style is the same as the <I>color</I> style except that
 random numbers are generated in a way that is independent of the
 processor which generates them.  Thus SPPARKS should produce the same
@@ -93,6 +101,12 @@ as specified by the <A HREF = "app_style.html">app_style</A> command.
 <P>Not all lattice styles and applications support the <I>color</I> and
 <I>color/strict</I> styles.  Not all applications support the <I>mask</I>
 option.
+</P>
+<P>The Kokkos styles of the <A HREF = "Section_start.html#start_3">KOKKOS package</A>
+(app styles ending in <I>/kk</I>) run rKMC only with the <I>color</I> or
+<I>color/strict</I> style.  With <I>color/strict</I>, <A HREF = "app_potts.html">app_style
+potts/kk</A> gives the same answer as <A HREF = "app_potts.html">app_style
+potts</A>.
 </P>
 <P><B>Related commands:</B>
 </P>

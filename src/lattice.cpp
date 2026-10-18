@@ -228,32 +228,48 @@ int Lattice::ncolors(int delcolor)
 }
 
 /* ----------------------------------------------------------------------
-   # of colors to partition lattice into (any box size)
-   Unlike ncolors(), this does not require dimensions divisible by color block
-   Used for non-periodic boundaries where site IDs may not be contiguous
+   # of colors to partition lattice into, for xyz2color()
+   Unlike ncolors(), this does not need domain nx,ny,nz (site IDs may not
+   be contiguous), but a periodic dim must still hold a whole number of
+   color periods or the wrap puts two neighbors on one color
 ------------------------------------------------------------------------- */
 
 int Lattice::ncolors_any(int delcolor)
 {
   int n = 0;
+  int period = 1;   // color period in unit cells along each colored dim
 
   if (style == LINE_2N) {
-    if (delcolor == 1) n = 2;
+    if (delcolor == 1) n = period = 2;
   } else if (style == SQ_4N) {
-    if (delcolor == 1) n = 2;
+    if (delcolor == 1) n = period = 2;
   } else if (style == SQ_8N) {
-    n = (delcolor+1)*(delcolor+1);
+    period = delcolor+1;
+    n = period*period;
   } else if (style == TRI) {
     if (delcolor == 1) n = 4;
+    period = 2;
   } else if (style == SC_6N) {
-    if (delcolor == 1) n = 2;
+    if (delcolor == 1) n = period = 2;
   } else if (style == SC_26N) {
-    n = (delcolor+1)*(delcolor+1)*(delcolor+1);
+    period = delcolor+1;
+    n = period*period*period;
   } else if (style == FCC) {
     if (delcolor == 1) n = 4;
   } else if (style == BCC) {
     if (delcolor == 1) n = 2;
   }
+
+  // TRI colors along x only; the others along every dim they span
+
+  int dimension = domain->dimension;
+  int check[3] = {1, dimension > 1 && style != TRI, dimension > 2};
+  double prd[3] = {domain->xprd, domain->yprd, domain->zprd};
+  double spacing[3] = {xlattice, ylattice, zlattice};
+  for (int d = 0; d < 3; d++)
+    if (n && check[d] && domain->periodicity[d] &&
+        lround(prd[d]/spacing[d]) % period)
+      error->all(FLERR,"Color stencil is incommensurate with lattice size");
 
   return n;
 }
@@ -261,69 +277,60 @@ int Lattice::ncolors_any(int delcolor)
 /* ----------------------------------------------------------------------
    convert xyz coordinates to a color (1 to Ncolor)
    Works for any box size, does not require contiguous site IDs
-   Uses lattice spacing and box origin to compute grid position
+   Same colors as id2color() for a full periodic box
 ------------------------------------------------------------------------- */
 
 int Lattice::xyz2color(double x, double y, double z, int delcolor)
 {
   int ncolor1d,icolor;
 
-  // compute grid indices from coordinates using lattice spacing
-  // use box lower bounds as origin reference
-  int i = static_cast<int>(floor((x - domain->boxxlo) / xlattice + 0.5));
-  int j = static_cast<int>(floor((y - domain->boxylo) / ylattice + 0.5));
-  int k = static_cast<int>(floor((z - domain->boxzlo) / zlattice + 0.5));
+  // half-cell index h = 2*cell + 2*basis offset, from the origin create_sites
+  // uses (box lo in periodic dims, 0 otherwise); basis offsets are 0 or 0.5
+  // for every colorable style, so h's parity is the offset
+
+  double xyz[3] = {x, y, z};
+  double lo[3] = {domain->boxxlo, domain->boxylo, domain->boxzlo};
+  double spacing[3] = {xlattice, ylattice, zlattice};
+  int cell[3],half[3];
+  for (int d = 0; d < 3; d++) {
+    double orig = domain->periodicity[d] ? lo[d] : 0.0;
+    long h = lround(2.0*(xyz[d]-orig)/spacing[d]);
+    half[d] = static_cast<int>(h & 1);
+    cell[d] = static_cast<int>((h - half[d]) / 2);
+  }
+
+  // non-negative cell index mod m
+  auto mod = [&](int d, int m) { return ((cell[d] % m) + m) % m; };
 
   if (style == LINE_2N) {
-    icolor = i % 2;
+    icolor = mod(0,2);
 
   } else if (style == SQ_4N) {
-    icolor = (i+j) % 2;
+    icolor = (mod(0,2) + mod(1,2)) % 2;
 
   } else if (style == SQ_8N) {
     ncolor1d = delcolor+1;
-    // ensure positive modulo for negative indices
-    int ii = ((i % ncolor1d) + ncolor1d) % ncolor1d;
-    int jj = ((j % ncolor1d) + ncolor1d) % ncolor1d;
-    icolor = ncolor1d*jj + ii;
+    icolor = ncolor1d*mod(1,ncolor1d) + mod(0,ncolor1d);
 
   } else if (style == TRI) {
-    // TRI lattice has 2 basis atoms per unit cell, use position within cell
-    // color based on both grid position and sub-lattice
-    int ii = ((i % 2) + 2) % 2;
-    int jj = ((j % 2) + 2) % 2;
-    icolor = 2*jj + ii;
+    // basis (0,0) and (0.5,0.5); id2color's idsite % 4
+    icolor = 2*mod(0,2) + half[0];
 
   } else if (style == SC_6N) {
-    icolor = (((i % 2) + 2) % 2 + ((j % 2) + 2) % 2 + ((k % 2) + 2) % 2) % 2;
+    icolor = (mod(0,2) + mod(1,2) + mod(2,2)) % 2;
 
   } else if (style == SC_26N) {
     ncolor1d = delcolor+1;
-    // ensure positive modulo for negative indices
-    int ii = ((i % ncolor1d) + ncolor1d) % ncolor1d;
-    int jj = ((j % ncolor1d) + ncolor1d) % ncolor1d;
-    int kk = ((k % ncolor1d) + ncolor1d) % ncolor1d;
-    icolor = ncolor1d*ncolor1d*kk + ncolor1d*jj + ii;
+    icolor = ncolor1d*ncolor1d*mod(2,ncolor1d) +
+      ncolor1d*mod(1,ncolor1d) + mod(0,ncolor1d);
 
   } else if (style == FCC) {
-    // FCC has 4 basis atoms - determine which based on fractional position
-    double fx = (x - domain->boxxlo) / xlattice - i;
-    double fy = (y - domain->boxylo) / ylattice - j;
-    double fz = (z - domain->boxzlo) / zlattice - k;
-    // basis atoms at (0,0,0), (0,0.5,0.5), (0.5,0,0.5), (0.5,0.5,0)
-    if (fabs(fx) < 0.25 && fabs(fy) < 0.25 && fabs(fz) < 0.25) icolor = 0;
-    else if (fabs(fx) < 0.25 && fabs(fy-0.5) < 0.25 && fabs(fz-0.5) < 0.25) icolor = 1;
-    else if (fabs(fx-0.5) < 0.25 && fabs(fy) < 0.25 && fabs(fz-0.5) < 0.25) icolor = 2;
-    else icolor = 3;
+    // basis index: (0,0,0) (0,.5,.5) (.5,0,.5) (.5,.5,0); id2color's idsite % 4
+    icolor = 2*half[0] + half[1];
 
   } else if (style == BCC) {
-    // BCC has 2 basis atoms - determine which based on fractional position
-    double fx = (x - domain->boxxlo) / xlattice - i;
-    double fy = (y - domain->boxylo) / ylattice - j;
-    double fz = (z - domain->boxzlo) / zlattice - k;
-    // basis atoms at (0,0,0) and (0.5,0.5,0.5)
-    if (fabs(fx) < 0.25 && fabs(fy) < 0.25 && fabs(fz) < 0.25) icolor = 0;
-    else icolor = 1;
+    // basis index: (0,0,0) (.5,.5,.5)
+    icolor = half[0];
   }
 
   return icolor+1;

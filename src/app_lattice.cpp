@@ -197,9 +197,9 @@ void AppLattice::init()
     if (domain->lattice == NULL)
       error->all(FLERR,"Cannot color without a lattice definition of sites");
 
-    // check if site IDs are contiguous - if not, use xyz-based coloring
-    if (contiguous_sites() == 0) {
-      // use xyz-based coloring for non-contiguous site IDs
+    // id2color() needs IDs laid out on the nx,ny,nz grid, which create_sites
+    // sets only for a full periodic box; otherwise color by coordinates
+    if (domain->nx == 0 || contiguous_sites() == 0) {
       use_xyz_color = 1;
       ncolors = domain->lattice->ncolors_any(delcolor);
       if (ncolors == 0)

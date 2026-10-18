@@ -98,6 +98,7 @@ private:
   void open_file(const char *fname);
   void write_fields(double);
   void stage_copy(const char *tmp);
+  void reorigin_if_needed();
   void commit(const char *tmp);
   void choose_chunk(const int64_t *extent, size_t elemsize, int64_t *out);
   void ensure_dataset(const std::string &label, int type);

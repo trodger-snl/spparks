@@ -254,11 +254,14 @@ is only consulted when the file is created.
 
 {origin} and {extent} pre-declare the lattice index of dataset element
 [0][0][0] and the initial dataset size.  Both are honored only on file
-creation.  They are useful for a staged build whose later stages extend
-{below} the first stage's domain: HDF5 indices cannot be extended
-downward, so declaring the full build volume up front avoids an error
-later.  Datasets always grow automatically upward as the domain grows,
-so neither keyword is needed for the common layer-by-layer case.
+creation.  Neither is needed for correctness: datasets grow upward
+automatically, and a stage that starts {below} the stored origin
+rewrites the file once with a lower origin.  Declaring the full build
+volume up front avoids those rewrites for a build that moves down
+often.  The default origin is the first stage's lower corner, not 0,
+because parallel HDF5 allocates every chunk of a dataset on disk, so
+an origin far below the build would cost the space of the empty
+region.
 
 {verbose} 1 reports on processor 0 whenever HDF5 fell back from
 collective to independent I/O.  Since that fallback is silent and

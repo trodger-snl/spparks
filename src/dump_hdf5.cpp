@@ -304,7 +304,7 @@ void DumpHDF5::open_file(const char *fname) {
                    "Dump hdf5 domain starts below the origin stored in %s "
                    "(dim %d: domain %lld < origin %lld); recreate the file or "
                    "pre-declare it with 'dump_modify <id> origin'",
-                   fname, k, (long long)lo[k], (long long)origin[k]);
+                   filename, k, (long long)lo[k], (long long)origin[k]);
           error->all(FLERR, msg);
         }
     } else {
@@ -382,6 +382,9 @@ void DumpHDF5::extend_to(const int64_t *needed) {
 ------------------------------------------------------------------------- */
 
 void DumpHDF5::write(double time) {
+  if (!opened)
+    reorigin_if_needed();
+
   if (!atomic) {
     if (!opened)
       open_file(filename);
@@ -403,6 +406,140 @@ void DumpHDF5::write(double time) {
   file.reset(); // collective close
   opened = false;
   commit(tmp.c_str());
+}
+
+/* ----------------------------------------------------------------------
+   copy planes [z0,z1) of src into dst, shifted by off (z,y,x), a bounded
+   slab at a time; independent I/O, so ranks may make different numbers of
+   calls
+------------------------------------------------------------------------- */
+
+template <typename T>
+static void copy_planes(HighFive::DataSet &src, HighFive::DataSet &dst,
+                        size_t z0, size_t z1, const std::vector<size_t> &d,
+                        const size_t *off) {
+  size_t plane = d[1] * d[2];
+  size_t step = std::max<size_t>(1, ((size_t)256 << 20) / std::max<size_t>(1, plane * sizeof(T)));
+  std::vector<T> buf;
+  for (size_t z = z0; z < z1; z += step) {
+    size_t nz = std::min(step, z1 - z);
+    buf.resize(nz * plane);
+    src.select({z, 0, 0}, {nz, d[1], d[2]}).read_raw(buf.data());
+    dst.select({z + off[0], off[1], off[2]}, {nz, d[1], d[2]}).write_raw(buf.data());
+  }
+}
+
+/* ----------------------------------------------------------------------
+   if this run's domain starts below the file's origin in any dimension,
+   rewrite the file once with the origin moved down. HDF5 indices cannot
+   be prepended to, so every dataset is copied into a wider frame; each
+   rank copies a share of the z planes. The rewrite goes through tmp and a
+   rename like any atomic dump, so the old file survives a crash.
+------------------------------------------------------------------------- */
+
+void DumpHDF5::reorigin_if_needed() {
+  int64_t lo[3] = {applattice->xlo_simple, applattice->ylo_simple,
+                   applattice->zlo_simple};
+  int64_t hi[3] = {applattice->xhi_simple, applattice->yhi_simple,
+                   applattice->zhi_simple};
+
+  int64_t od[6] = {0, 0, 0, 0, 0, 0}; // stored origin, then dims (x,y,z)
+  double t = 0.0;
+  int below = 0;
+  if (me == 0) {
+    struct stat sb;
+    if (stat(filename, &sb) == 0) {
+      try {
+        HighFive::File f(filename, HighFive::File::ReadOnly);
+        if (f.hasAttribute("origin") && f.hasAttribute("dims")) {
+          std::vector<int64_t> o, d;
+          f.getAttribute("origin").read(o);
+          f.getAttribute("dims").read(d);
+          for (int k = 0; k < 3; k++) {
+            od[k] = o[k];
+            od[3 + k] = d[k];
+            if (lo[k] < o[k]) below = 1;
+          }
+          if (f.hasAttribute("time")) f.getAttribute("time").read(t);
+        }
+      } catch (const std::exception &e) {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "Dump hdf5 could not read %s: %s", filename, e.what());
+        error->one(FLERR, msg);
+      }
+    }
+  }
+  MPI_Bcast(&below, 1, MPI_INT, 0, world);
+  if (!below)
+    return;
+  MPI_Bcast(od, 6, MPI_LONG_LONG, 0, world);
+  MPI_Bcast(&t, 1, MPI_DOUBLE, 0, world);
+
+  // the new frame holds the old datasets and this run's domain
+  bool save_origin = user_origin, save_extent = user_extent;
+  int64_t save_req[6];
+  for (int k = 0; k < 3; k++) {
+    save_req[k] = req_origin[k];
+    save_req[3 + k] = req_extent[k];
+    req_origin[k] = std::min(od[k], lo[k]);
+    req_extent[k] = std::max(od[k] + od[3 + k], hi[k] + 1) - req_origin[k];
+  }
+  user_origin = user_extent = true;
+  std::string tmp = std::string(filename) + ".tmp";
+  if (me == 0) unlink(tmp.c_str());
+  MPI_Barrier(world);
+  open_file(tmp.c_str());
+  user_origin = save_origin;
+  user_extent = save_extent;
+  for (int k = 0; k < 3; k++) {
+    req_origin[k] = save_req[k];
+    req_extent[k] = save_req[3 + k];
+  }
+
+  try {
+#ifdef H5_HAVE_PARALLEL
+    HighFive::FileAccessProps fapl;
+    fapl.add(HighFive::MPIOFileAccess(world, MPI_INFO_NULL));
+    HighFive::File old(filename, HighFive::File::ReadOnly, fapl);
+#else
+    HighFive::File old(filename, HighFive::File::ReadOnly);
+#endif
+    // dataset index order is z,y,x; od[] and origin[] are x,y,z
+    size_t off[3] = {(size_t)(od[2] - origin[2]), (size_t)(od[1] - origin[1]),
+                     (size_t)(od[0] - origin[0])};
+    for (const std::string &name : old.listObjectNames()) {
+      HighFive::DataSet src = old.getDataSet(name);
+      bool isint = src.getDataType() == HighFive::AtomicType<int32_t>();
+      ensure_dataset(name, isint ? INT : DOUBLE); // collective, same order everywhere
+      HighFive::DataSet dst = file->getDataSet(name);
+      std::vector<size_t> d = src.getDimensions();
+      size_t per = (d[0] + nprocs - 1) / nprocs;
+      size_t z0 = std::min(d[0], (size_t)me * per), z1 = std::min(d[0], z0 + per);
+      if (isint) copy_planes<int32_t>(src, dst, z0, z1, d, off);
+      else copy_planes<double>(src, dst, z0, z1, d, off);
+    }
+    file->getAttribute("time").write(t);
+    file->flush();
+  } catch (const std::exception &e) {
+    char msg[512];
+    snprintf(msg, sizeof(msg), "Dump hdf5 could not move the origin of %s: %s",
+             filename, e.what());
+    error->all(FLERR, msg);
+  }
+  file.reset();
+  opened = false;
+  commit(tmp.c_str());
+
+  if (me == 0) {
+    char msg[512];
+    snprintf(msg, sizeof(msg),
+             "dump hdf5: domain starts below the origin of %s; rewrote it with "
+             "origin (%lld %lld %lld), was (%lld %lld %lld)\n",
+             filename, (long long)origin[0], (long long)origin[1], (long long)origin[2],
+             (long long)od[0], (long long)od[1], (long long)od[2]);
+    if (screen) fputs(msg, screen);
+    if (logfile) fputs(msg, logfile);
+  }
 }
 
 /* ----------------------------------------------------------------------

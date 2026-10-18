@@ -91,10 +91,14 @@ keyword behaves the same way as its <I>stitch</I> counterpart.
 coordinate origin.  Other root attributes record the current extent
 (<I>dims</I>), the index order (<I>dim_order</I>), the simulation time (<I>time</I>),
 and the box geometry.  A later SPPARKS run that dumps to an existing
-file reuses its origin and grows the datasets as needed; a run whose
-domain starts <I>below</I> the stored origin is an error, because HDF5
-indices cannot be extended downward.  Use <I>dump_modify origin</I> to
-pre-declare a larger volume when that would otherwise happen.
+file reuses its origin and grows the datasets as needed.  A run whose
+domain starts <I>below</I> the stored origin in any dimension (a deeper box,
+or a window shifted toward lower x or y) rewrites the file once with
+the origin moved down, since HDF5 indices cannot be extended downward,
+and prints a line saying so.  Every processor copies a share of the
+data, and the rewrite is crash safe like any other dump.  It costs one
+full copy of the file, so <A HREF = "dump_modify.html">dump_modify origin</A> can
+pre-declare the volume of a build known to move down often.
 </P>
 <P>Each dump is crash safe by default: it is written into a copy of the
 file that then replaces the original, so a run that dies mid-write

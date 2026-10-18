@@ -63,9 +63,11 @@ The `additive/texture*` styles are gated on **MPI** only
 `hdf5_*` temperature sources, which otherwise error at input time
 (`#ifdef SPPARKS_HIGHFIVE` in `temperature_source_hdf5_*.cpp`). If a style is "not recognized" at
 runtime, the style header generation skipped it — check that gating, not the
-C++. Any `cmake -S src -B <dir>` rewrites the shared `src/style_*.h`, so a
-scratch configure with fewer features can deregister styles for a working
-build; reconfigure the real build dir afterwards.
+C++. The headers are generated per build dir (`<build>/styles/`), so build
+dirs with different features (e.g. `build-verify` and the no-Kokkos
+`build-cpu`) coexist. Any `src/style_*.h` (left by the `make mpi` path's
+`Make.sh`) would shadow them and is deleted at configure and at every CMake
+build.
 
 ## Core SPPARKS architecture (big picture)
 

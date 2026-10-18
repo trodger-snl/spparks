@@ -1,4 +1,4 @@
-# Generates src/style_<type>.h: the #include lists through which App / Command /
+# Generates <build>/styles/style_<type>.h: the #include lists through which App / Command /
 # Diag / Dump / Pair / Region / Solve classes register themselves (the *Style(...)
 # macros in their headers). Two entry points, one file:
 #   include(cmake/generate_styles.cmake)   at configure time -> all styles, plus
@@ -8,6 +8,12 @@
 #                                          from that target (script mode)
 # Feature gating lives in ConditionalSources.cmake (should_include_header); in
 # script mode the feature flags come from <build>/feature_status.cmake.
+#
+# The headers live in the build directory, so build dirs with different
+# features (e.g. a CPU and a Kokkos build) do not overwrite each other's.
+# A src/style_*.h (written by the Makefile build's Make.sh) would shadow them,
+# because "#include \"style_app.h\"" searches the including file's directory
+# first; configure and every build delete those.
 
 if(NOT DEFINED SPK_SOURCE_DIR)
     set(SPK_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -21,6 +27,16 @@ if(CMAKE_SCRIPT_MODE_FILE)
     cmake_minimum_required(VERSION 3.22)
     include("${SPK_BINARY_DIR}/feature_status.cmake")
     include("${SPK_SOURCE_DIR}/cmake/ConditionalSources.cmake")
+endif()
+
+set(SPK_STYLE_DIR "${SPK_BINARY_DIR}/styles")
+file(MAKE_DIRECTORY "${SPK_STYLE_DIR}")
+if(NOT CMAKE_SCRIPT_MODE_FILE)
+    file(GLOB _spk_src_styles "${SPK_SOURCE_DIR}/style_*.h")
+    if(_spk_src_styles)
+        file(REMOVE ${_spk_src_styles})
+        message(STATUS "Removed src/style_*.h (Makefile-build or pre-2026-10 CMake leftovers)")
+    endif()
 endif()
 
 # style | class macro | header prefix ("" = every header, filtered by macro)
@@ -70,7 +86,7 @@ function(spk_generate_style STYLE CLASS_PATTERN PREFIX)
         endif()
     endforeach()
 
-    set(out "${SPK_SOURCE_DIR}/style_${STYLE}.h")
+    set(out "${SPK_STYLE_DIR}/style_${STYLE}.h")
     set(old "")
     if(EXISTS "${out}")
         file(READ "${out}" old)
@@ -93,7 +109,7 @@ foreach(rule IN LISTS SPK_STYLE_RULES)
 
     if(NOT CMAKE_SCRIPT_MODE_FILE)
         add_custom_command(
-            OUTPUT "${SPK_SOURCE_DIR}/style_${style}.h"
+            OUTPUT "${SPK_STYLE_DIR}/style_${style}.h"
             DEPENDS ${SPK_STYLE_${style}_HEADERS} "${SPK_BINARY_DIR}/feature_status.cmake"
             COMMAND ${CMAKE_COMMAND}
                 -DSTYLE_TYPE=${style}
@@ -102,10 +118,13 @@ foreach(rule IN LISTS SPK_STYLE_RULES)
                 -P "${CMAKE_CURRENT_LIST_FILE}"
             COMMENT "Regenerating style_${style}.h"
         )
-        list(APPEND SPK_STYLE_OUTPUTS "${SPK_SOURCE_DIR}/style_${style}.h")
+        list(APPEND SPK_STYLE_OUTPUTS "${SPK_STYLE_DIR}/style_${style}.h")
+        list(APPEND SPK_SRC_STYLES "${SPK_SOURCE_DIR}/style_${style}.h")
     endif()
 endforeach()
 
 if(NOT CMAKE_SCRIPT_MODE_FILE)
-    add_custom_target(style_headers DEPENDS ${SPK_STYLE_OUTPUTS})
+    add_custom_target(style_headers
+        COMMAND ${CMAKE_COMMAND} -E rm -f ${SPK_SRC_STYLES}
+        DEPENDS ${SPK_STYLE_OUTPUTS})
 endif()

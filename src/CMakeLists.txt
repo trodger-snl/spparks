@@ -600,7 +600,7 @@ include(cmake/generate_styles.cmake)
 add_library(spparks_lib STATIC ${SPPARKS_SOURCES})
 set_target_properties(spparks_lib PROPERTIES OUTPUT_NAME spparks)
 add_dependencies(spparks_lib style_headers)
-target_include_directories(spparks_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(spparks_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${SPK_STYLE_DIR})
 
 if(SPPARKS_ENABLE_MPI AND MPI_CXX_FOUND)
     target_link_libraries(spparks_lib PUBLIC MPI::MPI_CXX)

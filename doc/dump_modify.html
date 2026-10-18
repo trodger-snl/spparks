@@ -21,9 +21,13 @@
 
 <LI>these keywords apply to various dump styles 
 
-<LI>keyword = <I>delay</I> or <I>delta</I> or <I>fileper</I> or <I>first</I> or <I>flush</I> or <I>logfreq</I> or <I>loglinfreq</I> or <I>nfile</I> or <I>pad</I> or <I>region</I> or <I>sort</I> or <I>thresh</I> or <I>tol</I> or <I>vtk</I> 
+<LI>keyword = <I>delay</I> or <I>delta</I> or <I>fileper</I> or <I>first</I> or <I>flush</I> or <I>logfreq</I> or <I>loglinfreq</I> or <I>nfile</I> or <I>pad</I> or <I>region</I> or <I>sort</I> or <I>thresh</I> or <I>tol</I> 
 
-<PRE>  <I>delay</I> value = tdelay
+<LI>this keyword applies only to the <I>stitch</I> dump style 
+
+<LI>keyword = <I>retain</I> or <I>chunk</I> or <I>origin</I> or <I>extent</I> or <I>verbose</I> 
+
+<LI>  <I>delay</I> value = tdelay
     tdelay = delay dump until at least this time (seconds)
   <I>delta</I> arg = dt
     dt = time increment between dumps (seconds)
@@ -39,6 +43,16 @@
     Nf = write this many files, one from each of Nf processors
   <I>pad</I> arg = Nchar = # of characters to convert timestep to
   <I>region</I> arg = region-ID or "none"
+  <I>retain</I> arg = N
+    N = number of timesteps to retain in STITCH file (0 = unlimited, stitch style only)
+  <I>chunk</I> args = cx cy cz
+    cx,cy,cz = HDF5 chunk shape in lattice sites (hdf5 style only)
+  <I>origin</I> args = ox oy oz
+    ox,oy,oz = lattice index of dataset element <B>0</B><B>0</B><B>0</B> (hdf5 style only)
+  <I>extent</I> args = nx ny nz
+    nx,ny,nz = initial dataset extent in lattice sites (hdf5 style only)
+  <I>verbose</I> arg = N
+    N = 1 to report when a write was not collective (hdf5 style only)
   <I>sort</I> arg = <I>off</I> or <I>id</I> or N or -N
      off = no sorting of per-site lines within a snapshot
      id = sort per-site lines by atom ID
@@ -51,7 +65,11 @@
     these 3 args can be replaced by the word "none" to turn off thresholding
   <I>tol</I> value = epsilon
     epsilon = output a snapshot if time is within epsilon of target time (seconds)
-  <I>vtk</I> args = Nx Ny Nz minval maxval
+this keyword applies only to the <I>vtk</I> dump style 
+
+<LI>keyword = <I>vtk</I> 
+
+<PRE>  <I>vtk</I> args = Nx Ny Nz minval maxval
     Nx,Ny,Nz = site extent in x,y,z dimensions
     minval,maxval = min/max of any site's value 
 </PRE>
@@ -214,6 +232,61 @@ filter (the last one specified).  See the <A HREF = "region.html">region</A> com
 for more details.  Note that a region can be defined as the "inside"
 or "outside" of a geometric shape, and it can be the "union" or
 "intersection" of a series of simpler regions.
+</P>
+<HR>
+
+<P>The <I>retain</I> keyword applies only to the <I>stitch</I> dump style.  It
+limits the number of timesteps retained in the STITCH database file.
+By default (N = 0), all timesteps are retained.  If N > 0, the system
+attempts to keep only the N most recent timesteps by deleting older
+ones after each dump.
+</P>
+<P>Deletion uses a "safe delete" algorithm that preserves data integrity:
+a timestep is only deleted if all its data blocks are geometrically
+covered by newer blocks.  A block is "covered" if a newer block fully
+contains its spatial bounds (newer min <= older min and newer max >=
+older max for all dimensions).  This allows deletion even when MPI
+decomposition varies between simulations.
+</P>
+<P>If a timestep contains data with unique spatial coverage (not covered
+by any newer data), it is preserved regardless of the retain limit.
+This commonly occurs with sequential simulations that cover different
+regions.  For example, if Sim 1 covers x=<B>0,100</B> and Sim 2 covers
+x=<B>80,180</B>, Sim 1's data in x=<B>0,80) has no coverage from Sim 2 and
+will be preserved.  The algorithm skips over such protected timesteps
+and continues deleting intermediate states that can be safely removed.
+</P>
+<HR>
+
+<P>The <I>chunk</I>, <I>origin</I>, <I>extent</I> and <I>verbose</I> keywords apply only to the
+<I>hdf5</I> dump style.
+</P>
+<P><I>chunk</I> overrides the HDF5 chunk shape.  By default the chunk is chosen
+to tile the per-processor subdomains, so that no chunk is shared between
+processors -- a shared chunk would turn a collective write into a
+read-modify-write.  The default is clamped into a sensible byte range, and
+is only consulted when the file is created.
+</P>
+<P><I>origin</I> and <I>extent</I> pre-declare the lattice index of dataset element
+<B>0</B><B>0</B><B>0</B> and the initial dataset size.  Both are honored only on file
+creation.  They are useful for a staged build whose later stages extend
+<I>below</I> the first stage's domain: HDF5 indices cannot be extended
+downward, so declaring the full build volume up front avoids an error
+later.  Datasets always grow automatically upward as the domain grows,
+so neither keyword is needed for the common layer-by-layer case.
+</P>
+<P><I>verbose</I> 1 reports on processor 0 whenever HDF5 fell back from
+collective to independent I/O.  Since that fallback is silent and
+changes write scaling completely, turn it on before trusting any timing
+measurement.
+</P>
+<HR>
+
+<P>Setting <I>retain</I> to 1 provides an "overwrite mode" where only the
+latest state for each spatial region is kept.  This is useful for long
+simulations where only the final state is needed.  This can reduce file
+size by 97% or more compared to unlimited retention, with approximately
+5% runtime overhead for the deletion operations.
 </P>
 <HR>
 
@@ -541,6 +614,11 @@ details.
 <LI>loglinfreq = off
 <LI>pad = 0
 <LI>region = none
+<LI>retain = 0 (unlimited, stitch style only)
+<LI>chunk = chosen from the processor grid (hdf5 style only)
+<LI>origin = domain lower bound at file creation (hdf5 style only)
+<LI>extent = domain size at file creation (hdf5 style only)
+<LI>verbose = 0 (hdf5 style only)
 <LI>scolor = * c1/c2/.../c140 where c1-c140 are the names of the 140 pre-defined colors
 <LI>sdiam = * 1.0
 <LI>smap = min max cf 2 min blue max red

@@ -19,7 +19,7 @@
 </PRE>
 <UL><LI>dump-ID = user-assigned name for the dump 
 
-<LI>style = <I>text</I> or <I>sites</I> or <I>vtk</I> or <I>stitch</I> or <I>image</I> 
+<LI>style = <I>text</I> or <I>sites</I> or <I>vtk</I> or <I>stitch</I> or <I>hdf5</I> or <I>image</I> 
 
 <LI>delta = time increment between dumps (seconds) 
 
@@ -30,6 +30,7 @@
 <PRE>  <I>text</I> or <I>sites</I> or <I>stitch</I> or <I>vtk</I> fields =
      <I>id</I> or <I>site</I> or <I>x</I> or <I>y</I> or <I>z</I> or
      <I>energy</I> or <I>propensity</I> or <I>iN</I> or <I>dN</I>
+  <I>hdf5</I> fields = <I>site</I> or <I>iN</I> or <I>dN</I>
   <I>image</I> fields = discussed on <A HREF = "dump_image.html">dump image</A> doc page 
 </PRE>
 
@@ -69,6 +70,40 @@ various visualization programs, including
 by the <A HREF = "set.html">set stitch</A> command or auxiliary tools provided with
 the Stitch library in lib/stitch.  See the examples/stitch dir for
 examples of SPPARKS scripts that read and write <I>stitch</I> files.
+</P>
+<P>The <I>hdf5</I> style writes one chunked HDF5 dataset per field, named <I>site</I>,
+<I>iN</I> or <I>dN</I> to match the <I>stitch</I> field names.  Datasets are indexed
+<B>z</B><B>y</B><B>x</B>, so x varies fastest.  Unlike <I>stitch</I>, it stores only the
+latest value per lattice site: each dump overwrites in place rather than
+appending a timestep, so the file size is set by the domain rather than
+by the number of dumps.  That makes it a good fit for long AM builds
+where only the current state is wanted, and a poor fit when the time
+history matters -- there are no per-timestep frames to recover, so use
+<I>stitch</I> or <I>image</I> for that.
+</P>
+<P>Sites never written keep the dataset fill value, <I>-1</I> for integer fields
+and <I>0.0</I> for double fields.  These are the same "no value present"
+sentinels <I>stitch</I> uses, so <A HREF = "set.html">set hdf5</A> with the <I>skip_novalue</I>
+keyword behaves the same way as its <I>stitch</I> counterpart.
+</P>
+<P>The lattice index of dataset element <B>0</B><B>0</B><B>0</B> is stored in the root
+<I>origin</I> attribute, since AM windows are usually offset far from the
+coordinate origin.  Other root attributes record the current extent
+(<I>dims</I>), the index order (<I>dim_order</I>), the simulation time (<I>time</I>),
+and the box geometry.  A later SPPARKS run that dumps to an existing
+file reuses its origin and grows the datasets as needed; a run whose
+domain starts <I>below</I> the stored origin is an error, because HDF5
+indices cannot be extended downward.  Use <I>dump_modify origin</I> to
+pre-declare a larger volume when that would otherwise happen.
+</P>
+<P>Compression is intentionally not supported.  Measured payloads from AM
+runs compress only about 1.4x overall -- the double-precision fields
+dominate the volume and are nearly incompressible -- which does not pay
+for the parallel-write complexity that filtered chunks introduce.  Use
+<I>h5repack</I> after the fact if a smaller file is needed.
+</P>
+<P>Like <I>stitch</I>, the <I>hdf5</I> style requires a simple square or cubic
+lattice and does not support the '*' or '%' filename wildcards.
 </P>
 <P>As described below, the filename determines the kind of output (text
 or binary or gzipped, one big file or one per timestep, one big file

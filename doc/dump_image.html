@@ -135,9 +135,9 @@ setting with any valid atom attribute.
 </P>
 <P>If <I>ipf</I> is specified for the <I>color</I> setting, each site is colored by
 the inverse pole figure (IPF) of its crystallographic orientation for a
-reference sample direction, as in EBSD maps: red for [001], green
-for [011] and blue for [111] (cubic symmetry), blended toward
-white in the middle of the standard triangle.  This requires an
+reference sample direction, as in EBSD maps: the EDAX/TSL color key
+(as implemented in MTEX and orix) with red for [001], green for
+[101] and blue for [111] (cubic symmetry).  This requires an
 application that stores a unit quaternion per site in <I>d1</I>-<I>d4</I>, such
 as <A HREF = "app_potts_quaternion.html">potts/quaternion</A> and the additive/texture
 apps.  Only cubic crystal symmetry is currently supported: the coloring

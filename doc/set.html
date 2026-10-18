@@ -17,7 +17,7 @@
 </PRE>
 <UL><LI>label = <I>site</I> or <I>iN</I> or <I>dN</I> or <I>x</I> or <I>y</I> or <I>z</I> or <I>xyz</I> 
 
-<LI>style = <I>value</I> or <I>range</I> or <I>unique</I> or <I>displace</I> or <I>stitch</I> or <I>bfile</I> 
+<LI>style = <I>value</I> or <I>range</I> or <I>unique</I> or <I>displace</I> or <I>stitch</I> or <I>hdf5</I> or <I>bfile</I> 
 
 <PRE>  <I>value</I> arg = nvalue
     nvalue = value to set sites to
@@ -31,14 +31,17 @@
      tstamp = first or last or a floating point value
      if first: then site values from first timestamp in stitch file are read in
      if last: then site values from last timestamp in stitch file are read in
-     if floating point value: site values for this timestamp are read in 
+     if floating point value: site values for this timestamp are read in
+  <I>hdf5</I> args = hdf5file
+     hdf5file = name of a file written by <A HREF = "dump.html">dump hdf5</A>
+     no timestamp argument: an hdf5 dump stores one state per site 
 </PRE>
 <PRE>  <I>bfile</I> args = bfilename 
      bfilename = name of binary file 
 </PRE>
 <LI>zero or more keyword/value pairs may be appended 
 
-<LI>keyword = <I>fraction</I> or <I>region</I> or <I>loop</I> or <I>if</I> 
+<LI>keyword = <I>fraction</I> or <I>region</I> or <I>loop</I> or <I>if</I> or <I>skip_novalue</I> 
 
 <PRE>  <I>fraction</I> value = frac
     frac = number > 0 and <= 1.0
@@ -50,7 +53,8 @@
   <I>if</I> args = label2 op nvalue2
     label2 = <I>id</I> or <I>site</I> or <I>iN</I> or <I>dN</I> or <I>x</I> or <I>y</I> or <I>z</I>
     op = "<" or "<=" or ">" or "<=" or "=" or "!="
-    nvalue2 = value to compare site value to 
+    nvalue2 = value to compare site value to
+  <I>skip_novalue</I> args = none 
 </PRE>
 
 </UL>
@@ -64,7 +68,10 @@ set site stitch equiaxed.st first
 set site stitch equiaxed.st last
 set site stitch equiaxed.st 1.0
 set i1 stitch equiaxed.st 1.0
-set d1 stitch equiaxed.st 1.0 
+set d1 stitch equiaxed.st 1.0
+set site stitch left.st last region left_half
+set site stitch left.st last skip_novalue
+set site stitch right.st last skip_novalue 
 </PRE>
 <P><B>Description:</B>
 </P>
@@ -112,8 +119,17 @@ models, or a line segement for 1d models).
 lattices.  This means lattice = line (line/2n) for 1d models, square
 (sq/4n or sq/8n) for 2d, or simple cubic (sc/6n or sc/26n) for 3d.
 See the <A HREF = "create_sites.html">create_sites</A> command for more details.
-The <I>fraction</I>, <I>loop</I>, <I>region</I> and <I>if</I> keywords are ignored for
-these styles; these styles set values for all sites in the system.
+</P>
+<P>For style <I>bfile</I>, the <I>fraction</I>, <I>loop</I>, <I>region</I> and <I>if</I> keywords
+are ignored; this style sets values for all sites in the system.
+</P>
+<P>For style <I>stitch</I>, the <I>fraction</I>, <I>loop</I>, <I>region</I>, <I>if</I>, and
+<I>skip_novalue</I> keywords select which sites are overwritten, exactly as
+they do for the <I>value</I> and <I>range</I> styles.  Only the selected subset of
+sites is overwritten; all other sites retain their current values.  This
+makes it possible, for example, to initialize a domain from two <I>stitch</I>
+files that each cover a portion of the domain by issuing two <I>set stitch</I>
+commands with complementary <I>region</I> (or <I>skip_novalue</I>) selections.
 </P>
 <P>For style <I>stitch</I>, a <I>stitch</I> file is read to extract values
 associated with a specified <I>label</I>.  The <I>stitch</I> file can be created
@@ -182,6 +198,19 @@ different answers depending on the the number of processors used.
 per-site quantity to be reset.  The per-site quantity specified by
 <I>label2</I> is compared to the numeric <I>nvalue2</I> and if the condition is
 not met, then the site is skipped.
+</P>
+<P>The keyword <I>skip_novalue</I> is only valid for the <I>stitch</I> style.  A
+<I>stitch</I> file stores a "no value present" sentinel for each field (-1
+for integer fields, 0.0 for floating-point fields by default) that is
+returned for any site the file has no data for.  When <I>skip_novalue</I> is
+specified, sites whose value read from the file equals this sentinel are
+left unchanged rather than overwritten.  This makes it possible to
+composite partial-domain <I>stitch</I> files without defining regions: read
+each file over the full domain with <I>skip_novalue</I>, and each read only
+touches the sites it actually holds data for.  Note that for
+floating-point fields the default sentinel is 0.0, which can collide with
+legitimate data equal to 0.0; the keyword is therefore opt-in and off by
+default.
 </P>
 <HR>
 

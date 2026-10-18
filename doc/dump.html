@@ -104,11 +104,12 @@ pre-declare the volume of a build known to move down often.
 file that then replaces the original, so a run that dies mid-write
 leaves the previous dump intact.  See <A HREF = "dump_modify.html">dump_modify atomic</A>.
 </P>
-<P>Compression is intentionally not supported.  Measured payloads from AM
-runs compress only about 1.4x overall -- the double-precision fields
-dominate the volume and are nearly incompressible -- which does not pay
-for the parallel-write complexity that filtered chunks introduce.  Use
-<I>h5repack</I> after the fact if a smaller file is needed.
+<P>Datasets are uncompressed by default.  <A HREF = "dump_modify.html">dump_modify
+compress</A> N stores them with byte shuffling and
+deflate level N.  Over a six-box GP700 chain level 1 made the file 1.8x
+smaller: the phase field and the mostly-zero G/V fields compress well,
+while the quaternions, half the bytes, barely compress (1.2x).
+Unwritten regions of the file compress to almost nothing.
 </P>
 <P>Like <I>stitch</I>, the <I>hdf5</I> style requires a simple square or cubic
 lattice and does not support the '*' or '%' filename wildcards.

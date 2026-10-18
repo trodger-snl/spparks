@@ -94,11 +94,12 @@ Each dump is crash safe by default: it is written into a copy of the
 file that then replaces the original, so a run that dies mid-write
 leaves the previous dump intact.  See "dump_modify atomic"_dump_modify.html.
 
-Compression is intentionally not supported.  Measured payloads from AM
-runs compress only about 1.4x overall -- the double-precision fields
-dominate the volume and are nearly incompressible -- which does not pay
-for the parallel-write complexity that filtered chunks introduce.  Use
-{h5repack} after the fact if a smaller file is needed.
+Datasets are uncompressed by default.  "dump_modify
+compress"_dump_modify.html N stores them with byte shuffling and
+deflate level N.  Over a six-box GP700 chain level 1 made the file 1.8x
+smaller: the phase field and the mostly-zero G/V fields compress well,
+while the quaternions, half the bytes, barely compress (1.2x).
+Unwritten regions of the file compress to almost nothing.
 
 Like {stitch}, the {hdf5} style requires a simple square or cubic
 lattice and does not support the '*' or '%' filename wildcards.

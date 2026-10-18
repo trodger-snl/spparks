@@ -76,6 +76,7 @@ DumpHDF5::DumpHDF5(SPPARKS *spk, int narg, char **arg) : Dump(spk, narg, arg) {
   user_origin = user_extent = user_chunk = false;
   verbose = 0;
   atomic = 1;
+  compress = 0;
   for (int d = 0; d < 3; d++) {
     origin[d] = 0;
     dims[d] = 0;
@@ -196,6 +197,15 @@ void DumpHDF5::ensure_dataset(const std::string &label, int type) {
   // property list, and getId() below needs a real plist to set fill on.
   props.add(HighFive::Chunking(
       std::vector<hsize_t>{(hsize_t)c[2], (hsize_t)c[1], (hsize_t)c[0]}));
+  if (compress > 0) {
+    // shuffle groups the bytes of each value, which is what lets deflate
+    // find the redundancy in doubles; parallel HDF5 then requires every
+    // write to be collective (write_fields and copy_planes both are)
+    if (H5Zfilter_avail(H5Z_FILTER_DEFLATE) <= 0)
+      error->all(FLERR, "Dump hdf5 compress: this HDF5 has no deflate filter");
+    props.add(HighFive::Shuffle());
+    props.add(HighFive::Deflate(compress));
+  }
 
   hid_t plist = props.getId();
   if (plist <= 0)
@@ -258,19 +268,20 @@ void DumpHDF5::open_file(const char *fname) {
     // path through every dump, so collective metadata would be safe here.  It
     // is still left off in v1: it converts a subtle divergence into a hang
     // rather than a slowdown, and it is not needed for correctness.
-    file = std::make_shared<HighFive::File>(
-        fname,
-        exists ? HighFive::File::ReadWrite
-               : (HighFive::File::ReadWrite | HighFive::File::Create |
-                  HighFive::File::Truncate),
-        fapl);
 #else
-    file = std::make_shared<HighFive::File>(
-        fname,
-        exists ? HighFive::File::ReadWrite
-               : (HighFive::File::ReadWrite | HighFive::File::Create |
-                  HighFive::File::Truncate));
+    HighFive::FileAccessProps fapl;
 #endif
+    // A compressed chunk rewritten larger moves, and HDF5 forgets the space
+    // it left unless the free-space manager persists in the file: every dump
+    // reopens the file, so without this a build leaks space each dump.
+    HighFive::FileCreateProps fcpl;
+    fcpl.add(HighFive::FileSpaceStrategy(H5F_FSPACE_STRATEGY_FSM_AGGR, 1, 1));
+    file = exists ? std::make_shared<HighFive::File>(fname, HighFive::File::ReadWrite, fapl)
+                  : std::make_shared<HighFive::File>(
+                        fname,
+                        HighFive::File::ReadWrite | HighFive::File::Create |
+                            HighFive::File::Truncate,
+                        fcpl, fapl);
   } catch (const std::exception &e) {
     char msg[512];
     snprintf(msg, sizeof(msg), "Dump hdf5 could not open %s: %s", fname,
@@ -383,7 +394,7 @@ void DumpHDF5::extend_to(const int64_t *needed) {
 
 void DumpHDF5::write(double time) {
   if (!opened)
-    reorigin_if_needed();
+    rebuild_if_needed();
 
   if (!atomic) {
     if (!opened)
@@ -410,34 +421,59 @@ void DumpHDF5::write(double time) {
 
 /* ----------------------------------------------------------------------
    copy planes [z0,z1) of src into dst, shifted by off (z,y,x), a bounded
-   slab at a time; independent I/O, so ranks may make different numbers of
-   calls
+   slab at a time. The writes are collective, which parallel HDF5 requires
+   for a compressed dataset: every rank makes niter calls, with an empty
+   selection once its own planes are done.
 ------------------------------------------------------------------------- */
 
 template <typename T>
 static void copy_planes(HighFive::DataSet &src, HighFive::DataSet &dst,
                         size_t z0, size_t z1, const std::vector<size_t> &d,
-                        const size_t *off) {
+                        const size_t *off, size_t step, int niter) {
   size_t plane = d[1] * d[2];
-  size_t step = std::max<size_t>(1, ((size_t)256 << 20) / std::max<size_t>(1, plane * sizeof(T)));
-  std::vector<T> buf;
-  for (size_t z = z0; z < z1; z += step) {
-    size_t nz = std::min(step, z1 - z);
-    buf.resize(nz * plane);
-    src.select({z, 0, 0}, {nz, d[1], d[2]}).read_raw(buf.data());
-    dst.select({z + off[0], off[1], off[2]}, {nz, d[1], d[2]}).write_raw(buf.data());
+  // a predefined type: an id taken from a temporary HighFive::AtomicType is
+  // closed when the temporary dies
+  hid_t memtype = sizeof(T) == sizeof(int32_t) ? H5T_NATIVE_INT32 : H5T_NATIVE_DOUBLE;
+  hid_t xfer = H5Pcreate(H5P_DATASET_XFER);
+#ifdef H5_HAVE_PARALLEL
+  H5Pset_dxpl_mpio(xfer, H5FD_MPIO_COLLECTIVE);
+#endif
+  hid_t fspace = H5Dget_space(dst.getId());
+  std::vector<T> buf(1);
+  herr_t rc = 0;
+  for (int it = 0; it < niter && rc >= 0; it++) {
+    size_t z = z0 + (size_t)it * step;
+    hsize_t nz = z < z1 ? std::min(step, z1 - z) : 0;
+    hsize_t count[3] = {nz, d[1], d[2]}, one[3] = {1, 1, 1};
+    hid_t mspace = H5Screate_simple(3, nz ? count : one, NULL);
+    if (nz) {
+      buf.resize(nz * plane);
+      src.select({z, 0, 0}, {(size_t)nz, d[1], d[2]}).read_raw(buf.data());
+      hsize_t start[3] = {z + off[0], off[1], off[2]};
+      H5Sselect_hyperslab(fspace, H5S_SELECT_SET, start, NULL, count, NULL);
+    } else {
+      H5Sselect_none(fspace);
+      H5Sselect_none(mspace);
+    }
+    rc = H5Dwrite(dst.getId(), memtype, mspace, fspace, xfer, buf.data());
+    H5Sclose(mspace);
   }
+  H5Sclose(fspace);
+  H5Pclose(xfer);
+  if (rc < 0)
+    throw std::runtime_error("H5Dwrite failed while copying " + dst.getPath());
 }
 
 /* ----------------------------------------------------------------------
-   if this run's domain starts below the file's origin in any dimension,
-   rewrite the file once with the origin moved down. HDF5 indices cannot
-   be prepended to, so every dataset is copied into a wider frame; each
+   rewrite the file once if this run's domain starts below its origin in
+   any dimension (HDF5 indices cannot be prepended to, so every dataset is
+   copied into a wider frame) or if its datasets' compression differs from
+   'dump_modify compress' (filters are fixed at dataset creation). Each
    rank copies a share of the z planes. The rewrite goes through tmp and a
    rename like any atomic dump, so the old file survives a crash.
 ------------------------------------------------------------------------- */
 
-void DumpHDF5::reorigin_if_needed() {
+void DumpHDF5::rebuild_if_needed() {
   int64_t lo[3] = {applattice->xlo_simple, applattice->ylo_simple,
                    applattice->zlo_simple};
   int64_t hi[3] = {applattice->xhi_simple, applattice->yhi_simple,
@@ -445,7 +481,7 @@ void DumpHDF5::reorigin_if_needed() {
 
   int64_t od[6] = {0, 0, 0, 0, 0, 0}; // stored origin, then dims (x,y,z)
   double t = 0.0;
-  int below = 0;
+  int below = 0, relayout = 0;
   if (me == 0) {
     struct stat sb;
     if (stat(filename, &sb) == 0) {
@@ -461,6 +497,13 @@ void DumpHDF5::reorigin_if_needed() {
             if (lo[k] < o[k]) below = 1;
           }
           if (f.hasAttribute("time")) f.getAttribute("time").read(t);
+          // datasets whose compression differs from the requested setting
+          // are rebuilt (filters are fixed when a dataset is created)
+          for (const std::string &name : f.listObjectNames()) {
+            hid_t dcpl = H5Dget_create_plist(f.getDataSet(name).getId());
+            if ((H5Pget_nfilters(dcpl) > 0) != (compress > 0)) relayout = 1;
+            H5Pclose(dcpl);
+          }
         }
       } catch (const std::exception &e) {
         char msg[512];
@@ -469,8 +512,11 @@ void DumpHDF5::reorigin_if_needed() {
       }
     }
   }
-  MPI_Bcast(&below, 1, MPI_INT, 0, world);
-  if (!below)
+  int why[2] = {below, relayout};
+  MPI_Bcast(why, 2, MPI_INT, 0, world);
+  below = why[0];
+  relayout = why[1];
+  if (!below && !relayout)
     return;
   MPI_Bcast(od, 6, MPI_LONG_LONG, 0, world);
   MPI_Bcast(&t, 1, MPI_DOUBLE, 0, world);
@@ -515,8 +561,12 @@ void DumpHDF5::reorigin_if_needed() {
       std::vector<size_t> d = src.getDimensions();
       size_t per = (d[0] + nprocs - 1) / nprocs;
       size_t z0 = std::min(d[0], (size_t)me * per), z1 = std::min(d[0], z0 + per);
-      if (isint) copy_planes<int32_t>(src, dst, z0, z1, d, off);
-      else copy_planes<double>(src, dst, z0, z1, d, off);
+      size_t elem = isint ? sizeof(int32_t) : sizeof(double);
+      size_t step = std::max<size_t>(1, ((size_t)256 << 20) / std::max<size_t>(1, d[1] * d[2] * elem));
+      int mine = (int)((z1 - z0 + step - 1) / step), niter;
+      MPI_Allreduce(&mine, &niter, 1, MPI_INT, MPI_MAX, world);
+      if (isint) copy_planes<int32_t>(src, dst, z0, z1, d, off, step, niter);
+      else copy_planes<double>(src, dst, z0, z1, d, off, step, niter);
     }
     file->getAttribute("time").write(t);
     file->flush();
@@ -532,11 +582,15 @@ void DumpHDF5::reorigin_if_needed() {
 
   if (me == 0) {
     char msg[512];
-    snprintf(msg, sizeof(msg),
-             "dump hdf5: domain starts below the origin of %s; rewrote it with "
-             "origin (%lld %lld %lld), was (%lld %lld %lld)\n",
-             filename, (long long)origin[0], (long long)origin[1], (long long)origin[2],
-             (long long)od[0], (long long)od[1], (long long)od[2]);
+    if (below)
+      snprintf(msg, sizeof(msg),
+               "dump hdf5: domain starts below the origin of %s; rewrote it with "
+               "origin (%lld %lld %lld), was (%lld %lld %lld)\n",
+               filename, (long long)origin[0], (long long)origin[1], (long long)origin[2],
+               (long long)od[0], (long long)od[1], (long long)od[2]);
+    else
+      snprintf(msg, sizeof(msg), "dump hdf5: rewrote %s %s\n", filename,
+               compress > 0 ? "compressed" : "uncompressed");
     if (screen) fputs(msg, screen);
     if (logfile) fputs(msg, logfile);
   }
@@ -803,6 +857,14 @@ int DumpHDF5::modify_param(int narg, char **arg) {
     }
     user_extent = true;
     return 4;
+  }
+  if (strcmp(arg[0], "compress") == 0) {
+    if (narg < 2)
+      error->all(FLERR, "Illegal dump_modify command");
+    compress = atoi(arg[1]);
+    if (compress < 0 || compress > 9)
+      error->all(FLERR, "Dump_modify compress level must be 0 (off) to 9");
+    return 2;
   }
   if (strcmp(arg[0], "atomic") == 0) {
     if (narg < 2)

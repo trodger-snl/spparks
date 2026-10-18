@@ -389,7 +389,11 @@ on any other lattice spacing.
 mask no"); in parallel, random and raster sweeps need <A HREF = "sector.html">sector
 yes</A>.  Style <I>additive/texture/kk</I> requires "sweep color"
 (or <I>color/strict</I>, which is accepted but does not make this
-application repeatable).  A KMC solver cannot be used.
+application repeatable).  A KMC solver cannot be used.  No sweep is
+ever performed: each step advances time by the thermal timestep <I>dt</I>,
+so the sweep style does not change results.  The <A HREF = "sector.html">sector</A>
+<I>nstop</I> option must be left at 1 and <I>tstop</I> unset, since the step is
+<I>nstop</I> times <I>dt</I>; both styles stop with an error otherwise.
 </P>
 <P>Style <I>additive/texture/kk</I> runs on multiple MPI ranks, one GPU per
 rank (ranks are bound to GPUs by node-local rank).  The conduction

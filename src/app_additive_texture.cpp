@@ -472,6 +472,7 @@ void AppAdditiveTexture::init_app()
 {
   check_misorientation_step(dx, error, domain->me);
   check_material_complete(error, *thermal);
+  check_sector_stop(error, nstop, tstop);
 
   // Duplicate parent's array allocation logic without quaternion randomization
   delete[] sites;

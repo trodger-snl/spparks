@@ -352,7 +352,11 @@ A "sweep"_sweep.html command is required.  For
 mask no"); in parallel, random and raster sweeps need "sector
 yes"_sector.html.  Style {additive/texture/kk} requires "sweep color"
 (or {color/strict}, which is accepted but does not make this
-application repeatable).  A KMC solver cannot be used.
+application repeatable).  A KMC solver cannot be used.  No sweep is
+ever performed: each step advances time by the thermal timestep {dt},
+so the sweep style does not change results.  The "sector"_sector.html
+{nstop} option must be left at 1 and {tstop} unset, since the step is
+{nstop} times {dt}; both styles stop with an error otherwise.
 
 Style {additive/texture/kk} runs on multiple MPI ranks, one GPU per
 rank (ranks are bound to GPUs by node-local rank).  The conduction

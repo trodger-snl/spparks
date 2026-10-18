@@ -290,6 +290,15 @@ double AdditiveParams::front_velocity(double Tcool) const
 
 /* ---------------------------------------------------------------------- */
 
+void AdditiveParams::check_sector_stop(Error *error, double nstop, double tstop) const
+{
+  if (nstop != 1.0 || tstop != 0.0)
+    error->all(FLERR, "Additive apps step by the thermal timestep: "
+                      "sector nstop must be 1 and tstop unset");
+}
+
+/* ---------------------------------------------------------------------- */
+
 void AdditiveParams::check_material_complete(Error *error, const ThermalManager &thermal) const
 {
   if (!thermal.card()) return;

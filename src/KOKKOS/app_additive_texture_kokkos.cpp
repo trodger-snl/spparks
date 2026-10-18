@@ -250,6 +250,7 @@ void AppAdditiveTextureKokkos::init_app()
   AppPottsQuaternionKokkos::init_app();
   check_misorientation_step(dx, error, domain->me);
   check_material_complete(error, *thermal);
+  check_sector_stop(error, nstop, tstop);
 
   // The neighbour-reading kernels colour sites by coordinate parity (see
   // shuffled_colors), which is race-free only if no two owned neighbours share

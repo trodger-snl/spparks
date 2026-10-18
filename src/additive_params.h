@@ -102,6 +102,9 @@ struct AdditiveParams {
   // With a material card loaded, every material value must come from the card
   // or the deck: none falls back to a built-in default.
   void check_material_complete(Error *error, const ThermalManager &thermal) const;
+  // The loop step is sector nstop x the thermal timestep, while the physics
+  // always advances one thermal timestep: anything but nstop 1 desyncs them.
+  void check_sector_stop(Error *error, double nstop, double tstop) const;
 };
 
 }

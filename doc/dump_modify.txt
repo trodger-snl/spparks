@@ -17,7 +17,7 @@ one or more keyword/value pairs may be appended :l
 these keywords apply to various dump styles :l
 keyword = {delay} or {delta} or {fileper} or {first} or {flush} or {logfreq} or {loglinfreq} or {nfile} or {pad} or {region} or {sort} or {thresh} or {tol} :l
 this keyword applies only to the {stitch} dump style :l
-keyword = {retain} or {chunk} or {origin} or {extent} or {verbose} :l
+keyword = {retain} or {chunk} or {origin} or {extent} or {verbose} or {atomic} :l
   {delay} value = tdelay
     tdelay = delay dump until at least this time (seconds)
   {delta} arg = dt
@@ -44,6 +44,7 @@ keyword = {retain} or {chunk} or {origin} or {extent} or {verbose} :l
     nx,ny,nz = initial dataset extent in lattice sites (hdf5 style only)
   {verbose} arg = N
     N = 1 to report when a write was not collective (hdf5 style only)
+  {atomic} arg = {yes} or {no} (hdf5 style only)
   {sort} arg = {off} or {id} or N or -N
      off = no sorting of per-site lines within a snapshot
      id = sort per-site lines by atom ID
@@ -242,8 +243,8 @@ and continues deleting intermediate states that can be safely removed.
 
 :line
 
-The {chunk}, {origin}, {extent} and {verbose} keywords apply only to the
-{hdf5} dump style.
+The {chunk}, {origin}, {extent}, {verbose} and {atomic} keywords apply
+only to the {hdf5} dump style.
 
 {chunk} overrides the HDF5 chunk shape.  By default the chunk is chosen
 to tile the per-processor subdomains, so that no chunk is shared between
@@ -263,6 +264,20 @@ so neither keyword is needed for the common layer-by-layer case.
 collective to independent I/O.  Since that fallback is silent and
 changes write scaling completely, turn it on before trusting any timing
 measurement.
+
+{atomic} yes (the default) makes every {hdf5} dump crash safe.  The
+dump copies the file to {file}.tmp, writes into the copy, flushes it to
+disk, and renames it over {file}, so the file under its own name is
+always a complete earlier dump, whatever happens to the run mid-write.
+On file systems that support reflinks (btrfs, XFS) the copy shares the
+original's blocks and is effectively free; elsewhere (Lustre, GPFS,
+ext4, NFS) every processor copies one slice of the file through MPI-IO,
+so the copy runs at the file system's aggregate bandwidth.  Either way
+the file needs room for a second copy while a dump is written.  A stale
+{file}.tmp left by a crash is harmless and is replaced by the next dump.
+{atomic} no writes into the file in place and keeps it open between
+dumps, which avoids the copy but can leave the file unreadable if the
+run dies while it is open.
 
 :line
 
@@ -601,6 +616,7 @@ chunk = chosen from the processor grid (hdf5 style only)
 origin = domain lower bound at file creation (hdf5 style only)
 extent = domain size at file creation (hdf5 style only)
 verbose = 0 (hdf5 style only)
+atomic = yes (hdf5 style only)
 scolor = * c1/c2/.../c140 where c1-c140 are the names of the 140 pre-defined colors
 sdiam = * 1.0
 smap = min max cf 2 min blue max red

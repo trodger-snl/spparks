@@ -25,7 +25,7 @@
 
 <LI>this keyword applies only to the <I>stitch</I> dump style 
 
-<LI>keyword = <I>retain</I> or <I>chunk</I> or <I>origin</I> or <I>extent</I> or <I>verbose</I> 
+<LI>keyword = <I>retain</I> or <I>chunk</I> or <I>origin</I> or <I>extent</I> or <I>verbose</I> or <I>atomic</I> 
 
 <LI>  <I>delay</I> value = tdelay
     tdelay = delay dump until at least this time (seconds)
@@ -53,6 +53,7 @@
     nx,ny,nz = initial dataset extent in lattice sites (hdf5 style only)
   <I>verbose</I> arg = N
     N = 1 to report when a write was not collective (hdf5 style only)
+  <I>atomic</I> arg = <I>yes</I> or <I>no</I> (hdf5 style only)
   <I>sort</I> arg = <I>off</I> or <I>id</I> or N or -N
      off = no sorting of per-site lines within a snapshot
      id = sort per-site lines by atom ID
@@ -258,8 +259,8 @@ and continues deleting intermediate states that can be safely removed.
 </P>
 <HR>
 
-<P>The <I>chunk</I>, <I>origin</I>, <I>extent</I> and <I>verbose</I> keywords apply only to the
-<I>hdf5</I> dump style.
+<P>The <I>chunk</I>, <I>origin</I>, <I>extent</I>, <I>verbose</I> and <I>atomic</I> keywords apply
+only to the <I>hdf5</I> dump style.
 </P>
 <P><I>chunk</I> overrides the HDF5 chunk shape.  By default the chunk is chosen
 to tile the per-processor subdomains, so that no chunk is shared between
@@ -279,6 +280,20 @@ so neither keyword is needed for the common layer-by-layer case.
 collective to independent I/O.  Since that fallback is silent and
 changes write scaling completely, turn it on before trusting any timing
 measurement.
+</P>
+<P><I>atomic</I> yes (the default) makes every <I>hdf5</I> dump crash safe.  The
+dump copies the file to <I>file</I>.tmp, writes into the copy, flushes it to
+disk, and renames it over <I>file</I>, so the file under its own name is
+always a complete earlier dump, whatever happens to the run mid-write.
+On file systems that support reflinks (btrfs, XFS) the copy shares the
+original's blocks and is effectively free; elsewhere (Lustre, GPFS,
+ext4, NFS) every processor copies one slice of the file through MPI-IO,
+so the copy runs at the file system's aggregate bandwidth.  Either way
+the file needs room for a second copy while a dump is written.  A stale
+<I>file</I>.tmp left by a crash is harmless and is replaced by the next dump.
+<I>atomic</I> no writes into the file in place and keeps it open between
+dumps, which avoids the copy but can leave the file unreadable if the
+run dies while it is open.
 </P>
 <HR>
 
@@ -619,6 +634,7 @@ details.
 <LI>origin = domain lower bound at file creation (hdf5 style only)
 <LI>extent = domain size at file creation (hdf5 style only)
 <LI>verbose = 0 (hdf5 style only)
+<LI>atomic = yes (hdf5 style only)
 <LI>scolor = * c1/c2/.../c140 where c1-c140 are the names of the 140 pre-defined colors
 <LI>sdiam = * 1.0
 <LI>smap = min max cf 2 min blue max red

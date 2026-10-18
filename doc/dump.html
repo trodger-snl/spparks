@@ -96,6 +96,10 @@ domain starts <I>below</I> the stored origin is an error, because HDF5
 indices cannot be extended downward.  Use <I>dump_modify origin</I> to
 pre-declare a larger volume when that would otherwise happen.
 </P>
+<P>Each dump is crash safe by default: it is written into a copy of the
+file that then replaces the original, so a run that dies mid-write
+leaves the previous dump intact.  See <A HREF = "dump_modify.html">dump_modify atomic</A>.
+</P>
 <P>Compression is intentionally not supported.  Measured payloads from AM
 runs compress only about 1.4x overall -- the double-precision fields
 dominate the volume and are nearly incompressible -- which does not pay

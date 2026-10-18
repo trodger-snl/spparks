@@ -33,7 +33,13 @@
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
+#ifdef __linux__
+#include <linux/fs.h> // FICLONE
+#include <sys/ioctl.h>
+#endif
 
 using namespace SPPARKS_NS;
 
@@ -69,6 +75,7 @@ DumpHDF5::DumpHDF5(SPPARKS *spk, int narg, char **arg) : Dump(spk, narg, arg) {
   opened = false;
   user_origin = user_extent = user_chunk = false;
   verbose = 0;
+  atomic = 1;
   for (int d = 0; d < 3; d++) {
     origin[d] = 0;
     dims[d] = 0;
@@ -228,7 +235,7 @@ void DumpHDF5::ensure_dataset(const std::string &label, int type) {
    create the file, or reopen one an earlier invocation left behind
 ------------------------------------------------------------------------- */
 
-void DumpHDF5::open_file() {
+void DumpHDF5::open_file(const char *fname) {
   // global lattice extent of THIS run; a staged build's window is only part
   // of the whole part being built
   int64_t lo[3] = {applattice->xlo_simple, applattice->ylo_simple,
@@ -239,7 +246,7 @@ void DumpHDF5::open_file() {
   int exists = 0;
   if (me == 0) {
     struct stat sb;
-    exists = (stat(filename, &sb) == 0) ? 1 : 0;
+    exists = (stat(fname, &sb) == 0) ? 1 : 0;
   }
   MPI_Bcast(&exists, 1, MPI_INT, 0, world);
 
@@ -252,21 +259,21 @@ void DumpHDF5::open_file() {
     // is still left off in v1: it converts a subtle divergence into a hang
     // rather than a slowdown, and it is not needed for correctness.
     file = std::make_shared<HighFive::File>(
-        filename,
+        fname,
         exists ? HighFive::File::ReadWrite
                : (HighFive::File::ReadWrite | HighFive::File::Create |
                   HighFive::File::Truncate),
         fapl);
 #else
     file = std::make_shared<HighFive::File>(
-        filename,
+        fname,
         exists ? HighFive::File::ReadWrite
                : (HighFive::File::ReadWrite | HighFive::File::Create |
                   HighFive::File::Truncate));
 #endif
   } catch (const std::exception &e) {
     char msg[512];
-    snprintf(msg, sizeof(msg), "Dump hdf5 could not open %s: %s", filename,
+    snprintf(msg, sizeof(msg), "Dump hdf5 could not open %s: %s", fname,
              e.what());
     error->all(FLERR, msg);
   }
@@ -297,7 +304,7 @@ void DumpHDF5::open_file() {
                    "Dump hdf5 domain starts below the origin stored in %s "
                    "(dim %d: domain %lld < origin %lld); recreate the file or "
                    "pre-declare it with 'dump_modify <id> origin'",
-                   filename, k, (long long)lo[k], (long long)origin[k]);
+                   fname, k, (long long)lo[k], (long long)origin[k]);
           error->all(FLERR, msg);
         }
     } else {
@@ -331,7 +338,7 @@ void DumpHDF5::open_file() {
     }
   } catch (const std::exception &e) {
     char msg[512];
-    snprintf(msg, sizeof(msg), "Dump hdf5 metadata error on %s: %s", filename,
+    snprintf(msg, sizeof(msg), "Dump hdf5 metadata error on %s: %s", fname,
              e.what());
     error->all(FLERR, msg);
   }
@@ -375,8 +382,143 @@ void DumpHDF5::extend_to(const int64_t *needed) {
 ------------------------------------------------------------------------- */
 
 void DumpHDF5::write(double time) {
-  if (!opened)
-    open_file();
+  if (!atomic) {
+    if (!opened)
+      open_file(filename);
+    write_fields(time);
+    return;
+  }
+
+  // write-then-rename: the file under its own name is always a complete
+  // earlier dump, whatever happens to this process mid-write
+  std::string tmp = std::string(filename) + ".tmp";
+  stage_copy(tmp.c_str());
+  open_file(tmp.c_str());
+  write_fields(time);
+  try {
+    file->flush(); // H5Fflush; under MPI-IO it ends in MPI_File_sync
+  } catch (const std::exception &e) {
+    error->all(FLERR, (std::string("Dump hdf5 flush failed: ") + e.what()).c_str());
+  }
+  file.reset(); // collective close
+  opened = false;
+  commit(tmp.c_str());
+}
+
+/* ----------------------------------------------------------------------
+   copy the current file to tmp, so the dump overwrites only the copy.
+   A reflink (btrfs, XFS) is instant; elsewhere (Lustre, GPFS, ext4) every
+   rank copies one slice through MPI-IO, so the copy runs at the parallel
+   file system's aggregate bandwidth rather than one client's.
+------------------------------------------------------------------------- */
+
+void DumpHDF5::stage_copy(const char *tmp) {
+  int exists = 0, cloned = 0;
+  if (me == 0) {
+    unlink(tmp); // a crash mid-dump leaves a stale copy behind
+    struct stat sb;
+    exists = (stat(filename, &sb) == 0) ? 1 : 0;
+#ifdef FICLONE
+    if (exists) {
+      int in = open(filename, O_RDONLY);
+      int out = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, sb.st_mode & 07777);
+      cloned = (in >= 0 && out >= 0 && ioctl(out, FICLONE, in) == 0) ? 1 : 0;
+      if (in >= 0) close(in);
+      if (out >= 0) close(out);
+      if (!cloned) unlink(tmp);
+    }
+#endif
+  }
+  int flags[2] = {exists, cloned};
+  MPI_Bcast(flags, 2, MPI_INT, 0, world);
+  if (!flags[0] || flags[1])
+    return; // first dump creates tmp from scratch, or the reflink did it
+
+  int err = 0;
+  const size_t piece = (size_t)64 << 20;
+  std::vector<char> buf;
+#ifdef H5_HAVE_PARALLEL
+  MPI_File in, out;
+  err |= MPI_File_open(world, filename, MPI_MODE_RDONLY, MPI_INFO_NULL, &in);
+  err |= MPI_File_open(world, tmp, MPI_MODE_WRONLY | MPI_MODE_CREATE,
+                       MPI_INFO_NULL, &out);
+  if (err == MPI_SUCCESS) {
+    MPI_Offset size;
+    MPI_File_get_size(in, &size);
+    MPI_Offset per = (size + nprocs - 1) / nprocs;
+    MPI_Offset lo = std::min(size, (MPI_Offset)me * per);
+    MPI_Offset hi = std::min(size, lo + per);
+    if (hi > lo) buf.resize(std::min((MPI_Offset)piece, hi - lo));
+    for (MPI_Offset off = lo; off < hi && !err; off += piece) {
+      int n = (int)std::min((MPI_Offset)piece, hi - off);
+      MPI_Status st;
+      err |= MPI_File_read_at(in, off, buf.data(), n, MPI_BYTE, &st);
+      err |= MPI_File_write_at(out, off, buf.data(), n, MPI_BYTE, &st);
+    }
+    err |= MPI_File_sync(out); // collective
+    MPI_File_close(&in);
+    MPI_File_close(&out);
+  }
+#else
+  if (me == 0) {
+    FILE *in = fopen(filename, "rb"), *out = fopen(tmp, "wb");
+    if (!in || !out) err = 1;
+    buf.resize(piece);
+    size_t n;
+    while (!err && (n = fread(buf.data(), 1, piece, in)) > 0)
+      if (fwrite(buf.data(), 1, n, out) != n) err = 1;
+    if (in && ferror(in)) err = 1;
+    if (in) fclose(in);
+    if (out && fclose(out) != 0) err = 1;
+  }
+#endif
+  int errall;
+  MPI_Allreduce(&err, &errall, 1, MPI_INT, MPI_MAX, world);
+  if (errall) {
+    char msg[512];
+    snprintf(msg, sizeof(msg), "Dump hdf5 could not copy %s to %s", filename, tmp);
+    error->all(FLERR, msg);
+  }
+}
+
+/* ----------------------------------------------------------------------
+   make the finished copy durable, then atomically replace the file with it
+------------------------------------------------------------------------- */
+
+void DumpHDF5::commit(const char *tmp) {
+  int ok = 1;
+  if (me == 0) {
+    int fd = open(tmp, O_RDONLY); // the serial-HDF5 flush does not fsync
+    if (fd < 0 || fsync(fd) != 0) ok = 0;
+    if (fd >= 0) close(fd);
+    if (ok && rename(tmp, filename) != 0) ok = 0;
+    if (ok) {
+      // the rename itself lives in the directory
+      std::string f(filename);
+      size_t slash = f.rfind('/');
+      std::string dir = slash == std::string::npos ? "." : f.substr(0, slash ? slash : 1);
+      int dfd = open(dir.c_str(), O_RDONLY | O_DIRECTORY);
+      if (dfd >= 0) {
+        fsync(dfd);
+        close(dfd);
+      }
+    }
+  }
+  MPI_Bcast(&ok, 1, MPI_INT, 0, world);
+  if (!ok) {
+    char msg[512];
+    snprintf(msg, sizeof(msg),
+             "Dump hdf5 could not replace %s with %s (the previous dump is intact)",
+             filename, tmp);
+    error->all(FLERR, msg);
+  }
+}
+
+/* ----------------------------------------------------------------------
+   write every field into the open file
+------------------------------------------------------------------------- */
+
+void DumpHDF5::write_fields(double time) {
 
   // this rank's owned box in absolute lattice indices, half-open
   int64_t lo[3] = {applattice->xlo_me_simple, applattice->ylo_me_simple,
@@ -524,6 +666,14 @@ int DumpHDF5::modify_param(int narg, char **arg) {
     }
     user_extent = true;
     return 4;
+  }
+  if (strcmp(arg[0], "atomic") == 0) {
+    if (narg < 2)
+      error->all(FLERR, "Illegal dump_modify command");
+    if (strcmp(arg[1], "yes") == 0) atomic = 1;
+    else if (strcmp(arg[1], "no") == 0) atomic = 0;
+    else error->all(FLERR, "Illegal dump_modify command");
+    return 2;
   }
   if (strcmp(arg[0], "verbose") == 0) {
     if (narg < 2)

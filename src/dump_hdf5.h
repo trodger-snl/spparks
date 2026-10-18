@@ -83,6 +83,7 @@ private:
   int64_t req_extent[3];
   int64_t req_chunk[3];
   int verbose;             // report collective-IO mode after each write
+  int atomic;              // write a copy, then rename it over the file
 
   // private methods
 
@@ -94,7 +95,10 @@ private:
   int parse_fields(int, char **);
   int modify_param(int, char **);
 
-  void open_file();
+  void open_file(const char *fname);
+  void write_fields(double);
+  void stage_copy(const char *tmp);
+  void commit(const char *tmp);
   void choose_chunk(const int64_t *extent, size_t elemsize, int64_t *out);
   void ensure_dataset(const std::string &label, int type);
   void extend_to(const int64_t *needed);

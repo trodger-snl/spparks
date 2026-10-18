@@ -93,6 +93,7 @@ option(SPPARKS_ENABLE_PNG "Enable PNG support" OFF)
 option(SPPARKS_ENABLE_HDF5 "Enable HDF5 support" OFF)
 option(SPPARKS_ENABLE_HIGHFIVE "Enable HighFive C++ HDF5 wrapper" OFF)
 option(SPPARKS_USE_EXTERNAL_HIGHFIVE "Use system-provided HighFive instead of FetchContent" OFF)
+option(SPPARKS_ENABLE_OPENMP "Thread the host per-site loops with OpenMP" ON)
 
 # Packages: optional components whose sources live in src/KOKKOS/ and src/STITCH/
 # and compile from there (no copying into src/).
@@ -109,10 +110,8 @@ set(SPPARKS_KOKKOS_ARCH "" CACHE STRING "Kokkos GPU architecture token (e.g. AMD
 # Enable OpenMP as the Kokkos HOST execution space alongside a GPU DEVICE backend
 # (HIP/CUDA/SYCL). With this ON, Kokkos::DefaultExecutionSpace stays the GPU while
 # Kokkos::DefaultHostExecutionSpace becomes OpenMP instead of Serial -- so
-# host-side Kokkos parallel_for loops run multithreaded. (The non-Kokkos
-# #pragma omp host loops in the HDF5 source are already threaded via the
-# find_package(OpenMP) link below regardless of this option; this option adds
-# threading for the Kokkos host space itself.) Ignored for the OPENMP/SERIAL
+# host-side Kokkos parallel_for loops run multithreaded. (The plain #pragma omp
+# loops follow SPPARKS_ENABLE_OPENMP, not this option.) Ignored for the OPENMP/SERIAL
 # backends. Intended for multi-GPU HPC nodes with many host cores per GPU
 # (e.g. 4xH100 + 112 cores: 1 rank/GPU x N host threads) and usable on this APU
 # (HIP + OpenMP) for the same host-threading benefit.
@@ -623,16 +622,18 @@ if(SPPARKS_ENABLE_HIGHFIVE)
     target_link_libraries(spparks_lib PUBLIC HighFive)
 endif()
 
-# Host OpenMP for the non-Kokkos per-site layer-cache loops in the HDF5
-# temperature source (build_site_element_cache / compute_site_thermal_intervals,
-# ~40 s/layer serial on a 5M-site box). The OpenMP Kokkos backend already
-# compiles with -fopenmp; for the HIP/CUDA backends this adds host threading for
-# those loops. Harmless (loops just run serially) if OpenMP is unavailable.
-find_package(OpenMP QUIET)
-if(OpenMP_CXX_FOUND)
-    target_link_libraries(spparks_lib PUBLIC OpenMP::OpenMP_CXX)
-else()
-    message(STATUS "OpenMP not found; HDF5 layer-cache loops will run serially")
+# Host OpenMP for the plain #pragma omp per-site loops: the HDF5 source's layer
+# cache (~40 s/layer serial on a 5M-site box), the color/strict site seeds, and
+# the kk apps' host setup. Every one is correct serially, so OFF (or no OpenMP
+# found) only costs time. The Kokkos OpenMP backend compiles with -fopenmp
+# through Kokkos::kokkos whatever this is set to.
+if(SPPARKS_ENABLE_OPENMP)
+    find_package(OpenMP)
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(spparks_lib PUBLIC OpenMP::OpenMP_CXX)
+    else()
+        message(WARNING "SPPARKS_ENABLE_OPENMP is ON but OpenMP was not found; host loops will run serially")
+    endif()
 endif()
 
 if(SPPARKS_PACKAGE_KOKKOS)
@@ -672,6 +673,7 @@ message(STATUS "GZIP support: ${SPPARKS_ENABLE_GZIP}")
 message(STATUS "JPEG support: ${SPPARKS_ENABLE_JPEG}")
 message(STATUS "PNG support: ${SPPARKS_ENABLE_PNG}")
 message(STATUS "HDF5 support: ${SPPARKS_ENABLE_HDF5}")
+message(STATUS "OpenMP host loops: ${SPPARKS_ENABLE_OPENMP}")
 if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
     message(STATUS "HDF5 version: ${HDF5_VERSION}")
     message(STATUS "HDF5 is parallel: ${HDF5_IS_PARALLEL}")

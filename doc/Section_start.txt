@@ -137,7 +137,8 @@ Feature Options:
 -DSPPARKS_ENABLE_HIGHFIVE=ON/OFF    # Modern C++ HDF5 wrapper (default: OFF)
 -DSPPARKS_ENABLE_JPEG=ON/OFF        # JPEG image output (default: ON)
 -DSPPARKS_ENABLE_PNG=ON/OFF         # PNG image output (default: OFF)
--DSPPARKS_ENABLE_GZIP=ON/OFF        # GZIP compression (default: ON) :pre
+-DSPPARKS_ENABLE_GZIP=ON/OFF        # GZIP compression (default: ON)
+-DSPPARKS_ENABLE_OPENMP=ON/OFF      # OpenMP-threaded host loops (default: ON) :pre
 
 Build Type Options:
 

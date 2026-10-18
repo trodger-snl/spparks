@@ -142,7 +142,8 @@ cmake --build . -j12
 -DSPPARKS_ENABLE_HIGHFIVE=ON/OFF    # Modern C++ HDF5 wrapper (default: OFF)
 -DSPPARKS_ENABLE_JPEG=ON/OFF        # JPEG image output (default: ON)
 -DSPPARKS_ENABLE_PNG=ON/OFF         # PNG image output (default: OFF)
--DSPPARKS_ENABLE_GZIP=ON/OFF        # GZIP compression (default: ON) 
+-DSPPARKS_ENABLE_GZIP=ON/OFF        # GZIP compression (default: ON)
+-DSPPARKS_ENABLE_OPENMP=ON/OFF      # OpenMP-threaded host loops (default: ON) 
 </PRE>
 <P>Build Type Options:
 </P>
@@ -657,7 +658,7 @@ picks them when CXX is not set.  src/CMakePresets.json holds presets
 for MI300A, Strix Halo and OpenMP ("cmake --list-presets").  For
 example:
 </P>
-<PRE>cmake -S src -B build-hip -DCMAKE_CXX_COMPILER=hipcc   -DSPPARKS_PACKAGE_KOKKOS=ON -DSPPARKS_KOKKOS_BACKEND=HIP   -DSPPARKS_KOKKOS_ARCH=AMD_GFX1151
+<PRE>cmake -S src -B build-hip -DCMAKE_CXX_COMPILER=hipcc -DSPPARKS_PACKAGE_KOKKOS=ON -DSPPARKS_KOKKOS_BACKEND=HIP -DSPPARKS_KOKKOS_ARCH=AMD_GFX1151
 cmake --build build-hip -j 
 </PRE>
 <P>or, with the build script:
@@ -679,7 +680,7 @@ them before SPPARKS parses the rest; for example
 spparks -in in.potts --kokkos-num-threads=8 
 </PRE>
 <P>With more than one visible GPU, SPPARKS binds each MPI rank to GPU
-(node-local rank mod number of GPUs), unless the device was chosen with
+number (node-local rank mod number of GPUs), unless the device was chosen with
 the KOKKOS_DEVICE_ID or KOKKOS_MAP_DEVICE_ID_BY environment variable or
 with --kokkos-device-id.  With the OpenMP backend, launch MPI so that
 each rank's threads are not pinned to one core (for example "mpirun

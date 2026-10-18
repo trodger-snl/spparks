@@ -5,14 +5,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this checkout is
 
 SPPARKS (Stochastic Parallel PARticle Kinetic Simulator), a kinetic Monte Carlo
-code. This checkout (`/home/tron/spparks-kokkos`, branch **SURGE-kokkos**) is the
-GPU-acceleration line: it adds a Kokkos/HIP port of the additive-manufacturing
-`additive/texture` app, building for an **AMD gfx1151 (Strix Halo, RDNA 3.5)**
-APU with `hipcc`.
+code. This checkout (`/home/tron/spparks`, branch **SURGE**) carries the
+additive-manufacturing `additive/texture` app and its Kokkos/HIP port
+(`additive/texture/kk`), building for an **AMD gfx1151 (Strix Halo, RDNA 3.5)**
+APU with `hipcc`. The GPU line (branch SURGE-kokkos, checkout
+`/home/tron/spparks-kokkos`) was merged into SURGE on 2026-10-17; SURGE is now
+the main line.
 
-Sibling repos: `/home/tron/spparks` (the non-GPU SURGE line), plus analysis
-tooling. The two SPPARKS repos share history; the CPU `additive/texture` app here
-is the correctness reference for the GPU port.
+The CPU `additive/texture` app is the correctness reference for the GPU port.
+`lib/kokkos` is a git submodule (`git submodule update --init lib/kokkos`).
 
 ## Build & run
 
@@ -128,7 +129,7 @@ Microstructure output is non-deterministic run-to-run (MC randomness). Only the
 (`additive/texture`) against the Kokkos app (`additive/texture/kk`) on the
 temperature diagnostic columns (`diag_style array d6 sum d6 max`), expecting a
 bit-for-bit match. The Kokkos app requires `sweep color`. Base test inputs are in
-`examples/ReducedTempAM/` and the SURGE branch's `examples/{rosenthal,moser}_am/`.
+`examples/ReducedTempAM/`, `examples/{rosenthal,moser}_am/` and `examples/am_validation/`.
 
 ## Commits
 

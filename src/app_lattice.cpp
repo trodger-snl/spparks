@@ -212,6 +212,17 @@ void AppLattice::init()
     }
   }
 
+  // iterate() will run iterate_app_update_only(), which reads neither the
+  // sector nor the colour sets nor the sector comm: build one whole-domain
+  // set. Building them all cost ~13 s per run on a 4M-site additive box.
+  // Only where dt_rkmc cannot move: no KMC solver (dt_kmc is set from the
+  // per-set propensities), and for sweep random a whole-number nstop (a
+  // fractional nstop or tstop truncates nselect per set).
+
+  if (allow_app_update && app_update_only && solve == NULL &&
+      (sweepflag != RANDOM || (tstop == 0.0 && nstop == (int) nstop)))
+    nsector = ncolors = 1;
+
   if (nsector > 1 && ncolors > 1) bothflag = 1;
   else bothflag = 0;
 
@@ -739,8 +750,10 @@ void AppLattice::iterate_app_update_only(double stoptime,double dt)
 {
   int done = 0;
   while (!done) {
+    timer->stamp();
     if (allow_app_update) app_update(dt);
-    
+    timer->stamp(TIME_APP);
+
     time += dt;
     if (time >= stoptime) done = 1;
     if (done || time >= nextoutput) nextoutput = output->compute(time,done);

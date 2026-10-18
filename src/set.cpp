@@ -376,8 +376,10 @@ void Set::set_single(int lhs, int rhs) {
     MyHash hash;
     MyIterator loc;
 
-    for (i = 0; i < nlocal; i++)
-      hash.insert(std::pair<tagint, int>(id[i], i));
+    // only the fraction < 1 branches look sites up by global ID
+    if (fraction < 1.0)
+      for (i = 0; i < nlocal; i++)
+        hash.insert(std::pair<tagint, int>(id[i], i));
 
     if (lhs == SITE || lhs == IARRAY) {
       if (regionflag == 0 && fraction == 1.0) {
@@ -1183,8 +1185,9 @@ void Set::apply_temp_buffer(int lhs, int32_t *itmp, double *dtmp,
   if (loopflag) {
     MyHash hash;
     MyIterator loc;
-    for (int i = 0; i < nlocal; i++)
-      hash.insert(std::pair<tagint, int>(id[i], i));
+    if (fraction < 1.0)
+      for (int i = 0; i < nlocal; i++)
+        hash.insert(std::pair<tagint, int>(id[i], i));
 
     if (fraction == 1.0) {
       for (int i = 0; i < nlocal; i++) {

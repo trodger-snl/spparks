@@ -126,32 +126,11 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
     nucleation_temps = NULL;
     nucleation_sizes = NULL;
 
-    //Set default values    
-    tl = 1723;
-    ts = 1673;
+    // AdditiveParams holds the shared defaults; the nuclei volumes need dx
     t_cool_max = tl - ts;
-    no = 1e15;
-    tc = 5;
-    tsig = 3;
     size_norm = pow(dx,3) * 2;
     size_sig = pow(dx,3);
-    solid_front_length = 4;
-    // Set default values for coefficient arrays
-    solid_front_coeffs = new double[4];    
-    solid_front_coeffs[0] = 1.091e-5;
-    solid_front_coeffs[1] = -2.034e-4;
-    solid_front_coeffs[2] = 2.74e-3;
-    solid_front_coeffs[3] = 1.151e-4;
-    //Default texture parameters
-    c1 = 0.5;
-    c2 = 0.5;
-    c3 = 2.5;
     t_room = 300;
-    mis_diffusion = 0.0;               // rotation off until misorientation_diffusion
-    mis_thresh = 2.0 * MY_PI / 180.0;  // Default 2 degrees converted to radians
-    misorient_alpha = 0.0;             // constant D
-    misorientation_target_mode = MISORI_TARGET_RANDOM_ROTATION;
-    nucleation_misorient_enabled = true;
     nucleation_mode = NUCLEATION_THRESHOLD;
 
     // Void generation defaults

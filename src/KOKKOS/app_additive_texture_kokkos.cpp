@@ -157,45 +157,12 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
   nucleation_temps = nullptr;
   nucleation_sizes = nullptr;
 
-  // Set default physical parameters (304L stainless steel)
-  tl = 1723.0;  // Liquidus temperature (K)
-  ts = 1673.0;  // Solidus temperature (K)
+  // AdditiveParams holds the defaults shared with AppAdditiveTexture; the
+  // nuclei volumes need dx, as there
   t_room = 300.0;  // Room temperature (K)
-
-  // Nucleation parameters
-  no = 1.0e11;   // Nucleation density (#/m^3)
-  tc = 5.0;      // Critical undercooling (K)
-  tsig = 3.0;    // Undercooling std dev (K)
-  size_norm = 8.4375e-16;  // Mean nuclei volume (m^3)
-  size_sig = 1.5625e-17;   // Nuclei volume std dev (m^3)
-
-  // Texture parameters: match AppAdditiveTexture's defaults (c1 0.5, c2 0.5,
-  // c3 2.5). The old 0.1/0.9 gave a NEGATIVE mobility for neighbours more than
-  // ~40 deg off the gradient -- and for every neighbour once the field is flat
-  // (see the zero-gradient note in the solidification kernel) -- which this
-  // kernel rejects outright, so a cooled pool could never finish solidifying.
-  c1 = 0.5;
-  c2 = 0.5;
-  c3 = 2.5;
-  // Match AppAdditiveTexture's defaults (app_additive_texture.cpp:150-152).
-  mis_diffusion = 0.0;   // rotation off until misorientation_diffusion, as on the CPU
+  size_norm = pow(dx,3) * 2;
+  size_sig = pow(dx,3);
   t_cool_max = 100.0;    // placeholder; init_app sets tl - ts like the CPU app
-  // RADIANS. `misorientation_function` stores atof(arg[1]) * MY_PI/180 into
-  // this, and the new-grain test compares it against an angle in radians, so a
-  // bare degree literal here was unreachable: the previous default of 5.0 was
-  // ~286 deg, above the pi upper bound of that angle, so the test could never
-  // fire and a deck relying on the default silently never created new grains
-  // through the misorientation path.
-  mis_thresh = 2.0 * MY_PI / 180.0;
-  misorient_alpha = 0.0;   // constant D (matches AppAdditiveTexture)
-
-  // Solidification velocity polynomial (default: V = -1.0302e-7*dT^3 + 1.0533e-4*dT^2 + 2.2196e-3*dT)
-  solid_front_length = 4;
-  solid_front_coeffs = new double[4];
-  solid_front_coeffs[0] = -1.0302e-7;
-  solid_front_coeffs[1] = 1.0533e-4;
-  solid_front_coeffs[2] = 2.2196e-3;
-  solid_front_coeffs[3] = 0.0;
 
   // Temperature-I/O orchestration (source setup/update, laser scan path,
   // multi-pass pause/reset scheduling, fast-forward predictors, smoothing)

@@ -24,8 +24,9 @@ class Error;
 class ThermalManager;
 
 // Microstructure parameters and their input commands, shared by the CPU
-// (additive/texture) and Kokkos (additive/texture/kk) apps. Each app's
-// constructor sets its own defaults.
+// (additive/texture) and Kokkos (additive/texture/kk) apps, with the defaults
+// both use. The nuclei volumes scale with the lattice spacing, so each app's
+// constructor sets those from dx.
 struct AdditiveParams {
   // Rotation-axis choice for the per-hop misorientation step. random_rotation
   // (default) rotates about a uniformly random axis -- the isotropic random
@@ -39,32 +40,32 @@ struct AdditiveParams {
     MISORI_TARGET_RANDOM_ROTATION = 2
   };
 
-  double tl;    // liquidus temperature
-  double ts;    // solidus temperature
-  double no;    // nucleation density
-  double tc;    // critical undercooling
-  double tsig;  // undercooling standard deviation
-  double size_norm;  // mean nuclei volume
-  double size_sig;   // nuclei volume standard deviation
+  double tl = 1723;    // liquidus temperature (K)
+  double ts = 1673;    // solidus temperature (K)
+  double no = 1e15;    // nucleation density (1/m^3)
+  double tc = 5;       // critical undercooling (K)
+  double tsig = 3;     // undercooling standard deviation (K)
+  double size_norm;    // mean nuclei volume (m^3), default 2 dx^3
+  double size_sig;     // nuclei volume standard deviation (m^3), default dx^3
   // Front velocity V(Tcool) in m/s, Tcool = tl - T in K: the polynomial
   // solid_front_coeffs (highest power first), or, when solid_front_length
   // is 0, the power law solid_front_a * Tcool^solid_front_n.
-  double *solid_front_coeffs = nullptr;
-  int solid_front_length = 0;
+  double *solid_front_coeffs = new double[4]{1.091e-5, -2.034e-4, 2.74e-3, 1.151e-4};
+  int solid_front_length = 4;
   double solid_front_a = 0.0, solid_front_n = 0.0;
   double front_velocity(double Tcool) const;
 
   // Texture model: mobility = c1 + c2*cos(c3*theta), c1 fixed at 1.0.
-  double c1, c2, c3;
+  double c1 = 0.5, c2 = 0.5, c3 = 2.5;
 
   // Misorientation random walk (`misorientation_diffusion <D> [thresh] [alpha]`).
   // mis_diffusion: D in rad^2/m (input in deg^2/m); <= 0 disables rotation.
   // misorient_alpha > 0 makes D_eff = D * g(Tcool/(tl-ts))^2 with
   // g(x) = (exp(alpha x)-1)/(exp(alpha)-1); 0 = constant D.
   // mis_thresh (rad): a single step at or above it starts a new grain (default 2 deg).
-  double mis_diffusion;
-  double mis_thresh;
-  double misorient_alpha;
+  double mis_diffusion = 0.0;
+  double mis_thresh = 0.034906585039886591;   // 2 deg
+  double misorient_alpha = 0.0;
   // misorientation_grain_walk <D_deg2_per_m> [rho] [path|height]: coherent
   // per-grain rotation walk (grain_walk.h); rad^2/m, 0 = off.
   double grain_walk_D = 0.0;

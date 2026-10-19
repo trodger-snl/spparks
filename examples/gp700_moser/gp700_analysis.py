@@ -9,7 +9,6 @@ usage (WORK conda env):
 """
 import argparse, os, sys, json
 import numpy as np
-sys.path.insert(0, '/home/tron/spparks-micro-analysis/src')
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'scripts'))
 from spparks_micro_analysis.stitch_reader import StitchReader
 from spparks_micro_analysis.grain_size_analysis import relabel_grains

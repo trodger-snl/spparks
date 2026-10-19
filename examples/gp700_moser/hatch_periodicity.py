@@ -6,7 +6,6 @@ usage (WORK env): hatch_periodicity.py gp700.st --out DIR [--dx 3e-6] [--crop X0
 """
 import argparse, os, sys, json
 import numpy as np
-sys.path.insert(0, '/home/tron/spparks-micro-analysis/src')
 from spparks_micro_analysis.stitch_reader import StitchReader
 from spparks_micro_analysis.grain_size_analysis import relabel_grains
 import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt

@@ -22,7 +22,6 @@ usage (WORK env, or any env with spparks_micro_analysis on the path):
 Solid voxels: i2 == 3 if i2 is present (solidified; unremelted substrate excluded), else all.
 """
 import sys, os, json, argparse, time, numpy as np
-sys.path.insert(0, '/home/tron/spparks-micro-analysis/src')
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'scripts'))
 from spparks_micro_analysis.stitch_reader import StitchReader
 from spparks_micro_analysis.grain_size_analysis import relabel_grains

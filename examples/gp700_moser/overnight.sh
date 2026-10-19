@@ -2,8 +2,9 @@
 # Unattended chain (2026-09-04 night): analyse v3 and v4 as they finish, score v4
 # against Lamb, and if v4 misses run the Sobol study on the proxy geometry.
 # Launch detached: setsid nohup ./overnight.sh > overnight.log 2>&1 &
+# R (runs dir, default ~/gp700_runs) and PY (the WORK env python) come from the environment.
 set -u
-R=/home/tron/gp700_runs; E=/home/tron/spparks-kokkos/examples/gp700_moser; PY=/home/tron/miniconda3/envs/WORK/bin/python
+R=${R:-$HOME/gp700_runs}; E=$(cd "$(dirname "$0")" && pwd); PY=${PY:-python}
 BIN=$R/spparks_ad23c1a5
 log(){ echo "[$(date +%H:%M:%S)] $*"; }
 analyse(){ # name

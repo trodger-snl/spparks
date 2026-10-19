@@ -6,7 +6,6 @@ usage (WORK env): origin_census.py [--crop-frac 0.25] run1/gp700.st run2/gp700.s
 """
 import argparse, sys, os, re, json
 import numpy as np
-sys.path.insert(0, '/home/tron/spparks-micro-analysis/src')
 from spparks_micro_analysis.stitch_reader import StitchReader
 from spparks_micro_analysis.grain_size_analysis import relabel_grains
 ap = argparse.ArgumentParser(); ap.add_argument('stitch', nargs='+'); ap.add_argument('--dx', type=float, default=3e-6)

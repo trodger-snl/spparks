@@ -15,7 +15,6 @@ The build direction is the row axis of the (transformed) scan, increasing with t
 index (the convention of HPC-Calibration/scripts/prepare_v8_targets.py); --vflip reverses it.
 """
 import sys, os, json, argparse, time, numpy as np
-sys.path.insert(0, '/home/tron/spparks-micro-analysis/src')
 from spparks_micro_analysis.ebsd_reader import read_ang
 from spparks_micro_analysis.grain_segmentation import segment_grains_2d
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'scripts'))

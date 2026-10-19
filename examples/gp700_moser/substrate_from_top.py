@@ -6,7 +6,6 @@ random Voronoi grains.
 usage (WORK env): substrate_from_top.py BUILD.st OUT.st [--nz 50]
 """
 import argparse, sys, numpy as np
-sys.path.insert(0, '/home/tron/spparks-micro-analysis/src')
 from spparks_micro_analysis.stitch_reader import StitchReader, StitchWriter
 ap = argparse.ArgumentParser(); ap.add_argument('src'); ap.add_argument('out'); ap.add_argument('--nz', type=int, default=50)
 a = ap.parse_args()

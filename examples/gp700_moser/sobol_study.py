@@ -8,12 +8,17 @@ scored: RMS of (simulated - Lamb Fig. 5a) mean SROD over 25..240 um height.
 Resumable; never edits the shared template/driver (substitutes on a copy).
 
 usage: sobol_study.py --out DIR --binary BIN [--n 8] [--deadline HH:MM] [--dry]
+Run it with the analysis python (WORK env), which also runs gp700_analysis.py. With
+spack sourced ($SPACK_ROOT set), each box re-activates spparks-dev so the spack
+mpirun comes first on PATH rather than a conda env's.
 """
 import argparse, json, os, re, subprocess, sys, time, datetime
 import numpy as np
 from scipy.stats import qmc
 HERE = os.path.dirname(os.path.abspath(__file__))
-PY = '/home/tron/miniconda3/envs/WORK/bin/python'
+PY = sys.executable
+SPACK = os.environ.get('SPACK_ROOT')
+SETUP = f'. {SPACK}/share/spack/setup-env.sh && spack env activate spparks-dev && ' if SPACK else ''
 ap = argparse.ArgumentParser()
 ap.add_argument('--out', required=True); ap.add_argument('--binary', required=True)
 ap.add_argument('--n', type=int, default=8); ap.add_argument('--seed', type=int, default=12345)
@@ -110,7 +115,7 @@ for k, p in enumerate(pts):
         if os.path.exists(f'{bd}/completion.marker'): continue
         deck(p, n, f'{bd}/in.box', st, a.seed)
         if a.dry: continue
-        cmd = f'. /home/tron/spack/share/spack/setup-env.sh && spack env activate spparks-dev && cd {bd} && mpirun -np 1 --bind-to none {a.binary} < in.box > out.txt 2>&1'
+        cmd = f'{SETUP}cd {bd} && mpirun -np 1 --bind-to none {a.binary} < in.box > out.txt 2>&1'
         r = subprocess.run(['bash', '-c', cmd])
         if r.returncode != 0 or 'Loop time' not in open(f'{bd}/out.txt').read():
             log(f'point {k} box {n} FAILED (rc {r.returncode})'); ok = False; break

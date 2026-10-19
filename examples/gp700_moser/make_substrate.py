@@ -8,7 +8,6 @@ usage (WORK env): make_substrate.py OUT.st --nx 267 --nz 50 [--grain-um 50] [--d
 """
 import argparse, sys, numpy as np
 from scipy.spatial import cKDTree
-sys.path.insert(0, '/home/tron/spparks-micro-analysis/src')
 from spparks_micro_analysis.stitch_reader import StitchWriter
 ap = argparse.ArgumentParser(); ap.add_argument('out'); ap.add_argument('--nx', type=int, default=267); ap.add_argument('--nz', type=int, default=50)
 ap.add_argument('--grain-um', type=float, default=50.0); ap.add_argument('--dx', type=float, default=3e-6); ap.add_argument('--seed', type=int, default=1)

@@ -570,7 +570,11 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
   std::vector<double> timesFlat(totalElements);
   std::vector<double> tempsFlat(totalElements);
 
-  // Reusable chunk buffer — grows to largest chunk, then stays put
+  // Reusable chunk buffer — grows to largest chunk, then stays put.
+  // Read through select(offset, count), whose memory space has the 2D shape
+  // of the selection: a HyperSlab select gets a 1D memory space, and the shape
+  // mismatch sends HDF5 down a per-element chunk-mapping path that took ~4x
+  // the whole CSR read on ct15 (H5D__chunk_mem_cb dominated the profile).
   std::vector<double> buf;
   auto tempsDset = grp.getDataSet("temperatures");
   size_t dcPos = 0;  // read cursor into dataCounts / offsets
@@ -584,9 +588,8 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
     buf.resize(chunkRows * static_cast<size_t>(readCols));
 
     // --- Read & strip times ---
-    timesDset.select(HighFive::HyperSlab(HighFive::RegularHyperSlab(
-        {rowStart, 0}, {chunkRows, static_cast<size_t>(readCols)})))
-      .read(buf);
+    timesDset.select({rowStart, 0}, {chunkRows, static_cast<size_t>(readCols)})
+      .read(buf.data());
 
     for (size_t r = 0; r < chunkRows; r++) {
       unsigned count = dataCounts[dcPos + r];
@@ -595,9 +598,8 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
     }
 
     // --- Read & strip temperatures (reuse buf) ---
-    tempsDset.select(HighFive::HyperSlab(HighFive::RegularHyperSlab(
-        {rowStart, 0}, {chunkRows, static_cast<size_t>(readCols)})))
-      .read(buf);
+    tempsDset.select({rowStart, 0}, {chunkRows, static_cast<size_t>(readCols)})
+      .read(buf.data());
 
     for (size_t r = 0; r < chunkRows; r++) {
       unsigned count = dataCounts[dcPos + r];

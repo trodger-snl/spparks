@@ -62,7 +62,7 @@ AppPhaseFieldPotts::AppPhaseFieldPotts(SPPARKS *spk, int narg, char **arg) :
 
   // parse arguments for PhaseFieldPotts class only, not children
 
-  if (strcmp(style,"potts/pfm") != 0) return;
+  if (strcmp(style,"phasefield/potts") != 0) return;
 
   if (narg < 11) error->all(FLERR,"Illegal app_style command");
   

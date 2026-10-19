@@ -42,7 +42,7 @@ AppPottsStrainPin::AppPottsStrainPin(SPPARKS *spk, int narg, char **arg) :
 
   // parse arguments for PottsNeigh class only, not children
 
-  if (strcmp(style,"potts/strain/with/pinning") != 0) return;
+  if (strcmp(style,"potts/strain/pin") != 0) return;
 
   if (narg != 2) error->all(FLERR,"Illegal app_style command");
   

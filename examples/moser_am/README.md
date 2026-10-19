@@ -261,19 +261,19 @@ For Rosenthal counterparts (steady-state, no fluctuations) see
 ### Setting up substrate orientations
 
 To assign a single-crystal substrate at a chosen orientation, use the
-helper `scripts/crystal_to_quat.py` to convert from crystal directions
+helper `tools/crystal_to_quat.py` to convert from crystal directions
 (or Bunge Euler angles) into the scalar-first quaternion SPPARKS
 expects in the d1..d4 site fields:
 
 ```bash
 # [001] along build (+Z), [100] along scan (+X) — identity
-python scripts/crystal_to_quat.py --normal 001 --inplane 100
+python ../../tools/crystal_to_quat.py --normal 001 --inplane 100
 
 # Emit a ready-to-paste SPPARKS `set` line for substrate spin 7
-python scripts/crystal_to_quat.py --normal 110 --inplane 001 --as-set 7
+python ../../tools/crystal_to_quat.py --normal 110 --inplane 001 --as-set 7
 ```
 
-See `scripts/README.md` for full options.
+See `tools/README` (or `--help`) for full options.
 
 ### Adding fluctuations
 

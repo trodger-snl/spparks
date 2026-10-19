@@ -12,7 +12,20 @@ See the ./crystalline_orientations/README.adoc
 This directory contains scripts useful for processing stitch files.  
 
 
+=== ipf_color_check
+Checks src/ipf_color.h against orix IPFColorKeyTSL (m-3m) reference colours;
+build and run lines are at the top of check.cpp.
+
+
 == Files
 * dump2input.py for converting SPPARKS output to input
 * copyright: copyright statement placed in every spparks source file
 * update_copyright.sh: script used to change copyright
+* crystal_to_quat.py: crystal directions ([hkl] build normal + [uvw] scan
+  direction) or Bunge Euler angles to the scalar-first quaternion in d1-d4;
+  `--as-set N` prints a ready `set` line, `--check q0 qx qy qz` reports the
+  directions a quaternion places along +Z/+X, `--selftest` round-trips.
+  Needs numpy and scipy.
+* material_card.py: lint material parameter cards and fit front velocities
+  (docs/MATERIAL_CARDS.md)
+* laser_path_convert.py: convert scan paths to the `laser_path file` format

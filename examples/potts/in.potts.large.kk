@@ -1,23 +1,23 @@
-# SPPARKS Potts test - Larger system for benchmarking Kokkos
+# Potts Kokkos smoke test on a 60^3 box (gfx1151 / HIP)
+# Run:  build-verify/spparks -in examples/potts/in.potts.large.kk   (any KOKKOS build)
+# Confirm GPU selection with: spparks --kokkos-print-configuration -in ...
+seed 12345
+app_style potts/kk 100
 
-seed		 56789
+dimension 3
+lattice sc/26n 1.0
+region box block 0 60 0 60 0 60
+create_box box
+create_sites box
+set site range 1 100
 
-# Use Kokkos-enabled Potts app
-app_style	 potts/kk 1000
+# KOKKOS apps require color sweeping (not 'sweep random') for correct GPU execution
+sweep color
+sector yes
 
-dimension	 3
-lattice		 sc/26n 1.0
-region		 box block 0 50 0 50 0 50
-create_box	 box
-create_sites	 box
-set		 site range 1 1000
+temperature 0.5
 
-sweep		 raster
-sector		 no   # Kokkos apps don't support sectors yet
+diag_style energy
+stats 1.0
 
-diag_style       energy
-
-temperature	 0.0
-
-stats            10.0
-run              50.0
+run 5.0

@@ -21,19 +21,19 @@ form a right-handed orthonormal pair.
 Examples (run from this directory)::
 
     # Identity (cube-on-face)
-    python crystal_to_quat.py --normal 001 --inplane 100
+    python tools/crystal_to_quat.py --normal 001 --inplane 100
 
     # Goss orientation: {110}<001>
-    python crystal_to_quat.py --normal 110 --inplane 001
+    python tools/crystal_to_quat.py --normal 110 --inplane 001
 
     # 111-fiber with [1-10] along scan
-    python crystal_to_quat.py --normal 111 --inplane "1 -1 0"
+    python tools/crystal_to_quat.py --normal 111 --inplane "1 -1 0"
 
     # Bunge Euler angles (phi1, Phi, phi2) in degrees, ZXZ convention
-    python crystal_to_quat.py --euler-bunge 30 45 0
+    python tools/crystal_to_quat.py --euler-bunge 30 45 0
 
     # Print as a SPPARKS `set` command for one substrate spin
-    python crystal_to_quat.py --normal 110 --inplane 001 --as-set 7
+    python tools/crystal_to_quat.py --normal 110 --inplane 001 --as-set 7
 """
 
 from __future__ import annotations

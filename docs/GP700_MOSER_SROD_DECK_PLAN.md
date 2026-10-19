@@ -440,7 +440,7 @@ So the coarse substrate does **not** restore the walk to its input D (the
 "1.22×" was the artefact); it roughly triples the retained fraction relative
 to single-voxel seeding on the proxy (0.15 → 0.44), and the full build keeps
 ≈0.4× of the input in both v5-like and v6-like configurations. The
-single-hatch walk deck (1.2×, `scripts/srod_analysis.py`, correct D) remains
+single-hatch walk deck (1.2×, `spparks_micro_analysis.srod_analysis` (spparks-micro-analysis), correct D) remains
 the only configuration without damping, so the loss is a multi-layer /
 remelt / smoothing effect, still unexplained. The fix is committed
 (26732622); the chain scripts now pass `--D`.

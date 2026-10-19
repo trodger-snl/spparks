@@ -17,7 +17,7 @@ What landed, in both apps unless noted:
   (CPU flipper re-rooted onto the seed; kk unchanged in form). kk
   `t_cool_max` is now `tl - ts` (was 100 K).
 - Check deck `examples/misorientation_walk/in.walk.{cpu,kk}` and
-  `scripts/srod_analysis.py` (origin-referenced SROD vs distance, D fit,
+  `spparks_micro_analysis.srod_analysis` (spparks-micro-analysis) (origin-referenced SROD vs distance, D fit,
   width ratio).
 
 Validation (Rosenthal one-pass deck, dx = 5 µm, D = 4.2e5 deg²/m, 4 seeds):

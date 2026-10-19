@@ -9,11 +9,10 @@ usage (WORK conda env):
 """
 import argparse, os, sys, json
 import numpy as np
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'scripts'))
 from spparks_micro_analysis.stitch_reader import StitchReader
 from spparks_micro_analysis.grain_size_analysis import relabel_grains
 from spparks_micro_analysis.orientation_analysis import generate_ipf_colors, create_pole_density_plots_from_quaternions
-from srod_analysis import disorientation_deg
+from spparks_micro_analysis.srod_analysis import disorientation_deg
 import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
 
 ap = argparse.ArgumentParser()

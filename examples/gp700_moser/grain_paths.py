@@ -9,11 +9,10 @@ usage (WORK env): grain_paths.py gp700.st --out DIR [--dx 3e-6] [--crop X0 X1 Y0
 """
 import argparse, os, sys
 import numpy as np
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'scripts'))
 from spparks_micro_analysis.stitch_reader import StitchReader
 from spparks_micro_analysis.grain_size_analysis import relabel_grains
 from spparks_micro_analysis.orientation_analysis import generate_ipf_colors
-from srod_analysis import disorientation_deg
+from spparks_micro_analysis.srod_analysis import disorientation_deg
 import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
 
 ap = argparse.ArgumentParser(); ap.add_argument('stitch'); ap.add_argument('--out', default='grain_paths')

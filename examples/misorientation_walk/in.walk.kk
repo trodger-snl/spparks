@@ -1,7 +1,7 @@
 # Misorientation random-walk check (docs/MISORIENTATION_DIFFUSION_PLAN.md).
 # One Rosenthal pass over a substrate of single-voxel random grains; the
 # re-solidified grains carry a per-hop random rotation of sqrt(D*hop).
-# Analyse with: python3 scripts/srod_analysis.py "dump.walk.kk.*" --dx 5e-6 --D 4.2e5
+# Analyse with: python -m spparks_micro_analysis.srod_analysis "dump.walk.kk.*" --dx 5e-6 --D 4.2e5
 # Expect RMS(SROD)^2 ~= D * distance and (p95-p5)/mean ~= 1.38.
 app_style additive/texture/kk 1000000 5e-6 5e-6 2
 seed             56789

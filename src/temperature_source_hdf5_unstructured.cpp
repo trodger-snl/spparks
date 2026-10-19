@@ -310,14 +310,19 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
     }
   }
   
+  // Drop the previous layer before reading the next one, so peak memory is one
+  // layer, not two (the members below were otherwise replaced only after the
+  // new arrays were already allocated).
+  clear_layer_data();
+
   if (chunksToLoad.empty()) {
     // This rank's padded subdomain overlaps no chunk of this layer, so there is
     // genuinely no thermal data here -- normal when thin boxes are tiled across
     // a part and stitched back together, since a box can sit far from the layer
     // currently being deposited.
     //
-    // Drop the PREVIOUS layer's mesh and time series rather than returning with
-    // them still resident. Leaving them loaded made every site keep
+    // The clear above matters most here: returning with the PREVIOUS layer's
+    // mesh and time series still resident made every site keep
     // interpolating the old layer's field: silently harmless while each layer's
     // series happens to end where the next begins (the reader then falls back to
     // default_temp on the time-bounds check), but silently WRONG the moment a
@@ -328,7 +333,6 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
     // cache entry comes back invalid, and every site reads default_temp -- the
     // correct answer for "no data" -- while the empty interval list lets
     // get_next_time_with_temperature fast-forward to the next layer.
-    clear_layer_data();
     if (layerIdx >= layer_thermal_intervals.size())
       layer_thermal_intervals.resize(layerIdx + 1);
     layer_thermal_intervals[layerIdx].clear();
@@ -805,9 +809,10 @@ std::vector<std::array<double, 6>> HDF5UnstructuredTemperatureSource::build_elem
     totalElems += elemOffsets[c+1] - elemOffsets[c];
   }
 
-  std::vector<std::array<double, 6>> result;
-  result.reserve(totalElems);
+  std::vector<std::array<double, 6>> result(totalElems);
 
+  // Each element writes only its own slot, so threads give the serial result.
+  #pragma omp parallel for schedule(dynamic)
   for (unsigned c = 0; c < nChunks; c++) {
     for (unsigned e = elemOffsets[c]; e < elemOffsets[c+1]; e++) {
       std::array<double, 3> bmin{maxVal, maxVal, maxVal};
@@ -821,7 +826,7 @@ std::vector<std::array<double, 6>> HDF5UnstructuredTemperatureSource::build_elem
         }
       }
 
-      result.push_back({bmin[0], bmin[1], bmin[2], bmax[0], bmax[1], bmax[2]});
+      result[e] = {bmin[0], bmin[1], bmin[2], bmax[0], bmax[1], bmax[2]};
     }
   }
 
@@ -1547,8 +1552,14 @@ void HDF5UnstructuredTemperatureSource::compute_thermal_intervals_for_layer(unsi
   }
   
   std::vector<ThermalInterval> intervals;
-  
-  // For each node in the loaded chunks
+
+  // One pass over every loaded sample, so it is parallel over nodes. Each thread
+  // collects privately; merge_overlapping_intervals sorts, so the result does
+  // not depend on the order the buffers are joined.
+  #pragma omp parallel
+  {
+  std::vector<ThermalInterval> local;
+  #pragma omp for schedule(dynamic, 1024) nowait
   for (size_t node_idx = 0; node_idx < dataCounts.size(); node_idx++) {
     // Check if node is within SPPARKS domain
     double x = nodeCoords(node_idx, 0);
@@ -1573,10 +1584,13 @@ void HDF5UnstructuredTemperatureSource::compute_thermal_intervals_for_layer(unsi
     
     // Add interval if we found thermal activity
     if (first_hot_time >= 0) {
-      intervals.emplace_back(first_hot_time, last_hot_time);
+      local.emplace_back(first_hot_time, last_hot_time);
     }
   }
-  
+  #pragma omp critical
+  intervals.insert(intervals.end(), local.begin(), local.end());
+  }  // omp parallel
+
   // Merge overlapping intervals and store
   layer_thermal_intervals[layerIdx] = merge_overlapping_intervals(intervals);
 

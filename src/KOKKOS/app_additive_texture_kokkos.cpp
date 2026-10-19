@@ -1020,26 +1020,48 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
     d_hdf5_nodal_temps = Kokkos::View<fastreal*>("hdf5_nodal_temps", nnodes);
 
   if (dti) {
-    // (Re)upload the per-node raw time-series CSR + active-node list ONCE per
-    // layer. times/temps are flat (shared offsets, n_nodes+1); the flat double
-    // arrays upload zero-copy (unmanaged host View -> device). The active-node
-    // list is the only nodes the blend reads, so the device interpolates ONLY
-    // those (~33k), matching the host precompute subset (not all n_nodes).
+    // (Re)upload the time series ONCE per layer, compacted to the active nodes
+    // (the tet nodes of valid sites, ~33k): the only rows the blend reads, and
+    // the same subset the host precompute interpolates. Row k of the device CSR
+    // is node an[k]. Uploading every loaded node instead (pad halo included)
+    // cost a full extra copy of the layer's series, plus a same-size staging
+    // mirror; on an APU (gfx1151, MI300A) both come out of host memory.
     if (d_ts_version != plan.version) {
       const std::vector<double> &ts_t = hdf5->timeseries_times();
       const std::vector<double> &ts_T = hdf5->timeseries_temps();
       const std::vector<size_t> &ts_o = hdf5->timeseries_offsets();
-      const size_t n_samp = ts_t.size();
-      const int n_off = (int) ts_o.size();   // == n_nodes + 1
-      if (n_samp > 0 && n_off > 1) {
+      const std::vector<unsigned> &an = hdf5->timeseries_active_nodes();
+      // Free the previous layer's copy before allocating this one.
+      d_ts_times = {}; d_ts_temps = {}; d_ts_offsets = {}; d_active_nodes = {};
+      if (!ts_t.empty() && !an.empty()) {
+        const size_t nact = an.size();
+        // 64-bit offsets: a large layer can exceed 2^31 samples on one rank.
+        Kokkos::View<int64_t*> o("ts_offsets", nact + 1);
+        auto ho = Kokkos::create_mirror_view(o);
+        ho(0) = 0;
+        for (size_t k = 0; k < nact; k++)
+          ho(k + 1) = ho(k) + (int64_t) (ts_o[an[k] + 1] - ts_o[an[k]]);
+        const size_t nsamp = (size_t) ho(nact);
         // Times ALWAYS stay FP64 (absolute sim times ~3.9e4 s on a 3e-6 s step)
         // -- see fastreal in spktype.h. Only the temperatures are narrowable.
-        d_ts_times   = upload_vec<double>("ts_times", ts_t);
-        d_ts_temps   = upload_vec<fastreal>("ts_temps", ts_T);
-        d_ts_offsets = upload_vec<int>("ts_offsets", ts_o);
+        Kokkos::View<double*> tv("ts_times", nsamp);
+        Kokkos::View<fastreal*> Tv("ts_temps", nsamp);
+        auto ht = Kokkos::create_mirror_view(tv);
+        auto hT = Kokkos::create_mirror_view(Tv);
+        for (size_t k = 0; k < nact; k++) {
+          const size_t src = ts_o[an[k]], dst = (size_t) ho(k);
+          const size_t n = (size_t) (ho(k + 1) - ho(k));
+          for (size_t j = 0; j < n; j++) {
+            ht(dst + j) = ts_t[src + j];
+            hT(dst + j) = (fastreal) ts_T[src + j];
+          }
+        }
+        Kokkos::deep_copy(o, ho);
+        Kokkos::deep_copy(tv, ht);
+        Kokkos::deep_copy(Tv, hT);
+        d_ts_offsets = o; d_ts_times = tv; d_ts_temps = Tv;
 
-        const std::vector<unsigned> &an = hdf5->timeseries_active_nodes();
-        d_n_active_nodes = (int) an.size();
+        d_n_active_nodes = (int) nact;
         d_active_nodes = upload_vec<int>("active_nodes", an);
 
         d_ts_version = plan.version;
@@ -1066,8 +1088,8 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
     const double defn = plan.default_temp; const double simtn = plan.sim_time;
     Kokkos::parallel_for("ComputeNodalTemps", d_n_active_nodes, KOKKOS_LAMBDA(const int k) {
       const int nd = d_act_nodes(k);
-      const int start = tso(nd);
-      const int count = tso(nd + 1) - start;
+      const int64_t start = tso(k);
+      const int count = (int) (tso(k + 1) - start);
       const double tfirst = tst(start), tlast = tst(start + count - 1);
       if (simtn < tfirst || simtn > tlast) { nt_out(nd) = (fastreal) defn; return; }
       int lo = 0, hi = count;                  // first idx with tst >= simtn

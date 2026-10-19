@@ -2,6 +2,9 @@
 # Based on in.init_box_0_kokkos but without dumps for timing comparison
 
 variable DX equal 5e-6
+# The thermal HDF5 file is not shipped in-repo: put it beside this deck or
+# override with -var THERMAL_H5 /path/to/file.hdf5 (as in in.init_box_0_kokkos)
+variable THERMAL_H5 index fixed_reduced_thermal_output.hdf5
 
 app_style additive_temperature_texture/kk 1000000 5e-06 3e-6 2
 
@@ -27,7 +30,7 @@ sweep		 random mask no
 
 
 ########Setup temperature reading
-setup_temperature_source hdf5_unstructured /Users/Tron/spparks/examples/ReducedTempAM/unstructured/FixedInput/fixed_reduced_thermal_output.hdf5 5e-06 1563.0 300.0
+setup_temperature_source hdf5_unstructured ${THERMAL_H5} 5e-06 1563.0 300.0
 
 ############# Outputs the total temperature sum as a stat. If this goes crazy, try reducing timestep.
 diag_style       array d6 sum d6 max

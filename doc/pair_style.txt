@@ -17,7 +17,7 @@ args = arguments used by a particular style :ul
 
 [Examples:]
 
-pair_style lj 1 2.5 :pre
+pair_style lj/cut 1 2.5 :pre
 
 [Description:]
 

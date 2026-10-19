@@ -70,7 +70,7 @@ the "set"_set.html command, or read in via the
 
 The application does not change the strain assigned to each site as
 the simulation progresses.  But if SPPARKS is built and used as a
-library, as discussed in "this section"_Section_start.html#2_4 of the
+library, as discussed in "this section"_Section_start.html#start_4 of the
 manual, the driver program can alter the per-site settings.  The
 "couple" directory of the "LAMMPS molecular dynamics package"_lammps
 includes a sample coupled LAMMPS/SPPARKS application which uses LAMMPS

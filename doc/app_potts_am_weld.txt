@@ -39,7 +39,7 @@ The "pulse"_pulse.html command is disabled in this application.
 This is an application for 2D additive manufacturing simulations and is an
 adaptation of "potts/weld"_app_potts_weld.html; it can be viewed as a
 "potts/weld"_app_potts_weld.html model with rastering commands as defined and
-used by "potts_additive"_app_potts_additive.html. The 2D limitation of this app
+used by "am/ellipsoid"_app_am_ellipsoid.html. The 2D limitation of this app
 derives from the full penetration weld assumption; {potts/weld}; does not have
 a melt pool bottom that naturally occurs in an additive manufacturing build the
 {z}-direction.  Thickness of the lattice in the z-direction is taken as the
@@ -78,7 +78,7 @@ rectangular layer constructed from {am pass} and other parameters.
 
 {NOTE}: Because {potts/am/weld} is intended for {2D} simulations, only the
 first layer, as specified in the {am build} command, is used; this application
-does not simulate multilayer builds.  The examples/potts_additive directory
+does not simulate multilayer builds.  The examples/am_path directory
 has input files which illustrate how to use the rastering commands.  
 
 The "temperature"_temperature.html command should be used to set simulation Monte Carlo temperature.

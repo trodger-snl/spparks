@@ -36,7 +36,7 @@ application before using the create_box command.
 
 [Related commands:]
 
-"create_sites"_create_atoms.html, "region"_region.html,
-"read_sites"_create_atoms.html
+"create_sites"_create_sites.html, "region"_region.html,
+"read_sites"_read_sites.html
 
 [Default:] none

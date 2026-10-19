@@ -794,9 +794,9 @@ within the calling code, as needed.
 Python, the library has a simple function-style interface, provided in
 src/library.cpp and src/library.h.
 </P>
-<P>See the sample codes in examples/COUPLE/simple for examples of C++ and
-C and Fortran codes that invoke SPPARKS thru its library interface.
-There are other examples as well in the COUPLE directory which are
+<P>See examples/COUPLE/lammps_spparks for a C++ driver that invokes
+SPPARKS (and LAMMPS) thru its library interface.  The COUPLE directory
+has other material as well which are
 discussed in <A HREF = "Section_howto.html#howto_2">Section_howto 2</A> of the
 manual.  See <A HREF = "Section_python.html">Section_python</A> of the manual for a
 description of the Python wrapper provided with SPPARKS that operates
@@ -827,7 +827,7 @@ mpirun to launch a parallel job:
 </P>
 <PRE>cd src
 make linux
-cp spk_linux ../examples/lj
+cp spk_linux ../examples/potts
 cd ../examples/potts
 mpirun -np 4 spk_linux < in.potts 
 </PRE>
@@ -893,7 +893,7 @@ processors.
 </P>
 <P>The input script specifies what simulation is run on which partition;
 see the <A HREF = "variable.html">variable</A> and <A HREF = "next.html">next</A> commands.  This
-<A HREF = "Section_howto.html#4_4">howto section</A> gives examples of how to use
+<A HREF = "Section_howto.html#howto_1">howto section</A> gives examples of how to use
 these commands in this way.  
 </P>
 <PRE>-in file 
@@ -943,7 +943,7 @@ name index value" at the beginning of the input script.  Defining a
 variable as a command-line argument overrides any setting for the same
 variable in the input script, since variables cannot be re-defined.
 See the <A HREF = "variable.html">variable</A> command for more info on defining
-variables and <A HREF = "Section_commands.html#3_2">this section</A> for more info
+variables and <A HREF = "Section_commands.html#cmd_2">this section</A> for more info
 on using variables in input scripts.
 </P>
 <HR>
@@ -955,7 +955,7 @@ screen and a log file about significant actions it takes to setup a
 simulation.  When the simulation is ready to begin, SPPARKS performs
 various initializations and prints the amount of memory (in MBytes per
 processor) that the simulation requires.  An example output is shown
-here, for the examples/in.potts script run on 4 processors.
+here, for the examples/potts/in.potts script run on 4 processors.
 </P>
 <PRE>SPPARKS (11 Dec 2015)
 Created box = (0 0 0) to (20 20 20)

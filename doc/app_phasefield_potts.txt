@@ -53,7 +53,7 @@ to efficiently simulate grain growth in a two-phase system controlled
 by diffusion. For a full description of the model, see the paper by
 "Homer et al."_#Homer.
 
-See the examples/potts_pfm directory for an example script using this
+See the examples/phasefield_potts directory for an example script using this
 command.  See the "Pictures web
 page"_https://spparks.github.io/pictures.html for images of
 simulations performed with this command.

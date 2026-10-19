@@ -35,7 +35,7 @@ and not kinetic MC, no propensity is defined.
 This diagnostic can only be used for on-lattice applications.
 
 This diagnostic can only be used for KMC simulations where a
-"solver"_solve.html is defined.
+"solver"_solve_style.html is defined.
 
 [Related commands:]
 

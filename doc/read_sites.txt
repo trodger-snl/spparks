@@ -212,7 +212,7 @@ followed by the floating-point values.
 
 To write gzipped dump files, you must compile SPPARKS with the
 -DSPPARKS_GZIP option - see the "Making
-SPPARKS"_Section_start.html#2_2 section of the documentation.
+SPPARKS"_Section_start.html#start_2 section of the documentation.
 
 [Related commands:]
 

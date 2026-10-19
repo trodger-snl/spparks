@@ -792,9 +792,9 @@ When used from a C or Fortran program or a scripting language like
 Python, the library has a simple function-style interface, provided in
 src/library.cpp and src/library.h.
 
-See the sample codes in examples/COUPLE/simple for examples of C++ and
-C and Fortran codes that invoke SPPARKS thru its library interface.
-There are other examples as well in the COUPLE directory which are
+See examples/COUPLE/lammps_spparks for a C++ driver that invokes
+SPPARKS (and LAMMPS) thru its library interface.  The COUPLE directory
+has other material as well which are
 discussed in "Section_howto 2"_Section_howto.html#howto_2 of the
 manual.  See "Section_python"_Section_python.html of the manual for a
 description of the Python wrapper provided with SPPARKS that operates
@@ -825,7 +825,7 @@ mpirun to launch a parallel job:
 
 cd src
 make linux
-cp spk_linux ../examples/lj
+cp spk_linux ../examples/potts
 cd ../examples/potts
 mpirun -np 4 spk_linux < in.potts :pre
 
@@ -891,7 +891,7 @@ processors.
 
 The input script specifies what simulation is run on which partition;
 see the "variable"_variable.html and "next"_next.html commands.  This
-"howto section"_Section_howto.html#4_4 gives examples of how to use
+"howto section"_Section_howto.html#howto_1 gives examples of how to use
 these commands in this way.  
 
 -in file :pre
@@ -941,7 +941,7 @@ name index value" at the beginning of the input script.  Defining a
 variable as a command-line argument overrides any setting for the same
 variable in the input script, since variables cannot be re-defined.
 See the "variable"_variable.html command for more info on defining
-variables and "this section"_Section_commands.html#3_2 for more info
+variables and "this section"_Section_commands.html#cmd_2 for more info
 on using variables in input scripts.
 
 :line 
@@ -953,7 +953,7 @@ screen and a log file about significant actions it takes to setup a
 simulation.  When the simulation is ready to begin, SPPARKS performs
 various initializations and prints the amount of memory (in MBytes per
 processor) that the simulation requires.  An example output is shown
-here, for the examples/in.potts script run on 4 processors.
+here, for the examples/potts/in.potts script run on 4 processors.
 
 SPPARKS (11 Dec 2015)
 Created box = (0 0 0) to (20 20 20)

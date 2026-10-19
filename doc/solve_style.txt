@@ -101,7 +101,7 @@ The {ngroup} keyword can only be used with style {group}.
 
 [Related commands:]
 
-"app_style"_app_style.html, "sweep_style"_sweep_style.html
+"app_style"_app_style.html, "sweep"_sweep.html
 
 [Default:] none
 

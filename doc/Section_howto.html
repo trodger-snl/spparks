@@ -35,7 +35,12 @@ individual commands for more details on how these examples work.
 more timesteps, then you simply use the <A HREF = "run.html">run</A> command
 multiple times.  For example, this script
 </P>
-<PRE>app_style ising/2d/4n 100 100 12345
+<PRE>seed 12345
+app_style ising
+lattice sq/4n 1.0
+region box block 0 100 0 100 -0.5 0.5
+create_box box
+create_sites box
 ...
 run 1.0
 run 1.0
@@ -50,11 +55,21 @@ run 1.0
 the <A HREF = "clear.html">clear</A> command can be used in between them to
 re-initialize SPPARKS.  For example, this script
 </P>
-<PRE>app_style ising/2d/4n 100 100 12345
+<PRE>seed 12345
+app_style ising
+lattice sq/4n 1.0
+region box block 0 100 0 100 -0.5 0.5
+create_box box
+create_sites box
 ...
 run 1.0
 clear
-app_style ising/2d/4n 200 200 12345
+seed 12345
+app_style ising
+lattice sq/4n 1.0
+region box block 0 200 0 200 -0.5 0.5
+create_box box
+create_sites box
 ...
 run 1.0 
 </PRE>
@@ -68,7 +83,12 @@ script, named in.runs
 </P>
 <PRE>variable d index run1 run2 run3 run4 run5 run6 run7 run8
 shell cd $d
-app_style ising/2d/4n 100 100 12345
+seed 12345
+app_style ising
+lattice sq/4n 1.0
+region box block 0 100 0 100 -0.5 0.5
+create_box box
+create_sites box
 include temperature.txt
 run 1.0
 shell cd ..
@@ -85,7 +105,12 @@ output in different log files, for example
 <PRE>variable a loop 8
 variable size index 100 200 400 800 1600 3200 6400 10000
 log log.${size}
-app_style ising/2d/4n ${size} ${size} 12345
+seed 12345
+app_style ising
+lattice sq/4n 1.0
+region box block 0 ${size} 0 ${size} -0.5 0.5
+create_box box
+create_sites box
 run 1.0
 next size
 next a
@@ -94,7 +119,7 @@ jump in.runs
 <P>All of the above examples work whether you are running on 1 or
 multiple processors, but assumed you are running SPPARKS on a single
 partition of processors.  SPPARKS can be run on multiple partitions
-via the "-partition" command-line switch as described in <A HREF = "Section_start.html#2_6">this
+via the "-partition" command-line switch as described in <A HREF = "Section_start.html#start_6">this
 section</A> of the manual.
 </P>
 <P>In the last 2 examples, if SPPARKS were run on 3 partitions, the same

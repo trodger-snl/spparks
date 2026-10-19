@@ -6,20 +6,20 @@
 
 :line
 
-pair_style lj command :h3
+pair_style lj/cut command :h3
 
 [Syntax:]
 
-pair_style lj Ntypes cutoff :pre
+pair_style lj/cut Ntypes cutoff :pre
 
-lj = style name of this pair style
+lj/cut = style name of this pair style
 Ntypes = # of particle types
 cutoff = global cutoff for pairwise interactions (distance units) :ul
 
 [Examples:]
 
-pair_style lj 1 2.5
-pair_style lj 3 3.0 :pre
+pair_style lj/cut 1 2.5
+pair_style lj/cut 3 3.0 :pre
 
 [Description:]
 

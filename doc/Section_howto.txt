@@ -32,7 +32,12 @@ If "multiple simulations" means continue a previous simulation for
 more timesteps, then you simply use the "run"_run.html command
 multiple times.  For example, this script
 
-app_style ising/2d/4n 100 100 12345
+seed 12345
+app_style ising
+lattice sq/4n 1.0
+region box block 0 100 0 100 -0.5 0.5
+create_box box
+create_sites box
 ...
 run 1.0
 run 1.0
@@ -47,11 +52,21 @@ If you wish to run totally different simulations, one after the other,
 the "clear"_clear.html command can be used in between them to
 re-initialize SPPARKS.  For example, this script
 
-app_style ising/2d/4n 100 100 12345
+seed 12345
+app_style ising
+lattice sq/4n 1.0
+region box block 0 100 0 100 -0.5 0.5
+create_box box
+create_sites box
 ...
 run 1.0
 clear
-app_style ising/2d/4n 200 200 12345
+seed 12345
+app_style ising
+lattice sq/4n 1.0
+region box block 0 200 0 200 -0.5 0.5
+create_box box
+create_sites box
 ...
 run 1.0 :pre
 
@@ -65,7 +80,12 @@ script, named in.runs
 
 variable d index run1 run2 run3 run4 run5 run6 run7 run8
 shell cd $d
-app_style ising/2d/4n 100 100 12345
+seed 12345
+app_style ising
+lattice sq/4n 1.0
+region box block 0 100 0 100 -0.5 0.5
+create_box box
+create_sites box
 include temperature.txt
 run 1.0
 shell cd ..
@@ -82,7 +102,12 @@ output in different log files, for example
 variable a loop 8
 variable size index 100 200 400 800 1600 3200 6400 10000
 log log.$\{size\}
-app_style ising/2d/4n $\{size\} $\{size\} 12345
+seed 12345
+app_style ising
+lattice sq/4n 1.0
+region box block 0 $\{size\} 0 $\{size\} -0.5 0.5
+create_box box
+create_sites box
 run 1.0
 next size
 next a
@@ -92,7 +117,7 @@ All of the above examples work whether you are running on 1 or
 multiple processors, but assumed you are running SPPARKS on a single
 partition of processors.  SPPARKS can be run on multiple partitions
 via the "-partition" command-line switch as described in "this
-section"_Section_start.html#2_6 of the manual.
+section"_Section_start.html#start_6 of the manual.
 
 In the last 2 examples, if SPPARKS were run on 3 partitions, the same
 scripts could be used if the "index" and "loop" variables were

@@ -31,7 +31,8 @@ setup_temperature_source hdf5_csr          filename dx threshold_temp default_te
 
 <LI>grid_cell_mult = optional positive number, in units of dx (default 100.0):
                  the padding around each rank's subdomain when loading mesh
-                 chunks, and the bin size of the element-search grid 
+                 chunks.  (It no longer sets the element-search grid, which
+                 now covers only this rank's sites and sizes itself.) 
 </UL>
 <P><B>Examples:</B>
 </P>

@@ -241,7 +241,7 @@ private:
   double threshold_temp;  // Threshold temperature for fast-forward (K)
   double default_temp;    // Default/ambient temperature (K)
   bool device_time_interp_ = false;  // skip host precompute; device interps in time
-  double grid_cell_size_multiplier;  // Spatial grid cell size = dx * multiplier (default 50)
+  double grid_cell_size_multiplier;  // Chunk-load pad around the subdomain, in dx (default 100)
   // Latches the "pad wider than the decomposed subdomain" warning in
   // load_layer() so it is emitted once per run rather than once per layer.
   mutable bool pad_vs_subdomain_warned = false;
@@ -336,7 +336,7 @@ private:
 
   std::vector<std::array<double, 6>> build_elem_bounding_boxes() const;
 
-  void build_spatial_grid(double target_cell_size);
+  void build_spatial_grid();
 
   // Thermal interval management for efficient time queries
   std::vector<std::vector<ThermalInterval>> layer_thermal_intervals;

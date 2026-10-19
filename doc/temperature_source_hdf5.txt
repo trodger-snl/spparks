@@ -23,7 +23,8 @@ unused = optional placeholder (formerly bounds_check_mode); read and ignored,
          kept so decks that give grid_cell_mult in this position still work :l
 grid_cell_mult = optional positive number, in units of dx (default 100.0):
                  the padding around each rank's subdomain when loading mesh
-                 chunks, and the bin size of the element-search grid :l,ule
+                 chunks.  (It no longer sets the element-search grid, which
+                 now covers only this rank's sites and sizes itself.) :l,ule
 
 [Examples:]
 

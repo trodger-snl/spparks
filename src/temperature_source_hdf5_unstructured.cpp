@@ -250,7 +250,7 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   // Convert SPPARKS per-rank subdomain bounds to physical coordinates (meters).
   // Use subdomain (subxlo/hi) instead of global domain (boxxlo/hi) so each rank
   // only loads temperature chunks overlapping its own partition.
-  // Pad by one spatial grid cell to capture thermal elements straddling the
+  // Pad by grid_cell_mult*dx to capture thermal elements straddling the
   // subdomain boundary (needed for interpolation at boundary sites).
   double pad = dx * grid_cell_size_multiplier;
   std::vector<double> spparksPhysicalBbox{
@@ -427,9 +427,7 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   elem_bboxes = build_elem_bounding_boxes();
 
   // Build the spatial acceleration grid used by every element lookup.
-  // Larger cells = less memory but more elements per cell to search
-  // Default 50x lattice spacing (~250 microns), user-configurable via grid_cell_mult parameter
-  build_spatial_grid(dx * grid_cell_size_multiplier);
+  build_spatial_grid();
 
   // Build node-graph adjacency for mesh-Laplacian smoothing (optional).
   // Must run AFTER elemNode + nodeCoords + dataCounts are populated for the
@@ -837,33 +835,48 @@ std::vector<std::array<double, 6>> HDF5UnstructuredTemperatureSource::build_elem
 
 /* ---------------------------------------------------------------------- */
 
-void HDF5UnstructuredTemperatureSource::build_spatial_grid(double target_cell_size)
+void HDF5UnstructuredTemperatureSource::build_spatial_grid()
 {
   spatial_grid.valid = false;
 
-  if (elem_bboxes.empty()) return;
+  // The only lookups are this rank's owned + ghost sites
+  // (build_site_element_cache), so the grid spans their bounding box -- not
+  // the loaded chunks, which reach far past the subdomain and made a dense
+  // grid over them grow with the cube of 1/cell size (31 GB/rank on ct15 at
+  // 5 dx). Cells are sized for ~one element per cell among the elements
+  // overlapping that box, independent of the chunk-load pad.
+  const int nall = app->nlocal + app->nghost;
+  if (elem_bboxes.empty() || nall == 0) return;
 
-  // Find overall bounds from element bounding boxes
   constexpr double maxVal = std::numeric_limits<double>::max();
   constexpr double minVal = std::numeric_limits<double>::lowest();
   std::array<double, 3> domain_min{maxVal, maxVal, maxVal};
   std::array<double, 3> domain_max{minVal, minVal, minVal};
-
-  for (const auto& bbox : elem_bboxes) {
+  for (int i = 0; i < nall; i++) {
     for (unsigned d = 0; d < DIM; d++) {
-      domain_min[d] = std::fmin(domain_min[d], bbox[d]);
-      domain_max[d] = std::fmax(domain_max[d], bbox[d + 3]);
+      domain_min[d] = std::fmin(domain_min[d], app->xyz[i][d] * dx);
+      domain_max[d] = std::fmax(domain_max[d], app->xyz[i][d] * dx);
     }
   }
-
-  // Add small padding to avoid edge cases
+  // Pad by a fraction of dx so sites on the box faces land inside it
   for (unsigned d = 0; d < DIM; d++) {
-    double pad = target_cell_size * 0.01;
-    domain_min[d] -= pad;
-    domain_max[d] += pad;
+    domain_min[d] -= 0.01 * dx;
+    domain_max[d] += 0.01 * dx;
   }
 
-  // Compute grid dimensions
+  auto overlaps = [&](const std::array<double, 6>& b) {
+    for (unsigned d = 0; d < DIM; d++)
+      if (b[d] > domain_max[d] || b[d + 3] < domain_min[d]) return false;
+    return true;
+  };
+  size_t n_overlap = 0;
+  for (const auto& b : elem_bboxes) n_overlap += overlaps(b);
+  if (n_overlap == 0) return;
+
+  double volume = 1.0;
+  for (unsigned d = 0; d < DIM; d++) volume *= domain_max[d] - domain_min[d];
+  const double target_cell_size = std::cbrt(volume / n_overlap);
+
   spatial_grid.origin = domain_min;
   for (unsigned d = 0; d < DIM; d++) {
     double extent = domain_max[d] - domain_min[d];
@@ -905,6 +918,7 @@ void HDF5UnstructuredTemperatureSource::build_spatial_grid(double target_cell_si
   // Pass 1: Count elements per cell
   std::vector<size_t> cell_counts(total_cells, 0);
   for (unsigned e = 0; e < elem_bboxes.size(); e++) {
+    if (!overlaps(elem_bboxes[e])) continue;
     int ix_min, iy_min, iz_min, ix_max, iy_max, iz_max;
     get_cell_range(elem_bboxes[e], ix_min, iy_min, iz_min, ix_max, iy_max, iz_max);
 
@@ -931,6 +945,7 @@ void HDF5UnstructuredTemperatureSource::build_spatial_grid(double target_cell_si
   // Pass 2: Fill the flat array (reuse cell_counts as write positions)
   std::fill(cell_counts.begin(), cell_counts.end(), 0);
   for (unsigned e = 0; e < elem_bboxes.size(); e++) {
+    if (!overlaps(elem_bboxes[e])) continue;
     int ix_min, iy_min, iz_min, ix_max, iy_max, iz_max;
     get_cell_range(elem_bboxes[e], ix_min, iy_min, iz_min, ix_max, iy_max, iz_max);
 

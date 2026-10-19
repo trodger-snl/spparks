@@ -614,7 +614,7 @@ class TxtParser(object):
         return paragraph.startswith('<') and paragraph.endswith('>\n')
 
     def is_math_paragraph(self, paragraph):
-        return ('\\begin\{equation\}' in paragraph) and ('\\end\{equation\}' in paragraph)
+        return (r'\begin\{equation\}' in paragraph) and (r'\end\{equation\}' in paragraph)
 
     def is_paragraph_separator(self, line):
         return len(line) == 0 or line.isspace()

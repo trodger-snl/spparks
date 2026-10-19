@@ -1,8 +1,12 @@
 #!/bin/bash
 # Box-per-layer driver for the GP700 Moser build.
-# usage: [DX=3e-6] run_layers.sh <spparks-binary> <outdir> [nlayers=12] [seed=12345] [nx_voxels=267] [nhatch=10] [dt=2e-6] [substrate.st]
-# substrate.st (make_substrate.py): copied to <outdir>/gp700.st before box 0, which then
-# starts from it like a continuation box instead of single-voxel random grains.
+# usage: [DX=3e-6] [FMT=stitch|hdf5] run_layers.sh <spparks-binary> <outdir> [nlayers=12] [seed=12345] [nx_voxels=267] [nhatch=10] [dt=2e-6] [substrate.st]
+# substrate.st (make_substrate.py): box 0 starts from it like a continuation box instead
+# of single-voxel random grains (FMT=stitch copies it to <outdir>/gp700.st first; FMT=hdf5
+# reads it in box 0 and dumps the result to <outdir>/gp700.h5).
+# FMT=hdf5 carries the state in <outdir>/gp700.h5 via dump/set hdf5 instead of the stitch
+# file: one state sized by the build volume (no per-box history, so no --time reads or
+# movie frames), far less disk. The analysis scripts read either through StitchReader.
 # Lateral box = nx_voxels * 3 um square; hatches at 40 um + k*80 um, lines 100 um past
 # both edges. Analyse a central crop (gp700_analysis.py --crop) away from the walls,
 # where each pool has solid tracks alongside as in the print.
@@ -13,7 +17,7 @@
 # Even layers hatch along x (5 lines, y = 40..360 um), odd along y, serpentine.
 # Each box is a fresh Moser history (T0 = preheat, the recoat interval); the
 # microstructure continues through the stitch file. Sites absent from it (the
-# new layer) carry the stitch sentinel -1 in d1-d4, which the app would
+# new layer) carry the stitch sentinel -1 in d1-d4 (hdf5: fill 0.0), which the app would
 # normalise to ONE cube-aligned orientation for the whole layer; zeroing them
 # makes the app draw a random orientation per voxel at init (powder).
 set -eu
@@ -22,8 +26,15 @@ HERE=$(cd "$(dirname "$0")" && pwd); TPL=${TPL:-$HERE/in.gp700_layer}   # TPL=..
 # HATCH_OFFSET=random: seeded per-layer hatch shift in [-40,40) um along the hatch normal (layers n and n+2 no
 # longer register); HATCH_OFFSET=<metres>: that shift on every second same-direction layer; default 0.
 HOFF=${HATCH_OFFSET:-0}
-mkdir -p "$OUT"; ST=$OUT/gp700.st
-[ -n "$SUB" ] && [ ! -f "$ST" ] && cp "$SUB" "$ST" && echo "substrate $SUB -> $ST"
+FMT=${FMT:-stitch}
+case $FMT in
+  stitch) ST=$OUT/gp700.st; LAST=" last" ;;   # set X stitch FILE last
+  hdf5)   ST=$OUT/gp700.h5; LAST="" ;;        # set X hdf5 FILE: one state, no time argument
+  *) echo "FMT must be stitch or hdf5, not '$FMT'"; exit 1 ;;
+esac
+mkdir -p "$OUT"
+[ -n "$SUB" ] && SUB=$(readlink -f "$SUB")
+[ -n "$SUB" ] && [ $FMT = stitch ] && [ ! -f "$ST" ] && cp "$SUB" "$ST" && echo "substrate $SUB -> $ST"
 DX=${DX:-3e-6}; TGAP=10.0   # voxel size from the environment (DX=1.5e-6 run_layers.sh ...)
 # geometry in voxels: 150 um substrate, 30 um layers, 180 um box window
 VSUB=$(python3 -c "print(round(150e-6/$DX))"); VLAY=$(python3 -c "print(round(30e-6/$DX))"); VWIN=$(python3 -c "print(round(180e-6/$DX))")
@@ -59,20 +70,23 @@ for ((n=0; n<NL; n++)); do
     LASER="laser_path start $X0 -100e-6 $z0 end $X0 $LEND speed 1.137 hatch 80e-6 $NH serpentine pause $PAUSE"
   fi
   T0=$(python3 -c "print($n*$TGAP)"); T1=$(python3 -c "print($n*$TGAP + $TBOX)")
-  if [ $n -eq 0 ] && [ ! -f "$ST" ]; then
+  # state read by this box: the run's file, or for hdf5 box 0 the stitch substrate
+  SRC="$FMT $ST$LAST"
+  [ $n -eq 0 ] && [ $FMT = hdf5 ] && [ -n "$SUB" ] && SRC="stitch $SUB last"
+  if [ $n -eq 0 ] && [ ! -f "$ST" ] && { [ -z "$SUB" ] || [ $FMT = stitch ]; }; then
     INIT="set site range 1 1000000
 set i2 value 1
 set d6 value 473"
   else
-    INIT="set i1 stitch $ST last
-set i2 stitch $ST last
-set d1 stitch $ST last
-set d2 stitch $ST last
-set d3 stitch $ST last
-set d4 stitch $ST last
-set d8 stitch $ST last
-set d9 stitch $ST last
-set d10 stitch $ST last
+    INIT="set i1 $SRC
+set i2 $SRC
+set d1 $SRC
+set d2 $SRC
+set d3 $SRC
+set d4 $SRC
+set d8 $SRC
+set d9 $SRC
+set d10 $SRC
 set d1 value 0.0 if i2 < 1
 set d2 value 0.0 if i2 < 1
 set d3 value 0.0 if i2 < 1
@@ -89,13 +103,16 @@ floor_check      $(python3 -c "print($FLOOR*$DX)")"
   [ -f "$OUT/STOP" ] && { echo "STOP file present, stopping before box $n"; exit 0; }
   while true; do
   zlo=$((ztop-VWIN)); [ $zlo -lt 0 ] && zlo=0
-  python3 - "$TPL" "$D/in.box" "$((SEED+n))" "$zlo" "$ztop" "$INIT" "$LASER" "$T0" "$T1" "$ST" "$NX" "$DT" "$DX" <<'PY'
-import sys
-tpl,out,seed,zlo,zhi,init,laser,t0,t1,st,nx,dt,dx = sys.argv[1:]
+  python3 - "$TPL" "$D/in.box" "$((SEED+n))" "$zlo" "$ztop" "$INIT" "$LASER" "$T0" "$T1" "$ST" "$NX" "$DT" "$DX" "$FMT" <<'PY'
+import re, sys
+tpl,out,seed,zlo,zhi,init,laser,t0,t1,st,nx,dt,dx,fmt = sys.argv[1:]
 s = open(tpl).read()
 for k,v in {'__SEED__':seed,'__ZLO__':zlo,'__ZHI__':zhi,'__INIT_OR_STITCH__':init,
             '__LASER__':laser,'__T0__':t0,'__T1__':t1,'__STITCH__':st,'__NX__':nx,'__DT__':dt,'__DX__':dx}.items():
     s = s.replace(k, v)
+if fmt == 'hdf5':   # the template (shared with sobol_study.py) dumps stitch
+    s, n = re.subn(r'^(dump[ \t]+\S+[ \t]+)stitch\b', r'\1hdf5', s, flags=re.M)
+    if n != 1: sys.exit(f'{tpl}: expected one stitch dump to switch to hdf5, found {n}')
 open(out,'w').write(s)
 PY
   echo "box $n: z [$zlo,$ztop] t [$T0,$T1]  $(date +%T)"

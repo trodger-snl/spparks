@@ -38,7 +38,7 @@ class spparks:
     if cmdargs:
       cmdargs.insert(0,"spparks.py")
       narg = len(cmdargs)
-      cargs = (c_char_p*narg)(*cmdargs)
+      cargs = (c_char_p*narg)(*[a.encode("utf-8") for a in cmdargs])
       self.spk = c_void_p()
       self.lib.spparks_open_no_mpi(narg,cargs,byref(self.spk))
     else:

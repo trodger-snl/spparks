@@ -6,7 +6,7 @@
 # N = timestamp of snapshot to be converted
 
 if len(argv) != 4:
-  raise StandardError, "Syntax: pizza.py -f dump2input.py dumpfile N inputfile"
+  raise Exception("Syntax: pizza.py -f dump2input.py dumpfile N inputfile")
 
 dumpfile = argv[1]
 ntime = int(argv[2])
@@ -22,11 +22,11 @@ d.map(1,"id",2,"lattice")
 id,lattice = d.vecs(ntime,"id","lattice")
 
 fp = open(inputfile,"w")
-print >>fp,"SPPARKS input file from dump file, time =",ntime
-print >>fp,len(id),1
-print >>fp
-for i in xrange(len(id)):
-  print >>fp,int(id[i]),int(lattice[i])
+print("SPPARKS input file from dump file, time =",ntime,file=fp)
+print(len(id),1,file=fp)
+print(file=fp)
+for i in range(len(id)):
+  print(int(id[i]),int(lattice[i]),file=fp)
 fp.close()
 
 # example for off-lattice file with ID, x, y, z, site value
@@ -36,9 +36,9 @@ fp.close()
 #id,x,y,z,site = d.vecs(ntime,"id","x","y","z","site")
 
 #fp = open(inputfile,"w")
-#print >>fp,"SPPARKS input file from dump file, time =",ntime
-#print >>fp,len(id),1
-#print >>fp
-#for i in xrange(len(id)):
-#  print >>fp,int(id[i]),int(site[i]),float(x[i]),float(y[i]),float(z[i])
+#print("SPPARKS input file from dump file, time =",ntime,file=fp)
+#print(len(id),1,file=fp)
+#print(file=fp)
+#for i in range(len(id)):
+#  print(int(id[i]),int(site[i]),float(x[i]),float(y[i]),float(z[i]),file=fp)
 #fp.close()

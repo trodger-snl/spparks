@@ -158,7 +158,7 @@ mpi-stubs:
 # install SPPARKS shared lib and Python wrapper for Python usage
 
 install-python:
-	@python ../python/install.py
+	@python3 ../python/install.py
 
 # Create a tarball of src dir and packages
 

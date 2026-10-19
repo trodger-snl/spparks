@@ -1,4 +1,4 @@
-#!/usr/local/bin/python -i
+#!/usr/bin/env -S python3 -i
 # preceeding line should have path for Python on your machine
 
 # trivial.py
@@ -12,7 +12,7 @@ import sys
 
 argv = sys.argv
 if len(argv) != 2:
-  print "Syntax: trivial.py in.spparks"
+  print("Syntax: trivial.py in.spparks")
   sys.exit()
 
 infile = sys.argv[1]
@@ -36,5 +36,5 @@ lines = open(infile,'r').readlines()
 for line in lines: spk.command(line)
 
 # uncomment if running in parallel via Pypar
-#print "Proc %d out of %d procs has" % (me,nprocs), spk
+#print("Proc %d out of %d procs has" % (me,nprocs), spk)
 #pypar.finalize()

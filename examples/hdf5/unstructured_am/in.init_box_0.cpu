@@ -1,17 +1,14 @@
-# SPPARKS Kokkos additive/texture example - HDF5 unstructured temperature source
-# Updated 2026-07 for the current API (see README.md in this directory):
-#   - style renamed additive_temperature_texture/kk -> additive/texture/kk
-#   - the Kokkos app requires `sweep color` (not `sweep random`)
-#   - texture_parameters/misorientation_function replaced by misorientation_diffusion <D_deg2_per_m> <thresh_deg> [alpha]
-#   - temperature I/O is a modular source: `setup_temperature_source hdf5_unstructured ...`
+# SPPARKS additive/texture (CPU) example - HDF5 unstructured temperature source.
+# CPU twin of in.init_box_0.kk: same deck except the app style and the sweep, so
+# the deterministic temperature columns (diag d6 sum/max) can be compared.
 #
 # The unstructured thermal HDF5 file is ~1 GB and is NOT shipped in-repo. Point
 # THERMAL_H5 at your copy (or override on the command line:
-#   mpirun -np 1 spparks -var THERMAL_H5 /path/to/file.hdf5 < in.init_box_0_kokkos ).
+#   mpirun -np 1 spparks -var THERMAL_H5 /path/to/file.hdf5 < in.init_box_0.cpu ).
 variable DX equal 5e-6
 variable THERMAL_H5 index fixed_reduced_thermal_output.hdf5
 
-app_style additive/texture/kk 1000000 5e-06 3e-6 2
+app_style additive/texture 1000000 5e-06 3e-6 2
 
 seed		 1760655727
 
@@ -31,7 +28,7 @@ create_sites box
  set          d9 value 0
 
 sector		 yes
-sweep		 color
+sweep		 random
 
 ########Setup temperature reading
 setup_temperature_source hdf5_unstructured ${THERMAL_H5} 5e-06 1563.0 300.0

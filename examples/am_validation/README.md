@@ -12,7 +12,7 @@ columns (see CLAUDE.md, "Validating the GPU port").
 | `in.moser_pause_below.*` | Moser with fluctuations; `pause_below 1500 reset_temperature 600` fires a reset pass mid-run; predictor skip at start |
 | `in.moser_pause.*` | Moser static two-pass schedule with a 1 ms `pause`; predictor skips the gap |
 
-The HDF5 device path is covered by `../ReducedTempAM/StaleLayerTest`.
+The HDF5 device path is covered by `../hdf5/stale_layer`.
 
 ```bash
 ./compare.sh ../../build-verify/spparks                       # CPU vs kk, one binary

@@ -131,7 +131,7 @@ Microstructure output is non-deterministic run-to-run (MC randomness). Only the
 (`additive/texture`) against the Kokkos app (`additive/texture/kk`) on the
 temperature diagnostic columns (`diag_style array d6 sum d6 max`), expecting a
 bit-for-bit match. The Kokkos app requires `sweep color`. Base test inputs are in
-`examples/ReducedTempAM/`, `examples/{rosenthal,moser}_am/` and `examples/am_validation/`.
+`examples/hdf5/`, `examples/{rosenthal,moser}_am/` and `examples/am_validation/`.
 
 ## Commits
 

@@ -321,7 +321,7 @@ examples/am_validation/in.rosenthal.cpu|kk           : Rosenthal standard; fast-
 examples/am_validation/in.moser_pause.cpu|kk         : Moser two-pass schedule with a 1 ms pause
 examples/am_validation/in.moser_pause_below.cpu|kk   : Moser with fluctuations and a pause_below reset pass
 examples/am_validation/compare.sh                    : CPU vs kk bit-for-bit d6 comparison
-examples/ReducedTempAM/StaleLayerTest/in.stale_layer : hdf5_csr source on additive/texture/kk
+examples/hdf5/stale_layer/in.stale_layer : hdf5_csr source on additive/texture/kk
 examples/conduction_am/in.single_track               : conduction source, two hatched passes
 examples/conduction_am/in.single_track.card          : the same, driven by the 316L material card
 examples/conduction_am/in.thin_wall                  : four-layer thin wall in one process

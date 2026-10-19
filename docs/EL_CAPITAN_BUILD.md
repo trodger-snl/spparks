@@ -234,7 +234,7 @@ the empty interval list lets the run fast-forward to the next layer. The
 Kokkos fill has a matching `d_n_active_nodes > 0` guard, without which the
 cleared state would send `ComputeNodalTemps` past the end of a zero-extent view.
 
-Regression test: `examples/ReducedTempAM/StaleLayerTest` (generates its own
+Regression test: `examples/hdf5/stale_layer` (generates its own
 three-layer file — the production file cannot reach the path).
 
 This **decouples the correctness risk from `grid_cell_size_multiplier`**. Lowering

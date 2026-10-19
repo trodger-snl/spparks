@@ -9,7 +9,7 @@
 
 set -e
 
-SPPARKS=${SPPARKS:-../../../build/spparks}
+SPPARKS=${SPPARKS:-../../../build-cpu/spparks}
 NP=${NP:-4}
 MPIRUN=${MPIRUN:-"mpirun --bind-to none -np $NP"}
 

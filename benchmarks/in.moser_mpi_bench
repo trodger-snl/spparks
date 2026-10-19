@@ -30,7 +30,7 @@ undercooling_deviation  2
 mean_nuclei_volume      8.4375e-16
 nuclei_volume_deviation 1.5625e-17
 texture_parameters      2.990000e+00 2
-misorientation_function 1.883553e+01 2
+misorientation_diffusion 4.2e5 2
 fast_forward_search_window 0.001
 
 # Rosenthal standard source + linear scan across x at the box mid-width, top plane.

@@ -9,7 +9,7 @@ cd "$(dirname "$0")"
 echo "source,ranks,wall_s,loop_s,steps" > baseline_rm.csv
 run() { local src=$1 input=$2 ranks=$3
   local t0=$(date +%s.%N)
-  timeout 300 mpirun -np "$ranks" --bind-to core "$SPK" < "$input" > "${src}_np${ranks}.log" 2>&1
+  mpirun -np "$ranks" --bind-to core "$SPK" < "$input" > "${src}_np${ranks}.log" 2>&1
   local rc=$?; local wall=$(echo "$(date +%s.%N) - $t0"|bc)
   local loop=$(grep -oE "Loop time of [0-9.]+" "${src}_np${ranks}.log"|grep -oE "[0-9.]+"|tail -1)
   local steps=$(grep -oE "step=[0-9]+" "${src}_np${ranks}.log"|grep -oE "[0-9]+"|tail -1)

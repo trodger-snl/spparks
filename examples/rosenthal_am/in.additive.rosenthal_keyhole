@@ -23,8 +23,7 @@ create_box       box
 create_sites     box
  set             site range 1 1000000
  set             i2 value 1
- set             d1 value 0
- set             d2 value 573
+ set             d6 value 573
 
 sector           yes
 sweep            random mask no

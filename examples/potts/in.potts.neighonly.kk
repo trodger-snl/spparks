@@ -13,7 +13,7 @@ create_box	 box
 create_sites	 box
 set		 site range 1 100
 
-sweep		 random
+sweep		 color
 sector		 yes
 
 diag_style       energy

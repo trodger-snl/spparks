@@ -152,7 +152,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   // Cached device copy of site coordinates (lattice units). The lattice is
   // static for the run, so this is uploaded once and reused by the device
   // Rosenthal fill (rebuilt only if the site count changes via grow_app).
-  Kokkos::View<double*[3]> d_xyz;
+  Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz;
   int d_xyz_n = -1;                 // extent d_xyz was built for (nlocal+nghost)
 
   // Rosenthal KEYHOLE line-integral quadrature (fixed at setup; uploaded once).
@@ -336,7 +336,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   // cube-corner distance sqrt(3) so a periodic-wrap neighbour pair never
   // reads as a box-length hop.
   KOKKOS_INLINE_FUNCTION
-  static double hop_distance(const Kokkos::View<double*[3]> &xyz, int i, int j) {
+  static double hop_distance(const Kokkos::View<double*[3], Kokkos::LayoutRight> &xyz, int i, int j) {
     const double hdx = xyz(i, 0) - xyz(j, 0);
     const double hdy = xyz(i, 1) - xyz(j, 1);
     const double hdz = xyz(i, 2) - xyz(j, 2);
@@ -433,8 +433,8 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
         const Kokkos::View<const double*>& d_T,
         const Kokkos::View<const int*>& d_active_flag,
         const Kokkos::View<const int*>& numneigh,
-        const Kokkos::View<int**>& neighbor,
-        const Kokkos::View<double*[3]>& xyz,
+        const Kokkos::View<int**, Kokkos::LayoutRight>& neighbor,
+        const Kokkos::View<double*[3], Kokkos::LayoutRight>& xyz,
         double dx_lattice,
         double* grad_out,
         double* magnitude_out) {

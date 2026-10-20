@@ -44,7 +44,7 @@ class ConductionSolverKokkos : protected Pointers {
   // Advance the field to t, then write T for all nall sites into d_T.
   // Returns the max T over owned sites (for the fused-max convention).
   double fill(double t, Kokkos::View<double*> d_T,
-              Kokkos::View<double*[3]> d_xyz, Kokkos::View<int*> d_af,
+              Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz, Kokkos::View<int*> d_af,
               int nlocal, int nall, double dx, double ts, double tl);
 
   enum Phase { GAS = 0, POWDER = 1, DENSE = 3, LOOSE = 4 };   // LOOSE: flag bit, see packing
@@ -83,7 +83,7 @@ class ConductionSolverKokkos : protected Pointers {
 
   Kokkos::View<double*> sbuf, rbuf;
 
-  void build(Kokkos::View<double*[3]> d_xyz, Kokkos::View<int*> d_af,
+  void build(Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz, Kokkos::View<int*> d_af,
              int nlocal, int nall, double ts);
   void reset_field(double Tr);
   // One stage update. Explicit Euler (sts = false): H += h L(H). RKL2 stage

@@ -94,7 +94,7 @@ ConductionSolverKokkos::ConductionSolverKokkos(SPPARKS *spk,
 /* ---------------------------------------------------------------------- */
 
 double ConductionSolverKokkos::fill(double t, Kokkos::View<double*> d_T,
-                                    Kokkos::View<double*[3]> d_xyz,
+                                    Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz,
                                     Kokkos::View<int*> d_af, int nlocal,
                                     int nall, double dx_in, double ts, double tl_in)
 {
@@ -145,7 +145,7 @@ double ConductionSolverKokkos::fill(double t, Kokkos::View<double*> d_T,
 
 /* ---------------------------------------------------------------------- */
 
-void ConductionSolverKokkos::build(Kokkos::View<double*[3]> d_xyz,
+void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz,
                                    Kokkos::View<int*> d_af, int nlocal,
                                    int nall, double ts)
 {

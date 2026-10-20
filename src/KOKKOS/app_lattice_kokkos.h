@@ -36,8 +36,16 @@ public:
   // === Shared Kokkos data (all derived classes use these) ===
   // Device-only: filled from AppLattice's numneigh/neighbor, which stay the
   // host copy. (A DualView here kept a second 26*nall-int host array.)
+  // Exactly one neighbor view is allocated, chosen by neighbor_row_major.
+  // ponytail: two layouts. The potts colour sweeps coalesce on LayoutLeft
+  // (row-major measured 23% slower for potts/kk, 18% for neighonly, 256^3
+  // gfx1151); the additive front kernels gather whole rows and ran 10% faster
+  // row-major, which is also the host block's layout. Look for one layout that
+  // suits both (e.g. colour-packed rows) if this split spreads.
   Kokkos::View<int*> d_numneigh;
-  Kokkos::View<int**> d_neighbor;
+  Kokkos::View<int**> d_neighbor;                          // LayoutLeft on GPUs
+  Kokkos::View<int**, Kokkos::LayoutRight> d_neighbor_rm;  // host layout
+  bool neighbor_row_major = false;
   pool_type *rand_pool;
 
   // === Color-based site lists for GPU ===

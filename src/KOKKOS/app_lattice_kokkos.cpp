@@ -71,12 +71,14 @@ void AppLatticeKokkos::allocate_device_views()
 
   // Allocate neighbor arrays
   d_numneigh = Kokkos::View<int*>("numneigh", nall);
-  if (maxneigh > 0) {
-    // No zero fill: sync_neighbors_to_device() writes every j < numneigh[i]
-    // and every kernel stops at numneigh, so the padding is never read.
+  // No zero fill: sync_neighbors_to_device() writes every j < numneigh[i]
+  // and every kernel stops at numneigh, so the padding is never read.
+  if (maxneigh > 0 && neighbor_row_major)
+    d_neighbor_rm = Kokkos::View<int**, Kokkos::LayoutRight>(
+        Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighbor"), nall, maxneigh);
+  else if (maxneigh > 0)
     d_neighbor = Kokkos::View<int**>(
         Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighbor"), nall, maxneigh);
-  }
 
   // Derived class allocates app-specific views
   allocate_app_views();
@@ -162,7 +164,13 @@ void AppLatticeKokkos::sync_neighbors_to_device()
   Kokkos::deep_copy(d_numneigh,
       Kokkos::View<const int*, Kokkos::HostSpace, HostUnmanaged>(numneigh, nall));
 
-  if (maxneigh > 0 && nall > 0) {
+  if (maxneigh > 0 && nall > 0 && neighbor_row_major) {
+    // neighbor[][] is one row-major nall x maxneigh block (Memory::create),
+    // the same layout as d_neighbor_rm: one straight copy.
+    Kokkos::deep_copy(d_neighbor_rm,
+        Kokkos::View<const int**, Kokkos::LayoutRight, Kokkos::HostSpace, HostUnmanaged>(
+            neighbor[0], nall, maxneigh));
+  } else if (maxneigh > 0 && nall > 0) {
     // neighbor[][] is one row-major nall x maxneigh block (Memory::create);
     // d_neighbor is the device layout (LayoutLeft on GPUs). Move it in row
     // chunks through a small row-major device buffer and transpose on the

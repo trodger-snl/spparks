@@ -175,6 +175,7 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
   }
 #endif
 
+  neighbor_row_major = true;  // front kernels gather whole rows (see app_lattice_kokkos.h)
   allow_app_update = 1;
   app_update_only = 1;  // Skip solid-state growth for now
   allow_kmc = 0;        // all physics is in app_update; no KMC path
@@ -281,6 +282,10 @@ void AppAdditiveTextureKokkos::init_app()
   // Call parent initialization - sets up color lists, syncs neighbors, etc.
   // Parent also initializes rand_pool with seed from MPI rank
   AppPottsQuaternionKokkos::init_app();
+  // The inherited colour sweep reads d_neighbor, which this app never fills
+  // (it keeps the row-major d_neighbor_rm).
+  if (!app_update_only)
+    error->all(FLERR, "additive/texture/kk requires app_update_only yes");
   check_misorientation_step(dx, error, domain->me);
   check_material_complete(error, *thermal);
   check_sector_stop(error, nstop, tstop);
@@ -612,18 +617,12 @@ void AppAdditiveTextureKokkos::ensure_device_xyz()
   const int nall = nlocal + nghost;
   if (d_xyz_n == nall) return;
 
-  // Build a host mirror by explicit element assignment from the double** so the
-  // copy is correct regardless of the device View layout (host xyz is row-major
-  // [nall][3]; a LayoutLeft device view would otherwise misread it as
-  // column-major -- the source of an earlier melt-surface gradient bug).
-  d_xyz = Kokkos::View<double*[3]>("d_xyz", nall);
-  auto h_xyz = Kokkos::create_mirror_view(d_xyz);
-  for (int i = 0; i < nall; i++) {
-    h_xyz(i,0) = xyz[i][0];
-    h_xyz(i,1) = xyz[i][1];
-    h_xyz(i,2) = xyz[i][2];
-  }
-  Kokkos::deep_copy(d_xyz, h_xyz);
+  // LayoutRight matches the host's row-major [nall][3] block (Memory::create).
+  d_xyz = Kokkos::View<double*[3], Kokkos::LayoutRight>("d_xyz", nall);
+  if (nall > 0)
+    Kokkos::deep_copy(d_xyz,
+        Kokkos::View<const double*[3], Kokkos::LayoutRight, Kokkos::HostSpace,
+                     Kokkos::MemoryUnmanaged>(xyz[0], nall));
   d_xyz_n = nall;
 }
 
@@ -1413,7 +1412,7 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
   auto d_V_local = this->d_V;
   auto d_G_local = this->d_G;
   auto k_numneigh_d = d_numneigh;
-  auto k_neighbor_d = d_neighbor;
+  auto k_neighbor_d = d_neighbor_rm;
   ensure_device_xyz();
   auto k_xyz_d = d_xyz;
   const double dx_local = dx;
@@ -1513,7 +1512,7 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
   auto d_active_flag_local = d_active_flag;
   auto d_solid_d_local = d_solid_d;
 
-  auto k_neighbor_d = d_neighbor;
+  auto k_neighbor_d = d_neighbor_rm;
   auto k_numneigh_d = d_numneigh;
   auto d_G_local = d_G;
   auto d_V_local = d_V;
@@ -1725,7 +1724,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
   auto d_solid_d_local = d_solid_d;
 
   auto k_numneigh_d = d_numneigh;
-  auto k_neighbor_d = d_neighbor;
+  auto k_neighbor_d = d_neighbor_rm;
 
   // Cached, layout-correct device copy of site coordinates (used for on-demand
   // gradient computation in the kernel).
@@ -2005,7 +2004,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
   auto d_active_flag_local = d_active_flag;
   auto d_solid_d_local = d_solid_d;
 
-  auto k_neighbor_d = d_neighbor;
+  auto k_neighbor_d = d_neighbor_rm;
   auto k_numneigh_d = d_numneigh;
   auto rand_pool_local = *rand_pool;
 

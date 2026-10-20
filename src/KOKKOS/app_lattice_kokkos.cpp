@@ -112,6 +112,8 @@ void AppLatticeKokkos::pin_site_arrays()
   for (int k = 0; k < ndouble; k++) darray[k] = (double *) move(darray[k], n * sizeof(double));
   pinned_sites = true;
   grow_app();  // re-point the apps' named aliases (spin, q0, T, ...)
+  if (domain->me == 0 && screen)
+    fprintf(screen, "Site arrays shared with the integrated GPU (pinned host memory)\n");
 #endif
 }
 

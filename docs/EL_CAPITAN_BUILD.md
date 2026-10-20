@@ -218,12 +218,33 @@ stays temperature-only, exactly as it is locally.
 
 **32-bit site IDs.** The build defaults to `SPPARKS_SMALLBIG`, capping a run at
 2^31 sites. On one node that ceiling is unreachable — at the per-site footprint
-measured on this branch you exhaust 512 GB of unified HBM first — so it only
-matters multi-node. Note that turning on `SPPARKS_BIGBIG` is **not currently
+below you exhaust the node's HBM first — so it only matters multi-node. Note that turning on `SPPARKS_BIGBIG` is **not currently
 safe**: `src/read_sites.cpp:394` does an `MPI_Allreduce` on a `tagint` with a
 hardcoded `MPI_INT`, and `src/lattice.cpp:365-366,372-373` computes
 `idsite/(nx*ny)` with `nx*ny` as `int*int`, which silently corrupts the
 checkerboard coloring rather than erroring. Both need fixing first.
+
+**Memory per site.** Measured on gfx1151 (2D HDF5 ct15 deck, np=1, slope of
+peak memory over 4M/16M/64M-site boxes, host + device counted together):
+
+| App | B/site |
+|---|---|
+| CPU `additive/texture` | ~410 |
+| `additive/texture/kk`, discrete-GPU path (device copies) | ~700 |
+| `additive/texture/kk`, integrated-GPU path | ~510 |
+
+The integrated-GPU path moves the per-site host arrays into pinned host memory
+the GPU reads in place, instead of keeping `hipMalloc` copies
+(`AppLatticeKokkos::pin_site_arrays`). It keys on
+`hipDeviceAttributeIntegrated`, not on the arch token or `HSA_XNACK`, and
+prints `Site arrays shared with the integrated GPU (pinned host memory)` at the
+first run. **Check for that line on MI300A**; without it you are on the
+~700 B/site path. The arch token's unified memory does not merge these
+separate allocations by itself.
+
+Sizing at ~510 B/site, one rank per 128 GB APU with ~10% headroom: about
+225M sites per APU. Multiply by the APUs per node (four on El Capitan; some
+nodes have two).
 
 **Multi-node HDF5 is still unproven, but the stale-layer trap is fixed.**
 `load_layer()` used to return early when a rank's padded subdomain overlapped no

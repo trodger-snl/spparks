@@ -2140,6 +2140,11 @@ static void compute_temperature_gradient(
 
 **Note:** Add ~30% for Kokkos overhead (Views, RNG pool, etc.)
 
+**Measured (2026-10-20, gfx1151, 2D HDF5 ct15 deck, host + device together):**
+CPU app ~410 B/site; kk ~700 B/site with device copies, ~510 B/site on an
+integrated GPU where the per-site arrays are shared through pinned host memory
+(`AppLatticeKokkos::pin_site_arrays`). See `docs/EL_CAPITAN_BUILD.md` §7.
+
 ---
 
 ## 14. Future Enhancements (Beyond Phase 5)

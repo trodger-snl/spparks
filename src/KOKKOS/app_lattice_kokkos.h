@@ -36,7 +36,7 @@ public:
   // === Shared Kokkos data (all derived classes use these) ===
   // Device-only: filled from AppLattice's numneigh/neighbor, which stay the
   // host copy. (A DualView here kept a second 26*nall-int host array.)
-  // Exactly one neighbor view is allocated, chosen by neighbor_row_major.
+  // Exactly one neighbor view is allocated, chosen by host_layout_sites.
   // ponytail: two layouts. The potts colour sweeps coalesce on LayoutLeft
   // (row-major measured 23% slower for potts/kk, 18% for neighonly, 256^3
   // gfx1151); the additive front kernels gather whole rows and ran 10% faster
@@ -45,7 +45,19 @@ public:
   Kokkos::View<int*> d_numneigh;
   Kokkos::View<int**> d_neighbor;                          // LayoutLeft on GPUs
   Kokkos::View<int**, Kokkos::LayoutRight> d_neighbor_rm;  // host layout
-  bool neighbor_row_major = false;
+
+  // Set by an app whose device views use the host layout (d_neighbor_rm).
+  // On an integrated GPU such an app's per-site arrays are then moved into
+  // pinned host memory at the first init, and site_view() aliases them, so
+  // host and device share one copy (pin_site_arrays).
+  bool host_layout_sites = false;
+  bool integrated_gpu = false;
+  bool pinned_sites = false;
+  template <class T>
+  Kokkos::View<T*> site_view(const char *name, T *host, int n) {
+    if (pinned_sites) return Kokkos::View<T*>(host, n);
+    return Kokkos::View<T*>(name, n);
+  }
   pool_type *rand_pool;
 
   // === Color-based site lists for GPU ===
@@ -73,6 +85,8 @@ public:
   // === Shared methods ===
   virtual void init_app() override;
   virtual void grow_app() override;
+  void pin_site_arrays();
+  std::vector<void *> pinned;
   void setup_color_lists_kokkos();
   virtual void iterate_rejection(double stoptime) override;
 

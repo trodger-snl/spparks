@@ -164,18 +164,13 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
   // instead of as a host series plus a device copy. FP64 only: the FP32 build
   // narrows the temperatures into a device copy. Must precede the first layer
   // load, i.e. setup_temperature_source.
-  if (std::is_same<fastreal, double>::value && !SeriesMemory::alloc) {
-    int dev = 0, integrated = 0;
-    if (hipGetDevice(&dev) == hipSuccess &&
-        hipDeviceGetAttribute(&integrated, hipDeviceAttributeIntegrated, dev) == hipSuccess &&
-        integrated) {
-      SeriesMemory::alloc = series_alloc_pinned;
-      SeriesMemory::release = series_release_pinned;
-    }
+  if (std::is_same<fastreal, double>::value && !SeriesMemory::alloc && integrated_gpu) {
+    SeriesMemory::alloc = series_alloc_pinned;
+    SeriesMemory::release = series_release_pinned;
   }
 #endif
 
-  neighbor_row_major = true;  // front kernels gather whole rows (see app_lattice_kokkos.h)
+  host_layout_sites = true;  // front kernels gather whole rows (see app_lattice_kokkos.h)
   allow_app_update = 1;
   app_update_only = 1;  // Skip solid-state growth for now
   allow_kmc = 0;        // all physics is in app_update; no KMC path
@@ -257,17 +252,17 @@ void AppAdditiveTextureKokkos::allocate_app_views()
   int nall = nlocal + nghost;
 
   // AM-specific device views
-  d_active_flag = Kokkos::View<int*>("active_flag", nall);
-  d_solid_d = Kokkos::View<double*>("solid_d", nall);
+  d_active_flag = site_view("active_flag", active_flag, nall);
+  d_solid_d = site_view("solid_d", solid_d, nall);
 
   // Temperature field (device fills, or host fills + upload)
-  d_temp = Kokkos::View<double*>("temperature", nall);
+  d_temp = site_view("temperature", T, nall);
 
   // Gradient cache (device-only, computed once per timestep on device)
-  d_G = Kokkos::View<double*>("gradient_magnitude", nall);
-  d_V = Kokkos::View<double*>("solidification_velocity", nall);
-  d_spath = Kokkos::View<double*>("spath", nall);
-  d_mobility_out = Kokkos::View<double*>("mobility_out", nall);
+  d_G = site_view("gradient_magnitude", G, nall);
+  d_V = site_view("solidification_velocity", V, nall);
+  d_spath = site_view("spath", spath, nall);
+  d_mobility_out = site_view("mobility_out", mobility_out, nall);
 
   // Global parameter arrays (device-accessible constants); the per-spin
   // nucleation arrays and solid-front coefficients are uploaded at init.
@@ -618,6 +613,11 @@ void AppAdditiveTextureKokkos::ensure_device_xyz()
   if (d_xyz_n == nall) return;
 
   // LayoutRight matches the host's row-major [nall][3] block (Memory::create).
+  if (pinned_sites) {
+    d_xyz = Kokkos::View<double*[3], Kokkos::LayoutRight>(xyz[0], nall);
+    d_xyz_n = nall;
+    return;
+  }
   d_xyz = Kokkos::View<double*[3], Kokkos::LayoutRight>("d_xyz", nall);
   if (nall > 0)
     Kokkos::deep_copy(d_xyz,

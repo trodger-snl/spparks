@@ -17,7 +17,9 @@
 
 #include "app_lattice_kokkos.h"
 #include <algorithm>
+#include <cstring>
 #include "error.h"
+#include "memory.h"
 #include "timer.h"
 #include "output.h"
 #include "comm_lattice.h"
@@ -35,6 +37,12 @@ AppLatticeKokkos::AppLatticeKokkos(SPPARKS *spk, int narg, char **arg) :
   kokkos_ncolors(0), kokkos_nsectors(0),
   strict_rng(0)
 {
+#ifdef KOKKOS_ENABLE_HIP
+  int dev = 0, integrated = 0;
+  if (hipGetDevice(&dev) == hipSuccess &&
+      hipDeviceGetAttribute(&integrated, hipDeviceAttributeIntegrated, dev) == hipSuccess)
+    integrated_gpu = integrated;
+#endif
 }
 
 /* ---------------------------------------------------------------------- */
@@ -42,6 +50,18 @@ AppLatticeKokkos::AppLatticeKokkos(SPPARKS *spk, int narg, char **arg) :
 AppLatticeKokkos::~AppLatticeKokkos()
 {
   if (rand_pool) delete rand_pool;
+#ifdef KOKKOS_ENABLE_HIP
+  if (pinned_sites) {
+    hipDeviceSynchronize();
+    for (void *p : pinned) hipHostFree(p);
+    // ~AppLattice and ~App free these blocks: leave them none to free
+    numneigh = nullptr;
+    if (neighbor) neighbor[0] = nullptr;
+    xyz[0] = nullptr;
+    for (int i = 0; i < ninteger; i++) iarray[i] = nullptr;
+    for (int i = 0; i < ndouble; i++) darray[i] = nullptr;
+  }
+#endif
 }
 
 /* ----------------------------------------------------------------------
@@ -58,6 +78,44 @@ AppLatticeKokkos::~AppLatticeKokkos()
 void AppLatticeKokkos::grow_app() {}
 
 /* ----------------------------------------------------------------------
+   integrated GPU: move the per-site host arrays into pinned host memory the
+   GPU reads in place (hipHostMalloc, non-coherent = coarse-grained, as the
+   HDF5 SeriesMemory hook), so site_view() can alias them instead of holding
+   a device copy. Runs once, when the sites exist: AppLattice::grow() never
+   runs again (create_sites/read_sites refuse once sites exist), so nothing
+   reallocs these blocks. A gather from this memory measured ~10% slower than
+   hipMalloc on gfx1151.
+------------------------------------------------------------------------- */
+
+void AppLatticeKokkos::pin_site_arrays()
+{
+#ifdef KOKKOS_ENABLE_HIP
+  if (nmax == 0) return;
+  auto move = [&](void *old, size_t bytes) {
+    void *p = nullptr;
+    if (hipHostMalloc(&p, bytes, hipHostMallocNonCoherent) != hipSuccess)
+      error->one(FLERR, "Could not allocate pinned memory for the site arrays");
+    memcpy(p, old, bytes);
+    memory->sfree(old);
+    pinned.push_back(p);
+    return p;
+  };
+  const size_t n = nmax;
+  numneigh = (int *) move(numneigh, n * sizeof(int));
+  if (neighbor) {
+    int *data = (int *) move(neighbor[0], n * maxneigh * sizeof(int));
+    for (size_t i = 0; i < n; i++) neighbor[i] = &data[i * maxneigh];
+  }
+  double *x = (double *) move(xyz[0], n * 3 * sizeof(double));
+  for (size_t i = 0; i < n; i++) xyz[i] = &x[3 * i];
+  for (int k = 0; k < ninteger; k++) iarray[k] = (int *) move(iarray[k], n * sizeof(int));
+  for (int k = 0; k < ndouble; k++) darray[k] = (double *) move(darray[k], n * sizeof(double));
+  pinned_sites = true;
+  grow_app();  // re-point the apps' named aliases (spin, q0, T, ...)
+#endif
+}
+
+/* ----------------------------------------------------------------------
    (re)allocate device views when nlocal+nghost changed since the last run.
    Same size -> keep them: the additive app carries device-only state
    (solid_d, spath, ...) from one run to the next.
@@ -70,10 +128,12 @@ void AppLatticeKokkos::allocate_device_views()
   views_maxneigh = maxneigh;
 
   // Allocate neighbor arrays
-  d_numneigh = Kokkos::View<int*>("numneigh", nall);
+  d_numneigh = site_view("numneigh", numneigh, nall);
   // No zero fill: sync_neighbors_to_device() writes every j < numneigh[i]
   // and every kernel stops at numneigh, so the padding is never read.
-  if (maxneigh > 0 && neighbor_row_major)
+  if (maxneigh > 0 && pinned_sites)
+    d_neighbor_rm = Kokkos::View<int**, Kokkos::LayoutRight>(neighbor[0], nall, maxneigh);
+  else if (maxneigh > 0 && host_layout_sites)
     d_neighbor_rm = Kokkos::View<int**, Kokkos::LayoutRight>(
         Kokkos::view_alloc(Kokkos::WithoutInitializing, "neighbor"), nall, maxneigh);
   else if (maxneigh > 0)
@@ -101,6 +161,7 @@ void AppLatticeKokkos::init_app()
     rand_pool = new pool_type((uint64_t) ranmaster->initial_seed() * 65536 + me);
   }
 
+  if (host_layout_sites && integrated_gpu && !pinned_sites) pin_site_arrays();
   allocate_device_views();
 
   // Kokkos apps require coloring for correct parallel GPU execution
@@ -164,7 +225,7 @@ void AppLatticeKokkos::sync_neighbors_to_device()
   Kokkos::deep_copy(d_numneigh,
       Kokkos::View<const int*, Kokkos::HostSpace, HostUnmanaged>(numneigh, nall));
 
-  if (maxneigh > 0 && nall > 0 && neighbor_row_major) {
+  if (maxneigh > 0 && nall > 0 && host_layout_sites) {
     // neighbor[][] is one row-major nall x maxneigh block (Memory::create),
     // the same layout as d_neighbor_rm: one straight copy.
     Kokkos::deep_copy(d_neighbor_rm,

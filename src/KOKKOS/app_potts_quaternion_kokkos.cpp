@@ -132,11 +132,11 @@ void AppPottsQuaternionKokkos::grow_app()
 void AppPottsQuaternionKokkos::allocate_app_views()
 {
   int nall = nlocal + nghost;
-  d_spin = Kokkos::View<int*>("spin", nall);
-  d_q0 = Kokkos::View<double*>("q0", nall);
-  d_qx = Kokkos::View<double*>("qx", nall);
-  d_qy = Kokkos::View<double*>("qy", nall);
-  d_qz = Kokkos::View<double*>("qz", nall);
+  d_spin = site_view("spin", spin, nall);
+  d_q0 = site_view("q0", q0, nall);
+  d_qx = site_view("qx", qx, nall);
+  d_qy = site_view("qy", qy, nall);
+  d_qz = site_view("qz", qz, nall);
 }
 
 /* ----------------------------------------------------------------------

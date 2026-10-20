@@ -17,6 +17,7 @@
 #ifdef SPPARKS_HIGHFIVE
 #include "highfive/highfive.hpp"
 #endif
+#include <algorithm>
 #include <numeric>
 
 using namespace SPPARKS_NS;
@@ -91,42 +92,50 @@ void HDF5CSRTemperatureSource::read_time_temperature_data(
     throw std::runtime_error("nodeOffset index not in any merged slice");
   };
 
-  std::vector<std::array<size_t, 2>> dataSlices;
-  dataSlices.reserve(nodeSlices.size());
-  size_t totalDataElements = 0;
-
-  for (const auto& ns : nodeSlices) {
-    int64_t dataStart = rawOffsets[toBufPos(ns[0])];
-    int64_t dataEnd   = rawOffsets[toBufPos(ns[1])];
-    dataSlices.push_back({static_cast<size_t>(dataStart),
-                          static_cast<size_t>(dataEnd)});
-    totalDataElements += static_cast<size_t>(dataEnd - dataStart);
-  }
-
   // ------------------------------------------------------------------
-  // 4. Read flat times and temperatures via 1D hyperslab — only actual
-  //    data, no padding.
-  // ------------------------------------------------------------------
-  auto dataHyperSlab = build_hyperslab_1d(dataSlices);
-
-  // Read into raw pointers: HighFive's vector reader knows only std::allocator.
-  SeriesVector<double> timesFlat(totalDataElements);
-  grp.getDataSet("times").select(dataHyperSlab).read(timesFlat.data());
-
-  SeriesVector<double> tempsFlat(totalDataElements);
-  grp.getDataSet("temperatures").select(dataHyperSlab).read(tempsFlat.data());
-
-  // ------------------------------------------------------------------
-  // 5. Build local row offsets from dataCounts (already loaded by
-  //    load_layer before this method is called).
+  // 4. Row offsets from dataCounts, which load_layer has zeroed for nodes
+  //    whose series is never read; those rows stay empty.
   // ------------------------------------------------------------------
   std::vector<size_t> localOffsets(dataCounts.size() + 1, 0);
   std::inclusive_scan(dataCounts.begin(), dataCounts.end(), localOffsets.begin() + 1,
                       std::plus<size_t>(), size_t{0});
 
   // ------------------------------------------------------------------
-  // 6. Construct CompressedArray2D directly — zero expansion.
+  // 5. Per chunk: read its contiguous data range into a reused buffer and
+  //    copy out the kept rows. Peak temporary = the largest chunk's data.
+  //    Chunks with no kept row are not read. Raw-pointer reads: HighFive's
+  //    vector reader knows only std::allocator.
   // ------------------------------------------------------------------
+  SeriesVector<double> timesFlat(localOffsets.back());
+  SeriesVector<double> tempsFlat(localOffsets.back());
+  auto timesDset = grp.getDataSet("times");
+  auto tempsDset = grp.getDataSet("temperatures");
+  std::vector<double> buf;
+  size_t row = 0;  // first local row of this chunk
+
+  for (const auto& ns : nodeSlices) {
+    const size_t n = ns[1] - ns[0];
+    if (localOffsets[row + n] == localOffsets[row]) { row += n; continue; }
+
+    // A chunk's nodeOffsets [ns0, ns1] lie contiguously in one merged slice.
+    const size_t base = toBufPos(ns[0]);
+    const size_t dataStart = static_cast<size_t>(rawOffsets[base]);
+    buf.resize(static_cast<size_t>(rawOffsets[base + n]) - dataStart);
+
+    auto strip = [&](HighFive::DataSet& dset, SeriesVector<double>& flat) {
+      dset.select({dataStart}, {buf.size()}).read(buf.data());
+      for (size_t r = 0; r < n; r++) {
+        const unsigned count = dataCounts[row + r];
+        if (count)
+          std::copy_n(buf.data() + (static_cast<size_t>(rawOffsets[base + r]) - dataStart),
+                      count, flat.data() + localOffsets[row + r]);
+      }
+    };
+    strip(timesDset, timesFlat);
+    strip(tempsDset, tempsFlat);
+    row += n;
+  }
+
   std::vector<size_t> localOffsets2 = localOffsets;
   times = CompressedArray2D<double>(std::move(timesFlat), std::move(localOffsets));
   temperatures = CompressedArray2D<double>(std::move(tempsFlat), std::move(localOffsets2));

@@ -420,9 +420,6 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   grp->getDataSet("dataCounts").select(
     build_hyperslab_1d(nodeSlices)).read(dataCounts);
 
-  // Read time and temperature data (virtual — overridden by CSR subclass)
-  read_time_temperature_data(*grp, nodeSlices);
-
   // Build element bounding boxes for spatial queries
   elem_bboxes = build_elem_bounding_boxes();
 
@@ -438,6 +435,30 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   } else {
     nodal_adjacency_valid = false;
   }
+
+  // The element cache needs only the mesh, and it decides which nodes' series
+  // are ever read, so build it before reading the series.
+  build_site_element_cache();
+
+  // Keep the series only for nodes something reads: the tet nodes of this
+  // rank's sites (or their smoothing halo, which precompute interpolates) and
+  // nodes inside the global box (node-level thermal intervals). The rest --
+  // most of the chunk-load pad -- get dataCount 0, so the readers below store
+  // nothing for them and every later reader sees an empty row.
+  {
+    const std::vector<unsigned> &used =
+      (nodal_smooth_enabled && !smooth_interp_indices.empty())
+        ? smooth_interp_indices : active_node_indices;
+    std::vector<unsigned char> keep(dataCounts.size(), 0);
+    for (unsigned nd : used) keep[nd] = 1;
+    for (size_t nd = 0; nd < dataCounts.size(); nd++)
+      if (!keep[nd] && !is_point_in_spparks_domain(nodeCoords(nd, 0), nodeCoords(nd, 1),
+                                                   nodeCoords(nd, 2)))
+        dataCounts[nd] = 0;
+  }
+
+  // Read time and temperature data (virtual — overridden by CSR subclass)
+  read_time_temperature_data(*grp, nodeSlices);
 
   // Compute thermal intervals for efficient time queries
   compute_thermal_intervals_for_layer(layerIdx, threshold_temp);
@@ -473,6 +494,7 @@ void HDF5UnstructuredTemperatureSource::clear_layer_data()
   // from it and sizes the device nodal-temperature slice, so leaving it behind
   // would advertise nodes whose series no longer exists.
   dataCounts.clear();
+  cache_valid = false;   // the site cache indexes the mesh being dropped
   times = CompressedArray2D<double>();
   temperatures = CompressedArray2D<double>();
 
@@ -582,6 +604,10 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
     size_t rowEnd    = nodeSlices[s][1];
     size_t chunkRows = rowEnd - rowStart;
     if (chunkRows == 0) continue;
+    if (offsets[dcPos + chunkRows] == offsets[dcPos]) {  // no row kept here
+      dcPos += chunkRows;
+      continue;
+    }
 
     buf.resize(chunkRows * static_cast<size_t>(readCols));
 
@@ -992,9 +1018,8 @@ void HDF5UnstructuredTemperatureSource::prepare_for_timestep(double time)
   if (std::fabs(time - current_time) / (std::fabs(time) + tol) > tol) {
     auto currentLayer = get_active_layer(time);
     if (currentLayer != active_layer) {
-      load_layer(currentLayer);
+      load_layer(currentLayer);   // also builds the site element cache
       active_layer = currentLayer;
-      cache_valid = false;
       nodal_cache_valid = false;
       site_intervals_for_layer = std::numeric_limits<unsigned>::max();
     }
@@ -1180,8 +1205,8 @@ void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double tim
     const auto timeIter = times.row_iterator(nodeIdx);
     const auto tempIter = temperatures.row_iterator(nodeIdx);
 
-    // Check time bounds - use default_temp if out of range
-    if (time < *timeIter || time > timeIter[count - 1]) {
+    // Empty row (series not kept) or out of the time range -> default_temp
+    if (count == 0 || time < *timeIter || time > timeIter[count - 1]) {
       cached_nodal_temps[nodeIdx] = default_temp;
       continue;
     }
@@ -1240,12 +1265,11 @@ void HDF5UnstructuredTemperatureSource::enable_nodal_smoothing(
 
   // If elemNode / nodeCoords are already populated from a prior load_layer,
   // build adjacency now so the caller doesn't need to reload the layer.
+  // Reload it rather than patching: load_layer kept the series only for the
+  // nodes the unsmoothed path reads, and smoothing reads a halo beyond them.
   if (!dataCounts.empty()) {
-    build_nodal_adjacency_weighted();
-    // If the site cache is already built, we can also compute the BFS
-    // expansions right away. Otherwise they'll be built lazily in
-    // build_site_element_cache on the next prepare_for_timestep.
-    if (cache_valid) build_smooth_node_sets();
+    load_layer(active_layer);
+    nodal_cache_valid = false;
   }
 }
 

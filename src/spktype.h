@@ -132,7 +132,7 @@ typedef int bigint;
 //   fastreal == double. Current users:
 //   - additive/texture/kk device temperature math: Rosenthal/Moser kernels
 //     and the HDF5 gather-and-blend (weights, nodal slice, raw samples).
-//     The k_T field, plan PODs, site-minus-laser differences and absolute
+//     The d_temp field, plan PODs, site-minus-laser differences and absolute
 //     simulation times stay double (~4e4 s on a 3e-6 s step: float cannot
 //     bracket it).
 //   - conduction temperature source (ConductionSolverKokkos): fluxes, the

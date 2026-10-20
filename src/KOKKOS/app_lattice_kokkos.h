@@ -20,7 +20,6 @@
 
 #include "app_lattice.h"
 #include <Kokkos_Core.hpp>
-#include <Kokkos_DualView.hpp>
 #include <Kokkos_Random.hpp>
 #include <vector>
 

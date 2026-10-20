@@ -82,11 +82,6 @@ struct GwCached {
 using namespace SPPARKS_NS;
 using namespace MathConst;
 
-// Unmanaged host View over the raw T array, for the k_T DualView copies.
-// The other arrays use AppLatticeKokkos::upload_range / download_range.
-using HostUnmanagedDouble =
-    Kokkos::View<double*, Kokkos::HostSpace, Kokkos::MemoryUnmanaged>;
-
 // Upload a host array into a fresh device View, casting element-wise. A
 // zero-length source yields a zero-extent View (legal; never indexed).
 template<typename U, typename T>
@@ -207,7 +202,7 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
   // lives in the shared ThermalManager, exactly as the CPU AppAdditiveTexture.
   // This Kokkos app populates a ThermalHost snapshot (refresh_thermal_host)
   // the manager reads/writes; the manager fills the host T[] which we then
-  // sync to the device k_T DualView.
+  // sync to the device d_temp.
   thermal = std::unique_ptr<ThermalManager>(new ThermalManager(spk, &thermal_host_));
 
   // Initialize powder activation tracking
@@ -264,8 +259,8 @@ void AppAdditiveTextureKokkos::allocate_app_views()
   d_active_flag = Kokkos::View<int*>("active_flag", nall);
   d_solid_d = Kokkos::View<double*>("solid_d", nall);
 
-  // Temperature field (CPU updates from HDF5, device reads)
-  k_T = Kokkos::DualView<double*>("temperature", nall);
+  // Temperature field (device fills, or host fills + upload)
+  d_temp = Kokkos::View<double*>("temperature", nall);
 
   // Gradient cache (device-only, computed once per timestep on device)
   d_G = Kokkos::View<double*>("gradient_magnitude", nall);
@@ -370,11 +365,9 @@ void AppAdditiveTextureKokkos::init_app()
   // Set timestep for framework (matches CPU version behavior)
   dt_sweep = dt;
 
-  // Initialize nucleation parameters (per-spin arrays and global params)
+  // Initialize nucleation parameters (per-spin arrays and global params).
+  // The per-site arrays were uploaded by AppPottsQuaternionKokkos::init_app.
   initialize_nucleation_parameters();
-
-  // Sync initial data to device (including new arrays)
-  sync_app_data_to_device();
 
   // Temperature field at the run's start time via the ThermalManager (fills
   // host T[]), as the CPU app's app_update(0.0) does. Not t=0: on a second run
@@ -481,21 +474,12 @@ void AppAdditiveTextureKokkos::refresh_thermal_host()
 
 void AppAdditiveTextureKokkos::sync_temperature_to_device()
 {
-  int nall = nlocal + nghost;
-
-  // Copy host temperature array to DualView host mirror (one memcpy)
-  const auto all = Kokkos::make_pair(0, nall);
-  Kokkos::deep_copy(Kokkos::subview(k_T.view_host(), all),
-                    Kokkos::subview(HostUnmanagedDouble(T, nall), all));
-
-  // Mark host as modified and sync to device
-  k_T.modify_host();
-  k_T.sync_device();
+  upload_range(d_temp, T, 0, nlocal + nghost);
 }
 
 /* ----------------------------------------------------------------------
    Sync temperature from device to host (after a device-side fill). Copies
-   k_T back into the host T array (darray[5]) so host consumers -- the d6
+   d_temp back into the host T array (darray[5]) so host consumers -- the d6
    diagnostic, activate_powder_sites(), optional smoothing diagnostics -- see
    the current field. Cheap O(nall) copy; the expensive per-site evaluation
    stays on the device.
@@ -503,11 +487,7 @@ void AppAdditiveTextureKokkos::sync_temperature_to_device()
 
 void AppAdditiveTextureKokkos::sync_temperature_to_host()
 {
-  int nall = nlocal + nghost;
-  k_T.sync_host();
-  const auto all = Kokkos::make_pair(0, nall);
-  Kokkos::deep_copy(Kokkos::subview(HostUnmanagedDouble(T, nall), all),
-                    Kokkos::subview(k_T.view_host(), all));
+  download_range(T, d_temp, nlocal + nghost);
   host_T_stale = false;
 }
 
@@ -559,7 +539,7 @@ void AppAdditiveTextureKokkos::sync_ghost_to_device()
 double AppAdditiveTextureKokkos::global_max_temperature_from_fill()
 {
   // The owned-range Max is computed INSIDE the fill kernels (fused with the
-  // k_T write -- no separate device pass, no extra stream sync); this only
+  // d_temp write -- no separate device pass, no extra stream sync); this only
   // reduces the per-rank value across ranks.
   double global_max = fill_maxT_local;
   MPI_Allreduce(&fill_maxT_local, &global_max, 1, MPI_DOUBLE, MPI_MAX, world);
@@ -619,7 +599,7 @@ void AppAdditiveTextureKokkos::ff_finish_pending()
 }
 
 /* ----------------------------------------------------------------------
-   Evaluate the analytical Rosenthal temperature on the device, writing k_T
+   Evaluate the analytical Rosenthal temperature on the device, writing d_temp
    for all nlocal+nghost sites. The laser pose + material parameters come from
    the host-advanced RosenthalDevicePlan; the pool-local transform
    (am_raster.h compute_position_relative_to_pool) and the Rosenthal kernel
@@ -678,7 +658,7 @@ void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
     d_ros_nquad = plan.n_quad;
   }
 
-  auto d_T   = k_T.view_device();
+  auto d_T   = d_temp;
   auto d_xyz_local = d_xyz;
   auto qnodes = d_ros_qnodes;
   auto qweights = d_ros_qweights;
@@ -753,7 +733,6 @@ void AppAdditiveTextureKokkos::fill_temperature_rosenthal_device(
   }, Kokkos::Max<double>(local_max));
   fill_maxT_local = (nlocal > 0) ? local_max : 0.0;
   Kokkos::fence();
-  k_T.modify_device();
 }
 
 /* ----------------------------------------------------------------------
@@ -859,7 +838,7 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
     d_seg_version = plan.version;
   }
 
-  auto d_T = k_T.view_device();
+  auto d_T = d_temp;
   auto d_xyz_local = d_xyz;
   auto bounds = d_seg_bounds; auto xlv = d_seg_xl; auto ylv = d_seg_yl;
   auto powers = d_seg_powers;  auto nxv = d_seg_nx;  auto nyv = d_seg_ny;
@@ -987,7 +966,6 @@ void AppAdditiveTextureKokkos::fill_temperature_moser_device(
   }, Kokkos::Max<double>(local_max));
   fill_maxT_local = (nlocal > 0) ? local_max : 0.0;
   Kokkos::fence();
-  k_T.modify_device();
 }
 
 /* ----------------------------------------------------------------------
@@ -1175,7 +1153,7 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
     d_hdf5_nodal_temps = upload_vec<fastreal>("hdf5_nodal_temps", nt.data(), nnodes);
   }
 
-  auto d_T = k_T.view_device();
+  auto d_T = d_temp;
   auto nidx = d_hdf5_node_idx;
   auto wts  = d_hdf5_weights;
   auto vld  = d_hdf5_valid;
@@ -1206,7 +1184,7 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
     // expression (and the identical operation order) the host fast path is
     // validated against; under FP32 the four nodal reads and three weights are
     // half-width, which is the whole point -- this kernel streams them over
-    // nall sites every step. The RESULT is always stored to the FP64 k_T field.
+    // nall sites every step. The RESULT is always stored to the FP64 d_temp field.
     fastreal Ti;
     if (!vld(i)) {
       Ti = (fastreal) def;
@@ -1232,7 +1210,6 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
   }, Kokkos::Max<double>(local_max));
   fill_maxT_local = (nlocal > 0) ? local_max : 0.0;
   Kokkos::fence();
-  k_T.modify_device();
   device_active_list_fresh = true;
 }
 
@@ -1304,7 +1281,7 @@ int AppAdditiveTextureKokkos::melting_kernel(Kokkos::View<int*> d_active_sites, 
 {
   // Get device views - simple Views (no double buffering needed for self-only writes)
   auto d_active_sites_local = d_active_sites;
-  auto d_T_local = k_T.view_device();
+  auto d_T_local = d_temp;
   auto d_spin_local = d_spin;
   auto d_q0_local = d_q0;
   auto d_qx_local = d_qx;
@@ -1415,7 +1392,7 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
 {
   // Get device views - simple Views (no double buffering needed for self-only writes)
   auto d_active_sites_local = d_active_sites;
-  auto d_T_local = k_T.view_device();
+  auto d_T_local = d_temp;
   auto d_spin_local = d_spin;
   auto d_q0_local = d_q0;
   auto d_qx_local = d_qx;
@@ -1554,7 +1531,7 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
   // seed orientation, with the seed's undercooling.
   ensure_device_xyz();
   auto k_xyz_d = d_xyz;
-  auto d_T_local = k_T.view_device();
+  auto d_T_local = d_temp;
   const double mis_diffusion_local = mis_diffusion;
   const double misorient_alpha_local = misorient_alpha;
   const double t_cool_max_local = t_cool_max;
@@ -1738,7 +1715,7 @@ void AppAdditiveTextureKokkos::shuffled_colors(int order[8])
 int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_sites, int n_active)
 {
   auto d_active_sites_local = d_active_sites;
-  auto d_T_local = k_T.view_device();
+  auto d_T_local = d_temp;
   auto d_spin_local = d_spin;
   auto d_q0_local = d_q0;
   auto d_qx_local = d_qx;
@@ -2210,7 +2187,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   // 1. Update temperature + fast-forward.
   //
   // Rosenthal (STANDARD/ANISOTROPIC): evaluate the per-site temperature on the
-  // DEVICE -- the host only advances the laser pose (cheap) and we fill k_T
+  // DEVICE -- the host only advances the laser pose (cheap) and we fill d_temp
   // directly on the GPU, then copy back to host T for the diagnostic and
   // host-side consumers. This replaces the dominant host exp/sqrt per-site
   // loop. Fast-forward uses a global max temperature + ThermalManager's
@@ -2234,16 +2211,15 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     if (ConductionTemperatureSource *csrc = thermal->conduction_source()) {
       // ---- DEVICE conduction path ----
       // Stateful: the filler advances the enthalpy field to t (sub-cycled) and
-      // samples it into k_T for all nall sites. Moser's pass scheduling runs
+      // samples it into d_temp for all nall sites. Moser's pass scheduling runs
       // unchanged around it; the fast-forward predictor is skipped for it.
       device_temp = true;
       if (!cond) cond = std::make_unique<ConductionSolverKokkos>(spk, csrc);
       thermal->set_moser_device_filler([this](double t) -> double {
         ensure_device_xyz();
-        fill_maxT_local = cond->fill(t, k_T.view_device(), d_xyz, d_active_flag,
+        fill_maxT_local = cond->fill(t, d_temp, d_xyz, d_active_flag,
                                      nlocal, nlocal + nghost, dx, ts, tl);
         Kokkos::fence();
-        k_T.modify_device();
         host_T_stale = true;
         return global_max_temperature_from_fill();
       });
@@ -2260,7 +2236,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       // ThermalManager runs the per-pass pause/reset + fast-forward decisions on
       // the host (they rebuild the scan from temperature feedback) and calls back
       // here to do every per-site Green's-function fill on the GPU. The filler
-      // fills k_T at a given time and returns the device-reduced global max; it
+      // fills d_temp at a given time and returns the device-reduced global max; it
       // also re-uploads segment/fluctuation Views when a fired pass bumps the
       // scan version. On return the device field is filled at s.new_time.
       device_temp = true;
@@ -2274,7 +2250,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       // ---- DEVICE HDF5 (unstructured-mesh) path ----
       // The host still does the expensive HDF5 work (reads, layer load, element
       // search/cache, nodal precompute) inside hdf5_device_plan(); the GPU does
-      // the per-site barycentric interpolation into k_T for all nall sites
+      // the per-site barycentric interpolation into d_temp for all nall sites
       // (owned + ghost, positional). The filler fills the device field at a
       // given time and returns the device-reduced global max for fast-forward.
       device_temp = true;
@@ -2295,7 +2271,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       s = thermal->hdf5_advance_device(time, stoptime);
       // Ghost temperatures need no special handling: the element cache covers
       // nall (owned + ghost via the chunk-load pad), so the device fill already
-      // wrote correct ghost k_T positionally. A ghost equals the owning rank's
+      // wrote correct ghost d_temp positionally. A ghost equals the owning rank's
       // value by construction (same global field, same point), so the field is
       // fully device-resident -- no host T round-trip, no T ghost comm.
     } else {
@@ -2327,7 +2303,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   }
 
   // 2. Sync temperature to device (host path only; the device path already
-  //    wrote k_T on the GPU). The host fill covers owned sites only, so ghost
+  //    wrote d_temp on the GPU). The host fill covers owned sites only, so ghost
   //    T is exchanged first: this step's kernels read the neighbour T of this
   //    step, as on the CPU.
   if (!device_temp) {
@@ -2367,7 +2343,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       d_active_sites = Kokkos::View<int*>("active_sites", nlocal);
     auto d_active_sites_local = d_active_sites;
     const int nlocal_act = this->nlocal;
-    auto d_T_act = k_T.view_device();
+    auto d_T_act = d_temp;
     auto d_active_flag_act = d_active_flag;
     auto d_solid_d_act = d_solid_d;
     const double tl_act = this->tl;
@@ -2518,10 +2494,10 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     // T is not exchanged here: on the host-temperature path (temperature_smooth /
     // no device plan) ghost T was exchanged right after the
     // fill, before the kernels; on a device-temp path the fill already wrote
-    // k_T over all nall positionally.
+    // d_temp over all nall positionally.
     //
     // sync_ghost_to_host/device move the OWNED out / ghost in for spin/
-    // active_flag/q0-3 only (T lives in host T[]/k_T, handled above). all_selective
+    // active_flag/q0-3 only (T lives in host T[]/d_temp, handled above). all_selective
     // uses the same swap as all(), so the same ghost sites are exchanged.
     static const int sel_i[2] = {0, 1};            // spin, active_flag
     static const int sel_d[5] = {0, 1, 2, 3, 9};             // q0-3 + spath

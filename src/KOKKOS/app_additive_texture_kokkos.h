@@ -34,7 +34,6 @@ AppStyle(additive/texture/kk,AppAdditiveTextureKokkos)
 #include "conduction_solver_kokkos.h"
 #include "math_const.h"
 #include <Kokkos_Core.hpp>
-#include <Kokkos_DualView.hpp>
 #include <memory>
 
 namespace SPPARKS_NS {
@@ -62,7 +61,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   // Temperature field management
   void refresh_thermal_host();
   void sync_temperature_to_device();
-  void sync_temperature_to_host();   // device k_T -> host T (for diag/host code)
+  void sync_temperature_to_host();   // device d_temp -> host T (for diag/host code)
   // Phase 2 selective ghost sync: move only neighbor-read MC state
   // (spin/active_flag/q0-3) device<->host raw arrays (owned out, ghost in).
   void sync_ghost_to_host();
@@ -82,7 +81,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   void ensure_device_xyz();
 
   // Device-side analytical Rosenthal temperature: evaluate the per-site
-  // temperature directly into k_T on the GPU from the host-advanced laser pose,
+  // temperature directly into d_temp on the GPU from the host-advanced laser pose,
   // replacing the host per-site exp/sqrt loop. Fills all nlocal+nghost sites
   // (Rosenthal is positional, so ghosts compute their own T -- no ghost comm).
   void fill_temperature_rosenthal_device(const RosenthalDevicePlan &plan);
@@ -94,7 +93,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   // Device-side HDF5 unstructured-mesh temperature: the host precomputes the
   // per-site element cache (static per layer) and the per-node temperature
   // slice (per step); the GPU does the per-site barycentric interpolation
-  // straight into k_T, reproducing get_temperature_at_site_fast() bit-for-bit.
+  // straight into d_temp, reproducing get_temperature_at_site_fast() bit-for-bit.
   // Fills ALL nall sites (owned + ghost) positionally -- the cache is built over
   // nall via the chunk-load pad, so ghosts compute their own T with no host
   // round-trip and no T ghost comm (a ghost equals the owner's value by
@@ -114,9 +113,9 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   void activate_powder_sites();
 
  protected:
-  // Temperature fields (CPU-updated from HDF5, device-readable)
-  // Uses DualView because temperature is read-only during device sweeps
-  Kokkos::DualView<double*> k_T;  // Temperature field
+  // Temperature field (darray d6). Written by the device fills, or by the
+  // host fill + sync_temperature_to_device.
+  Kokkos::View<double*> d_temp;
 
   // True when a device temperature fill has made the host T (darray d6) stale.
   // The copy-back is deferred (lazy): host T is only refreshed before a host
@@ -126,7 +125,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
 
   // Peak temperature of the LAST device fill over OWNED sites. The Max
   // reduction is FUSED into the fill kernels themselves (RosenthalFill /
-  // MoserFill / HDF5Fill fold it in while writing k_T), replacing the
+  // MoserFill / HDF5Fill fold it in while writing d_temp), replacing the
   // separate per-step "Tmax" parallel_reduce over nlocal + its stream sync
   // (~9% of box runtime on gfx1151). Consumed by
   // global_max_temperature_from_fill() for the fast-forward and Moser

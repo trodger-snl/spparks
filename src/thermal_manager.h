@@ -130,7 +130,7 @@ class ThermalManager : protected Pointers {
                             const std::function<double(double)> &refill);
 
   // Register the device temperature filler used by moser_advance_device(): given
-  // a simulation time, it fills the device temperature field (k_T) at that time
+  // a simulation time, it fills the device temperature field (d_temp) at that time
   // and returns the global (MPI-reduced) max temperature. Set once by the app.
   void set_moser_device_filler(std::function<double(double)> f) {
     moser_device_filler_ = std::move(f);
@@ -171,7 +171,7 @@ class ThermalManager : protected Pointers {
   ConductionTemperatureSource *conduction_source() const;
 
   // Register the device temperature filler used by hdf5_advance_device(): given a
-  // simulation time it fills k_T[0,nlocal) on the device and returns the global
+  // simulation time it fills d_temp[0,nlocal) on the device and returns the global
   // (MPI-reduced) max temperature. Set once by the app.
   void set_hdf5_device_filler(std::function<double(double)> f) {
     hdf5_device_filler_ = std::move(f);
@@ -192,11 +192,11 @@ class ThermalManager : protected Pointers {
  private:
   ThermalHost *host_;   // lattice-state snapshot owned by the app
 
-  // Device temperature filler for moser_advance_device(): fills k_T at a given
+  // Device temperature filler for moser_advance_device(): fills d_temp at a given
   // time and returns the global max temperature (set by the Kokkos app).
   std::function<double(double)> moser_device_filler_;
 
-  // Device temperature filler for hdf5_advance_device(): fills k_T[0,nlocal) at
+  // Device temperature filler for hdf5_advance_device(): fills d_temp[0,nlocal) at
   // a given time and returns the global max temperature (set by the Kokkos app).
   std::function<double(double)> hdf5_device_filler_;
 

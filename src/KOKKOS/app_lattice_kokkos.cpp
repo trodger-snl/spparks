@@ -213,6 +213,8 @@ void AppLatticeKokkos::setup_color_lists_kokkos()
   kokkos_nsectors = (colored && bothflag) ? nsector : 1;
   color_offsets.assign(kokkos_nsectors, std::vector<int>(kokkos_ncolors + 1, 0));
   d_color_sites_vec.assign(kokkos_nsectors, Kokkos::View<int*>());
+  // iterate() then runs iterate_app_update_only, which never reads the lists.
+  if (allow_app_update && app_update_only) return;
 
   for (int isector = 0; isector < kokkos_nsectors; isector++) {
     // set[c] holds colour c; with sectors, set[nsector + isector*ncolors + c]

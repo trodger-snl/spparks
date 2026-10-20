@@ -109,11 +109,12 @@ void HDF5CSRTemperatureSource::read_time_temperature_data(
   // ------------------------------------------------------------------
   auto dataHyperSlab = build_hyperslab_1d(dataSlices);
 
-  std::vector<double> timesFlat;
-  grp.getDataSet("times").select(dataHyperSlab).read(timesFlat);
+  // Read into raw pointers: HighFive's vector reader knows only std::allocator.
+  SeriesVector<double> timesFlat(totalDataElements);
+  grp.getDataSet("times").select(dataHyperSlab).read(timesFlat.data());
 
-  std::vector<double> tempsFlat;
-  grp.getDataSet("temperatures").select(dataHyperSlab).read(tempsFlat);
+  SeriesVector<double> tempsFlat(totalDataElements);
+  grp.getDataSet("temperatures").select(dataHyperSlab).read(tempsFlat.data());
 
   // ------------------------------------------------------------------
   // 5. Build local row offsets from dataCounts (already loaded by

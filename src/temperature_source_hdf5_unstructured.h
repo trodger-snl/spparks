@@ -16,6 +16,7 @@
 
 #include "temperature_source.h"
 #include <memory>
+#include <new>
 #include <array>
 #include <vector>
 #include <string>
@@ -70,6 +71,38 @@ private:
   std::vector<T> data;
 };
 
+// Allocator for the per-node time series, the bulk of a loaded layer. A device
+// build on an integrated GPU (APU) points the hooks at device-readable host
+// memory so the device reads the series in place instead of keeping a second
+// copy (AppAdditiveTextureKokkos). Set the hooks before the first layer loads
+// and never change them: a buffer is freed by whichever hook is set when it dies.
+struct SeriesMemory {
+  static inline void *(*alloc)(size_t bytes) = nullptr;  // nullptr: operator new
+  static inline void (*release)(void *p) = nullptr;
+};
+
+template <typename T>
+struct SeriesAlloc {
+  using value_type = T;
+  SeriesAlloc() = default;
+  template <typename U> SeriesAlloc(const SeriesAlloc<U> &) {}
+  T *allocate(size_t n) {
+    void *p = SeriesMemory::alloc ? SeriesMemory::alloc(n * sizeof(T))
+                                  : ::operator new(n * sizeof(T));
+    if (!p) throw std::bad_alloc();
+    return static_cast<T *>(p);
+  }
+  void deallocate(T *p, size_t) {
+    if (SeriesMemory::release) SeriesMemory::release(p);
+    else ::operator delete(p);
+  }
+  template <typename U> bool operator==(const SeriesAlloc<U> &) const { return true; }
+  template <typename U> bool operator!=(const SeriesAlloc<U> &) const { return false; }
+};
+
+template <typename T>
+using SeriesVector = std::vector<T, SeriesAlloc<T>>;
+
 // CSR-style compressed 2D array — stores ragged rows without padding.
 // Each row i has (offsets[i+1] - offsets[i]) elements.
 template <typename T>
@@ -78,7 +111,7 @@ public:
   CompressedArray2D() {}
 
   // Construct directly from flat CSR data (zero-copy move).
-  CompressedArray2D(std::vector<T>&& flat_data,
+  CompressedArray2D(SeriesVector<T>&& flat_data,
                     std::vector<size_t>&& row_offsets)
     : data(std::move(flat_data)), offsets(std::move(row_offsets)) {}
 
@@ -90,11 +123,11 @@ public:
 
 
   // Flat CSR accessors (for device upload of the whole array at once).
-  const std::vector<T>& flat() const { return data; }
+  const SeriesVector<T>& flat() const { return data; }
   const std::vector<size_t>& row_offsets() const { return offsets; }
 
 private:
-  std::vector<T> data;
+  SeriesVector<T> data;
   std::vector<size_t> offsets;
 };
 
@@ -183,8 +216,8 @@ public:
   // does not reproduce smooth_nodal_temps()); otherwise it stays on the host.
   void set_device_time_interp(bool b) { device_time_interp_ = b && !nodal_smooth_enabled; }
   bool device_time_interp_active() const { return device_time_interp_; }
-  const std::vector<double>& timeseries_times() const { return times.flat(); }
-  const std::vector<double>& timeseries_temps() const { return temperatures.flat(); }
+  const SeriesVector<double>& timeseries_times() const { return times.flat(); }
+  const SeriesVector<double>& timeseries_temps() const { return temperatures.flat(); }
   const std::vector<size_t>& timeseries_offsets() const { return times.row_offsets(); }
   // The ~active nodes (tet nodes of valid sites) -- the only nodes the device
   // blend reads, so the device only needs to interpolate these (matches the host

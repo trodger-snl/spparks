@@ -197,13 +197,14 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   // node's series at the current time + linear-interpolates (bit-matching the
   // host precompute), replacing the per-step host precompute + nodal-slice
   // upload. Only the active nodes' rows are uploaded; times/temps share one
-  // offset array (n_active+1).
+  // offset array. On an integrated GPU the two series Views instead wrap the
+  // host series in place (SeriesMemory) and the offsets index it directly.
   Kokkos::View<double*>   d_ts_times; // flat per-node sample times -- ALWAYS
                                       // double: absolute sim times ~3.9e4 s on
                                       // a 3e-6 s step; float would quantize to
                                       // ~4e-3 s and break the search bracket
   Kokkos::View<fastreal*> d_ts_temps; // flat per-node sample temperatures
-  Kokkos::View<int64_t*> d_ts_offsets; // [n_active+1] row offsets; row k = node d_active_nodes(k)
+  Kokkos::View<int64_t*[2]> d_ts_offsets; // [n_active] {start,end}; row k = node d_active_nodes(k)
   Kokkos::View<int*>    d_active_nodes;  // the ~33k nodes the blend reads (interp only these)
   int  d_n_active_nodes = 0;
   long d_ts_version = -1;             // cache generation the time-series Views hold

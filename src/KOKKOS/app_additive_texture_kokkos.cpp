@@ -34,6 +34,7 @@
 #include "temperature_source_conduction.h"
 #include "temperature_source_hdf5_unstructured.h"
 #include "grain_walk.h"
+#include <type_traits>
 
 // Grain-walk state provider for the device kernels: cached OU recurrence
 // (see the cache views in the header); direct recurrence when rho == 0 or
@@ -123,6 +124,26 @@ static char** construct_parent_args(char **arg) {
    Constructor
 ------------------------------------------------------------------------- */
 
+#ifdef KOKKOS_ENABLE_HIP
+// SeriesMemory hooks for an integrated GPU: the HDF5 time series lives in pinned
+// host memory the GPU reads in place. Non-coherent = coarse-grained, so the GPU
+// may cache it; the host writes it once per layer, before any kernel reads it.
+static void *series_alloc_pinned(size_t bytes)
+{
+  void *p = nullptr;
+  if (hipHostMalloc(&p, bytes, hipHostMallocNonCoherent) != hipSuccess) return nullptr;
+  return p;
+}
+
+static void series_release_pinned(void *p)
+{
+  hipDeviceSynchronize();   // a kernel may still be reading the previous layer
+  hipHostFree(p);
+}
+#endif
+
+/* ---------------------------------------------------------------------- */
+
 AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char **arg) :
   AppPottsQuaternionKokkos(spk, 3, construct_parent_args(arg))
 {
@@ -141,6 +162,23 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
   ndouble = 10;  // q0, qx, qy, qz, mobility_out, T, solid_d, G, V, spath
   ninteger = 2; // spin, active_flag
   recreate_arrays();  // Reallocate iarray/darray pointers for ndouble=10
+
+#ifdef KOKKOS_ENABLE_HIP
+  // On an integrated GPU (APU) the HDF5 time series is allocated GPU-readable
+  // and read in place (fill_temperature_hdf5_device), so a layer is held once
+  // instead of as a host series plus a device copy. FP64 only: the FP32 build
+  // narrows the temperatures into a device copy. Must precede the first layer
+  // load, i.e. setup_temperature_source.
+  if (std::is_same<fastreal, double>::value && !SeriesMemory::alloc) {
+    int dev = 0, integrated = 0;
+    if (hipGetDevice(&dev) == hipSuccess &&
+        hipDeviceGetAttribute(&integrated, hipDeviceAttributeIntegrated, dev) == hipSuccess &&
+        integrated) {
+      SeriesMemory::alloc = series_alloc_pinned;
+      SeriesMemory::release = series_release_pinned;
+    }
+  }
+#endif
 
   allow_app_update = 1;
   app_update_only = 1;  // Skip solid-state growth for now
@@ -1027,21 +1065,44 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
     // cost a full extra copy of the layer's series, plus a same-size staging
     // mirror; on an APU (gfx1151, MI300A) both come out of host memory.
     if (d_ts_version != plan.version) {
-      const std::vector<double> &ts_t = hdf5->timeseries_times();
-      const std::vector<double> &ts_T = hdf5->timeseries_temps();
+      const auto &ts_t = hdf5->timeseries_times();
+      const auto &ts_T = hdf5->timeseries_temps();
       const std::vector<size_t> &ts_o = hdf5->timeseries_offsets();
       const std::vector<unsigned> &an = hdf5->timeseries_active_nodes();
       // Free the previous layer's copy before allocating this one.
       d_ts_times = {}; d_ts_temps = {}; d_ts_offsets = {}; d_active_nodes = {};
       if (!ts_t.empty() && !an.empty()) {
         const size_t nact = an.size();
-        // 64-bit offsets: a large layer can exceed 2^31 samples on one rank.
-        Kokkos::View<int64_t*> o("ts_offsets", nact + 1);
+        // Row k = [start, end) of node an[k]. 64-bit: a large layer can exceed
+        // 2^31 samples on one rank.
+        Kokkos::View<int64_t*[2]> o("ts_offsets", nact);
         auto ho = Kokkos::create_mirror_view(o);
-        ho(0) = 0;
-        for (size_t k = 0; k < nact; k++)
-          ho(k + 1) = ho(k) + (int64_t) (ts_o[an[k] + 1] - ts_o[an[k]]);
-        const size_t nsamp = (size_t) ho(nact);
+        bool in_place = false;
+#ifdef KOKKOS_ENABLE_HIP
+        if constexpr (std::is_same<fastreal, double>::value) {
+          if (SeriesMemory::alloc == series_alloc_pinned) {
+            // In place: rows index the host series directly, no copy.
+            for (size_t k = 0; k < nact; k++) {
+              ho(k, 0) = (int64_t) ts_o[an[k]];
+              ho(k, 1) = (int64_t) ts_o[an[k] + 1];
+            }
+            Kokkos::deep_copy(o, ho);
+            d_ts_offsets = o;
+            d_ts_times = Kokkos::View<double*>(const_cast<double*>(ts_t.data()), ts_t.size());
+            d_ts_temps = Kokkos::View<fastreal*>(const_cast<double*>(ts_T.data()), ts_T.size());
+            in_place = true;
+          }
+        }
+#endif
+        if (!in_place) {
+        // Compacted copy of the active rows.
+        int64_t pos = 0;
+        for (size_t k = 0; k < nact; k++) {
+          ho(k, 0) = pos;
+          pos += (int64_t) (ts_o[an[k] + 1] - ts_o[an[k]]);
+          ho(k, 1) = pos;
+        }
+        const size_t nsamp = (size_t) pos;
         // Times ALWAYS stay FP64 (absolute sim times ~3.9e4 s on a 3e-6 s step)
         // -- see fastreal in spktype.h. Only the temperatures are narrowable.
         Kokkos::View<double*> tv("ts_times", nsamp);
@@ -1049,8 +1110,8 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
         auto ht = Kokkos::create_mirror_view(tv);
         auto hT = Kokkos::create_mirror_view(Tv);
         for (size_t k = 0; k < nact; k++) {
-          const size_t src = ts_o[an[k]], dst = (size_t) ho(k);
-          const size_t n = (size_t) (ho(k + 1) - ho(k));
+          const size_t src = ts_o[an[k]], dst = (size_t) ho(k, 0);
+          const size_t n = (size_t) (ho(k, 1) - ho(k, 0));
           for (size_t j = 0; j < n; j++) {
             ht(dst + j) = ts_t[src + j];
             hT(dst + j) = (fastreal) ts_T[src + j];
@@ -1060,6 +1121,7 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
         Kokkos::deep_copy(tv, ht);
         Kokkos::deep_copy(Tv, hT);
         d_ts_offsets = o; d_ts_times = tv; d_ts_temps = Tv;
+        }
 
         d_n_active_nodes = (int) nact;
         d_active_nodes = upload_vec<int>("active_nodes", an);
@@ -1088,8 +1150,8 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
     const double defn = plan.default_temp; const double simtn = plan.sim_time;
     Kokkos::parallel_for("ComputeNodalTemps", d_n_active_nodes, KOKKOS_LAMBDA(const int k) {
       const int nd = d_act_nodes(k);
-      const int64_t start = tso(k);
-      const int count = (int) (tso(k + 1) - start);
+      const int64_t start = tso(k, 0);
+      const int count = (int) (tso(k, 1) - start);
       const double tfirst = tst(start), tlast = tst(start + count - 1);
       if (simtn < tfirst || simtn > tlast) { nt_out(nd) = (fastreal) defn; return; }
       int lo = 0, hi = count;                  // first idx with tst >= simtn

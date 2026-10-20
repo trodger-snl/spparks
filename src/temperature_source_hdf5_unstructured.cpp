@@ -565,8 +565,8 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
   size_t totalElements = offsets[nrows];
 
   // Pre-allocate flat output arrays to exact CSR size
-  std::vector<double> timesFlat(totalElements);
-  std::vector<double> tempsFlat(totalElements);
+  SeriesVector<double> timesFlat(totalElements);
+  SeriesVector<double> tempsFlat(totalElements);
 
   // Reusable chunk buffer — grows to largest chunk, then stays put.
   // Read through select(offset, count), whose memory space has the 2D shape

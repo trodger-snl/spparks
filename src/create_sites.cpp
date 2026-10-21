@@ -505,11 +505,6 @@ void CreateSites::structured_lattice()
 
 void CreateSites::structured_connectivity()
 {
-  int i,j,m,max;
-  int ineigh,jneigh,kneigh,mneigh;
-  tagint gid;
-  double xneigh,yneigh,zneigh;
-
   int dimension = domain->dimension;
   int nonperiodic = domain->nonperiodic;
   int xperiodic = domain->xperiodic;
@@ -559,14 +554,22 @@ void CreateSites::structured_connectivity()
   tagint *id = app->id;
   int *numneigh = applattice->numneigh;
 
-  for (i = 0; i < nlocal; i++) {
+  // each site writes only its own row: threaded, except for style REGION,
+  // whose Region::match() is not known to be thread-safe
+
+  int badgid = 0;
+  #pragma omp parallel for schedule(static) if(style != REGION) reduction(|:badgid)
+  for (int i = 0; i < nlocal; i++) {
+    int m,max,ineigh,jneigh,kneigh,mneigh;
+    tagint gid;
+    double xneigh,yneigh,zneigh;
     numneigh[i] = 0;
     if (latstyle == FCC_OCTA_TETRA) {
       if ((id[i]-1) % 16 < 8) max = maxneigh;
       else max = 14;
     } else max = maxneigh;
     
-    for (j = 0; j < max; j++) {
+    for (int j = 0; j < max; j++) {
 
       // ijkm neigh = indices of neighbor site
       // calculated from siteijk and cmap offsets
@@ -640,13 +643,17 @@ void CreateSites::structured_connectivity()
         mneigh + 1;
 
       if (style == BOX && nonperiodic == 0 && (gid <= 0 || gid > nglobal))
-        error->all(FLERR,"Bad neighbor site ID");
+        badgid = 1;
 
       // add gid to neigh list of site I
 
       idneigh[i][numneigh[i]++] = gid;
     }
   }
+
+  int badall;
+  MPI_Allreduce(&badgid,&badall,1,MPI_INT,MPI_MAX,world);
+  if (badall) error->all(FLERR,"Bad neighbor site ID");
 
   // delete siteijk and connectivity offsets
 
@@ -1090,6 +1097,7 @@ void CreateSites::ghosts_from_connectivity(AppLattice *apl, int delpropensity)
     id = app->id;
 
     hash.clear();
+    hash.reserve(nlocal+nghost);
     for (i = 0; i < nlocal+nghost; i++)
       hash.insert(std::pair<tagint,int> (id[i],i));
 
@@ -1105,7 +1113,16 @@ void CreateSites::ghosts_from_connectivity(AppLattice *apl, int delpropensity)
 
     numneigh = apl->numneigh;
 
-    for (i = 0; i < nlocal+nghost; i++) {
+    // threaded read-only check first: the ordered scan below only matters if
+    // some neighbor is missing, never at np=1 with non-periodic boundaries
+
+    int missing = 0;
+    #pragma omp parallel for schedule(static) reduction(|:missing)
+    for (int ii = 0; ii < nlocal+nghost; ii++)
+      for (int jj = 0; jj < numneigh[ii]; jj++)
+        if (hash.find(idneigh[ii][jj]) == hash.end()) missing = 1;
+
+    for (i = 0; missing && i < nlocal+nghost; i++) {
       for (j = 0; j < numneigh[i]; j++) {
 	idglobal = idneigh[i][j];
 	if (hash.find(idglobal) == hash.end()) {
@@ -1217,20 +1234,27 @@ void CreateSites::ghosts_from_connectivity(AppLattice *apl, int delpropensity)
   // if i is owned or in delpropensity-1 layers, then error if neigh not found
   // if i is ghost in last delpropensity layer, then delete neigh if not found
 
-  for (i = 0; i < nlocal+nghost; i++) {
-    j = 0;
-    while (j < numneigh[i]) {
-      idglobal = idneigh[i][j];
-      loc = hash.find(idglobal);
-      if (loc != hash.end()) {
-	neighbor[i][j] = loc->second;
-	j++;
-      } else if (i >= nlocal+npreviousghost) {
-	numneigh[i]--;
-	for (k = j; k < numneigh[i]; k++) idneigh[i][k] = idneigh[i][k+1];
-      } else error->one(FLERR,"Ghost connection was not found");
+  // each site rewrites only its own row, so threaded
+
+  int notfound = 0;
+  #pragma omp parallel for schedule(static) reduction(|:notfound)
+  for (int ii = 0; ii < nlocal+nghost; ii++) {
+    int jj = 0;
+    while (jj < numneigh[ii]) {
+      MyIterator it = hash.find(idneigh[ii][jj]);
+      if (it != hash.end()) {
+	neighbor[ii][jj] = it->second;
+	jj++;
+      } else if (ii >= nlocal+npreviousghost) {
+	numneigh[ii]--;
+	for (int kk = jj; kk < numneigh[ii]; kk++) idneigh[ii][kk] = idneigh[ii][kk+1];
+      } else {
+        notfound = 1;
+        break;
+      }
     }
   }
+  if (notfound) error->one(FLERR,"Ghost connection was not found");
 
   // no longer need idneigh since AppLattice::neighbor now exists
 

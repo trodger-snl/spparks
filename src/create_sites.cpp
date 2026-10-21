@@ -370,7 +370,7 @@ void CreateSites::structured_lattice()
 	  nlocal = app->nlocal;
 
 	  if (nlocal > maxlocal) {
-	    maxlocal += DELTALOCAL;
+	    maxlocal += MAX(DELTALOCAL,maxlocal/2);   // geometric: each grow re-points every row
 	    memory->grow(siteijk,maxlocal,4,"create:siteijk");
 	  }
 
@@ -1209,7 +1209,7 @@ void CreateSites::ghosts_from_connectivity(AppLattice *apl, int delpropensity)
   // can now set AppLattice::maxneigh and allocate AppLattice::neighbor
 
   apl->maxneigh = maxneigh;
-  apl->grow(apl->nmax);
+  apl->grow(MAX(nlocal+nghost,1));   // exact: drops grow(0)'s slack before neighbor exists
   numneigh = apl->numneigh;
   neighbor = apl->neighbor;
 

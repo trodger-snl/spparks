@@ -1277,10 +1277,14 @@ void AppLattice::connected_ghosts(int i, int* cluster_ids,
 
 void AppLattice::grow(int n)
 {
-  if (n == 0) nmax += DELTA;
-  else nmax = n;
-  if (nmax < 0 || nmax > MAXSMALLINT)
+  // n = 0 (add_site/add_ghost appends) grows geometrically: fixed DELTA steps
+  // made create_sites quadratic, as each step re-points every xyz row (~40 s
+  // at 99M sites on one rank). ghosts_from_connectivity trims the slack.
+  bigint nnew = n;
+  if (n == 0) nnew = MIN(nmax + MAX((bigint) DELTA,(bigint) nmax/2),(bigint) MAXSMALLINT);
+  if (nnew < 0 || nnew > MAXSMALLINT || (n == 0 && nnew == nmax))
     error->one(FLERR,"Per-processor system is too big");
+  nmax = nnew;
 
   memory->grow(id,nmax,"app:id");
   memory->grow(xyz,nmax,3,"app:xyz");

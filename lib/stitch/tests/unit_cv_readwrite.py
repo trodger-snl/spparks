@@ -19,6 +19,7 @@
 # For more information, contact Jay Lofstead (gflofst@sandeia.gov) or
 # John Mitchell (jamitch@sandia.gov) for more information.
 
+import os
 import unittest
 import numpy
 from math import fabs,pi,cos,sin,log
@@ -775,6 +776,42 @@ class unit_big_element(unittest.TestCase):
         # close the file
         libstitch.close (self._file);
         pass
+
+class unit_out_of_order_write_read(unittest.TestCase):
+    """Reads must overlay blocks by simulated time, not by the order times were first written."""
+
+    def setUp(self):
+        self._fname = 'unit_out_of_order_write_read.st'
+        if os.path.exists(self._fname):
+            os.remove(self._fname)
+        (rc, self._file) = libstitch.open(self._fname)
+        (rc, self._fid) = libstitch.create_field(self._file, 'spin', 1, 1, -1)
+        libstitch.set_parameters(self._file, 1.0e-9, 1.0e-15)
+        self._b = numpy.fromiter([0, 2, 0, 2, 0, 2], dtype=numpy.int32).reshape(2, 3, order='F')
+
+    def tearDown(self):
+        libstitch.close(self._file)
+
+    def _write(self, t, v):
+        s = v * numpy.ones(shape=get_block_width(self._b), dtype=numpy.int32, order='F')
+        libstitch.write_block(self._file, self._fid, t, self._b, s)
+
+    def _read(self, t):
+        (rc, s, new_time) = libstitch.read_block(self._file, self._fid, t, self._b)
+        return int(s.flat[0])
+
+    def test_earlier_time_written_last(self):
+        self._write(5.0, 5)
+        self._write(3.0, 3)     # an earlier time, inserted after t=5
+        self.assertEqual(self._read(10.0), 5)
+        self.assertEqual(self._read(4.0), 3)
+
+    def test_rewrite_at_existing_time(self):
+        self._write(5.0, 5)
+        self._write(3.0, 3)
+        self._write(5.0, 7)     # re-run of the t=5 box: newest write at that time wins
+        self.assertEqual(self._read(10.0), 7)
+
 
 if __name__ == "__main__":
     unittest.main()

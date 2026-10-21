@@ -1750,6 +1750,7 @@ static int stitch_read_block (const StitchFile * file, int64_t field_id, double 
     assert (is_new_time_flag);
     int rc = 0;
     sqlite3_stmt * stmt_index = NULL;
+    sqlite3_stmt * blob_stmt = NULL;   // fetches one block's state by rowid
     const char * tail_index = NULL;
 //    char * ErrMsg = NULL;
     int32_t x1 = bb [0];
@@ -1930,8 +1931,11 @@ static int stitch_read_block (const StitchFile * file, int64_t field_id, double 
 #define SQLITE_MAX_SQL_LENGTH_CAT 998000
         char query [SQLITE_MAX_SQL_LENGTH] = "";
         const char * q_txt =
-                "select blocks.timestamp, blocks.field_id, blocks.x_min, blocks.y_min, blocks.z_min, blocks.x_max, blocks.y_max, blocks.z_max, blocks.state "
-                "from blocks, times, globals "
+                "select blocks.timestamp, blocks.field_id, blocks.x_min, blocks.y_min, blocks.z_min, blocks.x_max, blocks.y_max, blocks.z_max, blocks.rowid "
+                // times drives the join (CROSS JOIN fixes the order) so rows stream
+                // newest-first off the times_time index; joining blocks first
+                // sorted every matching blob in a temp b-tree (~35% slower read)
+                "from times cross join blocks, globals "
                 "where "
                 // Block bounds are half-open [min,max), so sharing a face is
                 // NOT an overlap: '<=/>=' matched every face, edge and corner
@@ -1945,11 +1949,12 @@ static int stitch_read_block (const StitchFile * file, int64_t field_id, double 
                 "and times.time < globals.absolute_tolerance + ? ";
         strncpy (query, q_txt, SQLITE_MAX_SQL_LENGTH_CAT);
         // The time filter is a join now instead of a C-side linear scan over a
-        // materialized timestamp list.  Descending order combined with the
-        // coverage mask yields the same result as the old ascending overlay;
-        // rowid breaks ties so blocks sharing a timestamp resolve the way the
-        // ascending pass resolved them (last row applied == first row seen).
-        strncat (query, "order by blocks.timestamp desc, blocks.rowid desc ", SQLITE_MAX_SQL_LENGTH_CAT);
+        // materialized timestamp list.  Blocks are visited newest-first by
+        // simulated time (times.time), not by timestamp: a timestamp is the id
+        // a time got when first written, so a box written out of time order
+        // (an earlier time inserted after a later one) would otherwise win.
+        // rowid breaks ties so the last block written at a time wins.
+        strncat (query, "order by times.time desc, blocks.rowid desc ", SQLITE_MAX_SQL_LENGTH_CAT);
 
         rc = sqlite3_prepare_v2 (file->db, query, -1, &stmt_index, &tail_index);
         if (rc != SQLITE_OK && rc != SQLITE_BUSY && rc != SQLITE_LOCKED)
@@ -1972,6 +1977,19 @@ static int stitch_read_block (const StitchFile * file, int64_t field_id, double 
     rc = sqlite3_bind_int (stmt_index, 6, z1); assert (rc == SQLITE_OK);
     rc = sqlite3_bind_int64 (stmt_index, 7, field_id); assert (rc == SQLITE_OK);
     rc = sqlite3_bind_double (stmt_index, 8, *time); assert (rc == SQLITE_OK);
+    // The ordered query returns rowids, not blobs: sorting by time (below)
+    // would otherwise copy every matching blob through a temp b-tree.  Blobs
+    // are fetched one at a time, only for blocks that still contribute.
+    do
+    {
+        rc = sqlite3_prepare_v2 (file->db, "select state from blocks where rowid = ?", -1, &blob_stmt, NULL);
+        if (rc != SQLITE_OK && rc != SQLITE_BUSY && rc != SQLITE_LOCKED)
+        {
+            fprintf (stderr, "%d Line: %d SQL error (%d): %s\n", file->rank, __LINE__, rc, sqlite3_errmsg (file->db));
+            sqlite3_close (file->db);
+            goto cleanup;
+        }
+    } while (rc == SQLITE_BUSY || rc == SQLITE_LOCKED);
 //printf ("time: %g bounding box x1: %d y1: %d z1: %d x2: %d y2: %d z2: %d\n", *time, x1, y1, z1, x2, y2, z2);
 //if (file->rank == 0) printf ("1: %d 2: %d 3: %d 4: %d 5: %d 6: %d 7: %lld 8: %f\n", x2, x1, y2, y1, z2, z1, field_id, *time);
 #ifdef STITCH_TIMING
@@ -2070,7 +2088,18 @@ static int stitch_read_block (const StitchFile * file, int64_t field_id, double 
 #ifdef STITCH_TIMING
         gettimeofday (&start1, NULL);
 #endif
-        block_size = sqlite3_column_bytes (stmt_index, 8);
+        rc = sqlite3_reset (blob_stmt);
+        rc = sqlite3_bind_int64 (blob_stmt, 1, sqlite3_column_int64 (stmt_index, 8)); assert (rc == SQLITE_OK);
+        do
+        {
+            rc = sqlite3_step (blob_stmt);
+        } while (rc == SQLITE_BUSY || rc == SQLITE_LOCKED);
+        if (rc != SQLITE_ROW)
+        {
+            fprintf (stderr, "%d Line: %d SQL error (%d): %s\n", file->rank, __LINE__, rc, sqlite3_errmsg (file->db));
+            goto cleanup;
+        }
+        block_size = sqlite3_column_bytes (blob_stmt, 0);
         //printf ("block_size: %u\n", block_size);
         new_block = realloc (new_block, block_size); assert (new_block);
 #ifdef STITCH_TIMING
@@ -2081,7 +2110,7 @@ static int stitch_read_block (const StitchFile * file, int64_t field_id, double 
         {
             goto cleanup;
         }
-        memcpy (new_block, sqlite3_column_blob (stmt_index, 8), block_size);
+        memcpy (new_block, sqlite3_column_blob (blob_stmt, 0), block_size);
         new_block_i32 = (int32_t *) new_block;
         new_block_i64 = (int64_t *) new_block;
         new_block_f64 = (double *) new_block;
@@ -2205,6 +2234,7 @@ printf ("in array min: %d max: %d\n", min_val, max_val);
     rc = sqlite3_finalize (stmt_index);
 
 cleanup:
+    sqlite3_finalize (blob_stmt);
     free (new_block);
     free (covered);
 #ifdef STITCH_TIMING

@@ -1653,6 +1653,7 @@ void HDF5UnstructuredTemperatureSource::compute_site_thermal_intervals(double th
   auto t_start = std::chrono::high_resolution_clock::now();
 
   std::vector<ThermalInterval> raw;
+  size_t nraw = 0;
 
   const int nlocal = app->nlocal;
 
@@ -1740,7 +1741,46 @@ void HDF5UnstructuredTemperatureSource::compute_site_thermal_intervals(double th
     bool in_hot = (T_prev > threshold);
     double hot_start = in_hot ? t_prev : 0.0;
 
+    // Cold skip (exact). With non-negative weights T_site is a convex
+    // combination of the four node temperatures, so while every node stays at
+    // or below thr_cold (a margin far above rounding) the site cannot reach
+    // the threshold and no crossing can occur. Jump to L, the last critical
+    // time before the first node warms, and rebuild the state the full walk
+    // has there: T at L from the lower-bound cursors, then cursors past L.
+    // The crossings found afterwards are therefore bit-identical.
+    const bool convex = ww0 >= 0.0 && ww1 >= 0.0 && ww2 >= 0.0 && ww3 >= 0.0;
+    const double thr_cold = threshold - 1e-6 * (std::fabs(threshold) + 1.0);
+    unsigned s0 = 0, s1 = 0, s2 = 0, s3 = 0;   // first sample > thr_cold at/after cursor-1
+    auto cold_until = [thr_cold](unsigned& s, unsigned idx, unsigned count, auto ti, auto Ti) {
+      if (s < idx - 1) s = idx - 1;
+      while (s < count && Ti[s] <= thr_cold) ++s;
+      return s < idx ? -std::numeric_limits<double>::infinity() : ti[s - 1];
+    };
+    auto lower = [](unsigned idx, unsigned count, auto ti, double t) {
+      while (idx < count - 1 && ti[idx] < t) ++idx;
+      return idx;
+    };
+
     while (t_crit < t_end) {
+      if (convex && !in_hot) {
+        const double L = std::min({t_end, cold_until(s0, i0, c0, t0, T0), cold_until(s1, i1, c1, t1, T1),
+                                   cold_until(s2, i2, c2, t2, T2), cold_until(s3, i3, c3, t3, T3)});
+        if (L > t_crit) {
+          i0 = lower(i0, c0, t0, L); i1 = lower(i1, c1, t1, L);
+          i2 = lower(i2, c2, t2, L); i3 = lower(i3, c3, t3, L);
+          T_prev = ww0 * interp(t0, T0, i0, L)
+                 + ww1 * interp(t1, T1, i1, L)
+                 + ww2 * interp(t2, T2, i2, L)
+                 + ww3 * interp(t3, T3, i3, L);
+          if (i0 < c0 && t0[i0] == L) ++i0;
+          if (i1 < c1 && t1[i1] == L) ++i1;
+          if (i2 < c2 && t2[i2] == L) ++i2;
+          if (i3 < c3 && t3[i3] == L) ++i3;
+          t_prev = t_crit = L;
+          continue;
+        }
+      }
+
       // Next critical time = smallest of the four nodes' next sample times.
       double t_next = t_end;
       if (i0 < c0 && t0[i0] < t_next) t_next = t0[i0];
@@ -1782,8 +1822,15 @@ void HDF5UnstructuredTemperatureSource::compute_site_thermal_intervals(double th
       raw_local.emplace_back(hot_start, t_end);
     }
   }
+  // Merge per thread first: the union is associative, so this is the same
+  // result without one serial sort of every raw interval (~66M at 99M sites).
+  const size_t nraw_local = raw_local.size();
+  raw_local = merge_overlapping_intervals(raw_local);
   #pragma omp critical
+  {
+  nraw += nraw_local;
   raw.insert(raw.end(), raw_local.begin(), raw_local.end());
+  }
   }  // omp parallel
 
   current_layer_site_intervals = merge_overlapping_intervals(raw);
@@ -1796,7 +1843,7 @@ void HDF5UnstructuredTemperatureSource::compute_site_thermal_intervals(double th
   // communicator, not just rank 0's subdomain.  Build time is reduced with
   // MAX so the reported elapsed is the slowest rank (the actual bottleneck).
   bigint local_site_count = current_layer_site_intervals.size();
-  bigint local_raw_count  = raw.size();
+  bigint local_raw_count  = nraw;
   bigint local_node_count = (active_layer < layer_thermal_intervals.size())
     ? layer_thermal_intervals[active_layer].size() : 0;
   bigint total_site_count = 0, total_raw_count = 0, total_node_count = 0;

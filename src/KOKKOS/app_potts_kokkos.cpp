@@ -308,7 +308,7 @@ struct AppPottsKokkos::ColorSweepFunctor {
     // Compute initial energy (count unlike neighbors)
     int einitial = 0;
     for (int j = 0; j < numneigh(i); j++) {
-      if (spin(neighbor(i,j)) != oldstate) einitial++;
+      if (spin(neighbor((size_t) i, j)) != oldstate) einitial++;
     }
 
     // Pick random new spin
@@ -322,7 +322,7 @@ struct AppPottsKokkos::ColorSweepFunctor {
     // Compute final energy
     int efinal = 0;
     for (int j = 0; j < numneigh(i); j++) {
-      if (spin(neighbor(i,j)) != iran) efinal++;
+      if (spin(neighbor((size_t) i, j)) != iran) efinal++;
     }
 
     // Metropolis acceptance

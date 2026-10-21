@@ -258,7 +258,7 @@ void AppLatticeKokkos::sync_neighbors_to_device()
         KOKKOS_LAMBDA(const int i) {
           const int ni = nn(r0 + i);
           for (int j = 0; j < mn; j++)
-            if (j < ni) nbr(r0 + i, j) = stage(i, j);
+            if (j < ni) nbr((size_t) (r0 + i), j) = stage(i, j);
         });
     }
     Kokkos::fence();

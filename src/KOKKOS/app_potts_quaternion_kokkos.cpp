@@ -488,7 +488,7 @@ struct AppPottsQuaternionKokkos::ColorSweepFunctor {
     double eng = 0.0;
 
     for (int j = 0; j < numneigh(i); j++) {
-      int nj = neighbor(i, j);
+      int nj = neighbor((size_t) i, j);
       double qj[4] = {q0(nj), qx(nj), qy(nj), qz(nj)};
 
       double di = QuaternionOps::compute_disorientation(
@@ -519,7 +519,7 @@ struct AppPottsQuaternionKokkos::ColorSweepFunctor {
     int nevent = 0;
 
     for (int j = 0; j < numneigh(i); j++) {
-      int nj = neighbor(i, j);
+      int nj = neighbor((size_t) i, j);
       int value = spin(nj);
       if (value == oldstate) continue;
 

@@ -443,7 +443,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
       const int nn = numneigh(i);
       double T_neigh[26];
       for (int j = 0; j < nn && j < 26; j++) {
-        T_neigh[j] = d_T(neighbor(i,j));
+        T_neigh[j] = d_T(neighbor((size_t) i, j));
       }
 
       // Detect melt surface: the neighbor directly above (+z) is missing (a
@@ -452,7 +452,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
       // site's neighbor list is compacted, so slot 13 need not be +z.
       int above = -1;
       for (int j = 0; j < nn && j < 26; j++) {
-        const int nb = neighbor(i, j);
+        const int nb = neighbor((size_t) i, j);
         if (xyz(nb, 0) == xyz(i, 0) && xyz(nb, 1) == xyz(i, 1) &&
             xyz(nb, 2) == xyz(i, 2) + 1.0) { above = nb; break; }
       }
@@ -471,7 +471,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
 
       // Accumulate weighted least squares matrices
       for (int n = 0; n < nn && n < 26; n++) {
-        int nbr = neighbor(i,n);
+        int nbr = neighbor((size_t) i, n);
 
         // CRITICAL FIX: At melt surface, only use neighbors at or below current z
         // This matches CPU version lines 1211-1212

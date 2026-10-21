@@ -1618,7 +1618,7 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
 
         const int before = remaining;
         for (int j = 0; j < nn && remaining > 0; j++) {
-          const int nbr = k_neighbor_d(center, order[j]);
+          const int nbr = k_neighbor_d((size_t) center, order[j]);
           // Owned sites only, as on the CPU: a claimed ghost never reaches its
           // owner and is overwritten by the next exchange.
           if (nbr >= nlocal_local) continue;
@@ -1672,7 +1672,7 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
         int cand[MAX_NEIGHBORS];
         int nc = 0;
         for (int j = 0; j < nn; j++) {
-          const int nbr = k_neighbor_d(center, j);
+          const int nbr = k_neighbor_d((size_t) center, j);
           if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) == spin_c) cand[nc++] = nbr;
         }
         if (nc == 0) break;
@@ -1801,7 +1801,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
         int nn = k_numneigh_d(i);
         bool adjacent_solid = (nn < 26);
         for (int j = 0; j < nn && j < 26 && !adjacent_solid; j++) {
-          const int f = d_active_flag_local(k_neighbor_d(i, j));
+          const int f = d_active_flag_local(k_neighbor_d((size_t) i, j));
           if (f == 1 || f == 3) adjacent_solid = true;
         }
         if (!adjacent_solid) return;
@@ -1824,7 +1824,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
         bool gradient_computed = false;
 
         for (int j = 0; j < nn && j < 26; j++) {
-          int nbr = k_neighbor_d(i, j);
+          int nbr = k_neighbor_d((size_t) i, j);
           int nbr_flag = d_active_flag_local(nbr);   // live: same-colour sites are never neighbours
 
           // Check if neighbor is solid (active_flag == 1 or 3) and within reach
@@ -2060,7 +2060,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
       int unique_spins[27];
       int nevent = 0;
       for (int n = 0; n < nn; n++) {
-        const int v = d_spin_local(k_neighbor_d(i, n));
+        const int v = d_spin_local(k_neighbor_d((size_t) i, n));
         if (v == spin_i) continue;
         bool found = false;
         for (int k = 0; k < nevent; k++)
@@ -2072,7 +2072,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
         // einitial: bond energy of the current spin.
         int einitial = 0;
         for (int n = 0; n < nn; n++) {
-          const int nbr = k_neighbor_d(i, n);
+          const int nbr = k_neighbor_d((size_t) i, n);
           if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != spin_i) einitial++;
         }
 
@@ -2083,14 +2083,14 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
           new_spin = unique_spins[0];
           efinal = 0;
           for (int n = 0; n < nn; n++) {
-            const int nbr = k_neighbor_d(i, n);
+            const int nbr = k_neighbor_d((size_t) i, n);
             if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != new_spin) efinal++;
           }
           for (int c = 1; c < nevent; c++) {
             const int cand = unique_spins[c];
             int e = 0;
             for (int n = 0; n < nn; n++) {
-              const int nbr = k_neighbor_d(i, n);
+              const int nbr = k_neighbor_d((size_t) i, n);
               if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != cand) e++;
             }
             if (e < efinal) { efinal = e; new_spin = cand; }  // strict -> first-encounter
@@ -2101,7 +2101,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
           new_spin = unique_spins[iran];
           efinal = 0;
           for (int n = 0; n < nn; n++) {
-            const int nbr = k_neighbor_d(i, n);
+            const int nbr = k_neighbor_d((size_t) i, n);
             if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != new_spin) efinal++;
           }
         }
@@ -2121,7 +2121,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
           int pick = -1;
           if (copy_local) {
             int nc = 0;
-            for (int n = 0; n < nn; n++) if (d_spin_local(k_neighbor_d(i, n)) == new_spin) nc++;
+            for (int n = 0; n < nn; n++) if (d_spin_local(k_neighbor_d((size_t) i, n)) == new_spin) nc++;
             auto g2 = rand_pool_local.get_state();
             pick = (int)(nc * g2.drand()); if (pick >= nc) pick = nc - 1;
             rand_pool_local.free_state(g2);
@@ -2130,7 +2130,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
           double r0 = 0.0, rx = 0.0, ry = 0.0, rz = 0.0;
           int cq = 0; bool first = false; int seen = 0; int picked_nbr = -1;
           for (int n = 0; n < nn; n++) {
-            const int nbr = k_neighbor_d(i, n);
+            const int nbr = k_neighbor_d((size_t) i, n);
             if (d_spin_local(nbr) != new_spin) continue;
             if (copy_local && seen++ != pick) continue;
             picked_nbr = nbr;

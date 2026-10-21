@@ -43,6 +43,9 @@ public:
   // row-major, which is also the host block's layout. Look for one layout that
   // suits both (e.g. colour-packed rows) if this split spreads.
   Kokkos::View<int*> d_numneigh;
+  // Index these as neighbor((size_t) i, j): Kokkos 5 computes a View's offset
+  // in the caller's index type, so int i wraps once nall*maxneigh > 2^31
+  // (82.6M sites at 26 neighbours) and the GPU page-faults on a host address.
   Kokkos::View<int**> d_neighbor;                          // LayoutLeft on GPUs
   Kokkos::View<int**, Kokkos::LayoutRight> d_neighbor_rm;  // host layout
 

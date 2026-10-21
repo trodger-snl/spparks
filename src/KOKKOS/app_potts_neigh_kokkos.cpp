@@ -105,7 +105,7 @@ struct AppPottsNeighKokkos::ColorSweepFunctor {
     int nevent = 0;
 
     for (int j = 0; j < numneigh(i); j++) {
-      int value = spin(neighbor(i, j));
+      int value = spin(neighbor((size_t) i, j));
       if (value == oldstate) continue;
 
       bool found = false;
@@ -132,13 +132,13 @@ struct AppPottsNeighKokkos::ColorSweepFunctor {
     // Compute initial energy
     int einitial = 0;
     for (int j = 0; j < numneigh(i); j++) {
-      if (spin(neighbor(i, j)) != oldstate) einitial++;
+      if (spin(neighbor((size_t) i, j)) != oldstate) einitial++;
     }
 
     // Compute final energy
     int efinal = 0;
     for (int j = 0; j < numneigh(i); j++) {
-      if (spin(neighbor(i, j)) != newstate) efinal++;
+      if (spin(neighbor((size_t) i, j)) != newstate) efinal++;
     }
 
     // Metropolis acceptance

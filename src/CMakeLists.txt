@@ -642,10 +642,12 @@ endif()
 if(SPPARKS_PACKAGE_STITCH)
     target_link_libraries(spparks_lib PUBLIC stitch)
 endif()
-if(SPPARKS_ENABLE_GZIP)
+if(SPPARKS_ENABLE_GZIP OR SPPARKS_ENABLE_HIGHFIVE)
     find_package(ZLIB)
     if(ZLIB_FOUND)
         target_link_libraries(spparks_lib PUBLIC ZLIB::ZLIB)
+        # HDF5 sources inflate deflate-compressed series chunks on all threads
+        target_compile_definitions(spparks_lib PRIVATE SPPARKS_ZLIB)
     endif()
 endif()
 

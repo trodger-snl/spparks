@@ -18,6 +18,9 @@
 #include "app.h"
 #ifdef SPPARKS_HIGHFIVE
 #include "highfive/highfive.hpp"
+#ifdef SPPARKS_ZLIB
+#include <zlib.h>
+#endif
 #endif
 #include <algorithm>
 #include <functional>
@@ -25,6 +28,7 @@
 #include <limits>
 #include <stdexcept>
 #include <cmath>
+#include <cstring>
 #include <set>
 
 using namespace SPPARKS_NS;
@@ -552,6 +556,82 @@ HighFive::HyperSlab HDF5UnstructuredTemperatureSource::build_hyperslab_1d(
 }
 #endif // SPPARKS_HIGHFIVE
 
+#if defined(SPPARKS_HIGHFIVE) && defined(SPPARKS_ZLIB)
+/* ----------------------------------------------------------------------
+   Read the kept rows of a series dataset by inflating its storage chunks on
+   all threads. HDF5 inflates one chunk at a time under its global lock (~4.5 s
+   for a 99M-site box); here the compressed chunks are fetched serially with
+   H5Dread_chunk and inflated in parallel. rows = {file row, local row}, in
+   ascending file-row order. Handles only the layout the thermal exporter
+   writes (2D, chunked as full rows, deflate as the sole filter, little-endian
+   f64/f32); returns false otherwise, or on any read/inflate error, and the
+   caller falls back to H5Dread, which overwrites every kept row.
+------------------------------------------------------------------------- */
+
+static bool read_series_chunks_parallel(hid_t ds, const std::vector<std::array<size_t, 2>> &rows,
+                                        const std::vector<unsigned> &counts,
+                                        const std::vector<size_t> &offsets, double *out)
+{
+  hsize_t dims[2] = {0, 0}, cdims[2] = {0, 0};
+  hid_t space = H5Dget_space(ds), dcpl = H5Dget_create_plist(ds), type = H5Dget_type(ds);
+  const bool f64 = H5Tequal(type, H5T_IEEE_F64LE) > 0, f32 = H5Tequal(type, H5T_IEEE_F32LE) > 0;
+  unsigned flags = 0;
+  size_t nelmts = 0;
+  bool ok = H5Sget_simple_extent_ndims(space) == 2 && H5Sget_simple_extent_dims(space, dims, nullptr) == 2 &&
+            H5Pget_layout(dcpl) == H5D_CHUNKED && H5Pget_chunk(dcpl, 2, cdims) == 2 &&
+            cdims[1] == dims[1] && H5Pget_nfilters(dcpl) == 1 &&
+            H5Pget_filter2(dcpl, 0, &flags, &nelmts, nullptr, 0, nullptr, nullptr) == H5Z_FILTER_DEFLATE &&
+            (f64 || f32) && H5Tequal(H5T_NATIVE_DOUBLE, H5T_IEEE_F64LE) > 0;
+  H5Tclose(type); H5Pclose(dcpl); H5Sclose(space);
+  if (!ok) return false;
+
+  const size_t R = cdims[0], W = cdims[1], es = f64 ? 8 : 4, chunk_bytes = R * W * es;
+
+  // first row (index into rows) of each storage chunk touched, plus an end marker
+  std::vector<size_t> starts;
+  for (size_t k = 0; k < rows.size(); k++)
+    if (k == 0 || rows[k][0] / R != rows[k - 1][0] / R) starts.push_back(k);
+  starts.push_back(rows.size());
+
+  const size_t nchunk = starts.size() - 1, batch = 64;   // ~64 MB of compressed data in flight
+  std::vector<std::vector<unsigned char>> comp(batch);
+  std::vector<uint32_t> mask(batch);
+  for (size_t b0 = 0; b0 < nchunk; b0 += batch) {
+    const size_t nb = std::min(batch, nchunk - b0);
+    for (size_t b = 0; b < nb; b++) {
+      hsize_t off[2] = {rows[starts[b0 + b]][0] / R * R, 0}, nbytes = 0;
+      if (H5Dget_chunk_storage_size(ds, off, &nbytes) < 0) return false;
+      comp[b].resize(nbytes);
+      if (H5Dread_chunk(ds, H5P_DEFAULT, off, &mask[b], comp[b].data()) < 0) return false;
+    }
+    int bad = 0;
+    #pragma omp parallel reduction(|:bad)
+    {
+      std::vector<unsigned char> raw(chunk_bytes);
+      #pragma omp for schedule(dynamic)
+      for (size_t b = 0; b < nb; b++) {
+        const unsigned char *src = comp[b].data();
+        if (!(mask[b] & 1)) {                         // filter applied: inflate
+          uLongf len = chunk_bytes;
+          if (uncompress(raw.data(), &len, src, comp[b].size()) != Z_OK || len != chunk_bytes) { bad = 1; continue; }
+          src = raw.data();
+        } else if (comp[b].size() != chunk_bytes) { bad = 1; continue; }
+        const size_t row0 = rows[starts[b0 + b]][0] / R * R;
+        for (size_t k = starts[b0 + b]; k < starts[b0 + b + 1]; k++) {
+          const unsigned char *p = src + (rows[k][0] - row0) * W * es;
+          double *dst = out + offsets[rows[k][1]];
+          const unsigned n = counts[rows[k][1]];
+          if (f64) memcpy(dst, p, n * sizeof(double));
+          else for (unsigned j = 0; j < n; j++) { float v; memcpy(&v, p + 4 * j, 4); dst[j] = v; }
+        }
+      }
+    }
+    if (bad) return false;
+  }
+  return true;
+}
+#endif
+
 /* ---------------------------------------------------------------------- */
 
 void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
@@ -599,7 +679,22 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
   auto tempsDset = grp.getDataSet("temperatures");
   size_t dcPos = 0;  // read cursor into dataCounts / offsets
 
-  for (size_t s = 0; s < nodeSlices.size(); s++) {
+  bool parallel_done = false;
+#ifdef SPPARKS_ZLIB
+  {
+    std::vector<std::array<size_t, 2>> rows;   // {file row, local row} of kept nodes
+    size_t dc = 0;
+    for (const auto &sl : nodeSlices)
+      for (size_t r = sl[0]; r < sl[1]; r++, dc++)
+        if (dataCounts[dc] > 0) rows.push_back({r, dc});
+    std::sort(rows.begin(), rows.end());
+    parallel_done =
+      read_series_chunks_parallel(timesDset.getId(), rows, dataCounts, offsets, timesFlat.data()) &&
+      read_series_chunks_parallel(tempsDset.getId(), rows, dataCounts, offsets, tempsFlat.data());
+  }
+#endif
+
+  for (size_t s = 0; !parallel_done && s < nodeSlices.size(); s++) {
     size_t rowStart  = nodeSlices[s][0];
     size_t rowEnd    = nodeSlices[s][1];
     size_t chunkRows = rowEnd - rowStart;

@@ -29,6 +29,7 @@
 #include <stdexcept>
 #include <cmath>
 #include <cstring>
+#include <tuple>
 #include <set>
 
 using namespace SPPARKS_NS;
@@ -1726,169 +1727,180 @@ void HDF5UnstructuredTemperatureSource::compute_site_thermal_intervals(double th
 
   const int nlocal = app->nlocal;
 
-  // Per-site interval extraction is independent across sites and reads only
-  // shared (immutable here) mesh/cache data. merge_overlapping_intervals()
-  // below sorts, so the accumulation order does not affect the result -- each
-  // thread fills a private buffer and we concatenate. (When built without
-  // OpenMP the pragmas are no-ops, raw_local is a single buffer, and this runs
-  // exactly as the previous serial loop did.)
-  #pragma omp parallel
-  {
-  std::vector<ThermalInterval> raw_local;
-  raw_local.reserve(256);
-  #pragma omp for schedule(dynamic, 512) nowait
-  for (int i = 0; i < nlocal; i++) {
-    const ElementCache& cache = site_element_cache[i];
-    if (!cache.valid) continue;
+  // The cached barycentric formula used by get_temperature_at_site_fast() is
+  // T_site = T0 + w1*(T1-T0) + w2*(T2-T0) + w3*(T3-T0) = ww0*T0 + ww1*T1 +
+  // ww2*T2 + ww3*T3 with ww0 = 1 - w1 - w2 - w3, so T_site is piecewise linear
+  // between the union of the four nodes' sample times ("critical times").
+  //
+  // A site's walk over those critical times splits into a weight-independent
+  // part and a per-site part. The node values at each critical time, and (for
+  // non-negative weights) where the walk may jump over a stretch in which every
+  // node stays below thr_cold, depend only on the element's four node series:
+  // a convex site that is hot has a node above thr_cold, so the jump test never
+  // fires for it. So each element is walked once (element_walk), recording its
+  // evaluated critical times with the four interpolated node values, and every
+  // site of the element replays that list with its own weights (replay). The
+  // node values are the same interpolations and the weighted sum the same
+  // expression, so each site's intervals are bit-identical to walking it alone.
+  // Sites with a negative weight (outside the tet within tolerance) are grouped
+  // separately and replay a walk with no jumps.
 
-    const unsigned n0 = cache.nodeIndices[0];
-    const unsigned n1 = cache.nodeIndices[1];
-    const unsigned n2 = cache.nodeIndices[2];
-    const unsigned n3 = cache.nodeIndices[3];
-    const unsigned c0 = dataCounts[n0];
-    const unsigned c1 = dataCounts[n1];
-    const unsigned c2 = dataCounts[n2];
-    const unsigned c3 = dataCounts[n3];
-    if (c0 == 0 || c1 == 0 || c2 == 0 || c3 == 0) continue;
+  const double thr_cold = threshold - 1e-6 * (std::fabs(threshold) + 1.0);
 
-    const auto t0 = times.row_iterator(n0);
-    const auto t1 = times.row_iterator(n1);
-    const auto t2 = times.row_iterator(n2);
-    const auto t3 = times.row_iterator(n3);
-    const auto T0 = temperatures.row_iterator(n0);
-    const auto T1 = temperatures.row_iterator(n1);
-    const auto T2 = temperatures.row_iterator(n2);
-    const auto T3 = temperatures.row_iterator(n3);
+  struct Point { double t; double v[4]; bool jump; };
+  struct Walk { double t_start, t_end, v0[4]; std::vector<Point> pts; };
 
-    const double ww1 = cache.weights[0];
-    const double ww2 = cache.weights[1];
-    const double ww3 = cache.weights[2];
-    const double ww0 = 1.0 - ww1 - ww2 - ww3;
+  auto interp = [](const double *ti, const double *Ti, unsigned idx, double t) -> double {
+    // idx is such that ti[idx-1] <= t <= ti[idx]
+    const double t_lo = ti[idx - 1];
+    const double t_hi = ti[idx];
+    const double frac = (t - t_lo) / (t_hi - t_lo);
+    return Ti[idx - 1] + frac * (Ti[idx] - Ti[idx - 1]);
+  };
 
-    // The cached barycentric formula used by get_temperature_at_site_fast()
-    // is T_site = T0 + w1*(T1-T0) + w2*(T2-T0) + w3*(T3-T0).  Expanded:
-    //   T_site = (1 - w1 - w2 - w3)*T0 + w1*T1 + w2*T2 + w3*T3
-    //          = ww0*T0 + ww1*T1 + ww2*T2 + ww3*T3
-    // so the weights are a partition of unity and T_site is piecewise
-    // linear between the union of the four nodes' sample times.
+  // Walk one element (nodes nd); false if it has no common time range.
+  auto element_walk = [&](const std::array<unsigned, 4> &nd, bool jumps, Walk &w) -> bool {
+    const double *t[4], *T[4];
+    unsigned c[4], i[4] = {1, 1, 1, 1}, s[4] = {0, 0, 0, 0};
+    for (int k = 0; k < 4; k++) {
+      c[k] = dataCounts[nd[k]];
+      if (c[k] == 0) return false;
+      t[k] = &*times.row_iterator(nd[k]);
+      T[k] = &*temperatures.row_iterator(nd[k]);
+    }
 
-    // Per-node cursors: cursor points at the NEXT sample whose time is
-    // strictly greater than the current critical time.  Between calls we
-    // maintain T_j(t_crit) via linear interpolation at the last critical
-    // time.
-    unsigned i0 = 1, i1 = 1, i2 = 1, i3 = 1;
+    // Start at the max of the four nodes' first sample times and stop at the
+    // min of their last, so every node has data throughout.
+    double t_crit = std::max({t[0][0], t[1][0], t[2][0], t[3][0]});
+    const double t_end = std::min({t[0][c[0] - 1], t[1][c[1] - 1], t[2][c[2] - 1], t[3][c[3] - 1]});
+    if (t_end <= t_crit) return false;
 
-    // Start at the max of the four nodes' first sample times so every
-    // node has data at t_crit; stop at the min of the four nodes' last
-    // sample times for the same reason.
-    double t_crit = std::max({t0[0], t1[0], t2[0], t3[0]});
-    const double t_end = std::min({t0[c0 - 1], t1[c1 - 1],
-                                   t2[c2 - 1], t3[c3 - 1]});
-    if (t_end <= t_crit) continue;
+    // Cursor i[k] points at the NEXT sample strictly after the current
+    // critical time.
+    for (int k = 0; k < 4; k++)
+      while (i[k] < c[k] - 1 && t[k][i[k]] <= t_crit) ++i[k];
 
-    auto advance_cursor = [](unsigned& idx, unsigned count, auto ti, double t) {
-      while (idx < count - 1 && ti[idx] <= t) ++idx;
-    };
-    advance_cursor(i0, c0, t0, t_crit);
-    advance_cursor(i1, c1, t1, t_crit);
-    advance_cursor(i2, c2, t2, t_crit);
-    advance_cursor(i3, c3, t3, t_crit);
-
-    auto interp = [](auto ti, auto Ti, unsigned idx, double t) -> double {
-      // idx is such that ti[idx-1] <= t <= ti[idx]
-      const double t_lo = ti[idx - 1];
-      const double t_hi = ti[idx];
-      const double frac = (t - t_lo) / (t_hi - t_lo);
-      return Ti[idx - 1] + frac * (Ti[idx] - Ti[idx - 1]);
-    };
-
-    double T_prev = ww0 * interp(t0, T0, i0, t_crit)
-                  + ww1 * interp(t1, T1, i1, t_crit)
-                  + ww2 * interp(t2, T2, i2, t_crit)
-                  + ww3 * interp(t3, T3, i3, t_crit);
-    double t_prev = t_crit;
-    bool in_hot = (T_prev > threshold);
-    double hot_start = in_hot ? t_prev : 0.0;
-
-    // Cold skip (exact). With non-negative weights T_site is a convex
-    // combination of the four node temperatures, so while every node stays at
-    // or below thr_cold (a margin far above rounding) the site cannot reach
-    // the threshold and no crossing can occur. Jump to L, the last critical
-    // time before the first node warms, and rebuild the state the full walk
-    // has there: T at L from the lower-bound cursors, then cursors past L.
-    // The crossings found afterwards are therefore bit-identical.
-    const bool convex = ww0 >= 0.0 && ww1 >= 0.0 && ww2 >= 0.0 && ww3 >= 0.0;
-    const double thr_cold = threshold - 1e-6 * (std::fabs(threshold) + 1.0);
-    unsigned s0 = 0, s1 = 0, s2 = 0, s3 = 0;   // first sample > thr_cold at/after cursor-1
-    auto cold_until = [thr_cold](unsigned& s, unsigned idx, unsigned count, auto ti, auto Ti) {
-      if (s < idx - 1) s = idx - 1;
-      while (s < count && Ti[s] <= thr_cold) ++s;
-      return s < idx ? -std::numeric_limits<double>::infinity() : ti[s - 1];
-    };
-    auto lower = [](unsigned idx, unsigned count, auto ti, double t) {
-      while (idx < count - 1 && ti[idx] < t) ++idx;
-      return idx;
-    };
+    w.t_start = t_crit;
+    w.t_end = t_end;
+    for (int k = 0; k < 4; k++) w.v0[k] = interp(t[k], T[k], i[k], t_crit);
+    w.pts.clear();
 
     while (t_crit < t_end) {
-      if (convex && !in_hot) {
-        const double L = std::min({t_end, cold_until(s0, i0, c0, t0, T0), cold_until(s1, i1, c1, t1, T1),
-                                   cold_until(s2, i2, c2, t2, T2), cold_until(s3, i3, c3, t3, T3)});
+      if (jumps) {
+        // L = last critical time before the first node rises above thr_cold:
+        // s[k] = first sample above thr_cold at/after the cursor bracket
+        double L = t_end;
+        for (int k = 0; k < 4; k++) {
+          if (s[k] < i[k] - 1) s[k] = i[k] - 1;
+          while (s[k] < c[k] && T[k][s[k]] <= thr_cold) ++s[k];
+          L = std::min(L, s[k] < i[k] ? -std::numeric_limits<double>::infinity() : t[k][s[k] - 1]);
+        }
         if (L > t_crit) {
-          i0 = lower(i0, c0, t0, L); i1 = lower(i1, c1, t1, L);
-          i2 = lower(i2, c2, t2, L); i3 = lower(i3, c3, t3, L);
-          T_prev = ww0 * interp(t0, T0, i0, L)
-                 + ww1 * interp(t1, T1, i1, L)
-                 + ww2 * interp(t2, T2, i2, L)
-                 + ww3 * interp(t3, T3, i3, L);
-          if (i0 < c0 && t0[i0] == L) ++i0;
-          if (i1 < c1 && t1[i1] == L) ++i1;
-          if (i2 < c2 && t2[i2] == L) ++i2;
-          if (i3 < c3 && t3[i3] == L) ++i3;
-          t_prev = t_crit = L;
+          // rebuild the walk's state at L: values from the lower-bound
+          // cursors, then cursors past L
+          Point p{L, {0, 0, 0, 0}, true};
+          for (int k = 0; k < 4; k++) {
+            while (i[k] < c[k] - 1 && t[k][i[k]] < L) ++i[k];
+            p.v[k] = interp(t[k], T[k], i[k], L);
+          }
+          w.pts.push_back(p);
+          for (int k = 0; k < 4; k++)
+            if (i[k] < c[k] && t[k][i[k]] == L) ++i[k];
+          t_crit = L;
           continue;
         }
       }
 
       // Next critical time = smallest of the four nodes' next sample times.
       double t_next = t_end;
-      if (i0 < c0 && t0[i0] < t_next) t_next = t0[i0];
-      if (i1 < c1 && t1[i1] < t_next) t_next = t1[i1];
-      if (i2 < c2 && t2[i2] < t_next) t_next = t2[i2];
-      if (i3 < c3 && t3[i3] < t_next) t_next = t3[i3];
+      for (int k = 0; k < 4; k++)
+        if (i[k] < c[k] && t[k][i[k]] < t_next) t_next = t[k][i[k]];
 
-      const double T_cur = ww0 * interp(t0, T0, i0, t_next)
-                         + ww1 * interp(t1, T1, i1, t_next)
-                         + ww2 * interp(t2, T2, i2, t_next)
-                         + ww3 * interp(t3, T3, i3, t_next);
-
-      const bool cur_hot = (T_cur > threshold);
-      if (!in_hot && cur_hot) {
-        // Threshold crossing in [t_prev, t_next]; solve for exact crossing.
-        const double denom = T_cur - T_prev;
-        const double alpha = (threshold - T_prev) / denom;
-        hot_start = t_prev + alpha * (t_next - t_prev);
-        in_hot = true;
-      } else if (in_hot && !cur_hot) {
-        const double denom = T_cur - T_prev;
-        const double alpha = (threshold - T_prev) / denom;
-        const double hot_end = t_prev + alpha * (t_next - t_prev);
-        raw_local.emplace_back(hot_start, hot_end);
-        in_hot = false;
-      }
+      Point p{t_next, {0, 0, 0, 0}, false};
+      for (int k = 0; k < 4; k++) p.v[k] = interp(t[k], T[k], i[k], t_next);
+      w.pts.push_back(p);
 
       // Advance cursors whose sample time equals t_next.
-      if (i0 < c0 && t0[i0] == t_next) ++i0;
-      if (i1 < c1 && t1[i1] == t_next) ++i1;
-      if (i2 < c2 && t2[i2] == t_next) ++i2;
-      if (i3 < c3 && t3[i3] == t_next) ++i3;
-      t_prev = t_next;
-      T_prev = T_cur;
+      for (int k = 0; k < 4; k++)
+        if (i[k] < c[k] && t[k][i[k]] == t_next) ++i[k];
       t_crit = t_next;
     }
+    return true;
+  };
 
-    if (in_hot) {
-      raw_local.emplace_back(hot_start, t_end);
+  // One site's hot intervals from its element's walk.
+  auto replay = [&](const Walk &w, const ElementCache &cache, std::vector<ThermalInterval> &out) {
+    const double ww1 = cache.weights[0];
+    const double ww2 = cache.weights[1];
+    const double ww3 = cache.weights[2];
+    const double ww0 = 1.0 - ww1 - ww2 - ww3;
+
+    double T_prev = ww0 * w.v0[0] + ww1 * w.v0[1] + ww2 * w.v0[2] + ww3 * w.v0[3];
+    double t_prev = w.t_start;
+    bool in_hot = (T_prev > threshold);
+    double hot_start = in_hot ? t_prev : 0.0;
+
+    for (const Point &p : w.pts) {
+      const double T_cur = ww0 * p.v[0] + ww1 * p.v[1] + ww2 * p.v[2] + ww3 * p.v[3];
+      if (!p.jump) {
+        const bool cur_hot = (T_cur > threshold);
+        if (!in_hot && cur_hot) {
+          // Threshold crossing in [t_prev, p.t]; solve for exact crossing.
+          const double alpha = (threshold - T_prev) / (T_cur - T_prev);
+          hot_start = t_prev + alpha * (p.t - t_prev);
+          in_hot = true;
+        } else if (in_hot && !cur_hot) {
+          const double alpha = (threshold - T_prev) / (T_cur - T_prev);
+          out.emplace_back(hot_start, t_prev + alpha * (p.t - t_prev));
+          in_hot = false;
+        }
+      }
+      t_prev = p.t;
+      T_prev = T_cur;
+    }
+    if (in_hot) out.emplace_back(hot_start, w.t_end);
+  };
+
+  auto convex = [](const ElementCache &c) {
+    const double ww0 = 1.0 - c.weights[0] - c.weights[1] - c.weights[2];
+    return ww0 >= 0.0 && c.weights[0] >= 0.0 && c.weights[1] >= 0.0 && c.weights[2] >= 0.0;
+  };
+
+  // Group valid sites by element: counting sort on the first node, then each
+  // bucket is sorted by the remaining nodes (and convexity) below.
+  const size_t nnodes = dataCounts.size();
+  std::vector<int> bucket(nnodes + 1, 0);
+  for (int i = 0; i < nlocal; i++)
+    if (site_element_cache[i].valid) bucket[site_element_cache[i].nodeIndices[0] + 1]++;
+  for (size_t b = 0; b < nnodes; b++) bucket[b + 1] += bucket[b];
+  std::vector<int> order(bucket[nnodes]);
+  {
+    std::vector<int> fill(bucket.begin(), bucket.end() - 1);
+    for (int i = 0; i < nlocal; i++)
+      if (site_element_cache[i].valid) order[fill[site_element_cache[i].nodeIndices[0]]++] = i;
+  }
+
+  #pragma omp parallel
+  {
+  std::vector<ThermalInterval> raw_local;
+  raw_local.reserve(256);
+  Walk w;
+  #pragma omp for schedule(dynamic, 256) nowait
+  for (size_t b = 0; b < nnodes; b++) {
+    int *first = order.data() + bucket[b], *last = order.data() + bucket[b + 1];
+    if (first == last) continue;
+    auto key = [&](int i) {
+      const ElementCache &c = site_element_cache[i];
+      return std::make_tuple(c.nodeIndices[1], c.nodeIndices[2], c.nodeIndices[3], !convex(c));
+    };
+    std::sort(first, last, [&](int a, int b2) { return key(a) < key(b2); });
+    for (int *g = first; g != last;) {
+      int *ge = g + 1;
+      while (ge != last && key(*ge) == key(*g)) ++ge;
+      const ElementCache &c = site_element_cache[*g];
+      if (element_walk(c.nodeIndices, convex(c), w))
+        for (int *q = g; q != ge; ++q) replay(w, site_element_cache[*q], raw_local);
+      g = ge;
     }
   }
   // Merge per thread first: the union is associative, so this is the same

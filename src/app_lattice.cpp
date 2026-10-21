@@ -1471,14 +1471,15 @@ void AppLattice::print_connectivity()
 bigint AppLattice::memory_usage()
 {
   bigint bytes = 0;
+  const bigint n = nmax;                    // nmax*maxneigh overflows int past 82.6M sites
 
-  bytes += nmax * sizeof(tagint);           // id
-  bytes += nmax*3 * sizeof(double);         // xyz
-  bytes += ninteger*nmax * sizeof(int);     // iarray
-  bytes += ndouble*nmax * sizeof(double);   // darray
+  bytes += n * sizeof(tagint);              // id
+  bytes += n*3 * sizeof(double);            // xyz
+  bytes += ninteger*n * sizeof(int);        // iarray
+  bytes += ndouble*n * sizeof(double);      // darray
   
-  bytes += nmax * sizeof(int);              // numneigh
-  bytes += nmax*maxneigh * sizeof(int);     // neighbor
+  bytes += n * sizeof(int);                 // numneigh
+  bytes += n*maxneigh * sizeof(int);        // neighbor
 
   return bytes;
 }

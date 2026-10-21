@@ -1056,7 +1056,10 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
         auto ho = Kokkos::create_mirror_view(o);
         bool in_place = false;
 #ifdef KOKKOS_ENABLE_HIP
-        if constexpr (std::is_same<fastreal, double>::value) {
+#ifndef SPPARKS_FP32
+        // In-place needs the series in fastreal; a View<float> cannot wrap a double
+        // array, and if constexpr would not discard it outside a template.
+        {
           if (SeriesMemory::alloc == series_alloc_pinned) {
             // In place: rows index the host series directly, no copy.
             for (size_t k = 0; k < nact; k++) {
@@ -1070,6 +1073,7 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
             in_place = true;
           }
         }
+#endif
 #endif
         if (!in_place) {
         // Compacted copy of the active rows.

@@ -296,7 +296,8 @@ void AppAdditiveTextureKokkos::init_app()
              ((static_cast<int>(xyz[i][2]) & 1) << 2);
     };
     int flag = 0;
-    for (int i = 0; i < nlocal && !flag; i++)
+    #pragma omp parallel for schedule(static) reduction(|:flag)
+    for (int i = 0; i < nlocal; i++)
       for (int j = 0; j < numneigh[i]; j++)
         if (neighbor[i][j] < nlocal && colour(neighbor[i][j]) == colour(i)) flag = 1;
     int flagall;
@@ -997,23 +998,24 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
   // (Re)upload the STATIC per-site element cache only when the host rebuilds it
   // (layer boundary -> cache generation bumps) or the site count changes.
   if (d_hdf5_cache_version != plan.version || d_hdf5_nsites != n) {
-    std::vector<int> node_idx, valid;
-    std::vector<double> weights;
-    thermal->hdf5_source()->copy_device_cache(node_idx, weights, valid);
-
-    d_hdf5_node_idx = Kokkos::View<int*[4]>("hdf5_node_idx", n);
-    d_hdf5_weights  = Kokkos::View<fastreal*[3]>("hdf5_weights", n);
-    d_hdf5_valid    = Kokkos::View<int*>("hdf5_valid", n);
-    auto h_idx = Kokkos::create_mirror_view(d_hdf5_node_idx);
-    auto h_w   = Kokkos::create_mirror_view(d_hdf5_weights);
-    auto h_v   = Kokkos::create_mirror_view(d_hdf5_valid);
+    const HDF5UnstructuredTemperatureSource *src = thermal->hdf5_source();
+    const auto noinit = Kokkos::WithoutInitializing;
+    d_hdf5_node_idx = Kokkos::View<int*[4]>(Kokkos::view_alloc(noinit, "hdf5_node_idx"), n);
+    d_hdf5_weights  = Kokkos::View<fastreal*[3]>(Kokkos::view_alloc(noinit, "hdf5_weights"), n);
+    d_hdf5_valid    = Kokkos::View<int*>(Kokkos::view_alloc(noinit, "hdf5_valid"), n);
+    auto h_idx = Kokkos::create_mirror_view(noinit, d_hdf5_node_idx);
+    auto h_w   = Kokkos::create_mirror_view(noinit, d_hdf5_weights);
+    auto h_v   = Kokkos::create_mirror_view(noinit, d_hdf5_valid);
+    // Every entry is written: an invalid site (no containing element) gets
+    // zero indices/weights and valid 0, so the kernel yields default_temp.
+    #pragma omp parallel for schedule(static)
     for (int i = 0; i < n; i++) {
-      h_v(i) = valid[i];
-      const size_t i4 = (size_t)i * 4, i3 = (size_t)i * 3;  // avoid int overflow
-      for (int j = 0; j < 4; j++) h_idx(i, j) = node_idx[i4 + j];
+      const auto &c = src->element_cache(i);
+      h_v(i) = c.valid ? 1 : 0;
+      for (int j = 0; j < 4; j++) h_idx(i, j) = c.valid ? (int) c.nodeIndices[j] : 0;
       // Narrowed to fastreal under FP32 (weights are barycentric, in [0,1]);
       // a no-op cast in the default FP64 build.
-      for (int j = 0; j < 3; j++) h_w(i, j) = (fastreal) weights[i3 + j];
+      for (int j = 0; j < 3; j++) h_w(i, j) = c.valid ? (fastreal) c.weights[j] : (fastreal) 0;
     }
     Kokkos::deep_copy(d_hdf5_node_idx, h_idx);
     Kokkos::deep_copy(d_hdf5_weights, h_w);

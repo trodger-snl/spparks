@@ -1140,32 +1140,6 @@ void HDF5UnstructuredTemperatureSource::build_site_element_cache() const
   }
 }
 
-/* ----------------------------------------------------------------------
-   Flatten the static per-site element cache for device upload. node_idx is
-   [4*nlocal] (tet-node indices into the nodal-temp slice, site-major), weights
-   is [3*nlocal] (barycentric weights), valid is [nlocal] (1/0). Invalid sites
-   (no containing element) get zeroed indices/weights and valid 0 so the device
-   kernel yields default_temp for them. Mirrors get_temperature_at_site_fast().
-------------------------------------------------------------------------- */
-
-void HDF5UnstructuredTemperatureSource::copy_device_cache(
-    std::vector<int> &node_idx,
-    std::vector<double> &weights,
-    std::vector<int> &valid) const
-{
-  const size_t n = site_element_cache.size();
-  node_idx.assign(4 * n, 0);
-  weights.assign(3 * n, 0.0);
-  valid.assign(n, 0);
-  for (size_t i = 0; i < n; i++) {
-    const ElementCache &c = site_element_cache[i];
-    if (!c.valid) continue;
-    valid[i] = 1;
-    for (int j = 0; j < 4; j++) node_idx[4 * i + j] = (int) c.nodeIndices[j];
-    for (int j = 0; j < 3; j++) weights[3 * i + j] = c.weights[j];
-  }
-}
-
 /* ---------------------------------------------------------------------- */
 
 void HDF5UnstructuredTemperatureSource::precompute_nodal_temperatures(double time) const

@@ -727,6 +727,7 @@ void ThermalManager::update_temperatures(double simulation_time)
   // -------------------------------------------------------------------
   if (hdf5_source) {
     hdf5_source->prepare_for_timestep(simulation_time);
+    #pragma omp parallel for schedule(static)
     for (int i = 0; i < nlocal; i++) {
       T[i] = hdf5_source->get_temperature_at_site_fast(i);
     }

@@ -224,14 +224,9 @@ public:
   // precompute subset when nodal_smooth is off). Static per layer.
   const std::vector<unsigned>& timeseries_active_nodes() const { return active_node_indices; }
 
-  // Copy the STATIC per-site element cache for device upload (call when
-  // cache_generation() changes). node_idx is flattened lobe-major
-  // [4*nlocal] (the 4 tet-node indices into the nodal-temp slice), weights is
-  // [3*nlocal] (the 3 barycentric weights), valid is [nlocal] (1/0). Invalid
-  // sites get node_idx 0 / weights 0 and valid 0 -> device yields default_temp.
-  void copy_device_cache(std::vector<int> &node_idx,
-                         std::vector<double> &weights,
-                         std::vector<int> &valid) const;
+  // The STATIC per-site element cache, for device upload (re-read when
+  // cache_generation() changes). Index i < num_cache_sites().
+  const ElementCache &element_cache(int i) const { return site_element_cache[i]; }
 
   // The per-step, host-computed per-node temperature slice (time-interpolated,
   // optionally nodal-smoothed). Indexed by the cache's node indices. Valid

@@ -165,6 +165,7 @@ void AppPottsQuaternionKokkos::init_app()
   // that no other stream shifts.
   const uint64_t qseed = (uint64_t) ranmaster->initial_seed();
 
+  #pragma omp parallel for schedule(static)
   for (int i = 0; i < nlocal; i++) {
     double norm = sqrt(q0[i]*q0[i] + qx[i]*qx[i] + qy[i]*qy[i] + qz[i]*qz[i]);
     if (norm < 1.0e-6) {

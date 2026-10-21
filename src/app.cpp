@@ -203,6 +203,7 @@ void *App::extract(char *name)
 tagint App::min_site_ID()
 {
   tagint min = MAXTAGINT;
+  #pragma omp parallel for reduction(min:min)
   for (int i = 0; i < nlocal; i++) min = MIN(min,id[i]);
   tagint all;
   MPI_Allreduce(&min,&all,1,MPI_SPK_TAGINT,MPI_MIN,world);
@@ -217,6 +218,7 @@ tagint App::min_site_ID()
 tagint App::max_site_ID()
 {
   tagint max = -1;
+  #pragma omp parallel for reduction(max:max)
   for (int i = 0; i < nlocal; i++) max = MAX(max,id[i]);
   tagint all;
   MPI_Allreduce(&max,&all,1,MPI_SPK_TAGINT,MPI_MAX,world);

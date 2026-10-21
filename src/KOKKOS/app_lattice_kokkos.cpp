@@ -95,7 +95,11 @@ void AppLatticeKokkos::pin_site_arrays()
     void *p = nullptr;
     if (hipHostMalloc(&p, bytes, hipHostMallocNonCoherent) != hipSuccess)
       error->one(FLERR, "Could not allocate pinned memory for the site arrays");
-    memcpy(p, old, bytes);
+    // threaded copy: one memcpy stream is far below the memory bandwidth
+    const size_t chunk = (size_t) 1 << 24;
+    #pragma omp parallel for schedule(static)
+    for (size_t off = 0; off < bytes; off += chunk)
+      memcpy((char *) p + off, (char *) old + off, std::min(chunk, bytes - off));
     memory->sfree(old);
     pinned.push_back(p);
     return p;
@@ -104,9 +108,11 @@ void AppLatticeKokkos::pin_site_arrays()
   numneigh = (int *) move(numneigh, n * sizeof(int));
   if (neighbor) {
     int *data = (int *) move(neighbor[0], n * maxneigh * sizeof(int));
+    #pragma omp parallel for schedule(static)
     for (size_t i = 0; i < n; i++) neighbor[i] = &data[i * maxneigh];
   }
   double *x = (double *) move(xyz[0], n * 3 * sizeof(double));
+  #pragma omp parallel for schedule(static)
   for (size_t i = 0; i < n; i++) xyz[i] = &x[3 * i];
   for (int k = 0; k < ninteger; k++) iarray[k] = (int *) move(iarray[k], n * sizeof(int));
   for (int k = 0; k < ndouble; k++) darray[k] = (double *) move(darray[k], n * sizeof(double));

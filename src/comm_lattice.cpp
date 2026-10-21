@@ -544,12 +544,15 @@ void CommLattice::create_send_from_recv(int nsite, int maxsite,
     memory->smalloc(maxsite*sizeof(Site),"comm:bufcopy");
 
   // put my entire list of owned site IDs in a hash
+  // maxsite == 0 (no ghosts on any proc, e.g. np=1 non-periodic): the ring
+  // below carries no sites and never looks anything up, so skip building it
 
   std::map<tagint,int>::iterator loc;
   std::map<tagint,int> hash;
 
-  for (i = 0; i < nlocal; i++)
-    hash.insert(std::pair<tagint,int> (id[i],i));
+  if (maxsite)
+    for (i = 0; i < nlocal; i++)
+      hash.insert(std::pair<tagint,int> (id[i],i));
 
   // setup ring of procs
 
@@ -747,12 +750,15 @@ void CommLattice::create_recv_from_send(int nsite, int maxsite,
     memory->smalloc(maxsite*sizeof(Site),"comm:bufcopy");
 
   // put my entire list of owned site IDs in a hash
+  // maxsite == 0 (no ghosts on any proc, e.g. np=1 non-periodic): the ring
+  // below carries no sites and never looks anything up, so skip building it
 
   std::map<tagint,int>::iterator loc;
   std::map<tagint,int> hash;
 
-  for (i = 0; i < nlocal; i++)
-    hash.insert(std::pair<tagint,int> (id[i],i));
+  if (maxsite)
+    for (i = 0; i < nlocal; i++)
+      hash.insert(std::pair<tagint,int> (id[i],i));
 
   // setup ring of procs
 

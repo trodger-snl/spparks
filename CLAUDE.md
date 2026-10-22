@@ -123,6 +123,12 @@ falls back to the host path.
   (`d_active_flag`/`d_xyz`), not host loops. Cached `d_xyz` must be built
   layout-correctly (host `xyz` is row-major `[nall][3]`; a LayoutLeft device View
   misreads it — use `ensure_device_xyz()`).
+- **CUDA portability:** a member function that defines a `KOKKOS_LAMBDA` /
+  `KOKKOS_CLASS_LAMBDA` must be **public**. nvcc rejects device lambdas in
+  private or protected members; HIP and OpenMP accept them, so local builds never
+  catch it (it broke a colleague's CUDA build). Run
+  `python3 tools/check_kokkos_lambda_access.py` before committing Kokkos code;
+  it exits 1 and names any offender.
 
 ## Validating the GPU port
 

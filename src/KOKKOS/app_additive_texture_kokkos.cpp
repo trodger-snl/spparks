@@ -348,7 +348,7 @@ void AppAdditiveTextureKokkos::init_app()
   //
   // to reload the previously built microstructure, so zeroing active_flag here
   // destroyed exactly the state that had just been read: every already-solid
-  // site (i2 == 3) became 0, which is the Void phase. Multi-box builds
+  // site (i2 == 3) became 0, which is inactive/air. Multi-box builds
   // therefore never accumulated -- each box re-solidified its own layer and
   // lost every earlier one (measured: solid fraction flat at ~0.28 across 10
   // boxes where the CPU app climbs to 0.75), and the output carried a ~9.5%
@@ -1207,9 +1207,10 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
       if ((double) Ti > m) m = (double) Ti;
       const int af = d_af(i);
       const double sd = d_sd(i);
-      if (af == 2 || Ti >= tl_f ||
+      // i2 == 5 (void) never enters the list, so it never melts or solidifies
+      if (af != 5 && (af == 2 || Ti >= tl_f ||
           (sd > -nrefine_f - 1 && sd < 0.0) ||
-          (af == 3 && sd == -nrefine_f - 2)) {
+          (af == 3 && sd == -nrefine_f - 2))) {
         const int slot = Kokkos::atomic_fetch_add(&d_acount(), 1);
         d_asites(slot) = i;
       }
@@ -2060,11 +2061,13 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
       // temperature 0.
       const int nn = k_numneigh_d(i);
 
-      // Distinct neighbor spins != self.
+      // Distinct neighbor spins != self. Voids (i2 == 5) carry no grain.
       int unique_spins[27];
       int nevent = 0;
       for (int n = 0; n < nn; n++) {
-        const int v = d_spin_local(k_neighbor_d((size_t) i, n));
+        const int nbr = k_neighbor_d((size_t) i, n);
+        if (d_active_flag_local(nbr) == 5) continue;
+        const int v = d_spin_local(nbr);
         if (v == spin_i) continue;
         bool found = false;
         for (int k = 0; k < nevent; k++)
@@ -2125,7 +2128,10 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
           int pick = -1;
           if (copy_local) {
             int nc = 0;
-            for (int n = 0; n < nn; n++) if (d_spin_local(k_neighbor_d((size_t) i, n)) == new_spin) nc++;
+            for (int n = 0; n < nn; n++) {
+              const int nbr = k_neighbor_d((size_t) i, n);
+              if (d_spin_local(nbr) == new_spin && d_active_flag_local(nbr) != 5) nc++;
+            }
             auto g2 = rand_pool_local.get_state();
             pick = (int)(nc * g2.drand()); if (pick >= nc) pick = nc - 1;
             rand_pool_local.free_state(g2);
@@ -2135,7 +2141,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
           int cq = 0; bool first = false; int seen = 0; int picked_nbr = -1;
           for (int n = 0; n < nn; n++) {
             const int nbr = k_neighbor_d((size_t) i, n);
-            if (d_spin_local(nbr) != new_spin) continue;
+            if (d_spin_local(nbr) != new_spin || d_active_flag_local(nbr) == 5) continue;
             if (copy_local && seen++ != pick) continue;
             picked_nbr = nbr;
             double n0 = d_q0_local(nbr), nx = d_qx_local(nbr),
@@ -2359,11 +2365,13 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       KOKKOS_LAMBDA(int i, int& offset, bool final) {
         const int af = d_active_flag_act(i);
         const double sd = d_solid_d_act(i);
-        const bool active =
+        // i2 == 5 (void) is permanent: keeping it off this list keeps it out
+        // of every melt/nucleate/solidify/smooth kernel.
+        const bool active = af != 5 && (
             (af == 2) ||
             (d_T_act(i) >= tl_act) ||
             (sd > -nrefine_act - 1 && sd < 0.0) ||
-            (af == 3 && sd == -nrefine_act - 2);
+            (af == 3 && sd == -nrefine_act - 2));
         if (active) {
           if (final) d_active_sites_local(offset) = i;
           offset++;

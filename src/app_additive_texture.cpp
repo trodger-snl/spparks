@@ -1301,7 +1301,8 @@ std::vector<double> AppAdditiveTexture::get_average_neighbor_quaternion(int site
     if (smooth_orientation_copy) {   // one random neighbour of the new grain
         int cand[27]; int nc = 0;
         for (int j = 0; j < numneigh[site]; j++)
-            if (spin[neighbor[site][j]] == target_spin) cand[nc++] = neighbor[site][j];
+            if (spin[neighbor[site][j]] == target_spin && active_flag[neighbor[site][j]] != 5)
+                cand[nc++] = neighbor[site][j];
         if (nc == 0) error->all(FLERR,"get_average_neighbor_quaternion: no neighbor with target spin");
         int k = (int)(nc * ranapp->uniform()); if (k >= nc) k = nc - 1;
         double q[4] = {q0[cand[k]], qx[cand[k]], qy[cand[k]], qz[cand[k]]};
@@ -1322,8 +1323,8 @@ std::vector<double> AppAdditiveTexture::get_average_neighbor_quaternion(int site
     for (int j = 0; j < numneigh[site]; j++) {
         int neighbor_site = neighbor[site][j];
         
-        // Check if this neighbor has the target spin
-        if (spin[neighbor_site] == target_spin) {
+        // Check if this neighbor has the target spin (voids carry no grain)
+        if (spin[neighbor_site] == target_spin && active_flag[neighbor_site] != 5) {
             // Get this neighbor's quaternion
             double nq0 = q0[neighbor_site];
             double nqx = qx[neighbor_site];
@@ -1472,6 +1473,7 @@ void AppAdditiveTexture::smooth_site(int i) {
   int nevent = 0;
 
   for (j = 0; j < numneigh[i]; j++) {
+    if (active_flag[neighbor[i][j]] == 5) continue;  // voids carry no grain
     value = spin[neighbor[i][j]];
     if (value == spin[i]) continue;
     for (m = 0; m < nevent; m++)

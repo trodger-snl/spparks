@@ -247,21 +247,24 @@ void DumpHDF5::ensure_dataset(const std::string &label, int type) {
 }
 
 /* ----------------------------------------------------------------------
-   HDF5 inflates one chunk at a time under its global lock, ~36 s to read
-   back a 99M-site box's eight compressed fields.  Here the compressed chunks
-   are fetched serially with H5Dread_chunk, a batch at a time, then inflated,
-   unshuffled and scattered into out on all threads.  Handles the layouts
-   dump hdf5 writes: chunked 3-D little-endian int32/float64 with deflate,
-   optionally after shuffle.  Uncompressed datasets are left to H5Dread,
-   which is fast for them.
+   HDF5 runs the filter pipeline one chunk at a time on one thread: ~36 s to
+   read back a 99M-site box's eight compressed fields, ~45 s to write them.
+   Here the chunks a box touches go through a batch at a time: the file I/O
+   (H5Dread_chunk, H5Dwrite_chunk) is serial, the inflate/deflate and the
+   copy in or out of the box run on all threads.  Writing, a chunk the box
+   only partly covers is read and inflated first so the rest of it survives.
+   Handles the layouts dump hdf5 writes: chunked 3-D little-endian
+   int32/float64 with deflate, optionally after shuffle; returns false for
+   anything else, which is left to H5Dread/H5Dwrite.  Writes need the
+   serial driver: under MPI-IO a direct chunk write allocates file space
+   independently, which parallel HDF5 requires to be collective.
 ------------------------------------------------------------------------- */
 
-bool SPPARKS_NS::hdf5_read_box_parallel(int64_t dataset, const size_t *offset, const size_t *count,
-                            void *out) {
+static bool box_chunks(hid_t ds, const size_t *offset, const size_t *count, void *data,
+                       bool write) {
 #ifndef SPPARKS_ZLIB
   return false;
 #else
-  hid_t ds = dataset;
   hid_t dcpl = H5Dget_create_plist(ds), type = H5Dget_type(ds), space = H5Dget_space(ds);
   hsize_t dims[3] = {0, 0, 0}, cd[3] = {0, 0, 0};
   size_t es = 0;
@@ -274,13 +277,18 @@ bool SPPARKS_NS::hdf5_read_box_parallel(int64_t dataset, const size_t *offset, c
             nf <= 2;
   H5Z_filter_t filt[2] = {-1, -1};
   bool deflate = false;
+  int level = 6;
   for (int i = 0; ok && i < nf; i++) {
-    unsigned flags;
-    size_t nelmts = 0;
-    filt[i] = H5Pget_filter2(dcpl, i, &flags, &nelmts, nullptr, 0, nullptr, nullptr);
-    if (filt[i] == H5Z_FILTER_DEFLATE) deflate = true;
-    else if (filt[i] != H5Z_FILTER_SHUFFLE) ok = false;
+    unsigned flags, cdv[8];
+    size_t nelmts = 8;
+    filt[i] = H5Pget_filter2(dcpl, i, &flags, &nelmts, cdv, 0, nullptr, nullptr);
+    if (filt[i] == H5Z_FILTER_DEFLATE) {
+      deflate = true;
+      if (nelmts > 0) level = cdv[0];
+    } else if (filt[i] != H5Z_FILTER_SHUFFLE) ok = false;
   }
+  // writing applies the filters forward; only the order dump hdf5 creates
+  if (write && filt[nf - 1] != H5Z_FILTER_DEFLATE) ok = false;
   unsigned char fill[8] = {0};
   if (ok && H5Pget_fill_value(dcpl, es == 4 ? H5T_NATIVE_INT32 : H5T_NATIVE_DOUBLE, fill) < 0)
     ok = false;
@@ -302,13 +310,18 @@ bool SPPARKS_NS::hdf5_read_box_parallel(int64_t dataset, const size_t *offset, c
   const size_t batch = 64; // ~64 compressed chunks in flight
   std::vector<std::vector<unsigned char>> comp(batch);
   std::vector<uint32_t> mask(batch);
-  std::vector<char> filled(batch);
-  unsigned char *dst = (unsigned char *)out;
+  std::vector<char> filled(batch), whole(batch);
+  unsigned char *box = (unsigned char *)data;
   for (size_t b0 = 0; b0 < chunks.size(); b0 += batch) {
     const size_t nb = std::min(batch, chunks.size() - b0);
     for (size_t b = 0; b < nb; b++) {
-      hsize_t off[3] = {chunks[b0 + b][0] * cd[0], chunks[b0 + b][1] * cd[1],
-                        chunks[b0 + b][2] * cd[2]};
+      hsize_t off[3];
+      whole[b] = 1;
+      for (int k = 0; k < 3; k++) {
+        off[k] = chunks[b0 + b][k] * cd[k];
+        if (off[k] < offset[k] || off[k] + cd[k] > offset[k] + count[k]) whole[b] = 0;
+      }
+      if (write && whole[b]) continue; // overwritten entirely, nothing to keep
       haddr_t addr;
       hsize_t nbytes = 0;
       unsigned fmask = 0;
@@ -324,13 +337,13 @@ bool SPPARKS_NS::hdf5_read_box_parallel(int64_t dataset, const size_t *offset, c
       std::vector<unsigned char> buf1(chunk_bytes), buf2(chunk_bytes);
 #pragma omp for schedule(dynamic)
       for (size_t b = 0; b < nb; b++) {
-        const unsigned char *src = comp[b].data();
-        size_t len = comp[b].size();
-        if (filled[b]) {
+        unsigned char *raw = buf1.data(); // the chunk's values, unfiltered
+        if (write && whole[b]) {
+        } else if (filled[b]) {
           for (size_t i = 0; i < nelem; i++) memcpy(&buf1[i * es], fill, es);
-          src = buf1.data();
-          len = chunk_bytes;
         } else {
+          const unsigned char *src = comp[b].data();
+          size_t len = comp[b].size();
           // undo the pipeline last filter first; mask bit i = filter i skipped
           for (int i = nf - 1; i >= 0; i--) {
             if (mask[b] & (1u << i)) continue;
@@ -356,8 +369,10 @@ bool SPPARKS_NS::hdf5_read_box_parallel(int64_t dataset, const size_t *offset, c
             bad = 1;
             continue;
           }
+          if (src == comp[b].data()) memcpy(buf1.data(), src, chunk_bytes); // all skipped
+          else raw = (unsigned char *)src;
         }
-        // copy the part of this chunk inside the box, one x-run at a time
+        // the part of this chunk inside the box, one x-run at a time
         hsize_t lo[3], hi[3];
         for (int k = 0; k < 3; k++) {
           lo[k] = std::max<hsize_t>(chunks[b0 + b][k] * cd[k], offset[k]);
@@ -365,18 +380,52 @@ bool SPPARKS_NS::hdf5_read_box_parallel(int64_t dataset, const size_t *offset, c
         }
         for (hsize_t z = lo[0]; z < hi[0]; z++)
           for (hsize_t y = lo[1]; y < hi[1]; y++) {
-            size_t from = (((z - chunks[b0 + b][0] * cd[0]) * cd[1] + (y - chunks[b0 + b][1] * cd[1])) *
-                               cd[2] + (lo[2] - chunks[b0 + b][2] * cd[2])) * es;
-            size_t into = (((z - offset[0]) * count[1] + (y - offset[1])) * count[2] +
-                           (lo[2] - offset[2])) * es;
-            memcpy(dst + into, src + from, (hi[2] - lo[2]) * es);
+            size_t in_chunk = (((z - chunks[b0 + b][0] * cd[0]) * cd[1] +
+                                (y - chunks[b0 + b][1] * cd[1])) * cd[2] +
+                               (lo[2] - chunks[b0 + b][2] * cd[2])) * es;
+            size_t in_box = (((z - offset[0]) * count[1] + (y - offset[1])) * count[2] +
+                             (lo[2] - offset[2])) * es;
+            if (write) memcpy(raw + in_chunk, box + in_box, (hi[2] - lo[2]) * es);
+            else memcpy(box + in_box, raw + in_chunk, (hi[2] - lo[2]) * es);
           }
+        if (!write) continue;
+
+        // apply the pipeline: [shuffle,] deflate.  Like HDF5's optional deflate,
+        // a chunk that does not shrink is stored as is with its mask bit set.
+        unsigned char *src = raw;
+        mask[b] = 0;
+        if (nf == 2) { // shuffle
+          unsigned char *to = (src == buf1.data()) ? buf2.data() : buf1.data();
+          for (size_t j = 0; j < es; j++)
+            for (size_t e = 0; e < nelem; e++) to[j * nelem + e] = src[e * es + j];
+          src = to;
+        }
+        comp[b].resize(compressBound(chunk_bytes));
+        uLongf n = comp[b].size();
+        if (compress2(comp[b].data(), &n, src, chunk_bytes, level) == Z_OK && n < chunk_bytes) {
+          comp[b].resize(n);
+        } else {
+          mask[b] |= 1u << (nf - 1);
+          comp[b].assign(src, src + chunk_bytes);
+        }
       }
     }
     if (bad) return false;
+    if (write)
+      for (size_t b = 0; b < nb; b++) {
+        hsize_t off[3] = {chunks[b0 + b][0] * cd[0], chunks[b0 + b][1] * cd[1],
+                          chunks[b0 + b][2] * cd[2]};
+        if (H5Dwrite_chunk(ds, H5P_DEFAULT, mask[b], off, comp[b].size(), comp[b].data()) < 0)
+          return false;
+      }
   }
   return true;
 #endif
+}
+
+bool SPPARKS_NS::hdf5_read_box_parallel(int64_t dataset, const size_t *offset, const size_t *count,
+                                        void *out) {
+  return box_chunks(dataset, offset, count, out, false);
 }
 
 /* ----------------------------------------------------------------------
@@ -984,12 +1033,13 @@ void DumpHDF5::write_fields(double time) {
       if (vtype[i] == INT) {
         // site ordering for a simple lattice is x fastest, then y, then z --
         // the same order as the [z][y][x] hyperslab, so no repacking
-        const int *src = (fields[i] == SITE) ? app->iarray[0]
-                                             : app->iarray[vindex[i]];
-        dset.select(slab).write_raw(src, HighFive::AtomicType<int32_t>(), xfer);
+        int *src = (fields[i] == SITE) ? app->iarray[0] : app->iarray[vindex[i]];
+        if (nprocs > 1 || !box_chunks(dset.getId(), offset.data(), count.data(), src, true))
+          dset.select(slab).write_raw(src, HighFive::AtomicType<int32_t>(), xfer);
       } else {
-        const double *src = app->darray[vindex[i]];
-        dset.select(slab).write_raw(src, HighFive::AtomicType<double>(), xfer);
+        double *src = app->darray[vindex[i]];
+        if (nprocs > 1 || !box_chunks(dset.getId(), offset.data(), count.data(), src, true))
+          dset.select(slab).write_raw(src, HighFive::AtomicType<double>(), xfer);
       }
 
 #ifdef H5_HAVE_PARALLEL

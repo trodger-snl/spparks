@@ -119,7 +119,10 @@ compress</A> N stores them with byte shuffling and
 deflate level N.  Over a six-box GP700 chain level 1 made the file 1.8x
 smaller: the phase field and the mostly-zero G/V fields compress well,
 while the quaternions, half the bytes, barely compress (1.2x).
-Unwritten regions of the file compress to almost nothing.  A compressed
+Unwritten regions of the file compress to almost nothing.  On one
+processor SPPARKS compresses the chunks itself on all OpenMP threads; on
+more, HDF5 compresses each chunk on one processor, so the compression
+is spread over the processors but not their threads.  A compressed
 chunk that grows when rewritten moves, and the space it leaves is reused
 only within the same dump, so a compressed file grows somewhat over many
 dumps (about 15% in tests); "h5repack" compacts it.  HDF5 can keep free

@@ -128,8 +128,8 @@ public:
   // The actual sweep kernel for one color
   virtual void sweep_color_kokkos(int color, int start, int count) = 0;
 
-protected:
-  // Shared neighbor sync
+  // Shared neighbor sync. Public only because it defines a device lambda,
+  // which nvcc rejects in a private or protected member function.
   void sync_neighbors_to_device();
 };
 

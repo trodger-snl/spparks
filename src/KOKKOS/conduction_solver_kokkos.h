@@ -94,10 +94,14 @@ class ConductionSolverKokkos : protected Pointers {
     double h = 0.0, mu = 1.0, nu = 0.0, mut = 0.0, gat = 0.0;
     double Pq = 0.0, xl = 0.0, yl = 0.0;
   };
-  void stage(const Stage &c, Kokkos::View<fastreal***> Y1,
-             Kokkos::View<fastreal***> Y2, Kokkos::View<fastreal***> Yout);
   void step(double h, double t0);
   void sts_step(double tau, int s);
+
+  // These define device lambdas (KOKKOS_LAMBDA), which nvcc rejects in a
+  // private or protected member function; not part of the class interface.
+ public:
+  void stage(const Stage &c, Kokkos::View<fastreal***> Y1,
+             Kokkos::View<fastreal***> Y2, Kokkos::View<fastreal***> Yout);
   void exchange();
   double sample(Kokkos::View<double*> d_T, int nlocal, int nall);
 };

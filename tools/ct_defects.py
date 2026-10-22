@@ -343,15 +343,16 @@ def read_waypoints(path):
 def waypoint_layers(rows, scale, shift, nlayers=0):
     """Waypoint rows (x, y, z, p, v) -> {z (m): segments[n,4] (m)} of the emitting moves;
     nlayers > 0 keeps the first that many layers, as `laser_path file ... layers N` does."""
-    out, prev, layer = {}, None, 0
+    out, prev = {}, None
     for x, y, z, p, _ in rows:
         q = np.array([x, y, z]) * scale + shift
-        if prev is None or q[2] != prev[2]:    # a z change starts a layer (laser off)
-            layer += 1
-            if nlayers and layer > nlayers:
+        # an emitting move at one z (a z change is laser off); a layer counts once
+        # it emits, as SPPARKS drops empty ones before counting `layers N`
+        if prev is not None and p > 0 and q[2] == prev[2]:
+            zk = float(q[2])
+            if zk not in out and nlayers and len(out) >= nlayers:
                 break
-        elif p > 0:
-            out.setdefault(float(q[2]), []).append([prev[0], prev[1], q[0], q[1]])
+            out.setdefault(zk, []).append([prev[0], prev[1], q[0], q[1]])
         prev = q
     return {z: np.array(v) for z, v in out.items()}
 
@@ -619,6 +620,8 @@ def selftest():
             for z in (1, 2, 3) for k in range(3)]
     assert sorted(waypoint_layers(rows, 1.0, np.zeros(3), 2)) == [1.0, 2.0]
     assert len(waypoint_layers(rows, 1.0, np.zeros(3))[3.0]) == 2
+    # G-code rows start with a laser-off point at z = 0: not a layer of its own
+    assert sorted(waypoint_layers([(0, 0, 0, 0, None)] + rows, 1.0, np.zeros(3), 1)) == [1.0]
     # sparse mask: only chunks holding a void are written, the rest read -1
     import h5py, tempfile
     pts = np.array([[0, 0, 0], [299, 5, 9], [130, 140, 4]])
@@ -749,6 +752,9 @@ def cluster_footprint(a, dims, lo):
                 r = a.track_radius or 0.5 * float(np.median(cKDTree(u).query(u, 2)[0][:, 1])) + 0.5 * a.dx
                 add(z, np.hstack([xy, xy]), r)
     if not layers:
+        if a.laser_path or a.path_file or a.gcode or a.thermal_h5:
+            sys.exit("cluster: the footprint sources gave no scanned layer (check --path-scale/"
+                     "--path-layers/--liquidus); omit them for a fully interior run")
         print("footprint      none: fully interior")
         return None
     print(f"track radius   {sorted(radii)} um")

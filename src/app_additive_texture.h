@@ -35,6 +35,7 @@ AppStyle(additive_temperature_texture,AppAdditiveTextureDeprecated)
 namespace SPPARKS_NS {
 
 class ThermalManager;
+namespace quaternion { class SiteOrientationRNG; }
 
 class AppAdditiveTexture : public AppPottsQuaternion, public AdditiveParams {
  public:
@@ -49,22 +50,22 @@ class AppAdditiveTexture : public AppPottsQuaternion, public AdditiveParams {
   virtual void init_app();
   virtual void site_event_rejection(int, class RandomPark *);
   virtual void app_update(double);
-  virtual void nucleation_spins(class RandomPark *);
+  virtual void nucleation_spins();
   virtual void  input_app(char *, int , char **);
   virtual void nucleation_init();
   // Grow a nucleus from site i to partRad sites. seed/Tcool: the seed voxel
   // every claimed site inherits from and the undercooling of the nucleation
   // event (recursion re-roots i, never seed).
-  virtual void nucleation_particle_flipper(int i, int partRad, class RandomPark *,
+  virtual void nucleation_particle_flipper(int i, int partRad, quaternion::SiteOrientationRNG &,
                                            int seed, double Tcool);
-  virtual void mushy_phase(int, class RandomPark *);
+  virtual void mushy_phase(int, quaternion::SiteOrientationRNG &);
   virtual double site_energy(int);
-  void site_event_solidification(int, double, class RandomPark *);
-  void execute_nucleation_event(int, double);
+  void site_event_solidification(int, double, quaternion::SiteOrientationRNG &);
+  void execute_nucleation_event(int, double, quaternion::SiteOrientationRNG &);
   std::vector<double> normal_finder(int);
 	double melt_misorientation(int, double, double, double);
   double mobility_of_orientation(const std::vector<double> &q, const std::vector<double> &grad_full);
-  void apply_misorientation(int, int, double, class RandomPark *);
+  void apply_misorientation(int, int, double, quaternion::SiteOrientationRNG &);
   // Per-hop rotation angle (rad) of the misorientation random walk:
   // sqrt(D_eff * hop_m), D_eff = mis_diffusion * g(Tcool)^2 with the
   // exponential undercooling shape g when misorient_alpha > 0, else
@@ -74,9 +75,10 @@ class AppAdditiveTexture : public AppPottsQuaternion, public AdditiveParams {
   // Rotate site i by mis_angle per the target mode, then apply the
   // mis_thresh new-grain check. Shared by the solidification path
   // (apply_misorientation) and the nucleation flipper.
-  void rotate_toward_target(int, double, int, class RandomPark *);
-  std::vector<double> get_average_neighbor_quaternion(int site, int target_spin);
-  void smooth_site(int site);
+  void rotate_toward_target(int, double, int, quaternion::SiteOrientationRNG &);
+  std::vector<double> get_average_neighbor_quaternion(int site, int target_spin,
+                                                      quaternion::SiteOrientationRNG &);
+  void smooth_site(int site, quaternion::SiteOrientationRNG &);
   double site_energy_smooth(int site);
 
   // Post-smoothing single-voxel grain cleanup. Fires at most once per
@@ -85,7 +87,17 @@ class AppAdditiveTexture : public AppPottsQuaternion, public AdditiveParams {
   // was resolved (either flipped or confirmed not a 1-voxel grain) and
   // false if the check was deferred because the neighborhood was still
   // maturing.
-  bool flip_single_voxel_grain(int site);
+  bool flip_single_voxel_grain(int site, quaternion::SiteOrientationRNG &);
+
+  // Every random draw of site i's events in one step comes from step_rng(i),
+  // keyed by (deck seed, step, the site's GLOBAL id); the per-spin nucleation
+  // properties are keyed by (deck seed, spin). A site's draws depend on
+  // nothing else, so a run repeats at a fixed decomposition, and voids (or any
+  // site drawing more or fewer numbers) change the microstructure only through
+  // the physics around them, not by shifting a shared stream.
+  quaternion::SiteOrientationRNG step_rng(int i) const;
+  uint64_t rng_seed = 0;   // the deck seed
+  uint64_t rng_step = 0;   // app_update calls so far
 
   // Powder phase activation methods
   void activate_powder_sites();

@@ -146,9 +146,18 @@ error.
 
 <LI>The <I>floor_check</I> command is available. 
 </UL>
-<P>Microstructure output is not repeatable run to run on either style
-(Monte Carlo randomness); the temperature field (d6) is deterministic
-and matches bit for bit between the two styles.
+<P>The temperature field (d6) is deterministic and matches bit for bit
+between the two styles.  <I>additive/texture</I> microstructure output is
+also repeatable for a given seed and processor count: every random draw
+of a site's events in a step comes from a stream keyed by the seed, the
+step and the site's global ID, and the per-spin nucleation properties
+from one keyed by the seed and the spin.  A change at one site (a void
+added with "set i2 hdf5 ... skip_novalue", say) therefore alters the
+microstructure only through the physics around it, so runs with and
+without voids can be compared site for site.  A different processor
+count changes the update order at subdomain boundaries and gives a
+different microstructure.  <I>additive/texture/kk</I> microstructure is not
+repeatable run to run (its device RNG pool and parallel kernels).
 </P>
 <HR>
 

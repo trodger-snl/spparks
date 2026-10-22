@@ -51,12 +51,26 @@
 using namespace SPPARKS_NS;
 using namespace MathConst;
 
-static std::vector<double> sample_random_unit_vector(RandomPark *random)
+static std::vector<double> sample_random_unit_vector(quaternion::SiteOrientationRNG &random)
 {
-  const double z = 2.0 * random->uniform() - 1.0;
-  const double phi = 2.0 * MY_PI * random->uniform();
+  const double z = 2.0 * random.uniform() - 1.0;
+  const double phi = 2.0 * MY_PI * random.uniform();
   const double radial = sqrt(std::max(0.0, 1.0 - z * z));
   return std::vector<double>{radial * cos(phi), radial * sin(phi), z};
+}
+
+/* ----------------------------------------------------------------------
+   the RNG for site i's events in this step (see the header): splitmix64
+   keyed by the deck seed mixed with the step, and the site's GLOBAL id
+------------------------------------------------------------------------- */
+
+quaternion::SiteOrientationRNG AppAdditiveTexture::step_rng(int i) const
+{
+  uint64_t z = rng_step * 0x9E3779B97F4A7C15ULL + 0x632BE59BD9B4E019ULL;
+  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+  z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+  z ^= z >> 31;
+  return quaternion::SiteOrientationRNG(rng_seed ^ z, (uint64_t) id[i]);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -312,11 +326,13 @@ void AppAdditiveTexture::app_update(double dt)
 
   // Track if any melting occurs this timestep
   bool melting_occurred = false;
+  rng_step++;
 
   //iterate through all the sites for phase transitions (applies to both systems)
   for (int i=0; i<nlocal; i++) {
     // Skip void sites - they never change state
     if (active_flag[i] == 5) continue;
+    quaternion::SiteOrientationRNG rng = step_rng(i);
 
     //Turn the sites on/off depending on the phase data and whether or not the
     //site's temperature has gone above tl. Only do this when melting the first time
@@ -324,9 +340,9 @@ void AppAdditiveTexture::app_update(double dt)
     if( (T[i] >= tl) && active_flag[i] != 2) {
         melting_occurred = true;
         active_flag[i] = 2;
-        spin[i] = (int) (nspins * ranapp->uniform());
+        spin[i] = (int) (nspins * rng.uniform());
         // Create random orientation as each site
-        vector<double> uq = quaternion::generate_random_unit_quaternions(1);
+        vector<double> uq = quaternion::generate_unit_quaternion(rng);
         q0[i] = uq[0];
         qx[i] = uq[1];
         qy[i] = uq[2];
@@ -341,7 +357,7 @@ void AppAdditiveTexture::app_update(double dt)
     }
     //If we're molten, call the mushy_phase function to figure out any phase change
     else if (active_flag[i] == 2 && T[i] <= tl) {
-        mushy_phase(i, ranapp);
+        mushy_phase(i, rng);
         if (nucleation_mode == NUCLEATION_CONTINUOUS && active_flag[i] == 2) {
           T_prev_map[i] = T[i];
         }
@@ -349,7 +365,7 @@ void AppAdditiveTexture::app_update(double dt)
     //Call smoothing
     else if(solid_d[i] < 0 && solid_d[i] > -nrefine -1 && active_flag[i] == 3)    {
             mobility_out[i] = 1;
-            smooth_site(i);
+            smooth_site(i, rng);
             solid_d[i]--;
     }
     // Single-voxel grain cleanup (opt-in). Triggers exactly once per voxel
@@ -361,7 +377,7 @@ void AppAdditiveTexture::app_update(double dt)
              active_flag[i] == 3 &&
              solid_d[i] <= -nrefine - 1 &&
              solid_d[i] >  -nrefine - 3) {
-            if (flip_single_voxel_grain(i)) {
+            if (flip_single_voxel_grain(i, rng)) {
                 solid_d[i] = -nrefine - 3;
             }
     }
@@ -414,7 +430,7 @@ void AppAdditiveTexture::app_update(double dt)
    than 1 (which we should avoid), allow all spins to nucleate. If not, call a random number
    between zero and one. If the number is less than the fraction, make true. If not, make false.
 ------------------------------------------------------------------------- */
-void AppAdditiveTexture::nucleation_spins(RandomPark *random) {
+void AppAdditiveTexture::nucleation_spins() {
     timer->stamp();
     
     nucleation_flags = new int[nspins];
@@ -430,7 +446,9 @@ void AppAdditiveTexture::nucleation_spins(RandomPark *random) {
     //Do a random number test and allow the spin to nucleate if less than
     else {
         for (int i = 0; i < nspins; i++) {
-            if(random->uniform() <= nucleationFraction) {
+            // keyed by spin: the same spins nucleate whatever else draws
+            quaternion::SiteOrientationRNG r(rng_seed ^ 0x6E75636C65666C67ULL, (uint64_t) i);
+            if(r.uniform() <= nucleationFraction) {
                 nucleation_flags[i] = 1;
             }
             else {
@@ -498,6 +516,7 @@ void AppAdditiveTexture::init_app()
   // Per-site orientation stream keyed to the deck seed only (not drawn from
   // ranmaster, which would shift every stream seeded after it).
   const uint64_t qseed = (uint64_t) ranmaster->initial_seed();
+  rng_seed = qseed;
 
   int flag = 0;
 	int flagall;
@@ -509,11 +528,8 @@ void AppAdditiveTexture::init_app()
       if (active_flag[i] != 3) {
         // Create random orientation at each site that wasn't read as solid from
         // input file. Keyed to the site's GLOBAL id (see ranquat above), so the
-        // starting field is repeatable and decomposition-independent. NOTE the
-        // per-melt redraw in app_update() is deliberately left on the
-        // wall-clock generator -- a site re-melts many times and would need a
-        // per-site event counter to stay keyed, and this app is non-reproducible
-        // anyway once nucleation/solidification start sharing an RNG.
+        // starting field is repeatable and decomposition-independent. Draws in
+        // app_update() are keyed per step as well (step_rng).
         quaternion::SiteOrientationRNG rng(qseed, (uint64_t) id[i]);
         vector<double> uq = quaternion::generate_unit_quaternion(rng);
         q0[i] = uq[0];
@@ -530,7 +546,7 @@ void AppAdditiveTexture::init_app()
   
 	//Initialize the nucleation_flags vector
 	if (domain->me==0) {
-		nucleation_spins(ranapp);    
+		nucleation_spins();    
 	}
 
 	timer->stamp();
@@ -703,7 +719,8 @@ void AppAdditiveTexture::site_event_rejection(int /*i*/, RandomPark * /*random*/
    Sets site to solid, computes gradient and solidification rate,
    and grows the nucleus via nucleation_particle_flipper.
 ------------------------------------------------------------------------- */
-void AppAdditiveTexture::execute_nucleation_event(int i, double Tcool) {
+void AppAdditiveTexture::execute_nucleation_event(int i, double Tcool,
+                                                  quaternion::SiteOrientationRNG &random) {
     active_flag[i] = 3;
     solid_d[i] = nuclei_smooth_enabled ? -1 : -nrefine - 2;
 
@@ -714,7 +731,7 @@ void AppAdditiveTexture::execute_nucleation_event(int i, double Tcool) {
     V[i] = V[i] + front_velocity(Tcool);
 
     naccept++;
-    nucleation_particle_flipper(i, round(nucleation_sizes[spin[i]] / pow(dx, 3)), ranapp, i, Tcool);
+    nucleation_particle_flipper(i, round(nucleation_sizes[spin[i]] / pow(dx, 3)), random, i, Tcool);
 
     if (nucleation_mode == NUCLEATION_CONTINUOUS) {
       T_prev_map.erase(i);
@@ -734,7 +751,7 @@ void AppAdditiveTexture::execute_nucleation_event(int i, double Tcool) {
       mobility calculated from undercooling.)
 THIS NEEDS UPDATED TO INCLUDE TEXTURE
 ------------------------------------------------------------------------- */
-void AppAdditiveTexture::mushy_phase(int i, RandomPark *random){
+void AppAdditiveTexture::mushy_phase(int i, quaternion::SiteOrientationRNG &random){
     // Skip void sites - they never change state
     if (active_flag[i] == 5) return;
 
@@ -747,7 +764,7 @@ void AppAdditiveTexture::mushy_phase(int i, RandomPark *random){
         if (nucleation_mode == NUCLEATION_THRESHOLD) {
             // Threshold mode: nucleate if undercooling exceeds per-spin critical value
             if(Tcool >= nucleation_temps[spin[i]]){
-                execute_nucleation_event(i, Tcool);
+                execute_nucleation_event(i, Tcool, random);
                 return;
             }
             else {
@@ -765,8 +782,8 @@ void AppAdditiveTexture::mushy_phase(int i, RandomPark *random){
                     double P_nucleate = dn_ddT * dT_increment;
                     if (P_nucleate > 1.0) P_nucleate = 1.0;
 
-                    if (random->uniform() < P_nucleate) {
-                        execute_nucleation_event(i, Tcool);
+                    if (random.uniform() < P_nucleate) {
+                        execute_nucleation_event(i, Tcool, random);
                         return;
                     }
                 }
@@ -785,7 +802,8 @@ void AppAdditiveTexture::mushy_phase(int i, RandomPark *random){
    This handles the common logic for both nucleation and non-nucleation paths.
    Updates solid front distance and attempts epitaxial growth from neighboring sites.
 ------------------------------------------------------------------------- */
-void AppAdditiveTexture::site_event_solidification(int i, double Tcool, RandomPark *random) {
+void AppAdditiveTexture::site_event_solidification(int i, double Tcool,
+                                                   quaternion::SiteOrientationRNG &random) {
     int nevent = 0;
     int value;
     double dotValue = 0;
@@ -854,14 +872,14 @@ void AppAdditiveTexture::site_event_solidification(int i, double Tcool, RandomPa
     }
     int g = 0;
     if (gtotal > 0.0) {
-        double dran = gtotal * random->uniform();
+        double dran = gtotal * random.uniform();
         while (g < ngr - 1 && dran > gcum[g]) g++;
     } else {
-        g = (int)(ngr * random->uniform()); if (g >= ngr) g = ngr - 1;
+        g = (int)(ngr * random.uniform()); if (g >= ngr) g = ngr - 1;
     }
     int nsame = 0;
     for (int m = 0; m < nevent; m++) if (unique[m] == gspin[g]) nsame++;
-    int pick = (int)(nsame * random->uniform()); if (pick >= nsame) pick = nsame - 1;
+    int pick = (int)(nsame * random.uniform()); if (pick >= nsame) pick = nsame - 1;
     for( int j = 0; j < nevent; j++) {
         if (unique[j] != gspin[g]) continue;
         if (pick-- > 0) continue;
@@ -883,7 +901,7 @@ void AppAdditiveTexture::site_event_solidification(int i, double Tcool, RandomPa
             naccept++;
 
             // Apply misorientation based on temperature gradient
-            apply_misorientation(i, neighran, Tcool, ranapp);
+            apply_misorientation(i, neighran, Tcool, random);
             return;
         }
     }
@@ -904,7 +922,8 @@ double AppAdditiveTexture::diffusion_angle(double Tcool, double hop_m) const {
     return sqrt(D * hop_m);
 }
 
-void AppAdditiveTexture::apply_misorientation(int i, int parent, double Tcool, RandomPark *ranapp) {
+void AppAdditiveTexture::apply_misorientation(int i, int parent, double Tcool,
+                                              quaternion::SiteOrientationRNG &random) {
     // Hop to the inheritance parent. Coordinate differences are in lattice
     // units; the sqrt(3) clamp guards against a periodic-wrap neighbor pair
     // reading as a box-length hop (the true SC_26N stencil distance is at
@@ -925,7 +944,7 @@ void AppAdditiveTexture::apply_misorientation(int i, int parent, double Tcool, R
     if (mis_diffusion <= 0.0) return;
 
     rotate_toward_target(i, diffusion_angle(Tcool, hop_lat * dx),
-                         misorientation_target_mode, ranapp);
+                         misorientation_target_mode, random);
 }
 
 
@@ -935,7 +954,7 @@ void AppAdditiveTexture::apply_misorientation(int i, int parent, double Tcool, R
     and the nucleation particle flipper.
 ------------------------------------------------------------------------- */
 void AppAdditiveTexture::rotate_toward_target(int i, double mis_angle, int target_mode,
-                                              RandomPark *ranapp) {
+                                              quaternion::SiteOrientationRNG &random) {
     // Create quaternion vector from site's orientation
     vector<double> q_site = {q0[i], qx[i], qy[i], qz[i]};
 
@@ -953,7 +972,7 @@ void AppAdditiveTexture::rotate_toward_target(int i, double mis_angle, int targe
         // Apply a rotation by mis_angle about a uniformly-random axis,
         // composed with the existing site quaternion. No <100>-toward-target
         // alignment step.
-        vector<double> axis = sample_random_unit_vector(ranapp);
+        vector<double> axis = sample_random_unit_vector(random);
         double half = 0.5 * mis_angle;
         double s = sin(half);
         vector<double> dq = {cos(half), s*axis[0], s*axis[1], s*axis[2]};
@@ -964,7 +983,7 @@ void AppAdditiveTexture::rotate_toward_target(int i, double mis_angle, int targe
             q_new[0] /= m; q_new[1] /= m; q_new[2] /= m; q_new[3] /= m;
         }
     } else {  // MISORI_TARGET_RANDOM: rotate the nearest <100> toward a random direction
-        vector<double> target_dir = sample_random_unit_vector(ranapp);
+        vector<double> target_dir = sample_random_unit_vector(random);
         q_new = quaternion::rotate_q_towards_u(q_site, target_dir, mis_angle);
     }
 
@@ -986,7 +1005,7 @@ void AppAdditiveTexture::rotate_toward_target(int i, double mis_angle, int targe
     }
 
     if(di_rad >= mis_thresh) {
-        spin[i] = (int) (nspins * ranapp->uniform()); //If greater than misorientation threshold, make new grain
+        spin[i] = (int) (nspins * random.uniform()); //If greater than misorientation threshold, make new grain
     }
 }
 
@@ -994,7 +1013,7 @@ void AppAdditiveTexture::rotate_toward_target(int i, double mis_angle, int targe
     Only nucleating one site at a time introduce lattice size dependency. Here we will
     use a user-defined nucleation particle size and flip neighboring sites until that size is met
 ------------------------------------------------------------------------- */
-void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomPark *random,
+void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, quaternion::SiteOrientationRNG &random,
                                                      int seed, double Tcool) {
     
     //If one site is big enough to satisfy, skip evertyhing
@@ -1069,19 +1088,19 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
         // Shuffle each shell's indices using Fisher-Yates algorithm
         // Shell 1 (nearest neighbors)
         for(int j = 5; j > 0; j--) {
-            int k = (int)(random->uniform() * (j + 1));
+            int k = (int)(random.uniform() * (j + 1));
             std::swap(shell1_indices[j], shell1_indices[k]);
         }
         
         // Shell 2 (second nearest)
         for(int j = 11; j > 0; j--) {
-            int k = (int)(random->uniform() * (j + 1));
+            int k = (int)(random.uniform() * (j + 1));
             std::swap(shell2_indices[j], shell2_indices[k]);
         }
         
         // Shell 3 (third nearest)
         for(int j = 7; j > 0; j--) {
-            int k = (int)(random->uniform() * (j + 1));
+            int k = (int)(random.uniform() * (j + 1));
             std::swap(shell3_indices[j], shell3_indices[k]);
         }
         
@@ -1163,7 +1182,7 @@ void AppAdditiveTexture::nucleation_particle_flipper(int i, int partRad, RandomP
         return;
     }
     //Otherwise, randomly pick a possilbe neighbor
-    int neighran =  round(((nneigh -1) * random->uniform()));
+    int neighran =  round(((nneigh -1) * random.uniform()));
     
     int next_site = neighbor[i][possible_neigh[neighran]];
     if (next_site < nlocal)
@@ -1298,7 +1317,8 @@ std::vector<double> AppAdditiveTexture::normal_finder(int site)
      (function should only be called when such neighbors exist) and will
      terminate the simulation with an error message.
 ------------------------------------------------------------------------- */
-std::vector<double> AppAdditiveTexture::get_average_neighbor_quaternion(int site, int target_spin)
+std::vector<double> AppAdditiveTexture::get_average_neighbor_quaternion(int site, int target_spin,
+                                                                    quaternion::SiteOrientationRNG &random)
 {
     if (smooth_orientation_copy) {   // one random neighbour of the new grain
         int cand[27]; int nc = 0;
@@ -1306,7 +1326,7 @@ std::vector<double> AppAdditiveTexture::get_average_neighbor_quaternion(int site
             if (spin[neighbor[site][j]] == target_spin && active_flag[neighbor[site][j]] != 5)
                 cand[nc++] = neighbor[site][j];
         if (nc == 0) error->all(FLERR,"get_average_neighbor_quaternion: no neighbor with target spin");
-        int k = (int)(nc * ranapp->uniform()); if (k >= nc) k = nc - 1;
+        int k = (int)(nc * random.uniform()); if (k >= nc) k = nc - 1;
         double q[4] = {q0[cand[k]], qx[cand[k]], qy[cand[k]], qz[cand[k]]};
         spath[site] = spath[cand[k]];   // copy the path length with the orientation
         if (grain_walk_D > 0.0 && !grain_walk_path)   // height mode: the copied neighbour may sit on another level
@@ -1463,7 +1483,7 @@ double AppAdditiveTexture::melt_misorientation(int site, double c1, double c2, d
    Inputs: lattice site :: site
    Outputs: None
 ------------------------------------------------------------------------- */
-void AppAdditiveTexture::smooth_site(int i) {
+void AppAdditiveTexture::smooth_site(int i, quaternion::SiteOrientationRNG &random) {
 
   //Adapt code from potts_neigh_only site_event_rejection.
   int oldstate = spin[i];
@@ -1505,7 +1525,7 @@ void AppAdditiveTexture::smooth_site(int i) {
     spin[i] = best_spin;
     efinal = best_energy;
   } else {
-    int iran = (int) (nevent*ranapp->uniform());
+    int iran = (int) (nevent*random.uniform());
     if (iran >= nevent) iran = nevent-1;
     spin[i] = unique[iran];
     efinal = site_energy_smooth(i);
@@ -1516,14 +1536,14 @@ void AppAdditiveTexture::smooth_site(int i) {
   if (efinal <= einitial) {
   } else if (temperature == 0.0) {
     spin[i] = oldstate;
-  } else if (ranapp->uniform() > exp((einitial-efinal)*t_inverse)) {
+  } else if (random.uniform() > exp((einitial-efinal)*t_inverse)) {
     spin[i] = oldstate;
   }
 
   //If the spin flips successfully, also change the rest of the values
   if (spin[i] != oldstate) {
 
-    vector<double> q_new = get_average_neighbor_quaternion(i, spin[i]);
+    vector<double> q_new = get_average_neighbor_quaternion(i, spin[i], random);
     q0[i] = q_new[0];
     qx[i] = q_new[1];
     qy[i] = q_new[2];
@@ -1573,7 +1593,7 @@ double AppAdditiveTexture::site_energy_smooth(int i)
    the chosen grain's local orientation. The caller is responsible for
    marking solid_d to suppress re-firing.
 ------------------------------------------------------------------------- */
-bool AppAdditiveTexture::flip_single_voxel_grain(int i)
+bool AppAdditiveTexture::flip_single_voxel_grain(int i, quaternion::SiteOrientationRNG &random)
 {
   int oldstate = spin[i];
   int nunique = 0;
@@ -1611,7 +1631,7 @@ bool AppAdditiveTexture::flip_single_voxel_grain(int i)
   }
   spin[i] = best_spin;
 
-  vector<double> q_new = get_average_neighbor_quaternion(i, best_spin);
+  vector<double> q_new = get_average_neighbor_quaternion(i, best_spin, random);
   q0[i] = q_new[0];
   qx[i] = q_new[1];
   qy[i] = q_new[2];
@@ -1627,15 +1647,14 @@ bool AppAdditiveTexture::flip_single_voxel_grain(int i)
     This version will also initialize nucleii size (starting with a normal dist)
 ------------------------------------------------------------------------- */
 void AppAdditiveTexture::nucleation_init() {
-    std::normal_distribution<> dist_T{tc,tsig};
-    std::normal_distribution<> dist_S{size_norm,size_sig};
-    std::random_device rd{};
-    std::mt19937 gen{rd()};
-
-    // Randomly assign critical temperature to every spin
+    // Keyed by spin (was std::random_device: different every run). Box-Muller
+    // gives the pair of independent normals per spin.
     for(int i = 0; i < nspins; i++) {
-        nucleation_temps[i] = dist_T(gen);
-        nucleation_sizes[i] = dist_S(gen);
+        quaternion::SiteOrientationRNG r(rng_seed ^ 0x6E75636C74656D70ULL, (uint64_t) i);
+        double u1 = r.uniform(), u2 = r.uniform();
+        double rad = sqrt(-2.0 * log(1.0 - u1));
+        nucleation_temps[i] = tc + tsig * rad * cos(2.0 * MY_PI * u2);
+        nucleation_sizes[i] = size_norm + size_sig * rad * sin(2.0 * MY_PI * u2);
     }
 }
 

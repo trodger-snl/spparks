@@ -132,8 +132,9 @@ falls back to the host path.
 
 ## Validating the GPU port
 
-Microstructure output is non-deterministic run-to-run (MC randomness). Only the
-**temperature field is deterministic** — validate by comparing the CPU app
+Kokkos microstructure output is non-deterministic run-to-run; the CPU app's is
+repeatable only at a fixed seed and rank count (per-site keyed RNG). Only the
+**temperature field is deterministic across apps** — validate by comparing the CPU app
 (`additive/texture`) against the Kokkos app (`additive/texture/kk`) on the
 temperature diagnostic columns (`diag_style array d6 sum d6 max`), expecting a
 bit-for-bit match. The Kokkos app requires `sweep color`. Base test inputs are in

@@ -25,7 +25,7 @@
 
 <LI>this keyword applies only to the <I>stitch</I> dump style 
 
-<LI>keyword = <I>retain</I> or <I>chunk</I> or <I>origin</I> or <I>extent</I> or <I>verbose</I> or <I>atomic</I> or <I>compress</I> 
+<LI>keyword = <I>retain</I> or <I>chunk</I> or <I>origin</I> or <I>extent</I> or <I>verbose</I> or <I>atomic</I> or <I>compress</I> or <I>turns</I> 
 
 <LI>  <I>delay</I> value = tdelay
     tdelay = delay dump until at least this time (seconds)
@@ -52,10 +52,11 @@
   <I>extent</I> args = nx ny nz
     nx,ny,nz = initial dataset extent in lattice sites (hdf5 style only)
   <I>verbose</I> arg = N
-    N = 1 to report when a write was not collective (hdf5 style only)
+    N = 1 to report each dump's phase times and non-collective writes (hdf5 style only)
   <I>atomic</I> arg = <I>yes</I> or <I>no</I> (hdf5 style only)
   <I>compress</I> arg = N
     N = deflate level 1-9, or 0 for no compression (hdf5 style only)
+  <I>turns</I> arg = <I>yes</I> or <I>no</I> (hdf5 style only)
   <I>sort</I> arg = <I>off</I> or <I>id</I> or N or -N
      off = no sorting of per-site lines within a snapshot
      id = sort per-site lines by atom ID
@@ -261,8 +262,8 @@ and continues deleting intermediate states that can be safely removed.
 </P>
 <HR>
 
-<P>The <I>chunk</I>, <I>origin</I>, <I>extent</I>, <I>verbose</I>, <I>atomic</I> and <I>compress</I>
-keywords apply only to the <I>hdf5</I> dump style.
+<P>The <I>chunk</I>, <I>origin</I>, <I>extent</I>, <I>verbose</I>, <I>atomic</I>, <I>compress</I> and
+<I>turns</I> keywords apply only to the <I>hdf5</I> dump style.
 </P>
 <P><I>chunk</I> overrides the HDF5 chunk shape.  By default the chunk is chosen
 to tile the per-processor subdomains, so that no chunk is shared between
@@ -284,7 +285,9 @@ region.
 <P><I>verbose</I> 1 reports on processor 0 whenever HDF5 fell back from
 collective to independent I/O.  Since that fallback is silent and
 changes write scaling completely, turn it on before trusting any timing
-measurement.
+measurement.  It also prints how long each phase of every dump took:
+opening the file, writing (or, with <I>turns</I>, exchanging and compressing),
+closing, the turns, the read-back check, and the final sync.
 </P>
 <P><I>atomic</I> yes makes every <I>hdf5</I> dump crash safe.  The
 dump copies the file to <I>file</I>.tmp, writes into the copy, flushes it to
@@ -314,6 +317,20 @@ compression level is fixed when a dataset is created, so a dump whose
 setting differs from the file's datasets (compressed or not) rewrites
 the file once in the requested form, and later dumps write into it
 directly.  The level alone (1 versus 6) does not trigger a rewrite.
+</P>
+<P><I>turns</I> chooses how more than one processor writes the datasets.  With
+<I>no</I>, they write together through MPI-IO, and HDF5 compresses each chunk
+on one thread of one processor.  With <I>yes</I>, every processor first
+compresses its chunks on all its OpenMP threads at once; then the
+processors take turns, each opening the file alone, writing, and
+closing it.  Each chunk is written once, by one of the processors whose
+subdomains touch it; the others send it their part first.  Only the
+file I/O is serial, which suits a few processors per node with threads
+to spare, such as one per GPU.  Turns rely on a file written and closed
+on one node being read correctly on the next open from another, which
+Lustre and GPFS guarantee and NFS does not.  By default turns are used
+when compressing and every processor has more than one OpenMP thread.
+One processor always compresses on all its threads and writes alone.
 </P>
 <HR>
 
@@ -656,6 +673,7 @@ details.
 <LI>verbose = 0 (hdf5 style only)
 <LI>atomic = no (hdf5 style only)
 <LI>compress = 0 (hdf5 style only)
+<LI>turns = yes when compressing with more than one OpenMP thread per processor, else no (hdf5 style only)
 <LI>scolor = * c1/c2/.../c140 where c1-c140 are the names of the 140 pre-defined colors
 <LI>sdiam = * 1.0
 <LI>smap = min max cf 2 min blue max red

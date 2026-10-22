@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <array>
 #include <climits>
+#include <map>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -44,6 +45,9 @@
 #endif
 #ifdef SPPARKS_ZLIB
 #include <zlib.h>
+#endif
+#ifdef _OPENMP
+#include <omp.h>
 #endif
 
 using namespace SPPARKS_NS;
@@ -82,6 +86,7 @@ DumpHDF5::DumpHDF5(SPPARKS *spk, int narg, char **arg) : Dump(spk, narg, arg) {
   verbose = 0;
   atomic = 0;      // in place: no whole-file copy per dump (see dump_modify atomic)
   compress = 0;
+  turns = -1;
   for (int d = 0; d < 3; d++) {
     origin[d] = 0;
     dims[d] = 0;
@@ -258,10 +263,38 @@ void DumpHDF5::ensure_dataset(const std::string &label, int type) {
    anything else, which is left to H5Dread/H5Dwrite.  Writes need the
    serial driver: under MPI-IO a direct chunk write allocates file space
    independently, which parallel HDF5 requires to be collective.
+
+   For ranks writing in turn, a write splits in two.  pack_out: build and
+   compress the chunks into pack_out instead of writing them (all ranks at
+   once, before the turns; reading the old contents of partly covered
+   chunks is safe then, as each chunk has one writer).  pack_in: only
+   write those (in this rank's turn).  With sh, only the chunks this rank
+   owns, filled in with the other ranks' parts.
 ------------------------------------------------------------------------- */
 
+// the rank that writes chunk c (chunk-grid coordinates): one of the ranks
+// whose slab touches it, picked by the chunk's position so that neighbouring
+// chunks alternate between them -- the lowest would own (and compress) every
+// chunk split across ranks, e.g. all of them when chunks span the box in x
+// ponytail: O(ranks) per chunk; index the slabs if thousands of ranks make it show
+static int chunk_owner(const std::array<hsize_t, 3> &c, const hsize_t *cd,
+                       const std::vector<uint64_t> &slabs) {
+  int touching[64], n = 0; // a chunk touches few slabs; more just narrows the choice
+  for (size_t r = 0; r < slabs.size() / 6 && n < 64; r++) {
+    const uint64_t *b = &slabs[6 * r];
+    bool hit = true;
+    for (int k = 0; k < 3; k++)
+      if (b[3 + k] == 0 || b[k] >= (c[k] + 1) * cd[k] || b[k] + b[3 + k] <= c[k] * cd[k])
+        hit = false;
+    if (hit) touching[n++] = (int)r;
+  }
+  return n ? touching[(c[0] + c[1] + c[2]) % n] : -1;
+}
+
 static bool box_chunks(hid_t ds, const size_t *offset, const size_t *count, void *data,
-                       bool write) {
+                       bool write, std::vector<HDF5Chunk> *pack_out = nullptr,
+                       const std::vector<HDF5Chunk> *pack_in = nullptr,
+                       const HDF5Shared *sh = nullptr) {
 #ifndef SPPARKS_ZLIB
   return false;
 #else
@@ -298,30 +331,59 @@ static bool box_chunks(hid_t ds, const size_t *offset, const size_t *count, void
   for (int k = 0; ok && k < 3; k++)
     if (count[k] == 0 || offset[k] + count[k] > dims[k]) ok = false;
   if (!ok || !deflate) return false;
-
-  // every chunk the box touches, as chunk-grid coordinates
-  std::vector<std::array<hsize_t, 3>> chunks;
-  for (hsize_t z = offset[0] / cd[0]; z <= (offset[0] + count[0] - 1) / cd[0]; z++)
-    for (hsize_t y = offset[1] / cd[1]; y <= (offset[1] + count[1] - 1) / cd[1]; y++)
-      for (hsize_t x = offset[2] / cd[2]; x <= (offset[2] + count[2] - 1) / cd[2]; x++)
-        chunks.push_back({z, y, x});
+  if (pack_in) {
+    for (const HDF5Chunk &c : *pack_in) {
+      hsize_t off[3] = {c.off[0], c.off[1], c.off[2]};
+      if (H5Dwrite_chunk(ds, H5P_DEFAULT, c.mask, off, c.bytes.size(), c.bytes.data()) < 0)
+        return false;
+    }
+    return true;
+  }
 
   const size_t nelem = cd[0] * cd[1] * cd[2], chunk_bytes = nelem * es;
+
+  // other ranks' parts, by the chunk each lies in
+  std::map<std::array<hsize_t, 3>, std::vector<const HDF5Piece *>> parts;
+  if (sh)
+    for (const HDF5Piece &p : sh->pieces)
+      parts[{p.off[0] / cd[0], p.off[1] / cd[1], p.off[2] / cd[2]}].push_back(&p);
+  const std::vector<const HDF5Piece *> none;
+
+  // every chunk the box touches (that this rank owns), as chunk-grid
+  // coordinates, whether it is wholly covered, and the other ranks' parts in it
+  std::vector<std::array<hsize_t, 3>> chunks;
+  std::vector<char> whole;
+  std::vector<const std::vector<const HDF5Piece *> *> pcs;
+  for (hsize_t z = offset[0] / cd[0]; z <= (offset[0] + count[0] - 1) / cd[0]; z++)
+    for (hsize_t y = offset[1] / cd[1]; y <= (offset[1] + count[1] - 1) / cd[1]; y++)
+      for (hsize_t x = offset[2] / cd[2]; x <= (offset[2] + count[2] - 1) / cd[2]; x++) {
+        std::array<hsize_t, 3> c = {z, y, x};
+        if (sh && chunk_owner(c, cd, sh->slabs) != sh->me) continue;
+        size_t covered = 1;
+        for (int k = 0; k < 3; k++)
+          covered *= std::min<hsize_t>((c[k] + 1) * cd[k], offset[k] + count[k]) -
+                     std::max<hsize_t>(c[k] * cd[k], offset[k]);
+        auto it = parts.find(c);
+        const std::vector<const HDF5Piece *> *in = it == parts.end() ? &none : &it->second;
+        for (const HDF5Piece *p : *in) covered += p->cnt[0] * p->cnt[1] * p->cnt[2];
+        char w = covered == nelem; // slabs are disjoint, so volumes add
+        chunks.push_back(c);
+        whole.push_back(w);
+        pcs.push_back(in);
+      }
+
+
   const size_t batch = 64; // ~64 compressed chunks in flight
   std::vector<std::vector<unsigned char>> comp(batch);
   std::vector<uint32_t> mask(batch);
-  std::vector<char> filled(batch), whole(batch);
+  std::vector<char> filled(batch);
   unsigned char *box = (unsigned char *)data;
   for (size_t b0 = 0; b0 < chunks.size(); b0 += batch) {
     const size_t nb = std::min(batch, chunks.size() - b0);
     for (size_t b = 0; b < nb; b++) {
-      hsize_t off[3];
-      whole[b] = 1;
-      for (int k = 0; k < 3; k++) {
-        off[k] = chunks[b0 + b][k] * cd[k];
-        if (off[k] < offset[k] || off[k] + cd[k] > offset[k] + count[k]) whole[b] = 0;
-      }
-      if (write && whole[b]) continue; // overwritten entirely, nothing to keep
+      hsize_t off[3] = {chunks[b0 + b][0] * cd[0], chunks[b0 + b][1] * cd[1],
+                        chunks[b0 + b][2] * cd[2]};
+      if (write && whole[b0 + b]) continue; // overwritten entirely, nothing to keep
       haddr_t addr;
       hsize_t nbytes = 0;
       unsigned fmask = 0;
@@ -338,7 +400,7 @@ static bool box_chunks(hid_t ds, const size_t *offset, const size_t *count, void
 #pragma omp for schedule(dynamic)
       for (size_t b = 0; b < nb; b++) {
         unsigned char *raw = buf1.data(); // the chunk's values, unfiltered
-        if (write && whole[b]) {
+        if (write && whole[b0 + b]) {
         } else if (filled[b]) {
           for (size_t i = 0; i < nelem; i++) memcpy(&buf1[i * es], fill, es);
         } else {
@@ -389,6 +451,15 @@ static bool box_chunks(hid_t ds, const size_t *offset, const size_t *count, void
             else memcpy(box + in_box, raw + in_chunk, (hi[2] - lo[2]) * es);
           }
         if (!write) continue;
+        for (const HDF5Piece *p : *pcs[b0 + b])
+          for (hsize_t z = 0; z < p->cnt[0]; z++)
+            for (hsize_t y = 0; y < p->cnt[1]; y++) {
+              size_t in_chunk = (((p->off[0] + z - chunks[b0 + b][0] * cd[0]) * cd[1] +
+                                  (p->off[1] + y - chunks[b0 + b][1] * cd[1])) * cd[2] +
+                                 (p->off[2] - chunks[b0 + b][2] * cd[2])) * es;
+              memcpy(raw + in_chunk, sh->bytes.data() + p->at + (z * p->cnt[1] + y) * p->cnt[2] * es,
+                     p->cnt[2] * es);
+            }
 
         // apply the pipeline: [shuffle,] deflate.  Like HDF5's optional deflate,
         // a chunk that does not shrink is stored as is with its mask bit set.
@@ -415,7 +486,9 @@ static bool box_chunks(hid_t ds, const size_t *offset, const size_t *count, void
       for (size_t b = 0; b < nb; b++) {
         hsize_t off[3] = {chunks[b0 + b][0] * cd[0], chunks[b0 + b][1] * cd[1],
                           chunks[b0 + b][2] * cd[2]};
-        if (H5Dwrite_chunk(ds, H5P_DEFAULT, mask[b], off, comp[b].size(), comp[b].data()) < 0)
+        if (pack_out)
+          pack_out->push_back({{off[0], off[1], off[2]}, mask[b], std::move(comp[b])});
+        else if (H5Dwrite_chunk(ds, H5P_DEFAULT, mask[b], off, comp[b].size(), comp[b].data()) < 0)
           return false;
       }
   }
@@ -604,8 +677,13 @@ void DumpHDF5::write(double time) {
   std::string tmp = std::string(filename) + ".tmp";
   const char *target = atomic ? tmp.c_str() : filename;
   if (atomic) stage_copy(target);
+  double t[7];
+  t[0] = MPI_Wtime();
   open_file(target);
-  write_fields(time);
+  bool in_turns = use_turns();
+  t[1] = MPI_Wtime();
+  write_fields(time, in_turns);
+  t[2] = MPI_Wtime();
   try {
     file->flush(); // H5Fflush; under MPI-IO it ends in MPI_File_sync
   } catch (const std::exception &e) {
@@ -613,9 +691,20 @@ void DumpHDF5::write(double time) {
   }
   file.reset(); // collective close
   opened = false;
+  t[3] = MPI_Wtime();
+  if (in_turns) take_turns(target);
+  t[4] = MPI_Wtime();
   verify(target, time);
+  t[5] = MPI_Wtime();
   if (atomic) commit(target);
   else sync_file(target);
+  t[6] = MPI_Wtime();
+  if (verbose && me == 0 && screen)
+    fprintf(screen,
+            "dump hdf5: open %.2f, %s %.2f, close %.2f, turns %.2f, read-back %.2f, "
+            "sync %.2f s\n",
+            t[1] - t[0], in_turns ? "share+compress" : "write", t[2] - t[1], t[3] - t[2],
+            t[4] - t[3], t[5] - t[4], t[6] - t[5]);
 }
 
 /* ----------------------------------------------------------------------
@@ -1007,7 +1096,184 @@ void DumpHDF5::my_slab(std::vector<size_t> &offset, std::vector<size_t> &count) 
   count = {(size_t)n[2], (size_t)n[1], (size_t)n[0]};
 }
 
-void DumpHDF5::write_fields(double time) {
+// site ordering for a simple lattice is x fastest, then y, then z -- the
+// same order as the [z][y][x] hyperslab, so a field is written with no repacking
+void *DumpHDF5::field_data(int i) {
+  if (vtype[i] == INT) return (fields[i] == SITE) ? app->iarray[0] : app->iarray[vindex[i]];
+  return app->darray[vindex[i]];
+}
+
+static void write_slab(HighFive::DataSet &dset, const std::vector<size_t> &offset,
+                       const std::vector<size_t> &count, bool isint, void *src,
+                       const HighFive::DataTransferProps &xfer) {
+  HighFive::HyperSlab slab{HighFive::RegularHyperSlab(offset, count)};
+  if (isint) dset.select(slab).write_raw((int *)src, HighFive::AtomicType<int32_t>(), xfer);
+  else dset.select(slab).write_raw((double *)src, HighFive::AtomicType<double>(), xfer);
+}
+
+/* ----------------------------------------------------------------------
+   whether this dump's ranks write in turn: always with turns yes, never
+   with turns no or on one rank; by default when compressing and every
+   rank has more than one thread to compress with
+------------------------------------------------------------------------- */
+
+bool DumpHDF5::use_turns() {
+  if (nprocs == 1 || turns == 0) return false;
+  if (turns == 1) return true;
+  int nthreads = 1, fewest;
+#ifdef _OPENMP
+  nthreads = omp_get_max_threads();
+#endif
+  MPI_Allreduce(&nthreads, &fewest, 1, MPI_INT, MPI_MIN, world);
+  return compress > 0 && fewest > 1;
+}
+
+/* ----------------------------------------------------------------------
+   turns, field i: send this rank's parts of the chunks other ranks own to
+   their owners, and receive the parts of the chunks this rank owns, so each
+   chunk is written once. A chunk written in two turns would move twice,
+   and the space it left in the first turn is lost to the file.
+   false (on every rank) if the dataset is not chunked.
+------------------------------------------------------------------------- */
+
+bool DumpHDF5::share(int i, int64_t dataset, const std::vector<size_t> &offset,
+                     const std::vector<size_t> &count, HDF5Shared &sh) {
+  sh.me = me;
+  sh.slabs.resize(6 * nprocs);
+  uint64_t mine[6] = {offset[0], offset[1], offset[2], count[0], count[1], count[2]};
+  MPI_Allgather(mine, 6, MPI_UINT64_T, sh.slabs.data(), 6, MPI_UINT64_T, world);
+
+  hsize_t cd[3];
+  hid_t dcpl = H5Dget_create_plist(dataset);
+  bool chunked = H5Pget_layout(dcpl) == H5D_CHUNKED && H5Pget_chunk(dcpl, 3, cd) == 3;
+  H5Pclose(dcpl);
+  if (!chunked) return false;
+
+  // this rank's part of each chunk another rank owns: a header (offset,
+  // count, start) and the values, x-run by x-run, per destination
+  const size_t es = vtype[i] == INT ? 4 : 8;
+  const unsigned char *src = (const unsigned char *)field_data(i);
+  std::vector<std::vector<uint64_t>> hdr(nprocs);
+  std::vector<std::vector<unsigned char>> val(nprocs);
+  for (hsize_t z = offset[0] / cd[0]; z <= (offset[0] + count[0] - 1) / cd[0]; z++)
+    for (hsize_t y = offset[1] / cd[1]; y <= (offset[1] + count[1] - 1) / cd[1]; y++)
+      for (hsize_t x = offset[2] / cd[2]; x <= (offset[2] + count[2] - 1) / cd[2]; x++) {
+        std::array<hsize_t, 3> c = {z, y, x};
+        int r = chunk_owner(c, cd, sh.slabs);
+        if (r == me) continue;
+        uint64_t lo[3], n[3];
+        for (int k = 0; k < 3; k++) {
+          lo[k] = std::max<uint64_t>(c[k] * cd[k], offset[k]);
+          n[k] = std::min<uint64_t>((c[k] + 1) * cd[k], offset[k] + count[k]) - lo[k];
+        }
+        hdr[r].insert(hdr[r].end(), {lo[0], lo[1], lo[2], n[0], n[1], n[2], val[r].size()});
+        for (uint64_t zz = lo[0]; zz < lo[0] + n[0]; zz++)
+          for (uint64_t yy = lo[1]; yy < lo[1] + n[1]; yy++) {
+            const unsigned char *run =
+                src + (((zz - offset[0]) * count[1] + (yy - offset[1])) * count[2] +
+                       (lo[2] - offset[2])) * es;
+            val[r].insert(val[r].end(), run, run + n[2] * es);
+          }
+      }
+
+  // MPI counts are int: flatten per destination and check the totals fit
+  std::vector<int> hs(nprocs), hr(nprocs), vs(nprocs), vr(nprocs), hsd(nprocs), hrd(nprocs),
+      vsd(nprocs), vrd(nprocs);
+  std::vector<uint64_t> hflat;
+  std::vector<unsigned char> vflat;
+  for (int r = 0; r < nprocs; r++) {
+    hs[r] = hdr[r].size();
+    vs[r] = val[r].size();
+    hflat.insert(hflat.end(), hdr[r].begin(), hdr[r].end());
+    vflat.insert(vflat.end(), val[r].begin(), val[r].end());
+    std::vector<unsigned char>().swap(val[r]);
+  }
+  MPI_Alltoall(hs.data(), 1, MPI_INT, hr.data(), 1, MPI_INT, world);
+  MPI_Alltoall(vs.data(), 1, MPI_INT, vr.data(), 1, MPI_INT, world);
+  int64_t got = 0, hgot = 0;
+  for (int r = 0; r < nprocs; r++) got += vr[r], hgot += hr[r];
+  int64_t biggest = std::max<int64_t>(vflat.size(), got), most;
+  MPI_Allreduce(&biggest, &most, 1, MPI_INT64_T, MPI_MAX, world);
+  if (most > INT_MAX)
+    error->all(FLERR, "Dump hdf5 turns: over 2 GB of one field shared between ranks' "
+                      "chunks; use smaller chunks or dump_modify turns no");
+  for (int r = 1; r < nprocs; r++) {
+    hsd[r] = hsd[r - 1] + hs[r - 1];
+    hrd[r] = hrd[r - 1] + hr[r - 1];
+    vsd[r] = vsd[r - 1] + vs[r - 1];
+    vrd[r] = vrd[r - 1] + vr[r - 1];
+  }
+  std::vector<uint64_t> hin(hgot);
+  sh.bytes.resize(got);
+  MPI_Alltoallv(hflat.data(), hs.data(), hsd.data(), MPI_UINT64_T, hin.data(), hr.data(),
+                hrd.data(), MPI_UINT64_T, world);
+  MPI_Alltoallv(vflat.data(), vs.data(), vsd.data(), MPI_BYTE, sh.bytes.data(), vr.data(),
+                vrd.data(), MPI_BYTE, world);
+  for (int r = 0; r < nprocs; r++)
+    for (int h = hrd[r]; h < hrd[r] + hr[r]; h += 7) {
+      const uint64_t *v = &hin[h];
+      sh.pieces.push_back({{v[0], v[1], v[2]}, {v[3], v[4], v[5]}, v[6] + vrd[r]});
+    }
+  return true;
+}
+
+/* ----------------------------------------------------------------------
+   ranks write in turn. Every rank has already built and compressed the
+   chunks it owns (write_fields, all ranks at once, all threads); now, in
+   rank order, each rank opens the closed file alone with the POSIX driver,
+   writes them and closes it, so the next rank's allocations see its writes.
+   Only the file I/O is serial. Relies on close-to-open consistency, which
+   Lustre and GPFS give and NFS does not.
+------------------------------------------------------------------------- */
+
+namespace {
+// The turns already give one rank the file at a time; an HDF5 lock would
+// add nothing, and fails outright on a file system mounted without flock.
+struct NoFileLocking {
+  void apply(hid_t fapl) const { H5Pset_file_locking(fapl, false, true); }
+};
+} // namespace
+
+void DumpHDF5::take_turns(const char *fname) {
+  std::vector<size_t> offset, count;
+  my_slab(offset, count);
+  int token = 0;
+  std::string why;
+  if (me > 0) MPI_Recv(&token, 1, MPI_INT, me - 1, 0, world, MPI_STATUS_IGNORE);
+  try {
+    HighFive::FileAccessProps fapl;
+    fapl.add(NoFileLocking{});
+    HighFive::File f(fname, HighFive::File::ReadWrite, fapl);
+    for (int i = 0; i < size_one; i++) {
+      HighFive::DataSet dset = f.getDataSet(labels[i]);
+      void *src = field_data(i);
+      if (!packed_ok[i])
+        write_slab(dset, offset, count, vtype[i] == INT, src, {});
+      else if (!box_chunks(dset.getId(), offset.data(), count.data(), src, true, nullptr,
+                           &packed[i]))
+        throw std::runtime_error("writing the chunks of " + labels[i] + " failed");
+      std::vector<HDF5Chunk>().swap(packed[i]);
+    }
+    f.flush();
+  } catch (const std::exception &e) {
+    why = e.what();
+  }
+  // pass the turn on even after a failure, or every later rank waits forever
+  if (me < nprocs - 1) MPI_Send(&token, 1, MPI_INT, me + 1, 0, world);
+
+  int failed = !why.empty(), first;
+  int rank = failed ? me : nprocs;
+  MPI_Allreduce(&rank, &first, 1, MPI_INT, MPI_MIN, world);
+  if (first == nprocs) return;
+  if (failed) fprintf(stderr, "Dump hdf5 rank %d: %s\n", me, why.c_str());
+  char msg[512];
+  snprintf(msg, sizeof(msg), "Dump hdf5 write failed on %s in rank %d's turn (see stderr)%s",
+           fname, first,
+           atomic ? "; the previous dump is intact" : "; the file is damaged, restore a backup");
+  error->all(FLERR, msg);
+}
+
+void DumpHDF5::write_fields(double time, bool pack) {
   std::vector<size_t> offset, count;
   my_slab(offset, count);
 
@@ -1027,20 +1293,25 @@ void DumpHDF5::write_fields(double time) {
     if (nprocs > 1) xfer.add(HighFive::UseCollectiveIO{});
 #endif
 
+    if (pack) {
+      packed.assign(size_one, {});
+      packed_ok.assign(size_one, 0);
+    }
     for (int i = 0; i < size_one; i++) {
       HighFive::DataSet dset = file->getDataSet(labels[i]);
-      HighFive::HyperSlab slab{HighFive::RegularHyperSlab(offset, count)};
-      if (vtype[i] == INT) {
-        // site ordering for a simple lattice is x fastest, then y, then z --
-        // the same order as the [z][y][x] hyperslab, so no repacking
-        int *src = (fields[i] == SITE) ? app->iarray[0] : app->iarray[vindex[i]];
-        if (nprocs > 1 || !box_chunks(dset.getId(), offset.data(), count.data(), src, true))
-          dset.select(slab).write_raw(src, HighFive::AtomicType<int32_t>(), xfer);
-      } else {
-        double *src = app->darray[vindex[i]];
-        if (nprocs > 1 || !box_chunks(dset.getId(), offset.data(), count.data(), src, true))
-          dset.select(slab).write_raw(src, HighFive::AtomicType<double>(), xfer);
+      void *src = field_data(i);
+      if (pack) { // compressed here on all ranks at once, written in take_turns
+        HDF5Shared sh;
+        int ok = share(i, dset.getId(), offset, count, sh) &&
+                 box_chunks(dset.getId(), offset.data(), count.data(), src, true, &packed[i],
+                            nullptr, &sh);
+        int all;
+        MPI_Allreduce(&ok, &all, 1, MPI_INT, MPI_MIN, world);
+        packed_ok[i] = all; // else every rank writes its whole slab in its turn
+        continue;
       }
+      if (nprocs > 1 || !box_chunks(dset.getId(), offset.data(), count.data(), src, true))
+        write_slab(dset, offset, count, vtype[i] == INT, src, xfer);
 
 #ifdef H5_HAVE_PARALLEL
       if (verbose && nprocs > 1) {
@@ -1156,6 +1427,14 @@ int DumpHDF5::modify_param(int narg, char **arg) {
       error->all(FLERR, "Illegal dump_modify command");
     if (strcmp(arg[1], "yes") == 0) atomic = 1;
     else if (strcmp(arg[1], "no") == 0) atomic = 0;
+    else error->all(FLERR, "Illegal dump_modify command");
+    return 2;
+  }
+  if (strcmp(arg[0], "turns") == 0) {
+    if (narg < 2)
+      error->all(FLERR, "Illegal dump_modify command");
+    if (strcmp(arg[1], "yes") == 0) turns = 1;
+    else if (strcmp(arg[1], "no") == 0) turns = 0;
     else error->all(FLERR, "Illegal dump_modify command");
     return 2;
   }

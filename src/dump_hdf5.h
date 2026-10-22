@@ -50,6 +50,27 @@ namespace SPPARKS_NS {
 bool hdf5_read_box_parallel(int64_t dataset, const size_t *offset, const size_t *count,
                             void *out);
 
+// One chunk compressed ahead of an H5Dwrite_chunk: chunk-grid origin
+// ([z][y][x] element offset), filter mask, filtered bytes.
+struct HDF5Chunk {
+  uint64_t off[3];
+  uint32_t mask;
+  std::vector<unsigned char> bytes;
+};
+
+// Ranks writing in turn write each chunk once, from its owner: one of the
+// ranks whose slab touches it (chunk_owner). The other ranks' parts of the owner's chunks
+// ([z][y][x] element offset and count, start in bytes) reach it beforehand.
+struct HDF5Piece {
+  uint64_t off[3], cnt[3], at;
+};
+struct HDF5Shared {
+  int me;
+  std::vector<uint64_t> slabs; // 6 per rank: z,y,x offset then z,y,x count
+  std::vector<HDF5Piece> pieces;
+  std::vector<unsigned char> bytes;
+};
+
 /* ----------------------------------------------------------------------
    dump hdf5: latest-state-only lattice output.
 
@@ -93,6 +114,12 @@ private:
   int verbose;             // report collective-IO mode after each write
   int atomic;              // write a copy, then rename it over the file (else in place)
   int compress;            // deflate level of new datasets, 0 = off
+  int turns;               // np>1: ranks write in turn (1), collectively (0), or auto (-1)
+
+  // turns: each field's chunks this rank owns, compressed before the turns
+  // start; packed_ok[i] = 0 if field i could not be packed
+  std::vector<std::vector<HDF5Chunk>> packed;
+  std::vector<char> packed_ok;
 
   // private methods
 
@@ -105,7 +132,12 @@ private:
   int modify_param(int, char **);
 
   void open_file(const char *fname);
-  void write_fields(double);
+  void write_fields(double, bool pack);
+  void *field_data(int i);
+  bool share(int i, int64_t dataset, const std::vector<size_t> &offset,
+             const std::vector<size_t> &count, HDF5Shared &sh);
+  bool use_turns();
+  void take_turns(const char *fname);
   void my_slab(std::vector<size_t> &offset, std::vector<size_t> &count);
   void verify(const char *fname, double time);
   void stage_copy(const char *tmp);

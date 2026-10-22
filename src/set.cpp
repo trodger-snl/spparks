@@ -285,8 +285,12 @@ void Set::command(int narg, char **arg) {
       else
         error->all(FLERR, "Illegal set command");
 
+      // id has its own type: it was neither parsed nor compared (if id < N
+      // tested against an uninitialised value)
       if (cond[ncondition].type == INT)
         cond[ncondition].irhs = atoi(arg[iarg + 3]);
+      else if (cond[ncondition].type == TAGINT)
+        cond[ncondition].trhs = ATOTAGINT(arg[iarg + 3]);
       else
         cond[ncondition].drhs = atof(arg[iarg + 3]);
 
@@ -1448,7 +1452,8 @@ void Set::set_binary_file(int lhs, int rhs) {
   // read header of binary file
   // insure it matches current simulation box
 
-  int i, m, ix, iy, iz, xfile, yfile, zfile;
+  int i, ix, iy, iz, xfile, yfile, zfile;
+  bigint m;
   size_t tmp;
   int nxyz[3];
   FILE *fp;
@@ -1468,13 +1473,20 @@ void Set::set_binary_file(int lhs, int rhs) {
 
   int nlocal = app->nlocal;
 
+  // the whole lattice is broadcast in one call, whose count is an int
+  // ponytail: one Bcast of everything; read only each rank's part past 2^31
+  bigint nall = (bigint) nx * ny * nz;
+  if (nall > MAXSMALLINT)
+    error->all(FLERR, "Set bfile supports up to 2^31-1 sites; use set hdf5");
+  bigint mxy = (bigint) nx * ny;
+
   if (lhs == SITE || lhs == IARRAY) {
     int *buf;
-    memory->create(buf, nx * ny * nz, "set:buf");
+    memory->create(buf, nall, "set:buf");
 
     if (me == 0)
-      tmp = fread(buf, sizeof(int), nx * ny * nz, fp);
-    MPI_Bcast(buf, nx * ny * nz, MPI_INT, 0, world);
+      tmp = fread(buf, sizeof(int), nall, fp);
+    MPI_Bcast(buf, (int) nall, MPI_INT, 0, world);
 
     int *array = app->iarray[siteindex];
     for (i = 0; i < nlocal; i++) {
@@ -1484,7 +1496,7 @@ void Set::set_binary_file(int lhs, int rhs) {
       xfile = xlo_me - xlo + ix;
       yfile = ylo_me - ylo + iy;
       zfile = zlo_me - zlo + iz;
-      m = nx * ny * zfile + nx * yfile + xfile;
+      m = mxy * zfile + (bigint) nx * yfile + xfile;
       array[i] = buf[m];
     }
 
@@ -1492,11 +1504,11 @@ void Set::set_binary_file(int lhs, int rhs) {
 
   } else if (lhs == DARRAY) {
     double *buf;
-    memory->create(buf, nx * ny * nz, "set:buf");
+    memory->create(buf, nall, "set:buf");
 
     if (me == 0)
-      tmp = fread(buf, sizeof(double), nx * ny * nz, fp);
-    MPI_Bcast(buf, nx * ny * nz, MPI_INT, 0, world);
+      tmp = fread(buf, sizeof(double), nall, fp);
+    MPI_Bcast(buf, (int) nall, MPI_DOUBLE, 0, world);
 
     double *array = app->darray[siteindex];
     for (i = 0; i < nlocal; i++) {
@@ -1506,7 +1518,7 @@ void Set::set_binary_file(int lhs, int rhs) {
       xfile = xlo_me - xlo + ix;
       yfile = ylo_me - ylo + iy;
       zfile = zlo_me - zlo + iz;
-      m = nx * ny * zfile + nx * yfile + xfile;
+      m = mxy * zfile + (bigint) nx * yfile + xfile;
       array[i] = buf[m];
     }
 
@@ -1551,7 +1563,7 @@ int Set::condition(int i) {
         if (intarray[offset] >= cond[m].irhs)
           return 1;
       } else if (cond[m].type == TAGINT) {
-        if (tagintarray[offset] >= cond[m].irhs)
+        if (tagintarray[offset] >= cond[m].trhs)
           return 1;
       } else {
         if (doublearray[offset] >= cond[m].drhs)
@@ -1562,7 +1574,7 @@ int Set::condition(int i) {
         if (intarray[offset] > cond[m].irhs)
           return 1;
       } else if (cond[m].type == TAGINT) {
-        if (tagintarray[offset] > cond[m].irhs)
+        if (tagintarray[offset] > cond[m].trhs)
           return 1;
       } else {
         if (doublearray[offset] > cond[m].drhs)
@@ -1573,7 +1585,7 @@ int Set::condition(int i) {
         if (intarray[offset] <= cond[m].irhs)
           return 1;
       } else if (cond[m].type == TAGINT) {
-        if (tagintarray[offset] <= cond[m].irhs)
+        if (tagintarray[offset] <= cond[m].trhs)
           return 1;
       } else {
         if (doublearray[offset] <= cond[m].drhs)
@@ -1584,7 +1596,7 @@ int Set::condition(int i) {
         if (intarray[offset] < cond[m].irhs)
           return 1;
       } else if (cond[m].type == TAGINT) {
-        if (tagintarray[offset] < cond[m].irhs)
+        if (tagintarray[offset] < cond[m].trhs)
           return 1;
       } else {
         if (doublearray[offset] < cond[m].drhs)
@@ -1595,7 +1607,7 @@ int Set::condition(int i) {
         if (intarray[offset] != cond[m].irhs)
           return 1;
       } else if (cond[m].type == TAGINT) {
-        if (tagintarray[offset] != cond[m].irhs)
+        if (tagintarray[offset] != cond[m].trhs)
           return 1;
       } else {
         if (doublearray[offset] != cond[m].drhs)
@@ -1606,7 +1618,7 @@ int Set::condition(int i) {
         if (intarray[offset] == cond[m].irhs)
           return 1;
       } else if (cond[m].type == TAGINT) {
-        if (tagintarray[offset] == cond[m].irhs)
+        if (tagintarray[offset] == cond[m].trhs)
           return 1;
       } else {
         if (doublearray[offset] == cond[m].drhs)

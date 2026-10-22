@@ -709,6 +709,9 @@ void DiagCluster::dump_clusters(double time)
   int maxbuftmp;
   int cid;
   tagint isite;
+  // the whole lattice is gathered on rank 0 in int-indexed arrays
+  if ((bigint) nx_global*ny_global*nz_global > MAXSMALLINT)
+    error->all(FLERR,"Diag cluster dump supports up to 2^31-1 sites");
   int nsites = nx_global*ny_global*nz_global;
   int* datadx;
   int* randomkeys;

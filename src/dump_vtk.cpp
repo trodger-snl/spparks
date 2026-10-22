@@ -79,7 +79,7 @@ void DumpVTK::init_style()
 
 void DumpVTK::write_header(bigint ndump, double time)
 {
-  if (ndump != nx*ny*nz)
+  if (ndump != (bigint) nx*ny*nz)
     error->all(FLERR,"Dump vtk output does not match "
                "dump modify vtk settings");
 

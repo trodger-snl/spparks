@@ -352,6 +352,8 @@ int Lattice::id2color(tagint idsite, int delcolor)
     error->all(FLERR,"Cannot use coloring without domain nx,ny,nz defined");
 
   idsite--;
+  // tagint: the int product nx*ny overflows on a plane past 2^31 sites
+  tagint nxy = (tagint) nx * ny;
 
   if (style == SQ_4N) {
     i = idsite % nx;
@@ -369,15 +371,15 @@ int Lattice::id2color(tagint idsite, int delcolor)
 
   } else if (style == SC_6N) {
     i = idsite % nx;
-    j = (idsite%(nx*ny)) / nx;
-    k = idsite / (nx*ny);
+    j = (idsite%nxy) / nx;
+    k = idsite / nxy;
     icolor = (i+j+k) % 2;
 
   } else if (style == SC_26N) {
     ncolor1d = delcolor+1;
     i = idsite % nx;
-    j = (idsite%(nx*ny)) / nx;
-    k = idsite / (nx*ny);
+    j = (idsite%nxy) / nx;
+    k = idsite / nxy;
     icolor = ncolor1d*ncolor1d*(k%ncolor1d) + 
       ncolor1d*(j%ncolor1d) + i%ncolor1d;
 

@@ -310,9 +310,10 @@ void CreateSites::structured_lattice()
 
   // check for possible overflow of site IDs
 
-  bigint nglobal = (xhi-xlo+1)*nbasis;
-  if (dimension >= 2) nglobal *= (yhi-ylo+1)*nbasis;
-  if (dimension == 3) nglobal *= (zhi-zlo+1)*nbasis;
+  // nbasis sites per unit cell, counted once (it was cubed)
+  bigint nglobal = (bigint) (xhi-xlo+1)*nbasis;
+  if (dimension >= 2) nglobal *= (yhi-ylo+1);
+  if (dimension == 3) nglobal *= (zhi-zlo+1);
   if (nglobal > MAXTAGINT) 
     error->all(FLERR,"Site IDs may exceed max ID value");
 

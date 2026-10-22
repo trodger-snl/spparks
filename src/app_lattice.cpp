@@ -1362,8 +1362,14 @@ void AppLattice::add_ghost(tagint n, double x, double y, double z,
 void AppLattice::add_neighbors(int i, int nvalues, char **values)
 {
   numneigh[i] = nvalues;
-  for (int m = 0; m < nvalues; m++)
-    neighbor[i][m] = atoi(values[m]);
+  for (int m = 0; m < nvalues; m++) {
+    // neighbor[] holds the global id until it is made local, and is int
+    // ponytail: stage in a tagint array if read_sites must pass 2^31 sites
+    tagint idn = ATOTAGINT(values[m]);
+    if (idn > MAXSMALLINT)
+      error->one(FLERR,"Read_sites Neighbors section supports site IDs up to 2^31-1");
+    neighbor[i][m] = (int) idn;
+  }
 }
 
 /* ----------------------------------------------------------------------

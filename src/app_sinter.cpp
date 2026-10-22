@@ -169,6 +169,9 @@ void AppSinter::input_app(char *command, int narg, char **arg)
 
 void AppSinter::init_app()
 {
+  // site ids are kept in int throughout (hash keys, grid indices)
+  if (nglobal > MAXSMALLINT)
+    error->all(FLERR,"App sinter supports up to 2^31-1 sites");
 
    // num sites along each axis in lattice
    int nx = domain->nx;

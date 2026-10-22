@@ -110,9 +110,9 @@ void DiagArray::init()
 void DiagArray::compute()
 {
   int nlocal = app->nlocal;
-  int nlocal_all;
-  
-  MPI_Allreduce(&nlocal,&nlocal_all,1,MPI_INT,MPI_SUM,world);
+  bigint nlocal_me = nlocal, nlocal_all;   // over 2^31 sites in all
+
+  MPI_Allreduce(&nlocal_me,&nlocal_all,1,MPI_SPK_BIGINT,MPI_SUM,world);
   
   double **dptr;
   int **iptr;
@@ -187,14 +187,15 @@ void DiagArray::compute()
         MPI_Allreduce(&itmp,&itmp_all,1,MPI_INT,MPI_MAX,world);
         vals[i]= double(itmp_all);
       } else {
-        itmp = 0;
-        for (int j = 0; j < nlocal; j++) itmp += iptr[ii][j];
-        MPI_Allreduce(&itmp,&itmp_all,1,MPI_INT,MPI_SUM,world);
-        
+        // sums of iN outgrow int long before 2^31 sites (sum of i2 ~ 3N)
+        bigint isum = 0, isum_all;
+        for (int j = 0; j < nlocal; j++) isum += iptr[ii][j];
+        MPI_Allreduce(&isum,&isum_all,1,MPI_SPK_BIGINT,MPI_SUM,world);
+
         if (diag_method[i]==MEAN)
-          vals[i] = double(itmp_all) / double(nlocal_all);
+          vals[i] = double(isum_all) / double(nlocal_all);
         else if (diag_method[i]==SUM)
-          vals[i] = double(itmp_all);
+          vals[i] = double(isum_all);
       }  
     }
   } 

@@ -1681,12 +1681,12 @@ void AppAdditiveTexture::activate_powder_sites() {
   }
 
   // Sum across all MPI ranks
-  int global_powder_activated = 0;
-  MPI_Allreduce(&powder_activated, &global_powder_activated, 1, MPI_INT, MPI_SUM, world);
+  bigint powder_me = powder_activated, global_powder_activated = 0;  // a layer can pass 2^31
+  MPI_Allreduce(&powder_me, &global_powder_activated, 1, MPI_SPK_BIGINT, MPI_SUM, world);
 
   // Report activation (rank 0 only)
   if (domain->me == 0 && global_powder_activated > 0) {
-    fprintf(screen, "Powder activation at t=%.6e s: activated %d sites (meltpool top at z=%.3f)\n",
+    fprintf(screen, "Powder activation at t=%.6e s: activated " BIGINT_FORMAT " sites (meltpool top at z=%.3f)\n",
             time, global_powder_activated, global_max_molten_z);
   }
 }
@@ -1872,11 +1872,11 @@ void AppAdditiveTexture::generate_voids(RandomPark *random) {
     }
 
     // Report statistics
-    int global_sites_in_voids = 0;
-    MPI_Reduce(&sites_in_voids, &global_sites_in_voids, 1, MPI_INT, MPI_SUM, 0, world);
+    bigint voids_me = sites_in_voids, global_sites_in_voids = 0;
+    MPI_Reduce(&voids_me, &global_sites_in_voids, 1, MPI_SPK_BIGINT, MPI_SUM, 0, world);
 
     if (domain->me == 0 && actual_void_count > 0) {
-        fprintf(screen, "Total sites marked as voids: %d\n", global_sites_in_voids);
+        fprintf(screen, "Total sites marked as voids: " BIGINT_FORMAT "\n", global_sites_in_voids);
 
         // Post-generation verification: calculate actual pore fraction
         double total_void_volume = 0.0;

@@ -319,7 +319,8 @@ void ReadSites::header()
 
 void ReadSites::sites()
 {
-  int i,m,nchunk,id;
+  int i,m,nchunk;
+  tagint id;
   double x,y,z;
   char *values[4];
   char *next,*buf;
@@ -391,7 +392,7 @@ void ReadSites::sites()
   // check that all sites were assigned correctly
 
   tagint tmp = app->nlocal;
-  MPI_Allreduce(&tmp,&nglobal,1,MPI_INT,MPI_SUM,world);
+  MPI_Allreduce(&tmp,&nglobal,1,MPI_SPK_TAGINT,MPI_SUM,world);
 
   if (me == 0) {
     if (screen) fprintf(screen,"  " TAGINT_FORMAT " sites\n",nglobal);

@@ -234,11 +234,12 @@ void *AppPottsStrainPin::extract_app(char *name)
 
 void AppPottsStrainPin::pin_create()
 {
-  int i,j,m,nattempt,nme,npin,ndiff;
+  int i,j,m,ndiff;
+  bigint nattempt,nme,npin;     // global counts: over 2^31 sites with SPPARKS_BIGBIG
   int flag,flags[2],flagall[2];
   tagint iglobal;
 
-  int ndesired = static_cast<int> (pfraction*nglobal);
+  bigint ndesired = static_cast<bigint> (pfraction*nglobal);
 
   RandomPark *random = new RandomPark(ranmaster->uniform());
 
@@ -256,7 +257,7 @@ void AppPottsStrainPin::pin_create()
     npin = 0;
     while (npin < ndesired) {
       nattempt = ndesired - npin;
-      for (i = 0; i < nattempt; i++) {
+      for (bigint k = 0; k < nattempt; k++) {
 	iglobal = random->tagrandom(nglobal);
 	loc = hash.find(iglobal);
 	if (loc != hash.end()) {
@@ -274,7 +275,7 @@ void AppPottsStrainPin::pin_create()
       nme = 0;
       for (i = 0; i < nlocal; i++)
 	if (spin[i] > nspins) nme++;
-      MPI_Allreduce(&nme,&npin,1,MPI_INT,MPI_SUM,world);
+      MPI_Allreduce(&nme,&npin,1,MPI_SPK_BIGINT,MPI_SUM,world);
     }
 
   // multi site inclusions
@@ -322,7 +323,7 @@ void AppPottsStrainPin::pin_create()
       MPI_Allreduce(&flags,&flagall,2,MPI_INT,MPI_SUM,world);
 
       if (flagall[0]) {
-	MPI_Bcast(list,flagall[1],MPI_INT,flagall[0]-1,world);
+	MPI_Bcast(list,flagall[1],MPI_SPK_TAGINT,flagall[0]-1,world);
 	for (i = 0; i < flagall[1]; i++) {
 	  loc = hash.find(list[i]);
 	  if (loc != hash.end()) spin[loc->second] = nspins+1;
@@ -331,7 +332,7 @@ void AppPottsStrainPin::pin_create()
 	nme = 0;
 	for (i = 0; i < nlocal; i++)
 	  if (spin[i] > nspins) nme++;
-	MPI_Allreduce(&nme,&npin,1,MPI_INT,MPI_SUM,world);
+	MPI_Allreduce(&nme,&npin,1,MPI_SPK_BIGINT,MPI_SUM,world);
       }
     }
 

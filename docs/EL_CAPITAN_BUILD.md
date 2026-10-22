@@ -218,11 +218,18 @@ stays temperature-only, exactly as it is locally.
 
 **32-bit site IDs.** The build defaults to `SPPARKS_SMALLBIG`, capping a run at
 2^31 sites. On one node that ceiling is unreachable — at the per-site footprint
-below you exhaust the node's HBM first — so it only matters multi-node. Note that turning on `SPPARKS_BIGBIG` is **not currently
-safe**: `src/read_sites.cpp:394` does an `MPI_Allreduce` on a `tagint` with a
-hardcoded `MPI_INT`, and `src/lattice.cpp:365-366,372-373` computes
-`idsite/(nx*ny)` with `nx*ny` as `int*int`, which silently corrupts the
-checkerboard coloring rather than erroring. Both need fixing first.
+below you exhaust the node's HBM first — so it only matters multi-node. Past
+it, configure with `-DSPPARKS_BIGBIG=ON` (64-bit site IDs). Since 2026-10-22 the
+create_sites path is 64-bit clean: the simple-lattice site count, the
+checkerboard colouring, read_sites' site count, set `if id`, the sorted text
+dump, diag array sums and the AM apps' global counts. A BIGBIG build (CPU and
+HIP) reproduces the SMALLBIG trajectories and d6 bit for bit on the
+am_validation decks, potts with `sweep color` and potts/pin. It has not been
+run past 2^31 sites (~340 GB even for a 2-D lattice). What stays 32-bit stops
+with an error instead: the read_sites Neighbors section, `set bfile`, the
+diag cluster dump and app sinter. `set ... unique` wraps at 2^31-1, and the
+31-bit Park-Miller RNG gives ids that differ by 2^31-1 the same stream under
+`sweep color/strict`.
 
 **Memory per site.** Measured on gfx1151 (2D HDF5 ct15 deck, np=1, slope of
 peak memory over 4M/16M/64M-site boxes, host + device counted together):

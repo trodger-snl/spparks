@@ -237,7 +237,7 @@ void Dump::init()
         else if (me+1 != hi) idhi++;
 
         nme_reorder = idhi-idlo;
-        ntotal_reorder = static_cast<int> (app->nglobal);
+        ntotal_reorder = app->nglobal;
       }
     }
   }

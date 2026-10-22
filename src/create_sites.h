@@ -78,7 +78,8 @@ class CreateSites : protected Pointers {
   // site info to pack into a message from random lattices
 
   struct Site {
-    int id,proc,index;
+    tagint id;
+    int proc,index;
     double x,y,z;
   };
 

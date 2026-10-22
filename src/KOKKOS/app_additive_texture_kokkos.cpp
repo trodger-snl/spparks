@@ -452,7 +452,9 @@ void AppAdditiveTextureKokkos::refresh_thermal_host()
       int nl = 0, ng = 0;
       Kokkos::parallel_reduce("AnyLiquid", nlocal,
         KOKKOS_LAMBDA(int i, int &c) { if (af(i) == 2) c++; }, nl);
-      MPI_Allreduce(&nl, &ng, 1, MPI_INT, MPI_SUM, world);
+      // a flag, not a count: a sum over ranks can wrap past 2^31 liquid sites
+      int any = nl > 0;
+      MPI_Allreduce(&any, &ng, 1, MPI_INT, MPI_MAX, world);
       return ng > 0;
     };
   t_cool_max = tl - ts;  // undercooling normalization for misorient_alpha (matches CPU)
@@ -2590,10 +2592,10 @@ void AppAdditiveTextureKokkos::activate_powder_sites() {
     }, powder_activated);
   Kokkos::fence();
 
-  int global_powder_activated = 0;
-  MPI_Allreduce(&powder_activated, &global_powder_activated, 1, MPI_INT, MPI_SUM, world);
+  bigint powder_me = powder_activated, global_powder_activated = 0;  // a layer can pass 2^31
+  MPI_Allreduce(&powder_me, &global_powder_activated, 1, MPI_SPK_BIGINT, MPI_SUM, world);
   if (domain->me == 0 && global_powder_activated > 0) {
-    fprintf(screen, "Powder activation at t=%.6e s: activated %d sites (meltpool top at z=%.3f)\n",
+    fprintf(screen, "Powder activation at t=%.6e s: activated " BIGINT_FORMAT " sites (meltpool top at z=%.3f)\n",
             time, global_powder_activated, global_max_molten_z);
   }
 }

@@ -48,6 +48,7 @@ class Set : protected Pointers {
     int lhs,type,index,stride;
     int op;
     int irhs;
+    tagint trhs;                         // for id: 64-bit with SPPARKS_BIGBIG
     double drhs;
   };
   Condition *cond;

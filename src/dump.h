@@ -80,7 +80,7 @@ class Dump : protected Pointers {
   int maxsort;               // size of bufsort, idsort, index
   int maxproc;               // size of proclist
   int reorderflag;           // 1 if OK to reorder instead of sort
-  int ntotal_reorder;        // # of sites that must be in snapshot
+  bigint ntotal_reorder;     // # of sites that must be in snapshot
   int nme_reorder;           // # of sites I must own in snapshot
   tagint idlo;               // lowest ID I own when reordering
 

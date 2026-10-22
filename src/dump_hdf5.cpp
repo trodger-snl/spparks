@@ -30,6 +30,7 @@
 #include "highfive/highfive.hpp"
 
 #include <algorithm>
+#include <climits>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -242,6 +243,25 @@ void DumpHDF5::ensure_dataset(const std::string &label, int type) {
 }
 
 /* ----------------------------------------------------------------------
+   MPI-IO only when there is more than one rank: a single rank gets the
+   plain POSIX driver, which keeps the MPI-IO layer and HDF5's parallel
+   compressed-write path out of one-rank runs (a box chain lost a dump to
+   failed writes there that HDF5 reported as success)
+------------------------------------------------------------------------- */
+
+static HighFive::FileAccessProps access_props(MPI_Comm world, int nprocs) {
+  HighFive::FileAccessProps fapl;
+#ifdef H5_HAVE_PARALLEL
+  // Every rank takes the same path through every dump, so collective
+  // metadata would be safe here.  It is still left off: it converts a
+  // subtle divergence into a hang rather than a slowdown, and it is not
+  // needed for correctness.
+  if (nprocs > 1) fapl.add(HighFive::MPIOFileAccess(world, MPI_INFO_NULL));
+#endif
+  return fapl;
+}
+
+/* ----------------------------------------------------------------------
    create the file, or reopen one an earlier invocation left behind
 ------------------------------------------------------------------------- */
 
@@ -261,21 +281,15 @@ void DumpHDF5::open_file(const char *fname) {
   MPI_Bcast(&exists, 1, MPI_INT, 0, world);
 
   try {
-#ifdef H5_HAVE_PARALLEL
-    HighFive::FileAccessProps fapl;
-    fapl.add(HighFive::MPIOFileAccess(world, MPI_INFO_NULL));
-    // Unlike the HDF5 temperature-source reader, every rank takes the same
-    // path through every dump, so collective metadata would be safe here.  It
-    // is still left off in v1: it converts a subtle divergence into a hang
-    // rather than a slowdown, and it is not needed for correctness.
-#else
-    HighFive::FileAccessProps fapl;
-#endif
-    // A compressed chunk rewritten larger moves, and HDF5 forgets the space
-    // it left unless the free-space manager persists in the file: every dump
-    // reopens the file, so without this a build leaks space each dump.
+    HighFive::FileAccessProps fapl = access_props(world, nprocs);
+    // A compressed chunk rewritten larger moves, and the space it left is
+    // reused only while the file stays open: free space is not persisted
+    // across dumps, so a compressed file leaks some space per dump.  Both
+    // persistent strategies (FSM_AGGR and PAGE) deadlock or fail in the
+    // flush of a parallel compressed write in HDF5 1.12.3 and 1.14.6.
+    // ponytail: leaks ~15% over a chain, "h5repack" the file if that matters
     HighFive::FileCreateProps fcpl;
-    fcpl.add(HighFive::FileSpaceStrategy(H5F_FSPACE_STRATEGY_FSM_AGGR, 1, 1));
+    fcpl.add(HighFive::FileSpaceStrategy(H5F_FSPACE_STRATEGY_FSM_AGGR, 0, 1));
     file = exists ? std::make_shared<HighFive::File>(fname, HighFive::File::ReadWrite, fapl)
                   : std::make_shared<HighFive::File>(
                         fname,
@@ -413,8 +427,67 @@ void DumpHDF5::write(double time) {
   }
   file.reset(); // collective close
   opened = false;
+  verify(target, time);
   if (atomic) commit(target);
   else sync_file(target);
+}
+
+/* ----------------------------------------------------------------------
+   reopen the closed file and check that every field of this rank's box
+   reads back as written. A dump whose writes failed without HDF5 noticing
+   then stops the run instead of handing damaged state to the next box.
+------------------------------------------------------------------------- */
+
+void DumpHDF5::verify(const char *fname, double time) {
+  std::vector<size_t> offset, count;
+  my_slab(offset, count);
+  size_t nsites = count[0] * count[1] * count[2];
+
+  int bad = -1; // index of the first field that differs, -1 = all match
+  std::string why;
+  try {
+    HighFive::File f(fname, HighFive::File::ReadOnly, access_props(world, nprocs));
+    HighFive::DataTransferProps xfer;
+#ifdef H5_HAVE_PARALLEL
+    if (nprocs > 1) xfer.add(HighFive::UseCollectiveIO{});
+#endif
+    std::vector<int32_t> ibuf;
+    std::vector<double> dbuf;
+    for (int i = 0; i < size_one; i++) {
+      HighFive::HyperSlab slab{HighFive::RegularHyperSlab(offset, count)};
+      HighFive::Selection sel = f.getDataSet(labels[i]).select(slab);
+      int same;
+      if (vtype[i] == INT) {
+        const int *src = (fields[i] == SITE) ? app->iarray[0] : app->iarray[vindex[i]];
+        ibuf.resize(nsites);
+        sel.read_raw(ibuf.data(), HighFive::AtomicType<int32_t>(), xfer);
+        same = memcmp(ibuf.data(), src, nsites * sizeof(int32_t)) == 0;
+      } else {
+        dbuf.resize(nsites);
+        sel.read_raw(dbuf.data(), HighFive::AtomicType<double>(), xfer);
+        same = memcmp(dbuf.data(), app->darray[vindex[i]], nsites * sizeof(double)) == 0;
+      }
+      if (!same && bad < 0) bad = i;
+    }
+    double t;
+    f.getAttribute("time").read(t);
+    if (t != time && bad < 0) why = "time attribute";
+  } catch (const std::exception &e) {
+    why = e.what();
+  }
+
+  // lowest failing field on any rank; size_one = a read error, INT_MAX = all good
+  int code = bad >= 0 ? bad : (why.empty() ? INT_MAX : size_one), first;
+  MPI_Allreduce(&code, &first, 1, MPI_INT, MPI_MIN, world);
+  if (first == INT_MAX) return;
+  if (first < size_one) why = labels[first];
+  else if (why.empty()) why = "read error on another rank";
+  char msg[512];
+  snprintf(msg, sizeof(msg),
+           "Dump hdf5 read-back of %s does not match what was written (%s)%s", fname,
+           why.c_str(),
+           atomic ? "; the previous dump is intact" : "; the file is damaged, restore a backup");
+  error->all(FLERR, msg);
 }
 
 /* ----------------------------------------------------------------------
@@ -447,14 +520,14 @@ void DumpHDF5::sync_file(const char *fname) {
 template <typename T>
 static void copy_planes(HighFive::DataSet &src, HighFive::DataSet &dst,
                         size_t z0, size_t z1, const std::vector<size_t> &d,
-                        const size_t *off, size_t step, int niter) {
+                        const size_t *off, size_t step, int niter, bool collective) {
   size_t plane = d[1] * d[2];
   // a predefined type: an id taken from a temporary HighFive::AtomicType is
   // closed when the temporary dies
   hid_t memtype = sizeof(T) == sizeof(int32_t) ? H5T_NATIVE_INT32 : H5T_NATIVE_DOUBLE;
   hid_t xfer = H5Pcreate(H5P_DATASET_XFER);
 #ifdef H5_HAVE_PARALLEL
-  H5Pset_dxpl_mpio(xfer, H5FD_MPIO_COLLECTIVE);
+  if (collective) H5Pset_dxpl_mpio(xfer, H5FD_MPIO_COLLECTIVE);
 #endif
   hid_t fspace = H5Dget_space(dst.getId());
   std::vector<T> buf(1);
@@ -486,8 +559,8 @@ static void copy_planes(HighFive::DataSet &src, HighFive::DataSet &dst,
    rewrite the file once if this run's domain starts below its origin in
    any dimension (HDF5 indices cannot be prepended to, so every dataset is
    copied into a wider frame) or if its datasets' compression differs from
-   'dump_modify compress' (filters are fixed at dataset creation). Each
-   rank copies a share of the z planes. The rewrite goes through tmp and a
+   'dump_modify compress' (filters are fixed at dataset creation) or if it
+   persists its free space (fixed at file creation). Each rank copies a share of the z planes. The rewrite goes through tmp and a
    rename like any atomic dump, so the old file survives a crash.
 ------------------------------------------------------------------------- */
 
@@ -522,6 +595,15 @@ void DumpHDF5::rebuild_if_needed() {
             if ((H5Pget_nfilters(dcpl) > 0) != (compress > 0)) relayout = 1;
             H5Pclose(dcpl);
           }
+          // files from before free-space persistence was dropped: a parallel
+          // write to one deadlocks, and the setting is fixed at creation
+          hid_t fcpl = H5Fget_create_plist(f.getId());
+          H5F_fspace_strategy_t strategy;
+          hbool_t persist = 0;
+          hsize_t threshold;
+          H5Pget_file_space_strategy(fcpl, &strategy, &persist, &threshold);
+          H5Pclose(fcpl);
+          if (persist) relayout = 1;
         }
       } catch (const std::exception &e) {
         char msg[512];
@@ -561,13 +643,7 @@ void DumpHDF5::rebuild_if_needed() {
   }
 
   try {
-#ifdef H5_HAVE_PARALLEL
-    HighFive::FileAccessProps fapl;
-    fapl.add(HighFive::MPIOFileAccess(world, MPI_INFO_NULL));
-    HighFive::File old(filename, HighFive::File::ReadOnly, fapl);
-#else
-    HighFive::File old(filename, HighFive::File::ReadOnly);
-#endif
+    HighFive::File old(filename, HighFive::File::ReadOnly, access_props(world, nprocs));
     // dataset index order is z,y,x; od[] and origin[] are x,y,z
     size_t off[3] = {(size_t)(od[2] - origin[2]), (size_t)(od[1] - origin[1]),
                      (size_t)(od[0] - origin[0])};
@@ -583,8 +659,8 @@ void DumpHDF5::rebuild_if_needed() {
       size_t step = std::max<size_t>(1, ((size_t)256 << 20) / std::max<size_t>(1, d[1] * d[2] * elem));
       int mine = (int)((z1 - z0 + step - 1) / step), niter;
       MPI_Allreduce(&mine, &niter, 1, MPI_INT, MPI_MAX, world);
-      if (isint) copy_planes<int32_t>(src, dst, z0, z1, d, off, step, niter);
-      else copy_planes<double>(src, dst, z0, z1, d, off, step, niter);
+      if (isint) copy_planes<int32_t>(src, dst, z0, z1, d, off, step, niter, nprocs > 1);
+      else copy_planes<double>(src, dst, z0, z1, d, off, step, niter, nprocs > 1);
     }
     file->getAttribute("time").write(t);
     file->flush();
@@ -607,8 +683,8 @@ void DumpHDF5::rebuild_if_needed() {
                filename, (long long)origin[0], (long long)origin[1], (long long)origin[2],
                (long long)od[0], (long long)od[1], (long long)od[2]);
     else
-      snprintf(msg, sizeof(msg), "dump hdf5: rewrote %s %s\n", filename,
-               compress > 0 ? "compressed" : "uncompressed");
+      snprintf(msg, sizeof(msg), "dump hdf5: rewrote %s %s, without persistent free space\n",
+               filename, compress > 0 ? "compressed" : "uncompressed");
     if (screen) fputs(msg, screen);
     if (logfile) fputs(msg, logfile);
   }
@@ -727,8 +803,7 @@ void DumpHDF5::commit(const char *tmp) {
    write every field into the open file
 ------------------------------------------------------------------------- */
 
-void DumpHDF5::write_fields(double time) {
-
+void DumpHDF5::my_slab(std::vector<size_t> &offset, std::vector<size_t> &count) {
   // this rank's owned box in absolute lattice indices, half-open
   int64_t lo[3] = {applattice->xlo_me_simple, applattice->ylo_me_simple,
                    applattice->zlo_me_simple};
@@ -740,9 +815,19 @@ void DumpHDF5::write_fields(double time) {
     if (lo[k] < origin[k])
       error->all(FLERR, "Dump hdf5 subdomain starts below the file origin");
 
+  // dataset index order is z,y,x
+  offset = {(size_t)(lo[2] - origin[2]), (size_t)(lo[1] - origin[1]),
+            (size_t)(lo[0] - origin[0])};
+  count = {(size_t)n[2], (size_t)n[1], (size_t)n[0]};
+}
+
+void DumpHDF5::write_fields(double time) {
+  std::vector<size_t> offset, count;
+  my_slab(offset, count);
+
   int64_t mine[3], needed[3];
   for (int k = 0; k < 3; k++)
-    mine[k] = lo[k] - origin[k] + n[k];
+    mine[k] = (int64_t)(offset[2 - k] + count[2 - k]);
   MPI_Allreduce(mine, needed, 3, MPI_LONG_LONG, MPI_MAX, world);
 
   try {
@@ -751,14 +836,9 @@ void DumpHDF5::write_fields(double time) {
 
     extend_to(needed);
 
-    std::vector<size_t> offset = {(size_t)(lo[2] - origin[2]),
-                                  (size_t)(lo[1] - origin[1]),
-                                  (size_t)(lo[0] - origin[0])};
-    std::vector<size_t> count = {(size_t)n[2], (size_t)n[1], (size_t)n[0]};
-
     HighFive::DataTransferProps xfer;
 #ifdef H5_HAVE_PARALLEL
-    xfer.add(HighFive::UseCollectiveIO{});
+    if (nprocs > 1) xfer.add(HighFive::UseCollectiveIO{});
 #endif
 
     for (int i = 0; i < size_one; i++) {
@@ -776,7 +856,7 @@ void DumpHDF5::write_fields(double time) {
       }
 
 #ifdef H5_HAVE_PARALLEL
-      if (verbose) {
+      if (verbose && nprocs > 1) {
         // The only way to tell whether HDF5 actually did collective I/O or
         // silently fell back; without it any scaling number is uninterpretable.
         uint32_t cause_local = 0, cause_global = 0;

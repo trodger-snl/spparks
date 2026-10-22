@@ -97,12 +97,25 @@ that dies while a dump is writing can damage it; keep backup copies.
 writing a copy of the file that then replaces the original, at the cost
 of copying the whole file per dump.
 
+After closing the file each dump reads its sites back and stops the run
+with an error if any field differs from what was written, so a write
+that failed without HDF5 noticing cannot pass damaged state to the next
+run.  The check costs one read of each processor's sites per dump.  On
+one processor the file is written and read without MPI-IO; on more,
+through MPI-IO with collective transfers.
+
 Datasets are uncompressed by default.  "dump_modify
 compress"_dump_modify.html N stores them with byte shuffling and
 deflate level N.  Over a six-box GP700 chain level 1 made the file 1.8x
 smaller: the phase field and the mostly-zero G/V fields compress well,
 while the quaternions, half the bytes, barely compress (1.2x).
-Unwritten regions of the file compress to almost nothing.
+Unwritten regions of the file compress to almost nothing.  A compressed
+chunk that grows when rewritten moves, and the space it leaves is reused
+only within the same dump, so a compressed file grows somewhat over many
+dumps (about 15% in tests); "h5repack" compacts it.  HDF5 can keep free
+space across dumps, but that deadlocks parallel compressed writes, so it
+is off; a file written by an older SPPARKS with it on is rewritten once
+without it, with a message, the first time it is dumped to.
 
 Like {stitch}, the {hdf5} style requires a simple square or cubic
 lattice and does not support the '*' or '%' filename wildcards.

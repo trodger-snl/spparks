@@ -1276,13 +1276,14 @@ void Set::set_hdf5(int lhs, int rhs) {
   double novalue_f64 = 0.0;
 
   try {
-#ifdef H5_HAVE_PARALLEL
+    // MPI-IO only with more than one rank, as in dump hdf5
     HighFive::FileAccessProps fapl;
-    fapl.add(HighFive::MPIOFileAccess(world, MPI_INFO_NULL));
-    HighFive::File f(filename, HighFive::File::ReadOnly, fapl);
-#else
-    HighFive::File f(filename, HighFive::File::ReadOnly);
+#ifdef H5_HAVE_PARALLEL
+    int np;
+    MPI_Comm_size(world, &np);
+    if (np > 1) fapl.add(HighFive::MPIOFileAccess(world, MPI_INFO_NULL));
 #endif
+    HighFive::File f(filename, HighFive::File::ReadOnly, fapl);
 
     if (!f.exist(label)) {
       char msg[512];

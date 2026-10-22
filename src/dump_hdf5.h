@@ -98,6 +98,8 @@ private:
 
   void open_file(const char *fname);
   void write_fields(double);
+  void my_slab(std::vector<size_t> &offset, std::vector<size_t> &count);
+  void verify(const char *fname, double time);
   void stage_copy(const char *tmp);
   void rebuild_if_needed();
   void commit(const char *tmp);

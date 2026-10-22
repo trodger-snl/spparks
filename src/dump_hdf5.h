@@ -29,6 +29,7 @@ DumpStyle(hdf5, DumpHDF5)
 #ifdef SPPARKS_HIGHFIVE
 
 #include "dump.h"
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -41,6 +42,13 @@ class File;
 }
 
 namespace SPPARKS_NS {
+
+// Read box offset/count ([z][y][x]) of a chunked 3-D int32 or float64
+// dataset (an hid_t) into out, inflating the chunks on all threads.  Returns
+// false if the layout is not handled or a read fails; the caller then falls
+// back to an ordinary read.  Used by dump hdf5's read-back and "set hdf5".
+bool hdf5_read_box_parallel(int64_t dataset, const size_t *offset, const size_t *count,
+                            void *out);
 
 /* ----------------------------------------------------------------------
    dump hdf5: latest-state-only lattice output.

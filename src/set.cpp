@@ -45,6 +45,7 @@
 #endif
 
 #ifdef SPPARKS_HIGHFIVE
+#include "dump_hdf5.h"
 #include "highfive/highfive.hpp"
 #include <stdexcept>
 #endif
@@ -1347,10 +1348,12 @@ void Set::set_hdf5(int lhs, int rhs) {
       std::vector<double> dbuf;
       if (lhs == DARRAY) {
         dbuf.resize(ncells);
-        dset.select(slab).read_raw(dbuf.data());
+        if (!hdf5_read_box_parallel(dset.getId(), offset.data(), count.data(), dbuf.data()))
+          dset.select(slab).read_raw(dbuf.data());
       } else {
         ibuf.resize(ncells);
-        dset.select(slab).read_raw(ibuf.data());
+        if (!hdf5_read_box_parallel(dset.getId(), offset.data(), count.data(), ibuf.data()))
+          dset.select(slab).read_raw(ibuf.data());
       }
 
       // scatter the compact intersection into the full subdomain buffer,

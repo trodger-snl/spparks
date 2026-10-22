@@ -30,6 +30,7 @@
 #include "highfive/highfive.hpp"
 
 #include <algorithm>
+#include <array>
 #include <climits>
 #include <cstdio>
 #include <cstring>
@@ -40,6 +41,9 @@
 #ifdef __linux__
 #include <linux/fs.h> // FICLONE
 #include <sys/ioctl.h>
+#endif
+#ifdef SPPARKS_ZLIB
+#include <zlib.h>
 #endif
 
 using namespace SPPARKS_NS;
@@ -240,6 +244,139 @@ void DumpHDF5::ensure_dataset(const std::string &label, int type) {
     dset.createAttribute<int32_t>("no_value", -1);
   else
     dset.createAttribute<double>("no_value", 0.0);
+}
+
+/* ----------------------------------------------------------------------
+   HDF5 inflates one chunk at a time under its global lock, ~36 s to read
+   back a 99M-site box's eight compressed fields.  Here the compressed chunks
+   are fetched serially with H5Dread_chunk, a batch at a time, then inflated,
+   unshuffled and scattered into out on all threads.  Handles the layouts
+   dump hdf5 writes: chunked 3-D little-endian int32/float64 with deflate,
+   optionally after shuffle.  Uncompressed datasets are left to H5Dread,
+   which is fast for them.
+------------------------------------------------------------------------- */
+
+bool SPPARKS_NS::hdf5_read_box_parallel(int64_t dataset, const size_t *offset, const size_t *count,
+                            void *out) {
+#ifndef SPPARKS_ZLIB
+  return false;
+#else
+  hid_t ds = dataset;
+  hid_t dcpl = H5Dget_create_plist(ds), type = H5Dget_type(ds), space = H5Dget_space(ds);
+  hsize_t dims[3] = {0, 0, 0}, cd[3] = {0, 0, 0};
+  size_t es = 0;
+  if (H5Tequal(type, H5T_STD_I32LE) > 0 && H5Tequal(H5T_NATIVE_INT32, H5T_STD_I32LE) > 0) es = 4;
+  if (H5Tequal(type, H5T_IEEE_F64LE) > 0 && H5Tequal(H5T_NATIVE_DOUBLE, H5T_IEEE_F64LE) > 0) es = 8;
+  int nf = H5Pget_nfilters(dcpl);
+  bool ok = es && H5Sget_simple_extent_ndims(space) == 3 &&
+            H5Sget_simple_extent_dims(space, dims, nullptr) == 3 &&
+            H5Pget_layout(dcpl) == H5D_CHUNKED && H5Pget_chunk(dcpl, 3, cd) == 3 && nf >= 1 &&
+            nf <= 2;
+  H5Z_filter_t filt[2] = {-1, -1};
+  bool deflate = false;
+  for (int i = 0; ok && i < nf; i++) {
+    unsigned flags;
+    size_t nelmts = 0;
+    filt[i] = H5Pget_filter2(dcpl, i, &flags, &nelmts, nullptr, 0, nullptr, nullptr);
+    if (filt[i] == H5Z_FILTER_DEFLATE) deflate = true;
+    else if (filt[i] != H5Z_FILTER_SHUFFLE) ok = false;
+  }
+  unsigned char fill[8] = {0};
+  if (ok && H5Pget_fill_value(dcpl, es == 4 ? H5T_NATIVE_INT32 : H5T_NATIVE_DOUBLE, fill) < 0)
+    ok = false;
+  H5Tclose(type);
+  H5Pclose(dcpl);
+  H5Sclose(space);
+  for (int k = 0; ok && k < 3; k++)
+    if (count[k] == 0 || offset[k] + count[k] > dims[k]) ok = false;
+  if (!ok || !deflate) return false;
+
+  // every chunk the box touches, as chunk-grid coordinates
+  std::vector<std::array<hsize_t, 3>> chunks;
+  for (hsize_t z = offset[0] / cd[0]; z <= (offset[0] + count[0] - 1) / cd[0]; z++)
+    for (hsize_t y = offset[1] / cd[1]; y <= (offset[1] + count[1] - 1) / cd[1]; y++)
+      for (hsize_t x = offset[2] / cd[2]; x <= (offset[2] + count[2] - 1) / cd[2]; x++)
+        chunks.push_back({z, y, x});
+
+  const size_t nelem = cd[0] * cd[1] * cd[2], chunk_bytes = nelem * es;
+  const size_t batch = 64; // ~64 compressed chunks in flight
+  std::vector<std::vector<unsigned char>> comp(batch);
+  std::vector<uint32_t> mask(batch);
+  std::vector<char> filled(batch);
+  unsigned char *dst = (unsigned char *)out;
+  for (size_t b0 = 0; b0 < chunks.size(); b0 += batch) {
+    const size_t nb = std::min(batch, chunks.size() - b0);
+    for (size_t b = 0; b < nb; b++) {
+      hsize_t off[3] = {chunks[b0 + b][0] * cd[0], chunks[b0 + b][1] * cd[1],
+                        chunks[b0 + b][2] * cd[2]};
+      haddr_t addr;
+      hsize_t nbytes = 0;
+      unsigned fmask = 0;
+      if (H5Dget_chunk_info_by_coord(ds, off, &fmask, &addr, &nbytes) < 0) return false;
+      filled[b] = (addr == HADDR_UNDEF); // never allocated: all fill value
+      if (filled[b]) continue;
+      comp[b].resize(nbytes);
+      if (H5Dread_chunk(ds, H5P_DEFAULT, off, &mask[b], comp[b].data()) < 0) return false;
+    }
+    int bad = 0;
+#pragma omp parallel reduction(| : bad)
+    {
+      std::vector<unsigned char> buf1(chunk_bytes), buf2(chunk_bytes);
+#pragma omp for schedule(dynamic)
+      for (size_t b = 0; b < nb; b++) {
+        const unsigned char *src = comp[b].data();
+        size_t len = comp[b].size();
+        if (filled[b]) {
+          for (size_t i = 0; i < nelem; i++) memcpy(&buf1[i * es], fill, es);
+          src = buf1.data();
+          len = chunk_bytes;
+        } else {
+          // undo the pipeline last filter first; mask bit i = filter i skipped
+          for (int i = nf - 1; i >= 0; i--) {
+            if (mask[b] & (1u << i)) continue;
+            unsigned char *to = (src == buf1.data()) ? buf2.data() : buf1.data();
+            if (filt[i] == H5Z_FILTER_DEFLATE) {
+              uLongf n = chunk_bytes;
+              if (uncompress(to, &n, src, len) != Z_OK || n != chunk_bytes) {
+                bad = 1;
+                break;
+              }
+            } else { // shuffle: byte j of element e was stored at j*nelem + e
+              if (len != chunk_bytes) {
+                bad = 1;
+                break;
+              }
+              for (size_t j = 0; j < es; j++)
+                for (size_t e = 0; e < nelem; e++) to[e * es + j] = src[j * nelem + e];
+            }
+            src = to;
+            len = chunk_bytes;
+          }
+          if (bad || len != chunk_bytes) {
+            bad = 1;
+            continue;
+          }
+        }
+        // copy the part of this chunk inside the box, one x-run at a time
+        hsize_t lo[3], hi[3];
+        for (int k = 0; k < 3; k++) {
+          lo[k] = std::max<hsize_t>(chunks[b0 + b][k] * cd[k], offset[k]);
+          hi[k] = std::min<hsize_t>((chunks[b0 + b][k] + 1) * cd[k], offset[k] + count[k]);
+        }
+        for (hsize_t z = lo[0]; z < hi[0]; z++)
+          for (hsize_t y = lo[1]; y < hi[1]; y++) {
+            size_t from = (((z - chunks[b0 + b][0] * cd[0]) * cd[1] + (y - chunks[b0 + b][1] * cd[1])) *
+                               cd[2] + (lo[2] - chunks[b0 + b][2] * cd[2])) * es;
+            size_t into = (((z - offset[0]) * count[1] + (y - offset[1])) * count[2] +
+                           (lo[2] - offset[2])) * es;
+            memcpy(dst + into, src + from, (hi[2] - lo[2]) * es);
+          }
+      }
+    }
+    if (bad) return false;
+  }
+  return true;
+#endif
 }
 
 /* ----------------------------------------------------------------------
@@ -446,25 +583,25 @@ void DumpHDF5::verify(const char *fname, double time) {
   int bad = -1; // index of the first field that differs, -1 = all match
   std::string why;
   try {
+    // independent reads: a rank whose parallel read falls back must not
+    // wait in a collective the others skipped
     HighFive::File f(fname, HighFive::File::ReadOnly, access_props(world, nprocs));
-    HighFive::DataTransferProps xfer;
-#ifdef H5_HAVE_PARALLEL
-    if (nprocs > 1) xfer.add(HighFive::UseCollectiveIO{});
-#endif
     std::vector<int32_t> ibuf;
     std::vector<double> dbuf;
     for (int i = 0; i < size_one; i++) {
+      HighFive::DataSet dset = f.getDataSet(labels[i]);
       HighFive::HyperSlab slab{HighFive::RegularHyperSlab(offset, count)};
-      HighFive::Selection sel = f.getDataSet(labels[i]).select(slab);
       int same;
       if (vtype[i] == INT) {
         const int *src = (fields[i] == SITE) ? app->iarray[0] : app->iarray[vindex[i]];
         ibuf.resize(nsites);
-        sel.read_raw(ibuf.data(), HighFive::AtomicType<int32_t>(), xfer);
+        if (!hdf5_read_box_parallel(dset.getId(), offset.data(), count.data(), ibuf.data()))
+          dset.select(slab).read_raw(ibuf.data(), HighFive::AtomicType<int32_t>());
         same = memcmp(ibuf.data(), src, nsites * sizeof(int32_t)) == 0;
       } else {
         dbuf.resize(nsites);
-        sel.read_raw(dbuf.data(), HighFive::AtomicType<double>(), xfer);
+        if (!hdf5_read_box_parallel(dset.getId(), offset.data(), count.data(), dbuf.data()))
+          dset.select(slab).read_raw(dbuf.data(), HighFive::AtomicType<double>());
         same = memcmp(dbuf.data(), app->darray[vindex[i]], nsites * sizeof(double)) == 0;
       }
       if (!same && bad < 0) bad = i;

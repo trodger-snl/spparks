@@ -1793,7 +1793,9 @@ void HDF5UnstructuredTemperatureSource::compute_site_thermal_intervals(double th
         for (int k = 0; k < 4; k++) {
           if (s[k] < i[k] - 1) s[k] = i[k] - 1;
           while (s[k] < c[k] && T[k][s[k]] <= thr_cold) ++s[k];
-          L = std::min(L, s[k] < i[k] ? -std::numeric_limits<double>::infinity() : t[k][s[k] - 1]);
+          // s < i: this node's next sample is warm, so no jump (any L <= t_crit
+          // means that; finite, as -ffast-math assumes no infinities)
+          L = std::min(L, s[k] < i[k] ? t_crit : t[k][s[k] - 1]);
         }
         if (L > t_crit) {
           // rebuild the walk's state at L: values from the lower-bound

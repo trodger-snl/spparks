@@ -370,7 +370,8 @@ void CreateSites::structured_lattice()
 	  nlocal = app->nlocal;
 
 	  if (nlocal > maxlocal) {
-	    maxlocal += MAX(DELTALOCAL,maxlocal/2);   // geometric: each grow re-points every row
+	    // geometric (each grow re-points every row), clamped like AppLattice::grow
+	    maxlocal = MIN((bigint) maxlocal + MAX(DELTALOCAL,maxlocal/2),(bigint) MAXSMALLINT);
 	    memory->grow(siteijk,maxlocal,4,"create:siteijk");
 	  }
 

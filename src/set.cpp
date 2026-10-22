@@ -1275,6 +1275,7 @@ void Set::set_hdf5(int lhs, int rhs) {
   // defaults match the fill values dump_hdf5 writes
   int32_t novalue_i32 = -1;
   double novalue_f64 = 0.0;
+  std::string why;
 
   try {
     // MPI-IO only with more than one rank, as in dump hdf5
@@ -1300,6 +1301,11 @@ void Set::set_hdf5(int lhs, int rhs) {
       f.getAttribute("dims").read(dims);
 
     HighFive::DataSet dset = f.getDataSet(label);
+    // a field can be shorter than the file's extent (dumped by fewer boxes,
+    // before dump hdf5 grew every field): what lies beyond it is no value
+    std::vector<size_t> shape = dset.getDimensions();
+    for (int k = 0; k < 3 && shape.size() == 3; k++)
+      dims[k] = std::min<int64_t>(dims[k], (int64_t)shape[2 - k]);
     if (dset.hasAttribute("no_value")) {
       if (lhs == DARRAY)
         dset.getAttribute("no_value").read(novalue_f64);
@@ -1370,9 +1376,19 @@ void Set::set_hdf5(int lhs, int rhs) {
         }
     }
   } catch (const std::exception &e) {
+    why = e.what();
+  }
+
+  // the reads are independent, so a rank whose part failed is the only one
+  // that knows: agree first, then stop together (error->all alone would
+  // leave the others waiting in the next collective)
+  int me, failed = !why.empty(), any;
+  MPI_Comm_rank(world, &me);
+  MPI_Allreduce(&failed, &any, 1, MPI_INT, MPI_MAX, world);
+  if (any) {
+    if (failed) fprintf(stderr, "Set hdf5 rank %d: %s\n", me, why.c_str());
     char msg[512];
-    snprintf(msg, sizeof(msg), "Set hdf5 read failed on %s: %s", filename,
-             e.what());
+    snprintf(msg, sizeof(msg), "Set hdf5 read failed on %s (see stderr)", filename);
     error->all(FLERR, msg);
   }
 

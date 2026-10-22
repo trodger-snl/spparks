@@ -100,9 +100,16 @@ of copying the whole file per dump.
 After closing the file each dump reads its sites back and stops the run
 with an error if any field differs from what was written, so a write
 that failed without HDF5 noticing cannot pass damaged state to the next
-run.  The check costs one read of each processor's sites per dump.  On
-one processor the file is written and read without MPI-IO; on more,
-through MPI-IO with collective transfers.
+run.  The check costs one read of each processor's sites per dump, plus
+one plane of them decoded a second time by HDF5 itself, and it also
+checks that every dataset spans the file's extent.  On one processor the
+file is written and read without MPI-IO.  On more it is opened through
+MPI-IO: the datasets are written with collective transfers, or one
+processor at a time with "dump_modify turns"_dump_modify.html, and the
+read-back and "set hdf5"_set.html read independently.
+
+A dump that grows the file's extent grows every dataset in it, including
+fields this run does not dump.
 
 Datasets are stored with byte shuffling and deflate level 1 by default;
 "dump_modify compress"_dump_modify.html sets the level, or 0 for none.  Over a six-box GP700 chain level 1 made the file 1.8x

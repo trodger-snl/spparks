@@ -97,7 +97,7 @@ void Error::all(const char *file, int line, const char *str)
 
 /* ----------------------------------------------------------------------
    called by one proc in world
-   write to world screen only if non-NULL on this proc
+   write to world screen if non-NULL on this proc, else to stderr
    always write to universe screen 
    forces abort of entire world (and universe) if any proc in world calls
 ------------------------------------------------------------------------- */
@@ -106,8 +106,10 @@ void Error::one(const char *file, int line, const char *str)
 {
   int me;
   MPI_Comm_rank(world,&me);
-  if (screen) fprintf(screen,"ERROR on proc %d: %s (%s:%d)\n",
-		      me,str,file,line);
+  // screen is usually rank 0's only: elsewhere say it on stderr, or the
+  // abort comes with no reason
+  fprintf(screen ? screen : stderr,"ERROR on proc %d: %s (%s:%d)\n",
+	  me,str,file,line);
   if (universe->nworlds > 1)
     fprintf(universe->uscreen,"ERROR on proc %d: %s (%s:%d)\n",
 	    universe->me,str,file,line);

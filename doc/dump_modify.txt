@@ -253,7 +253,9 @@ The {chunk}, {origin}, {extent}, {verbose}, {atomic}, {compress} and
 sites (clipped to the dataset), keeps chunks small next to a box, so a
 box written into a larger file rewrites little beyond itself, and big
 enough to compress well.  Keep cz below a layer's height in a multilayer
-build.  The shape is fixed when the file is created.
+build.  The shape is fixed per dataset when it is created: a field added
+to an existing file, and every dataset of a file rewritten for a lower
+origin or a compression change, takes the shape in effect then.
 
 {origin} and {extent} pre-declare the lattice index of dataset element
 [0][0][0] and the initial dataset size.  Both are honored only on file
@@ -308,8 +310,10 @@ therefore compressed by the first dump that does not say {compress 0}.
 {no}, they write together through MPI-IO, and HDF5 compresses each chunk
 on one thread of one processor.  With {yes}, every processor first
 compresses its chunks on all its OpenMP threads at once; then the
-processors take turns, each opening the file alone, writing, and
-closing it.  Each chunk is written once, by one of the processors whose
+processors take turns, each opening the file alone, writing, closing
+and syncing it.  The compressed chunks a processor holds between turns
+are capped at 1 GB: beyond that the fields go in more than one round of
+turns.  Each chunk is written once, by one of the processors whose
 subdomains touch it; the others send it their part first.  Only the
 file I/O is serial, which suits a few processors per node with threads
 to spare, such as one per GPU.  Turns rely on a file written and closed

@@ -132,12 +132,12 @@ private:
   int modify_param(int, char **);
 
   void open_file(const char *fname);
-  void write_fields(double, bool pack);
+  int write_fields(double, bool pack, int first); // returns the next field to write
   void *field_data(int i);
   bool share(int i, int64_t dataset, const std::vector<size_t> &offset,
              const std::vector<size_t> &count, HDF5Shared &sh);
   bool use_turns();
-  void take_turns(const char *fname);
+  void take_turns(const char *fname, int i0, int i1);
   void my_slab(std::vector<size_t> &offset, std::vector<size_t> &count);
   void verify(const char *fname, double time);
   void stage_copy(const char *tmp);

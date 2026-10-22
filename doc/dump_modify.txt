@@ -270,7 +270,7 @@ collective to independent I/O.  Since that fallback is silent and
 changes write scaling completely, turn it on before trusting any timing
 measurement.
 
-{atomic} yes (the default) makes every {hdf5} dump crash safe.  The
+{atomic} yes makes every {hdf5} dump crash safe.  The
 dump copies the file to {file}.tmp, writes into the copy, flushes it to
 disk, and renames it over {file}, so the file under its own name is
 always a complete earlier dump, whatever happens to the run mid-write.
@@ -280,7 +280,7 @@ ext4, NFS) every processor copies one slice of the file through MPI-IO,
 so the copy runs at the file system's aggregate bandwidth.  Either way
 the file needs room for a second copy while a dump is written.  A stale
 {file}.tmp left by a crash is harmless and is replaced by the next dump.
-{atomic} no writes into the file in place: each dump opens the file,
+{atomic} no (the default) writes into the file in place: each dump opens the file,
 writes its sites, flushes, closes and syncs it, so there is no copy of
 the whole file per dump and the file is open only while a dump writes.
 That suits a chain of boxes much smaller than the file's domain on a
@@ -636,7 +636,7 @@ chunk = chosen from the processor grid (hdf5 style only)
 origin = domain lower bound at file creation (hdf5 style only)
 extent = domain size at file creation (hdf5 style only)
 verbose = 0 (hdf5 style only)
-atomic = yes (hdf5 style only)
+atomic = no (hdf5 style only)
 compress = 0 (hdf5 style only)
 scolor = * c1/c2/.../c140 where c1-c140 are the names of the 140 pre-defined colors
 sdiam = * 1.0

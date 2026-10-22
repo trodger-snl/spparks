@@ -286,7 +286,7 @@ collective to independent I/O.  Since that fallback is silent and
 changes write scaling completely, turn it on before trusting any timing
 measurement.
 </P>
-<P><I>atomic</I> yes (the default) makes every <I>hdf5</I> dump crash safe.  The
+<P><I>atomic</I> yes makes every <I>hdf5</I> dump crash safe.  The
 dump copies the file to <I>file</I>.tmp, writes into the copy, flushes it to
 disk, and renames it over <I>file</I>, so the file under its own name is
 always a complete earlier dump, whatever happens to the run mid-write.
@@ -296,7 +296,7 @@ ext4, NFS) every processor copies one slice of the file through MPI-IO,
 so the copy runs at the file system's aggregate bandwidth.  Either way
 the file needs room for a second copy while a dump is written.  A stale
 <I>file</I>.tmp left by a crash is harmless and is replaced by the next dump.
-<I>atomic</I> no writes into the file in place: each dump opens the file,
+<I>atomic</I> no (the default) writes into the file in place: each dump opens the file,
 writes its sites, flushes, closes and syncs it, so there is no copy of
 the whole file per dump and the file is open only while a dump writes.
 That suits a chain of boxes much smaller than the file's domain on a
@@ -654,7 +654,7 @@ details.
 <LI>origin = domain lower bound at file creation (hdf5 style only)
 <LI>extent = domain size at file creation (hdf5 style only)
 <LI>verbose = 0 (hdf5 style only)
-<LI>atomic = yes (hdf5 style only)
+<LI>atomic = no (hdf5 style only)
 <LI>compress = 0 (hdf5 style only)
 <LI>scolor = * c1/c2/.../c140 where c1-c140 are the names of the 140 pre-defined colors
 <LI>sdiam = * 1.0

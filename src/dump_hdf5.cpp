@@ -75,7 +75,7 @@ DumpHDF5::DumpHDF5(SPPARKS *spk, int narg, char **arg) : Dump(spk, narg, arg) {
   opened = false;
   user_origin = user_extent = user_chunk = false;
   verbose = 0;
-  atomic = 1;
+  atomic = 0;      // in place: no whole-file copy per dump (see dump_modify atomic)
   compress = 0;
   for (int d = 0; d < 3; d++) {
     origin[d] = 0;

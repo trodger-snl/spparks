@@ -456,7 +456,9 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
         if (xyz(nb, 0) == xyz(i, 0) && xyz(nb, 1) == xyz(i, 1) &&
             xyz(nb, 2) == xyz(i, 2) + 1.0) { above = nb; break; }
       }
-      bool is_melt_surface = (above < 0) || (d_active_flag(above) <= 1);
+      // A void above (i2 = 5) is air, so it is a free surface too.
+      bool is_melt_surface = (above < 0) || (d_active_flag(above) <= 1) ||
+                             (d_active_flag(above) == 5);
 
       // Get current site z-coordinate for melt surface filtering
       double site_z = xyz(i, 2);

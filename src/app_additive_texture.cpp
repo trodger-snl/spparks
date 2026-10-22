@@ -1183,7 +1183,7 @@ std::vector<double> AppAdditiveTexture::normal_finder(int site)
 	double grad_x = 0, grad_y = 0, grad_z = 0;
 	
 	// Special case: top of melt pool. If the neighbour directly above (+z) is
-	// missing (a top-boundary site) or not melted/solid (active_flag <= 1),
+	// missing (a top-boundary site), not melted/solid (active_flag <= 1) or a void,
 	// use only neighbours at or below the site's z. The +z neighbour is found
 	// by its coordinates, not by slot 13: a boundary site's neighbour list is
 	// compacted, so slot n is the n-th existing neighbour, not the n-th
@@ -1194,7 +1194,8 @@ std::vector<double> AppAdditiveTexture::normal_finder(int site)
 		if (xyz[nb][0] == xyz[site][0] && xyz[nb][1] == xyz[site][1] &&
 		    xyz[nb][2] == xyz[site][2] + 1.0) { above = nb; break; }
 	}
-	bool is_melt_surface = (above < 0) || (active_flag[above] <= 1);
+	// A void above (i2 = 5) is air, so it is a free surface too.
+	bool is_melt_surface = (above < 0) || (active_flag[above] <= 1) || (active_flag[above] == 5);
 	double site_z = xyz[site][2];
 
 	// Weighted least squares: A*grad = b, A rows [dx dy dz] per neighbor, b the

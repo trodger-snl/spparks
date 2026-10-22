@@ -342,9 +342,22 @@ with the <A HREF = "set.html">set</A> command before the run.  Sites with i2 = 1
 once the melt pool reaches their height.  At the start of the run,
 <I>additive/texture</I> gives a random orientation to every site with
 i2 != 3; <I>additive/texture/kk</I> gives one to every site whose
-quaternion is zero (and normalizes the others).  Void
-sites (i2 = 5) are produced only by the <I>additive/texture</I> void
-commands.
+quaternion is zero (and normalizes the others).
+</P>
+<P>Void sites (i2 = 5) are permanent in both styles.  They are thermally
+air (the conduction source treats them as gas), never melt, solidify,
+or become powder, and never lend their spin or orientation to a
+neighbour.  <I>additive/texture</I> can generate spherical voids with the
+void commands above.  Measured (CT) defects are applied as a mask
+written by tools/ct_defects.py from a .glb mesh export, either at
+their measured positions (crop) or sampled from the population
+(sample):
+</P>
+<PRE>set i2 hdf5 mask.h5 skip_novalue 
+</PRE>
+<P>The mask is keyed by absolute lattice index, so one file that covers
+the whole build can be applied in every box of a box-per-layer run
+(examples/gp700_moser/run_layers.sh: DEFECTS=mask.h5).
 </P>
 <P>A box-per-layer build continues the microstructure from a stitch file
 (STITCH package) by dumping and reloading i1 i2 d1 d2 d3 d4 d8 d9 d10,

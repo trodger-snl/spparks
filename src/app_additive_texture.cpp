@@ -618,6 +618,7 @@ void AppAdditiveTexture::init_app()
   // Generate voids if enabled
   if (enable_voids) {
     generate_voids(ranapp);
+    enable_voids = 0;  // init_app runs every run: a second run must not add more voids
   }
 
   // Note: Powder activation happens after meltpool appears, not during init
@@ -1715,12 +1716,26 @@ void AppAdditiveTexture::generate_voids(RandomPark *random) {
         double xlen = domain->boxxhi - domain->boxxlo;
         double ylen = domain->boxyhi - domain->boxylo;
         double zlen = domain->boxzhi - domain->boxzlo;
-        domain_volume = xlen * ylen * zlen;  // in m^3
+        domain_volume = xlen * ylen * zlen * dx * dx * dx;  // box is in lattice units; m^3
 
         // If pore fraction was specified, calculate void_density from it
         if (void_pore_fraction > 0.0) {
-            double r_mean_m = void_radius_mean * 1e-6;  // Convert μm to m
-            double avg_void_volume = (4.0/3.0) * M_PI * pow(r_mean_m, 3);
+            // mean void volume = 4/3 pi E[r^3] over the truncated normal
+            // (not at r_mean: E[r^3] > r_mean^3 overshot the target)
+            double r3 = pow(void_radius_mean, 3);
+            if (void_radius_std > 0.0) {
+                double s3 = 0.0, sw = 0.0;
+                const int nq = 2000;
+                for (int k = 0; k < nq; k++) {
+                    double r = void_radius_min + (k + 0.5) * (void_radius_max - void_radius_min) / nq;
+                    double u = (r - void_radius_mean) / void_radius_std;
+                    double p = exp(-0.5 * u * u);
+                    s3 += p * r * r * r;
+                    sw += p;
+                }
+                if (sw > 0.0) r3 = s3 / sw;
+            }
+            double avg_void_volume = (4.0/3.0) * M_PI * r3 * 1e-18;  // um^3 -> m^3
             void_density = void_pore_fraction / avg_void_volume;
 
             fprintf(screen, "Target pore fraction: %.4f (%.2f%%)\n",
@@ -1752,11 +1767,6 @@ void AppAdditiveTexture::generate_voids(RandomPark *random) {
         voids.clear();
         voids.reserve(num_voids);
 
-        // Setup random number generator for Gaussian distribution
-        std::random_device rd{};
-        std::mt19937 gen{rd()};
-        std::normal_distribution<double> radius_dist(void_radius_mean, void_radius_std);
-
         // Convert micrometers to meters for radius bounds
         double r_min_m = void_radius_min * 1e-6;
         double r_max_m = void_radius_max * 1e-6;
@@ -1773,11 +1783,16 @@ void AppAdditiveTexture::generate_voids(RandomPark *random) {
                 attempts++;
                 total_attempts++;
 
-                // Sample radius from truncated Gaussian (convert um to m)
+                // Sample radius from truncated Gaussian (convert um to m);
+                // Box-Muller on the app RNG so the voids follow the deck seed
                 double radius_m;
                 do {
-                    radius_m = radius_dist(gen) * 1e-6;
+                    double u1 = random->uniform(), u2 = random->uniform();
+                    double g = sqrt(-2.0 * log(1.0 - u1)) * cos(2.0 * M_PI * u2);
+                    radius_m = (void_radius_mean + void_radius_std * g) * 1e-6;
                 } while (radius_m < r_min_m || radius_m > r_max_m);
+                // centres and xyz are lattice units: store the radius in them too
+                const double radius = radius_m / dx;
 
                 // Pick random center location in domain
                 double x = domain->boxxlo + random->uniform() * (domain->boxxhi - domain->boxxlo);
@@ -1791,7 +1806,7 @@ void AppAdditiveTexture::generate_voids(RandomPark *random) {
                     double dy_v = y - existing_void.y;
                     double dz_v = z - existing_void.z;
                     double dist = sqrt(dx_v*dx_v + dy_v*dy_v + dz_v*dz_v);
-                    double min_dist = radius_m + existing_void.radius;
+                    double min_dist = radius + existing_void.radius;
 
                     if (dist < min_dist) {
                         collides = true;
@@ -1800,7 +1815,7 @@ void AppAdditiveTexture::generate_voids(RandomPark *random) {
                 }
 
                 if (!collides) {
-                    voids.emplace_back(x, y, z, radius_m);
+                    voids.emplace_back(x, y, z, radius);
                     placed = true;
                     successful_placements++;
                 }

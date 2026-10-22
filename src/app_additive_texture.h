@@ -97,7 +97,7 @@ class AppAdditiveTexture : public AppPottsQuaternion, public AdditiveParams {
 	// Void structure for tracking spherical voids
 	struct Void {
 		double x, y, z;  // Center coordinates
-		double radius;   // Radius in meters
+		double radius;   // Radius in lattice units (xyz units)
 
 		Void(double x_, double y_, double z_, double r_)
 			: x(x_), y(y_), z(z_), radius(r_) {}

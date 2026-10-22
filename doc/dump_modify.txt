@@ -249,11 +249,11 @@ and continues deleting intermediate states that can be safely removed.
 The {chunk}, {origin}, {extent}, {verbose}, {atomic}, {compress} and
 {turns} keywords apply only to the {hdf5} dump style.
 
-{chunk} overrides the HDF5 chunk shape.  By default the chunk is chosen
-to tile the per-processor subdomains, so that no chunk is shared between
-processors -- a shared chunk would turn a collective write into a
-read-modify-write.  The default is clamped into a sensible byte range, and
-is only consulted when the file is created.
+{chunk} overrides the HDF5 chunk shape.  The default, 128 x 128 x 4
+sites (clipped to the dataset), keeps chunks small next to a box, so a
+box written into a larger file rewrites little beyond itself, and big
+enough to compress well.  Keep cz below a layer's height in a multilayer
+build.  The shape is fixed when the file is created.
 
 {origin} and {extent} pre-declare the lattice index of dataset element
 [0][0][0] and the initial dataset size.  Both are honored only on file
@@ -294,13 +294,15 @@ wider frame) the whole file can become unreadable.  Keep periodic
 backup copies of the file when using it.
 
 {compress} N stores the datasets with byte shuffling and deflate
-(gzip) level N; 0, the default, stores them uncompressed.  Level 1 is
+(gzip) level N; 0 stores them uncompressed.  Level 1, the default, is
 usually the right choice: higher levels cost more time for little
 further gain.  Any HDF5 reader, h5py included, reads the result.  A
 compression level is fixed when a dataset is created, so a dump whose
 setting differs from the file's datasets (compressed or not) rewrites
 the file once in the requested form, and later dumps write into it
 directly.  The level alone (1 versus 6) does not trigger a rewrite.
+Files written by an older SPPARKS, where the default was 0, are
+therefore compressed by the first dump that does not say {compress 0}.
 
 {turns} chooses how more than one processor writes the datasets.  With
 {no}, they write together through MPI-IO, and HDF5 compresses each chunk
@@ -649,12 +651,12 @@ loglinfreq = off
 pad = 0
 region = none
 retain = 0 (unlimited, stitch style only)
-chunk = chosen from the processor grid (hdf5 style only)
+chunk = 128 128 4 (hdf5 style only)
 origin = domain lower bound at file creation (hdf5 style only)
 extent = domain size at file creation (hdf5 style only)
 verbose = 0 (hdf5 style only)
 atomic = no (hdf5 style only)
-compress = 0 (hdf5 style only)
+compress = 1 (hdf5 style only)
 turns = yes when compressing with more than one OpenMP thread per processor, else no (hdf5 style only)
 scolor = * c1/c2/.../c140 where c1-c140 are the names of the 140 pre-defined colors
 sdiam = * 1.0

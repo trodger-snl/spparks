@@ -104,9 +104,8 @@ run.  The check costs one read of each processor's sites per dump.  On
 one processor the file is written and read without MPI-IO; on more,
 through MPI-IO with collective transfers.
 
-Datasets are uncompressed by default.  "dump_modify
-compress"_dump_modify.html N stores them with byte shuffling and
-deflate level N.  Over a six-box GP700 chain level 1 made the file 1.8x
+Datasets are stored with byte shuffling and deflate level 1 by default;
+"dump_modify compress"_dump_modify.html sets the level, or 0 for none.  Over a six-box GP700 chain level 1 made the file 1.8x
 smaller: the phase field and the mostly-zero G/V fields compress well,
 while the quaternions, half the bytes, barely compress (1.2x).
 Unwritten regions of the file compress to almost nothing.  SPPARKS

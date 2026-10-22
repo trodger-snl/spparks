@@ -58,11 +58,6 @@ using namespace SPPARKS_NS;
 enum { ID, SITE, X, Y, Z, ENERGY, PROPENSITY, IARRAY, DARRAY };
 enum { INT, DOUBLE, TAGINT };
 
-// Chunks below this are dominated by chunk-index overhead; above this a
-// partially touched chunk wastes too much I/O.
-static const int64_t CHUNK_MIN_BYTES = 256 * 1024;
-static const int64_t CHUNK_MAX_BYTES = 4 * 1024 * 1024;
-
 static const int SPPARKS_HDF5_DUMP_VERSION = 1;
 
 /* ---------------------------------------------------------------------- */
@@ -85,7 +80,7 @@ DumpHDF5::DumpHDF5(SPPARKS *spk, int narg, char **arg) : Dump(spk, narg, arg) {
   user_origin = user_extent = user_chunk = false;
   verbose = 0;
   atomic = 0;      // in place: no whole-file copy per dump (see dump_modify atomic)
-  compress = 0;
+  compress = 1;    // deflate level 1: cheap now that chunks deflate on all threads
   turns = -1;
   for (int d = 0; d < 3; d++) {
     origin[d] = 0;
@@ -127,56 +122,20 @@ void DumpHDF5::init_style() {
 }
 
 /* ----------------------------------------------------------------------
-   choose a chunk shape that tiles the per-rank subdomains.
-
-   ceil(extent/procgrid) is exactly rank 0's subdomain extent in each
-   dimension and every other rank is within one site of it, so chunks land
-   approximately one per rank.  That keeps a chunk from being shared between
-   ranks, which is what would otherwise turn a collective write into a
-   read-modify-write.  The byte clamp keeps the chunk index from exploding on
-   one end and from wasting I/O on a partial touch at the other.
+   the chunk shape, x,y,z: dump_modify chunk, else a fixed compact block.
+   Compact so that a box written into a bigger file rewrites little beyond
+   itself; ~0.5 MB of doubles, big enough for deflate and a small chunk
+   index.  Chunks tiled to the processor grid only lined up with the run
+   that created the file -- a box chain re-decomposes every box, and on one
+   processor that rule made each chunk a full row of the whole file.
+   Measured on 99M-site boxes of a chain: 128x128x4 and 256x256x2 were the
+   fastest of the shapes tried; 64x64x8 slows reads, full rows slow both.
 ------------------------------------------------------------------------- */
 
-void DumpHDF5::choose_chunk(const int64_t *extent, size_t elemsize,
-                            int64_t *out) {
-  if (user_chunk) {
-    for (int d = 0; d < 3; d++)
-      out[d] = std::max((int64_t)1, std::min(req_chunk[d], extent[d]));
-    return;
-  }
-
-  for (int d = 0; d < 3; d++) {
-    int64_t p = domain->procgrid[d] > 0 ? domain->procgrid[d] : 1;
-    out[d] = (extent[d] + p - 1) / p;
-    if (out[d] < 1)
-      out[d] = 1;
-    if (out[d] > extent[d])
-      out[d] = extent[d];
-  }
-
-  // shrink the slowest-varying dimension first (z, then y) so that x stays
-  // contiguous for as long as possible
-  int order[3] = {2, 1, 0};
-  for (int k = 0; k < 3; k++) {
-    int d = order[k];
-    while (out[0] * out[1] * out[2] * (int64_t)elemsize > CHUNK_MAX_BYTES &&
-           out[d] > 1)
-      out[d] = (out[d] + 1) / 2;
-  }
-
-  // grow x, then y, then z back toward the minimum useful chunk, never past
-  // the current extent
-  int grow[3] = {0, 1, 2};
-  for (int k = 0; k < 3; k++) {
-    int d = grow[k];
-    while (out[0] * out[1] * out[2] * (int64_t)elemsize < CHUNK_MIN_BYTES &&
-           out[d] < extent[d]) {
-      int64_t next = std::min(extent[d], out[d] * 2);
-      if (next == out[d])
-        break;
-      out[d] = next;
-    }
-  }
+void DumpHDF5::choose_chunk(const int64_t *extent, int64_t *out) {
+  const int64_t compact[3] = {128, 128, 4};
+  for (int d = 0; d < 3; d++)
+    out[d] = std::max((int64_t)1, std::min(user_chunk ? req_chunk[d] : compact[d], extent[d]));
 }
 
 /* ----------------------------------------------------------------------
@@ -187,9 +146,8 @@ void DumpHDF5::ensure_dataset(const std::string &label, int type) {
   if (file->exist(label))
     return;
 
-  size_t elemsize = (type == INT) ? sizeof(int32_t) : sizeof(double);
   int64_t c[3];
-  choose_chunk(dims, elemsize, c);
+  choose_chunk(dims, c);
   if (!user_chunk)
     for (int d = 0; d < 3; d++)
       chunk[d] = c[d];

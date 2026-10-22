@@ -144,7 +144,7 @@ private:
   void rebuild_if_needed();
   void commit(const char *tmp);
   void sync_file(const char *fname);
-  void choose_chunk(const int64_t *extent, size_t elemsize, int64_t *out);
+  void choose_chunk(const int64_t *extent, int64_t *out);
   void ensure_dataset(const std::string &label, int type);
   void extend_to(const int64_t *needed);
 };

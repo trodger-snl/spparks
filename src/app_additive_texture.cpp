@@ -432,8 +432,8 @@ void AppAdditiveTexture::app_update(double dt)
 ------------------------------------------------------------------------- */
 void AppAdditiveTexture::nucleation_spins() {
     timer->stamp();
-    
-    nucleation_flags = new int[nspins];
+    // nucleation_flags is allocated by init_app (re-allocating it here leaked
+    // the init_app array on rank 0 every run)
     double nucleationFraction = dx * dx * dx * no;
     
     // Initialize all spins as nucleation sites (fallback behavior)

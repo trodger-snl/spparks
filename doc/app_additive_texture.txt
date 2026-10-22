@@ -135,7 +135,11 @@ between the two styles.  {additive/texture} microstructure output is
 also repeatable for a given seed and processor count: every random draw
 of a site's events in a step comes from a stream keyed by the seed, the
 step and the site's global ID, and the per-spin nucleation properties
-from one keyed by the seed and the spin.  A change at one site (a void
+from one keyed by the seed and the spin ({misorientation_grain_walk}
+is a fixed function of the grain and level, independent of the seed).
+Rerunning a deck therefore reproduces it: replicate runs must use
+different seeds.  Microstructures from versions before 2026-10-22, which
+were not repeatable, cannot be reproduced.  A change at one site (a void
 added with "set i2 hdf5 ... skip_novalue", say) therefore alters the
 microstructure only through the physics around it, so runs with and
 without voids can be compared site for site.  A different processor
@@ -278,7 +282,9 @@ Mutually exclusive with {void_pore_fraction}. :ulb,l
 {void_pore_fraction} {f} : target volumetric pore fraction in
 \[0, 1).  Mutually exclusive with {void_density}. :l
 {void_size_distribution} {mean std min max} : truncated normal
-distribution of pore radii in micrometers.  Default 75 25 0 150. :l,ule
+distribution of pore radii in micrometers.  Default 75 25 0 150.
+The voids fill the run's box; in a box-per-layer chain every box
+adds a set of its own, so use a void mask (below) there instead. :l,ule
 
 Box-per-layer builds, {additive/texture/kk} only:
 

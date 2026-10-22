@@ -1581,6 +1581,7 @@ bool AppAdditiveTexture::flip_single_voxel_grain(int i)
 
   for (int j = 0; j < numneigh[i]; j++) {
     int nj = neighbor[i][j];
+    if (active_flag[nj] == 5) continue;      // a void never matures and carries no grain
     if (active_flag[nj] != 3) return false;  // defer: neighborhood immature
     int s = spin[nj];
     if (s == oldstate) {

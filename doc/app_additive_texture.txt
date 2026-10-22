@@ -223,8 +223,9 @@ the sign-aligned average orientation of its neighbors in that grain
 smoothing window like epitaxially solidified sites; when off
 (default) they are not smoothed. :l
 {single_voxel_cleanup} {on|off} : after a voxel exits the {nrefine}
-window, if its full 26-neighbor shell is solidified and contains no
-same-spin neighbor, flip it to the energy-minimizing neighbor grain.
+window, if its full 26-neighbor shell is solidified (voids aside) and
+contains no same-spin neighbor, flip it to the energy-minimizing
+neighbor grain.
 Default off.  {additive/texture} only. :l,ule
 
 Temperature source plumbing:

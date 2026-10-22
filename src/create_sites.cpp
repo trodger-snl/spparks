@@ -471,7 +471,8 @@ void CreateSites::structured_lattice()
     MPI_Allreduce(&zlo_me,&zminlo,1,MPI_INT,MPI_MIN,world);
     MPI_Allreduce(&zhi_me,&zmaxhi,1,MPI_INT,MPI_MAX,world);
 
-    tagint all = (xmaxhi-xminlo+1) * (ymaxhi-yminlo+1) * (zmaxhi-zminlo+1);
+    // bigint: the int product overflows past 2^31 sites (SPPARKS_BIGBIG)
+    bigint all = (bigint) (xmaxhi-xminlo+1) * (ymaxhi-yminlo+1) * (zmaxhi-zminlo+1);
     if (all != app->nglobal) 
       error->all(FLERR,"Global simple lattice is not consistent");
 

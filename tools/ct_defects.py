@@ -8,8 +8,9 @@ The mask is read by additive/texture and additive/texture/kk with
 i2 = 5 is the permanent void state: it behaves as air and never melts,
 solidifies or becomes powder. The file uses the dump hdf5 layout: an int32
 dataset 'i2' shaped [z][y][x], with -1 (no_value) everywhere except the
-defects, and root attributes origin = (0,0,0) and dims = (nx,ny,nz) in x,y,z
-order. Sites are keyed by absolute lattice index (lattice sc/26n 1.0,
+defects, and root attributes origin = --lo and dims = (nx,ny,nz) in x,y,z
+order. Only chunks that hold a defect are written; the rest read as the -1
+fill, so a mask of a whole part costs little disk or memory. Sites are keyed by absolute lattice index (lattice sc/26n 1.0,
 boundary n n n: site (i,j,k) sits at x = i), so a single mask that covers the
 whole build serves every sliding box of a staged run.
 
@@ -45,17 +46,21 @@ is the CT's and is not adjustable.
     Footprint sources (repeatable, merged by layer plane z; all metres):
       --laser-path "start X0 Y0 Z0 end X1 Y1 ... [hatch S N]"  deck line form
       --path-file F    laser_path waypoint file (x y z p [v])
-      --gcode F        G-code, read with laser_path_convert.py
-          (--path-scale / --path-shift apply to both files, as in the deck)
+      --gcode F        G-code, read with laser_path_convert.py (--travel-feed
+                       as there: G1 moves at or above it are jumps)
+          (--path-scale / --path-shift / --path-layers N apply to both files,
+          as scale / shift / layers do in the deck)
       --thermal-h5 F --liquidus TL   hdf5_unstructured / hdf5_csr file:
           xy of the nodes that reach TL in each layer group
     The footprint is every point within --track-radius of a scan segment (or
     a melted node), with holes filled. Default radius: S/2 for a hatched
-    --laser-path, the median melted-node spacing for --thermal-h5; give it for
-    files and single lines. --union uses one footprint (all layers OR'd).
+    --laser-path; for --thermal-h5 half the median melted-node spacing (plus
+    half a site), so the edge falls midway to the first unmelted node; give
+    it for files and single lines. Only the layer planes the domain's sites
+    use are kept. --union uses one footprint (those layers OR'd).
     The CT depth is measured from the edge of the CT data, which assumes the
     scan includes the part's as-built surface. If it does not (a reduced field
-    of view or a machined core), give --ct-radius (mm, about the fitted axis).
+    of view or a machined core), give --ct-radius (m, about the fitted axis).
     The scan-edge band is then never copied, and tiles shallower than the data
     reaches come from bulk.
   ponytail: a thin wall or a corner tighter than a tile distorts depth (one
@@ -88,7 +93,7 @@ Facts about the Huddle CT15 export (tiff - CT15-2 ..._registered_cleaned.glb):
     footprint is ~8.1 mm across (x 35.9-44.0, y -24.1..-16.0 mm), so the 2.86 mm
     CT cylinder is the part's core, not its surface. Its 0.1-0.3 mm band lies
     ~2.7 mm inside the as-built surface (a radial trend or a scan-edge
-    artifact). Use --ct-radius 4.05 with that part. The thermal layers 0-9
+    artifact). Use --ct-radius 4.05e-3 with that part. The thermal layers 0-9
     (z ~ 25.0-25.3 mm) are also below the CT's z range (26.0-41.0 mm).
 
 Needs numpy and h5py; cluster mode also uses scipy.
@@ -115,13 +120,20 @@ def read_glb(path):
     jlen, jtype = struct.unpack("<II", b[12:20])
     j = json.loads(b[20:20 + jlen])
     bin0 = 20 + jlen + 8
+    if j.get("extensionsRequired"):
+        sys.exit(f"{path}: needs glTF extensions {j['extensionsRequired']} (e.g. Draco); "
+                 "re-export without them")
     for n in j.get("nodes", []):
         if any(k in n for k in ("matrix", "translation", "rotation", "scale")):
             sys.exit(f"{path}: node transforms are not supported ({n.get('name')})")
 
     def acc(i):
         a = j["accessors"][i]
+        if "sparse" in a or "bufferView" not in a:
+            sys.exit(f"{path}: sparse or buffer-less accessors are not supported")
         v = j["bufferViews"][a["bufferView"]]
+        if v.get("buffer", 0) != 0:
+            sys.exit(f"{path}: only the GLB's own binary chunk (buffer 0) is supported")
         if v.get("byteStride", 0) not in (0, NCOMP[a["type"]] * np.dtype(COMP[a["componentType"]]).itemsize):
             sys.exit(f"{path}: interleaved buffer views are not supported")
         off = bin0 + v.get("byteOffset", 0) + a.get("byteOffset", 0)
@@ -134,8 +146,10 @@ def read_glb(path):
         for p in m["primitives"]:
             if p.get("mode", 4) != 4:
                 sys.exit(f"{path}: mesh {m.get('name')} is not a triangle list")
-            F.append(acc(p["indices"]).astype(np.int64).reshape(-1, 3) + sum(len(v) for v in V))
-            V.append(acc(p["attributes"]["POSITION"]).astype(np.float64))
+            P = acc(p["attributes"]["POSITION"]).astype(np.float64)
+            I = acc(p["indices"]).astype(np.int64) if "indices" in p else np.arange(len(P))
+            F.append(I.reshape(-1, 3) + sum(len(v) for v in V))
+            V.append(P)
         out.append((m.get("name", f"mesh{len(out)}"), np.vstack(V), np.vstack(F)))
     return out
 
@@ -235,46 +249,58 @@ def ct_profile(s):
 
 def place(placements, dims, lo, dx_mm, out, listfile):
     """placements: list of (name, V in absolute lattice units, F, quat, mesh_vol_mm3)."""
-    mask = np.zeros(dims[::-1], np.int8)       # [z][y][x]
-    rows, nmin, nsites, vmesh = [], 0, 0, 0.0
+    hits, rows, nmin, nsites, vmesh = [], [], 0, 0, 0.0
     for name, V, F, q, vol in placements:
         sites, used_min = rasterise(V - lo, F, dims)
         if sites is None:
             continue
-        mask[sites[:, 2], sites[:, 1], sites[:, 0]] = 1
+        hits.append(sites)
         nmin += used_min
         nsites += len(sites)
         vmesh += vol
         c = V.mean(0)
         rows.append([name, *np.round(c, 2), *np.round(q, 6), len(sites),
                      round(vol * 1e9, 2), round(len(sites) * dx_mm ** 3 * 1e9, 2)])
-    nvoid = int(mask.sum(dtype=np.int64))
+    # the void sites, unique (overlapping defects share some), kept sparse
+    sites = np.vstack(hits) if hits else np.zeros((0, 3), int)
+    lin = np.unique((sites[:, 2].astype(np.int64) * dims[1] + sites[:, 1]) * dims[0] + sites[:, 0])
+    sites = np.stack([lin % dims[0], lin // dims[0] % dims[1], lin // (dims[0] * dims[1])], 1)
+    nvoid = len(sites)
     dvol = np.prod(dims) * dx_mm ** 3
     print(f"placed         {len(rows)} defects, {nmin} at the 1-site minimum")
     print(f"void sites     {nvoid} ({nsites - nvoid} shared by overlapping defects)")
     print(f"porosity       sites {nvoid / np.prod(dims):.3e}, mesh {vmesh / dvol:.3e}"
           " (mesh counts clipped defects whole)")
-    write_mask(out, mask, dims, lo)
+    write_mask(out, sites, dims, lo)
     if listfile:
         with open(listfile, "w", newline="") as f:
             w = csv.writer(f)
             w.writerow(["name", "i", "j", "k", "q0", "qx", "qy", "qz",
                         "n_sites", "mesh_vol_um3", "raster_vol_um3"])
             w.writerows(rows)
-    return mask
 
 
-def write_mask(path, mask, dims, lo):
+def write_mask(path, sites, dims, lo):
+    """sites[n,3]: void sites (x, y, z) relative to lo. Writes only the chunks holding one."""
     import h5py
-    nz, ny, nx = mask.shape
+    nx, ny, nz = (int(v) for v in dims)
+    cz, cy, cx = min(4, nz), min(128, ny), min(128, nx)
     with h5py.File(path, "w") as f:
         f.attrs["origin"] = np.asarray(lo, np.int64)
         f.attrs["dims"] = np.asarray(dims, np.int64)
-        d = f.create_dataset("i2", mask.shape, np.int32, fillvalue=-1,
-                             chunks=(min(4, nz), min(128, ny), min(128, nx)),
-                             compression="gzip", compression_opts=1)
-        for z in range(nz):                    # int8 in memory, int32 on disk
-            d[z] = np.where(mask[z], 5, -1).astype(np.int32)
+        d = f.create_dataset("i2", (nz, ny, nx), np.int32, fillvalue=-1,
+                             chunks=(cz, cy, cx), compression="gzip", compression_opts=1)
+        key = (sites[:, 2] // cz * ((ny + cy - 1) // cy) + sites[:, 1] // cy) * ((nx + cx - 1) // cx) \
+            + sites[:, 0] // cx
+        order = np.argsort(key, kind="stable")
+        bounds = np.flatnonzero(np.diff(key[order])) + 1
+        for g in np.split(order, bounds) if len(order) else []:
+            x, y, z = sites[g, 0], sites[g, 1], sites[g, 2]
+            z0, y0, x0 = z[0] // cz * cz, y[0] // cy * cy, x[0] // cx * cx
+            z1, y1, x1 = min(z0 + cz, nz), min(y0 + cy, ny), min(x0 + cx, nx)
+            blk = np.full((z1 - z0, y1 - y0, x1 - x0), -1, np.int32)
+            blk[z - z0, y - y0, x - x0] = 5
+            d[z0:z1, y0:y1, x0:x1] = blk
         d.attrs["field"] = "i2"
         d.attrs["type"] = "int32"
         d.attrs["per_site_length"] = np.int32(1)
@@ -314,21 +340,26 @@ def read_waypoints(path):
     return rows
 
 
-def waypoint_layers(rows, scale, shift):
-    """Waypoint rows (x, y, z, p, v) -> {z (m): segments[n,4] (m)} of the emitting moves."""
-    out, prev = {}, None
+def waypoint_layers(rows, scale, shift, nlayers=0):
+    """Waypoint rows (x, y, z, p, v) -> {z (m): segments[n,4] (m)} of the emitting moves;
+    nlayers > 0 keeps the first that many layers, as `laser_path file ... layers N` does."""
+    out, prev, layer = {}, None, 0
     for x, y, z, p, _ in rows:
         q = np.array([x, y, z]) * scale + shift
-        if prev is not None and p > 0 and q[2] == prev[2]:   # a z change starts a layer, laser off
+        if prev is None or q[2] != prev[2]:    # a z change starts a layer (laser off)
+            layer += 1
+            if nlayers and layer > nlayers:
+                break
+        elif p > 0:
             out.setdefault(float(q[2]), []).append([prev[0], prev[1], q[0], q[1]])
         prev = q
     return {z: np.array(v) for z, v in out.items()}
 
 
 def thermal_layers(path, tl, box):
-    """{z (m): melted node xy[n,2]} per layer group; box = (xlo, xhi, ylo, yhi) in m."""
+    """[(z (m), melted node xy[n,2])] per layer group; box = (xlo, xhi, ylo, yhi) in m."""
     import h5py
-    out = {}
+    out = []
     with h5py.File(path, "r") as f:
         for name in sorted((k for k in f if k.isdigit()), key=int):
             g = f[name]
@@ -337,6 +368,7 @@ def thermal_layers(path, tl, box):
             T, tmax = g["temperatures"], np.full(len(c), -np.inf)
             csr = "nodeOffsets" in g
             off = g["nodeOffsets"][:] if csr else None
+            counts = g["dataCounts"][:] if "dataCounts" in g else None
             B = 1 << 18
             for a in range(0, len(c), B):      # ponytail: reads every series in the box; per-node reads if it gets slow
                 b = min(a + B, len(c))
@@ -348,11 +380,14 @@ def thermal_layers(path, tl, box):
                     if nz.any():
                         v = T[off[a]:off[b]]
                         tmax[a:b][nz] = np.maximum.reduceat(v, (off[a:b] - off[a])[nz])
-                else:
-                    tmax[a:b] = T[a:b].max(1)
+                else:                          # padded rows: only the first dataCounts samples
+                    v = T[a:b]
+                    if counts is not None:
+                        v = np.where(np.arange(v.shape[1])[None, :] < counts[a:b, None], v, -np.inf)
+                    tmax[a:b] = v.max(1)
             m = keep & (tmax >= tl)
             if m.any():
-                out[float(c[m, 2].max())] = c[m, :2]
+                out.append((float(c[m, 2].max()), c[m, :2]))
             print(f"thermal        {os.path.basename(path)} layer {name}: {int(m.sum())} melted nodes in the box")
     return out
 
@@ -386,26 +421,40 @@ def footprint(layers, dims, lo, dx, pad, union):
             return np.full(F.shape, -np.inf, np.float32)
         return ((ndimage.distance_transform_edt(F) - ndimage.distance_transform_edt(~F)) * dx * 1e3).astype(np.float32)
 
-    planes = sorted(layers)
-    Fs = [raster(layers[z]) for z in planes]
-    if union:
-        Fs, planes = [np.logical_or.reduce(Fs)], [planes[-1]]
-    maps, which, seen = [], [], {}
-    for F in Fs:                               # identical layers share one map
-        key = F.tobytes()
+    import hashlib
+    # only the planes the domain's sites use: z belongs to the first plane at
+    # or above it, so from the one above the bottom up to the one above the top
+    allp = sorted(layers)
+    lat = np.array(allp) / dx
+    i0 = int(np.searchsorted(lat, lo[2] - 1e-6))
+    i1 = min(int(np.searchsorted(lat, lo[2] + dims[2] - 1 - 1e-6)), len(allp) - 1)
+    planes = allp[i0:i1 + 1]
+    maps, which, seen, acc = [], [], {}, None
+    for z in planes:                           # one raster at a time; identical layers share a map
+        F = raster(layers[z])
+        if union:
+            acc = F if acc is None else acc | F
+            continue
+        key = hashlib.blake2b(np.packbits(F)).digest()
         if key not in seen:
             seen[key] = len(maps)
             maps.append(depth(F))
         which.append(seen[key])
-    print(f"footprint      {len(planes)} layer plane(s), {len(maps)} distinct footprint(s), "
-          f"part area {[round(float((m >= 0).sum()) * (dx * 1e3) ** 2, 3) for m in maps]} mm^2")
-    return dict(planes=np.array(planes) / dx, maps=maps, which=np.array(which), ox=ox, oy=oy)
+    if union and planes:
+        maps, which, planes = [depth(acc)], [0], [planes[-1]]
+    print(f"footprint      {len(planes)} of {len(allp)} layer plane(s) used by the domain, "
+          f"{len(maps)} distinct footprint(s), part area "
+          f"{[round(float((m >= 0).sum()) * (dx * 1e3) ** 2, 3) for m in maps]} mm^2")
+    return dict(planes=np.array(planes) / dx, maps=maps, which=np.array(which, int), ox=ox, oy=oy,
+                pad=pad)
 
 
 def depth_at(fp, P):
     """Signed depth (mm) below the part edge at absolute lattice points P[n,3]; -inf above the top layer."""
     li = np.searchsorted(fp["planes"], P[:, 2] - 1e-6)
     out = np.full(len(P), -np.inf)
+    if not fp["maps"]:                         # no layer at or above the domain
+        return out
     ny, nx = fp["maps"][0].shape
     ix = np.clip(np.rint(P[:, 0] - fp["ox"]).astype(int), 0, nx - 1)
     iy = np.clip(np.rint(P[:, 1] - fp["oy"]).astype(int), 0, ny - 1)
@@ -485,11 +534,12 @@ def sim_profile(fp, pl, dims, lo, dx_mm):
     """Placed-defect density by depth below the footprint edge, for comparison with the CT."""
     cen = np.array([V.mean(0) for _, V, _, _, _ in pl]) if pl else np.zeros((0, 3))
     d = depth_at(fp, cen)
-    ys, xs = np.mgrid[lo[1]:lo[1] + dims[1], lo[0]:lo[0] + dims[0]]
-    vol = np.zeros(len(DEPTH_BINS) - 1)
-    for z in range(lo[2], lo[2] + dims[2]):
-        P = np.stack([xs.ravel(), ys.ravel(), np.full(xs.size, z)], 1)
-        vol += np.histogram(depth_at(fp, P), DEPTH_BINS)[0]
+    # site volume per depth bin: each layer's map over the domain, times its z slices
+    li = np.searchsorted(fp["planes"], np.arange(lo[2], lo[2] + dims[2]) - 1e-6)
+    pad, vol = fp["pad"], np.zeros(len(DEPTH_BINS) - 1)
+    for l, nsl in zip(*np.unique(li[li < len(fp["planes"])], return_counts=True)):
+        m = fp["maps"][fp["which"][l]][pad:pad + dims[1], pad:pad + dims[0]]
+        vol += nsl * np.histogram(m, DEPTH_BINS)[0]
     cnt = np.histogram(d, DEPTH_BINS)[0]
     vol = vol * dx_mm ** 3
     return ", ".join(f"{a:.1f}-{b:.1f} mm " + (f"{n / v:.1f}" if v > 0 else "-")
@@ -559,6 +609,27 @@ def selftest():
     # true surface (--ct-radius) beyond the CT data: its 0.2 mm band is the scan edge,
     # never copied to the part surface; every tile falls back to (empty) bulk
     assert cluster(ct, vols, dict(st, R=3.0, R_fit=1.4), dims, lo, dx * 1e3, 0.2, 0.35, rng, fp) == []
+
+    # layer planes: only those the domain's sites use (z 10..13 -> planes 10 and 15)
+    lay = {z * dx: [(seg, r)] for z in (5, 10, 15, 20)}
+    f2 = footprint(lay, np.array([140, 140, 4]), np.array([-20, -20, 10]), dx, 60, False)
+    assert np.allclose(f2["planes"], [10, 15]), f2["planes"]
+    # waypoint files: --path-layers keeps the first N layers
+    rows = [(0, 0, z, 0, None) if k == 0 else (1e-3 * k, 0, z, 1, None)
+            for z in (1, 2, 3) for k in range(3)]
+    assert sorted(waypoint_layers(rows, 1.0, np.zeros(3), 2)) == [1.0, 2.0]
+    assert len(waypoint_layers(rows, 1.0, np.zeros(3))[3.0]) == 2
+    # sparse mask: only chunks holding a void are written, the rest read -1
+    import h5py, tempfile
+    pts = np.array([[0, 0, 0], [299, 5, 9], [130, 140, 4]])
+    with tempfile.TemporaryDirectory() as tdir:
+        fn = os.path.join(tdir, "m.h5")
+        write_mask(fn, pts, np.array([300, 200, 10]), np.array([7, -3, 2]))
+        with h5py.File(fn) as f:
+            m = f["i2"][:]
+            assert list(f.attrs["origin"]) == [7, -3, 2] and m.shape == (10, 200, 300)
+            assert (m == 5).sum() == 3 and all(m[z, y, x] == 5 for x, y, z in pts)
+            assert set(np.unique(m)) == {-1, 5} and f["i2"].id.get_num_chunks() == 3
     print("selftest ok")
 
 
@@ -593,12 +664,14 @@ def main():
             p.add_argument("--gcode", action="append", default=[], help="G-code file")
             p.add_argument("--path-scale", type=float, default=1.0, help="file coordinate scale")
             p.add_argument("--path-shift", type=float, nargs=3, default=[0.0, 0.0, 0.0], help="offset (m) after scale")
+            p.add_argument("--path-layers", type=int, default=0, help="use the first N layers of each file (0 = all)")
+            p.add_argument("--travel-feed", type=float, help="G-code: G1 moves at or above this feed are jumps")
             p.add_argument("--thermal-h5", action="append", default=[], help="hdf5_unstructured/csr thermal file")
             p.add_argument("--liquidus", type=float, help="K; a node is part of the footprint if it reaches it")
             p.add_argument("--track-radius", type=float, help="m; footprint = within this of a scan segment")
             p.add_argument("--union", action="store_true", help="one footprint for all layers")
             p.add_argument("--ct-radius", type=float,
-                           help="mm; radius of the CT part's as-built surface about the fitted axis, when the "
+                           help="m; radius of the CT part's as-built surface about the fitted axis, when the "
                                 "scan does not reach it (default: the CT data's own extent)")
     a = ap.parse_args()
 
@@ -630,7 +703,10 @@ def main():
             pl.append((name, (V - V.mean(0)) @ R.T / dx_mm + c, F, q, vols[k]))
     else:
         if a.ct_radius:
-            s["R_fit"], s["R"] = s["R"], a.ct_radius
+            if not s["R"] - 1e-9 <= a.ct_radius * 1e3 <= 1e3:
+                sys.exit(f"cluster: --ct-radius {a.ct_radius} m must lie between the CT data's radius "
+                         f"({s['R'] * 1e-3:.3e} m) and 1 m; it is in metres, like the other lengths")
+            s["R_fit"], s["R"] = s["R"], a.ct_radius * 1e3
             print("depth profile  from --ct-radius: " + ct_profile(s))
         fp = cluster_footprint(a, dims, lo)
         pl = cluster(defects, vols, s, dims, lo, dx_mm, a.tile * 1e3, a.bulk_depth * 1e3,
@@ -643,11 +719,12 @@ def main():
 
 def cluster_footprint(a, dims, lo):
     """Merge every footprint source into {z (m): [(segments, radius)]} -> fp, or None (interior)."""
-    layers = {}
+    layers, radii = {}, set()
     def add(z, seg, r):
         if r is None:
             sys.exit("cluster: give --track-radius (half the melt-track width) for this path source")
         layers.setdefault(round(z, 12), []).append((seg, r))
+        radii.add(round(r * 1e6, 2))
     for line in a.laser_path:
         z, seg, r = parse_laser_path(line)
         add(z, seg, a.track_radius or r)
@@ -655,9 +732,9 @@ def cluster_footprint(a, dims, lo):
     if a.gcode:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from laser_path_convert import from_gcode
-        rows += [from_gcode(open(f)) for f in a.gcode]
+        rows += [from_gcode(open(f), travel_feed=a.travel_feed) for f in a.gcode]
     for r in rows:
-        for z, seg in waypoint_layers(r, a.path_scale, np.array(a.path_shift)).items():
+        for z, seg in waypoint_layers(r, a.path_scale, np.array(a.path_shift), a.path_layers).items():
             add(z, seg, a.track_radius)
     if a.thermal_h5:
         if a.liquidus is None:
@@ -666,13 +743,15 @@ def cluster_footprint(a, dims, lo):
         m = (a.tile + a.bulk_depth) * 2
         box = ((lo[0]) * a.dx - m, (lo[0] + dims[0]) * a.dx + m, lo[1] * a.dx - m, (lo[1] + dims[1]) * a.dx + m)
         for f in a.thermal_h5:
-            for z, xy in thermal_layers(f, a.liquidus, box).items():
+            for z, xy in thermal_layers(f, a.liquidus, box):
                 u = np.unique(xy, axis=0)
-                r = a.track_radius or float(np.median(cKDTree(u).query(u, 2)[0][:, 1]))
+                # half the node spacing: the edge sits midway to the first unmelted node
+                r = a.track_radius or 0.5 * float(np.median(cKDTree(u).query(u, 2)[0][:, 1])) + 0.5 * a.dx
                 add(z, np.hstack([xy, xy]), r)
     if not layers:
         print("footprint      none: fully interior")
         return None
+    print(f"track radius   {sorted(radii)} um")
     pad = int(np.ceil((a.tile + a.bulk_depth) * 2 / a.dx))
     return footprint(layers, dims, lo, a.dx, pad, a.union)
 

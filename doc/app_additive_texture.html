@@ -349,9 +349,12 @@ air (the conduction source treats them as gas), never melt, solidify,
 or become powder, and never lend their spin or orientation to a
 neighbour.  <I>additive/texture</I> can generate spherical voids with the
 void commands above.  Measured (CT) defects are applied as a mask
-written by tools/ct_defects.py from a .glb mesh export, either at
-their measured positions (crop) or sampled from the population
-(sample):
+written by tools/ct_defects.py from a .glb mesh export: at their
+measured positions (crop), sampled uniformly from the population
+(sample), or as a tile bootstrap that keeps the measured clumping and
+depth below the part surface (cluster; the surface is the edge of the
+scanned footprint from a laser_path line, a waypoint file, G-code, or
+an HDF5 thermal file):
 </P>
 <PRE>set i2 hdf5 mask.h5 skip_novalue 
 </PRE>

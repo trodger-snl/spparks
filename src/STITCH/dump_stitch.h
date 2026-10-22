@@ -58,6 +58,7 @@ private:
   virtual void write_data(int, double *) {}
   int parse_fields(int, char **);
   void create_stitch_field_ids();
+  void check(int err, const char *what);
   int modify_param(int, char **);
 };
 

@@ -117,7 +117,7 @@ void DumpStitch::create_stitch_field_ids() {
   // open Stitch database file
   // printf("DumpStitch::create_stitch_field_ids filename %s \n", filename);
   int err = stitch_open(&fid, MPI_COMM_WORLD, filename);
-  // TODO: process err
+  check(err, "open");
 
   int64_t field_id = -1;
   for (int i = 0; i < size_one; i++) {
@@ -245,21 +245,21 @@ void DumpStitch::write(double time) {
       // write_flag == False when new time step NOT created
       err = stitch_write_block_int32(fid, field_id, &time, block, idata,
                                      &write_flag);
-      // TODO: process err
+      check(err, "write");
     } else if (IARRAY == fields[i]) {
       // std::cout << "DumpStitch::write(time=" << time << "); IARRAY
       // field_id="<<field_id<< std::endl;
       idata = app->iarray[vindex[i]];
       err = stitch_write_block_int32(fid, field_id, &time, block, idata,
                                      &write_flag);
-      // TODO: process err
+      check(err, "write");
     } else if (DARRAY == fields[i]) {
       // std::cout << "DumpStitch::write(time=" << time << "); DARRAY
       // field_id="<<field_id<< std::endl;
       real_data = app->darray[vindex[i]];
       err = stitch_write_block_float64(fid, field_id, &time, block, real_data,
                                        &write_flag);
-      // TODO: process err
+      check(err, "write");
     }
   }
 
@@ -267,7 +267,24 @@ void DumpStitch::write(double time) {
   if (retain_count > 0) {
     int64_t deleted_count = 0;
     err = stitch_trim_timesteps(fid, retain_count, &deleted_count);
+    check(err, "trim");
   }
+}
+
+/* ----------------------------------------------------------------------
+   stop every rank if the stitch call failed on any; a failed block write
+   (e.g. a blob over SQLite's 1 GB limit) used to be skipped silently
+------------------------------------------------------------------------- */
+
+void DumpStitch::check(int err, const char *what) {
+  int bad = err != 0, any;
+  MPI_Allreduce(&bad, &any, 1, MPI_INT, MPI_MAX, world);
+  if (!any) return;
+  char msg[512];
+  snprintf(msg, sizeof(msg),
+           "Dump stitch %s failed on %s (SQLite code %d on this rank; see stderr)", what,
+           filename, err);
+  error->all(FLERR, msg);
 }
 
 /* ---------------------------------------------------------------------- */

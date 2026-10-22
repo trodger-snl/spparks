@@ -1562,7 +1562,7 @@ static int stitch_write_block (const StitchFile * file, int64_t field_id, double
     // we don't want the last value for each one which is why we don't do + 1
     // NOTE: this is the number of SITES in this rank's own block; it is turned
     // into a byte count further down, once the field descriptor is known.
-    int32_t state_size = ((x2 - x1) * (y2 - y1) * (z2 - z1));
+    int64_t state_size = (int64_t) (x2 - x1) * (y2 - y1) * (z2 - z1);
     // {type, length} for this field.  Only rank 0 queries the 'fields' table;
     // the descriptor is then handed down the write serialization ring so every
     // rank can size its OWN blob.  Passing a byte count along the ring instead
@@ -1647,12 +1647,18 @@ static int stitch_write_block (const StitchFile * file, int64_t field_id, double
         if (rc != SQLITE_OK && rc != SQLITE_LOCKED && rc != SQLITE_BUSY)
         {
             fprintf (stderr, "%d Line: %d SQL error (%d): %s\n", file->rank, __LINE__, rc, sqlite3_errmsg (file->db));
-            sqlite3_close (file->db);
-            goto cleanup;
+            goto handoff;
         }
     } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
 
     state_buffer = malloc (state_size);
+    if (!state_buffer)
+    {
+        fprintf (stderr, "%d Line: %d cannot allocate %" PRId64 " bytes for a block\n", file->rank, __LINE__, state_size);
+        rc = SQLITE_NOMEM;
+        sqlite3_finalize (stmt_index);
+        goto handoff;
+    }
     memcpy (state_buffer, state, state_size);
 
     rc = sqlite3_bind_int (stmt_index, 1, timestamp); if (rc != SQLITE_OK) fprintf (stderr, "%d Line: %d SQL error (%d): %s\n", file->rank, __LINE__, rc, sqlite3_errmsg (file->db)); assert (rc == SQLITE_OK);
@@ -1663,7 +1669,15 @@ static int stitch_write_block (const StitchFile * file, int64_t field_id, double
     rc = sqlite3_bind_int (stmt_index, 6, x2); assert (rc == SQLITE_OK);
     rc = sqlite3_bind_int (stmt_index, 7, y2); assert (rc == SQLITE_OK);
     rc = sqlite3_bind_int (stmt_index, 8, z2); assert (rc == SQLITE_OK);
-    rc = sqlite3_bind_blob (stmt_index, 9, state_buffer, state_size, free); assert (rc == SQLITE_OK);
+    // a block over SQLite's length limit (1e9 bytes, ~125M double sites)
+    // fails here; it used to be dropped silently with asserts compiled out
+    rc = sqlite3_bind_blob64 (stmt_index, 9, state_buffer, state_size, free); // frees on failure too
+    if (rc != SQLITE_OK)
+    {
+        fprintf (stderr, "%d Line: %d block of %" PRId64 " bytes not stored (%d): %s\n", file->rank, __LINE__, state_size, rc, sqlite3_errmsg (file->db));
+        sqlite3_finalize (stmt_index);
+        goto handoff;
+    }
 
     do
     {
@@ -1672,12 +1686,17 @@ static int stitch_write_block (const StitchFile * file, int64_t field_id, double
         if (rc != SQLITE_OK && rc != SQLITE_DONE && rc != SQLITE_ROW && rc != SQLITE_LOCKED && rc != SQLITE_BUSY)
         {
             fprintf (stderr, "%d Line: %d SQL error (%d): %s\n", file->rank, __LINE__, rc, sqlite3_errmsg (file->db));
-            sqlite3_close (file->db);
-            goto cleanup;
+            sqlite3_finalize (stmt_index);
+            goto handoff;
         }
     } while (rc == SQLITE_LOCKED || rc == SQLITE_BUSY);
 
     rc = sqlite3_finalize (stmt_index);
+
+    // a failed insert still passes the token and joins the barrier, so the
+    // other ranks return too and the caller can stop them all; the db stays
+    // open for stitch_close
+handoff:
 //    int rowid = sqlite3_last_insert_rowid (file->db);
 //printf ("rowid for chunk: %d\n", rowid);
 

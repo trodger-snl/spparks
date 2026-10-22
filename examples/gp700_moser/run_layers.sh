@@ -20,6 +20,9 @@
 # new layer) carry the stitch sentinel -1 in d1-d4 (hdf5: fill 0.0), which the app would
 # normalise to ONE cube-aligned orientation for the whole layer; zeroing them
 # makes the app draw a random orientation per voxel at init (powder).
+# DEFECTS=mask.h5 (tools/ct_defects.py, global lattice extent): every box applies
+# `set i2 hdf5 mask.h5 skip_novalue` after its state load, so the CT voids (i2 = 5,
+# permanent) are present in each window, including layers not yet built.
 set -eu
 BIN=$(readlink -f "$1"); OUT=$(readlink -f "$2"); NL=${3:-12}; SEED=${4:-12345}; NX=${5:-267}; NH=${6:-10}; DT=${7:-2e-6}; SUB=${8:-}
 HERE=$(cd "$(dirname "$0")" && pwd); TPL=${TPL:-$HERE/in.gp700_layer}   # TPL=... overrides the deck template
@@ -98,6 +101,8 @@ set d8 value 0.0 if i2 != 3
 set d9 value 0.0 if i2 != 3
 set d10 value 0.0 if i2 != 3"
   fi
+  if [ -n "${DEFECTS:-}" ]; then INIT="$INIT
+set i2 hdf5 $(readlink -f "$DEFECTS") skip_novalue"; fi
   INIT="$INIT
 floor_check      $(python3 -c "print($FLOOR*$DX)")"
   [ -f "$OUT/STOP" ] && { echo "STOP file present, stopping before box $n"; exit 0; }

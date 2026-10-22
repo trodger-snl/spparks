@@ -83,7 +83,7 @@ private:
   int64_t req_extent[3];
   int64_t req_chunk[3];
   int verbose;             // report collective-IO mode after each write
-  int atomic;              // write a copy, then rename it over the file
+  int atomic;              // write a copy, then rename it over the file (else in place)
   int compress;            // deflate level of new datasets, 0 = off
 
   // private methods
@@ -101,6 +101,7 @@ private:
   void stage_copy(const char *tmp);
   void rebuild_if_needed();
   void commit(const char *tmp);
+  void sync_file(const char *fname);
   void choose_chunk(const int64_t *extent, size_t elemsize, int64_t *out);
   void ensure_dataset(const std::string &label, int type);
   void extend_to(const int64_t *needed);

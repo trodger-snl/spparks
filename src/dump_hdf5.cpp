@@ -396,18 +396,15 @@ void DumpHDF5::write(double time) {
   if (!opened)
     rebuild_if_needed();
 
-  if (!atomic) {
-    if (!opened)
-      open_file(filename);
-    write_fields(time);
-    return;
-  }
-
-  // write-then-rename: the file under its own name is always a complete
-  // earlier dump, whatever happens to this process mid-write
+  // atomic: write-then-rename, so the file under its own name is always a
+  // complete earlier dump, whatever happens to this process mid-write.
+  // Otherwise write the file in place: no copy of the whole file per dump,
+  // but a crash mid-write can damage it. Either way the file is open only
+  // while this dump writes, and is closed and synced before the run goes on.
   std::string tmp = std::string(filename) + ".tmp";
-  stage_copy(tmp.c_str());
-  open_file(tmp.c_str());
+  const char *target = atomic ? tmp.c_str() : filename;
+  if (atomic) stage_copy(target);
+  open_file(target);
   write_fields(time);
   try {
     file->flush(); // H5Fflush; under MPI-IO it ends in MPI_File_sync
@@ -416,7 +413,28 @@ void DumpHDF5::write(double time) {
   }
   file.reset(); // collective close
   opened = false;
-  commit(tmp.c_str());
+  if (atomic) commit(target);
+  else sync_file(target);
+}
+
+/* ----------------------------------------------------------------------
+   fsync a closed file (the serial-HDF5 flush does not), so the next run
+   reads what this dump wrote even after an OS crash
+------------------------------------------------------------------------- */
+
+void DumpHDF5::sync_file(const char *fname) {
+  int ok = 1;
+  if (me == 0) {
+    int fd = open(fname, O_RDONLY);
+    if (fd < 0 || fsync(fd) != 0) ok = 0;
+    if (fd >= 0) close(fd);
+  }
+  MPI_Bcast(&ok, 1, MPI_INT, 0, world);
+  if (!ok) {
+    char msg[512];
+    snprintf(msg, sizeof(msg), "Dump hdf5 could not sync %s", fname);
+    error->all(FLERR, msg);
+  }
 }
 
 /* ----------------------------------------------------------------------

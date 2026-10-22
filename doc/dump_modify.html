@@ -296,9 +296,15 @@ ext4, NFS) every processor copies one slice of the file through MPI-IO,
 so the copy runs at the file system's aggregate bandwidth.  Either way
 the file needs room for a second copy while a dump is written.  A stale
 <I>file</I>.tmp left by a crash is harmless and is replaced by the next dump.
-<I>atomic</I> no writes into the file in place and keeps it open between
-dumps, which avoids the copy but can leave the file unreadable if the
-run dies while it is open.
+<I>atomic</I> no writes into the file in place: each dump opens the file,
+writes its sites, flushes, closes and syncs it, so there is no copy of
+the whole file per dump and the file is open only while a dump writes.
+That suits a chain of boxes much smaller than the file's domain on a
+slow or non-reflink file system.  The cost is crash safety: if the run
+dies while a dump is writing, the box's region can be left part old and
+part new, and if HDF5 was updating its chunk index (new chunks or a
+wider frame) the whole file can become unreadable.  Keep periodic
+backup copies of the file when using it.
 </P>
 <P><I>compress</I> N stores the datasets with byte shuffling and deflate
 (gzip) level N; 0, the default, stores them uncompressed.  Level 1 is

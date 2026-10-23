@@ -34,6 +34,9 @@
 #include "temperature_source_conduction.h"
 #include "temperature_source_hdf5_unstructured.h"
 #include "grain_walk.h"
+#include "random_mars.h"
+#include "crystalline_orientations/quaternion.h"
+#include <Kokkos_Sort.hpp>
 #include <type_traits>
 
 // Grain-walk state provider for the device kernels: cached OU recurrence
@@ -1228,6 +1231,7 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
 
 void AppAdditiveTextureKokkos::initialize_nucleation_parameters()
 {
+  rng_seed = (uint64_t) ranmaster->initial_seed();   // KeyedRNG and the per-spin tables
   // Allocate host temp arrays for nucleation parameters
   delete[] nucleation_flags;
   delete[] nucleation_temps;
@@ -1252,20 +1256,21 @@ void AppAdditiveTextureKokkos::initialize_nucleation_parameters()
       if (nucleationFraction >= 1.0) {
         nucleation_flags[i] = 1;  // All spins can nucleate
       } else {
-        nucleation_flags[i] = (ranapp->uniform() <= nucleationFraction) ? 1 : 0;
+        // keyed by spin with the CPU app's key: the same spins nucleate in both
+        quaternion::SiteOrientationRNG r(rng_seed ^ 0x6E75636C65666C67ULL, (uint64_t) i);
+        nucleation_flags[i] = (r.uniform() <= nucleationFraction) ? 1 : 0;
       }
     }
 
-    // Initialize nucleation_temps and nucleation_sizes using Gaussian distributions
-    // Use C++ standard library random (consistent with CPU version)
-    std::random_device rd{};
-    std::mt19937 gen{rd()};
-    std::normal_distribution<> dist_T{tc, tsig};       // Critical undercooling (K)
-    std::normal_distribution<> dist_S{size_norm, size_sig};  // Nucleus volume (m^3)
-
+    // Critical undercooling (K) and nucleus volume (m^3) per spin: normals keyed
+    // by spin (was std::random_device, different every run), the CPU app's
+    // keys and Box-Muller pair, so both apps draw the same tables
     for (int i = 0; i < nspins; i++) {
-      nucleation_temps[i] = dist_T(gen);
-      nucleation_sizes[i] = dist_S(gen);
+      quaternion::SiteOrientationRNG r(rng_seed ^ 0x6E75636C74656D70ULL, (uint64_t) i);
+      const double u1 = r.uniform(), u2 = r.uniform();
+      const double rad = sqrt(-2.0 * log(1.0 - u1));
+      nucleation_temps[i] = tc + tsig * rad * cos(2.0 * MathConst::MY_PI * u2);
+      nucleation_sizes[i] = size_norm + size_sig * rad * sin(2.0 * MathConst::MY_PI * u2);
     }
   }
   MPI_Bcast(nucleation_flags, nspins, MPI_INT, 0, world);
@@ -1304,7 +1309,7 @@ int AppAdditiveTextureKokkos::melting_kernel(Kokkos::View<int*> d_active_sites, 
   // Capture parameters for lambda
   double tl_local = this->tl;
   int nspins_local = this->nspins;
-  auto rand_pool_local = *rand_pool;
+  const uint64_t key_local = rng_key();   // KeyedRNG: this step's draws
 
   // Melting kernel: parallel over the active-front list with event tracking
   // Race-free: each site only reads/writes itself
@@ -1318,8 +1323,7 @@ int AppAdditiveTextureKokkos::melting_kernel(Kokkos::View<int*> d_active_sites, 
 
       // Check if site should melt: T >= liquidus && not already liquid
       if (T_i >= tl_local && active_flag_i != 2) {
-        // Get thread-local RNG state
-        auto generator = rand_pool_local.get_state();
+        KeyedRNG generator(key_local, i, RNG_MELT);
 
         // Transition to liquid state
         d_active_flag_local(i) = 2;  // LIQUID
@@ -1341,8 +1345,6 @@ int AppAdditiveTextureKokkos::melting_kernel(Kokkos::View<int*> d_active_sites, 
         d_V_local(i) = 0.0;
         d_spath_local(i) = 0.0;
 
-        // Return RNG state to pool
-        rand_pool_local.free_state(generator);
 
         // Track melting event
         count++;
@@ -1412,7 +1414,7 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
   // Capture parameters for lambda
   double tl_local = this->tl;
   int nrefine_local = this->nrefine;
-  auto rand_pool_local = *rand_pool;
+  const uint64_t key_local = rng_key();   // KeyedRNG: this step's draws
   auto d_nucleation_flags_local = this->d_nucleation_flags;
   auto d_nucleation_temps_local = this->d_nucleation_temps;
   auto d_solid_front_coeffs_local = this->d_solid_front_coeffs;
@@ -1458,14 +1460,13 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
             // d_spin_local(i) = spin_i;  // No-op, already has this value
 
             // Random unit quaternion for the new grain orientation
-            auto generator = rand_pool_local.get_state();
+            KeyedRNG generator(key_local, i, RNG_NUCLEATE);
             double q[4];
             QuaternionOps::generate_random_quaternion(q, generator);
             d_q0_local(i) = q[0];
             d_qx_local(i) = q[1];
             d_qy_local(i) = q[2];
             d_qz_local(i) = q[3];
-            rand_pool_local.free_state(generator);
 
             d_V_local(i) = solid_front_velocity(d_solid_front_coeffs_local,
                                                 solid_front_length_local, solid_front_a_local,
@@ -1527,7 +1528,7 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
   auto d_V_local = d_V;
   auto d_spath_local = d_spath;
   auto d_nucleation_sizes_local = d_nucleation_sizes;
-  auto rand_pool_local = *rand_pool;
+  const uint64_t key_local = rng_key();   // KeyedRNG: this step's draws
 
   int nrefine_local = nrefine;
   double dx_local = dx;
@@ -1561,21 +1562,33 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
   const double nucleus_done_d =
       nuclei_smooth_enabled ? -1.0 : (double)(-nrefine_local - 3);
 
-  // Parallel over the active-front list - each nucleus flips its neighbors with
-  // event tracking. Race-safe: uses atomic CAS to claim neighbors.
-  int naccept_local = 0;
-  Kokkos::parallel_reduce("ParticleFlipperKernel", n_active,
-    KOKKOS_LAMBDA(int idx, int& count) {
+  // This step's nuclei (marked solid_d = -nrefine-2), in site order. They
+  // grow one after another in that order, in a single-thread launch: a liquid
+  // site two nuclei reach goes to the lower-index one every run, where
+  // concurrent CAS claims gave it to whichever thread got there first.
+  // ponytail: serial over the step's nuclei (few); a two-phase priority claim
+  // if nucleation-heavy decks make it slow.
+  if ((int) d_nuclei.extent(0) < n_active)
+    d_nuclei = Kokkos::View<int*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, "nuclei"),
+                                  Kokkos::max(n_active, 2 * (int) d_nuclei.extent(0)));
+  auto d_nuc = d_nuclei;
+  int n_nuc = 0;
+  Kokkos::parallel_scan("FindNuclei", n_active,
+    KOKKOS_LAMBDA(int idx, int& off, bool final) {
       const int i = d_active_sites_local(idx);
-      // Only process newly nucleated sites (marked with solid_d = -nrefine-2)
-      double solid_d_i = d_solid_d_local(i);
-      int active_flag_i = d_active_flag_local(i);
-
-      // Check if this is a newly nucleated site
-      if (active_flag_i != 3 || solid_d_i != -nrefine_local - 2) {
-        // Not a nucleus - site keeps its current values
-        return;
+      if (d_active_flag_local(i) == 3 && d_solid_d_local(i) == -nrefine_local - 2) {
+        if (final) d_nuc(off) = i;
+        off++;
       }
+    }, n_nuc);
+  if (n_nuc == 0) return 0;
+  Kokkos::sort(d_nuc, 0, n_nuc);   // the active list's order varies run to run
+
+  int naccept_local = 0;
+  Kokkos::parallel_reduce("ParticleFlipperKernel", Kokkos::RangePolicy<>(0, 1),
+    KOKKOS_LAMBDA(int, int& count) {
+    for (int kn = 0; kn < n_nuc; kn++) {
+      const int i = d_nuc(kn);
 
       // This is a newly nucleated site - attempt to grow it
       int spin_i = d_spin_local(i);
@@ -1603,7 +1616,7 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
       constexpr int shell_start[4] = {0, 6, 18, 26};
       constexpr int MAX_NEIGHBORS = 26;
 
-      auto generator = rand_pool_local.get_state();
+      KeyedRNG generator(key_local, i, RNG_FLIP);
       int center = i;
       while (remaining > 0) {
         const int nn = Kokkos::min(k_numneigh_d(center), MAX_NEIGHBORS);
@@ -1685,13 +1698,13 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
         if (next >= nlocal_local) break;   // the CPU recurses only into owned sites
         center = next;
       }
-      rand_pool_local.free_state(generator);
 
       // Update nucleus solid_d to ready state
       d_solid_d_local(i) = nucleus_done_d;  // terminal, or -1 under nuclei_smooth
 
       // Track nucleus growth event
       count++;
+    }
     }, naccept_local);
 
   return naccept_local;
@@ -1702,6 +1715,15 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
    Phase 3.3: Liquid sites captured by solid neighbors based on texture
 ------------------------------------------------------------------------- */
 
+// This step's KeyedRNG key: the deck seed, the rank and the step. A site's
+// draws are then fixed by (key, site index, kernel) -- repeatable at a fixed
+// seed and rank count, whatever the thread schedule.
+uint64_t AppAdditiveTextureKokkos::rng_key() const
+{
+  return KeyedRNG::mix(KeyedRNG::mix(rng_seed ^ ((uint64_t)(domain->me + 1) * 0xD1B54A32D192ED03ULL))
+                       + rng_step * 0x9E3779B97F4A7C15ULL);
+}
+
 // Multicolour ordering for the neighbour-reading kernels. Colour = parity
 // class (x&1, y&1, z&1) of the lattice coordinates: no two SC_26N neighbours
 // share a colour, so within one colour's launch every neighbour read is
@@ -1710,11 +1732,12 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
 // the update order is spatially random, like the CPU app's random sweep, and
 // never the site-index order (which grew grains along +x). Non-periodic
 // boxes only: parity would not match across a periodic wrap of odd length.
-void AppAdditiveTextureKokkos::shuffled_colors(int order[8])
+void AppAdditiveTextureKokkos::shuffled_colors(int order[8], int kernel)
 {
+  KeyedRNG r(rng_key(), 0, kernel);   // keyed by step, like every other draw
   for (int c = 0; c < 8; c++) order[c] = c;
   for (int c = 7; c > 0; c--) {
-    const int k = static_cast<int>(ranapp->uniform() * (c + 1));
+    const int k = static_cast<int>(r.drand() * (c + 1));
     const int t = order[c]; order[c] = order[k]; order[k] = t;
   }
 }
@@ -1751,7 +1774,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
   auto d_G_local = this->d_G;
   auto d_V_local = this->d_V;
   auto d_spath_local = this->d_spath;
-  auto rand_pool_local = *rand_pool;
+  const uint64_t key_local = rng_key();   // KeyedRNG: this step's draws
 
   // Misorientation random walk parameters
   const double mis_diffusion_local = this->mis_diffusion;
@@ -1780,7 +1803,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
   // Multicolour Gauss-Seidel: one launch per parity colour in a per-step
   // random order (see shuffled_colors); neighbour reads are live and race-free.
   int naccept_local = 0;
-  int color_order[8]; shuffled_colors(color_order);
+  int color_order[8]; shuffled_colors(color_order, RNG_COLORS_SOLIDIFY);
   for (int cc = 0; cc < 8; cc++) {
   const int color_local = color_order[cc];
   int naccept_color = 0;
@@ -1892,8 +1915,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
             gspin[ngr] = solid_neighbor_spin[k]; gcum[ngr] = gtotal; ngr++;
           }
 
-          // Get RNG state
-          auto generator = rand_pool_local.get_state();
+          KeyedRNG generator(key_local, i, RNG_SOLIDIFY);
           int g = 0;
           if (gtotal > 0.0) {
             const double rand_val = generator.drand() * gtotal;
@@ -1978,8 +2000,6 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
           // Record solidification parameters
           d_V_local(i) = V_advance;
 
-          // Return RNG state
-          rand_pool_local.free_state(generator);
         } else {
           // No solid neighbors within reach - update advanced distance only
           d_solid_d_local(i) = solid_d_i;
@@ -2015,7 +2035,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
 
   auto k_neighbor_d = d_neighbor_rm;
   auto k_numneigh_d = d_numneigh;
-  auto rand_pool_local = *rand_pool;
+  const uint64_t key_local = rng_key();   // KeyedRNG: this step's draws
 
   double temperature_local = temperature;
   double t_inverse_local = t_inverse;
@@ -2031,7 +2051,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
 
   // Parallel sweep over ONLY smoothing sites (not all sites!)
   int naccept_local = 0;
-  int color_order[8]; shuffled_colors(color_order);
+  int color_order[8]; shuffled_colors(color_order, RNG_COLORS_SMOOTH);
   for (int cc = 0; cc < 8; cc++) {
   const int color_local = color_order[cc];
   int naccept_color = 0;
@@ -2083,7 +2103,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
           if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != spin_i) einitial++;
         }
 
-        auto generator = rand_pool_local.get_state();
+        KeyedRNG generator(key_local, i, RNG_SMOOTH);
 
         int new_spin, efinal;
         if (greedy_local) {
@@ -2120,7 +2140,6 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
         else accept = (generator.drand() <=
                        Kokkos::exp((double)(einitial - efinal) * t_inverse_local));
 
-        rand_pool_local.free_state(generator);
 
         if (accept) {
           // Orientation = sign-aligned average of neighbors with new_spin,
@@ -2132,9 +2151,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
               const int nbr = k_neighbor_d((size_t) i, n);
               if (d_spin_local(nbr) == new_spin && d_active_flag_local(nbr) != 5) nc++;
             }
-            auto g2 = rand_pool_local.get_state();
-            pick = (int)(nc * g2.drand()); if (pick >= nc) pick = nc - 1;
-            rand_pool_local.free_state(g2);
+            pick = (int)(nc * generator.drand()); if (pick >= nc) pick = nc - 1;
           }
           double s0 = 0.0, sx = 0.0, sy = 0.0, sz = 0.0;
           double r0 = 0.0, rx = 0.0, ry = 0.0, rz = 0.0;
@@ -2196,6 +2213,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
 
   static int step_count = 0;   // cadence for maybe_run_diagnostics
   step_count++;
+  rng_step++;
 
   // 1. Update temperature + fast-forward.
   //

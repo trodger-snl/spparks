@@ -38,6 +38,28 @@ AppStyle(additive/texture/kk,AppAdditiveTextureKokkos)
 
 namespace SPPARKS_NS {
 
+// Counter-keyed RNG for the kernels (splitmix64, as the CPU app's step_rng).
+// A site's draws in one kernel and step depend only on the key (deck seed,
+// step, rank), the site's index and the kernel, never on which thread runs
+// it or on what other sites drew, so a run repeats bit for bit at a fixed
+// seed and rank count on any backend and thread count, and a void changes
+// the microstructure only through the physics around it.
+struct KeyedRNG {
+  uint64_t s;
+  KOKKOS_INLINE_FUNCTION static uint64_t mix(uint64_t z) {
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+  }
+  KOKKOS_INLINE_FUNCTION KeyedRNG(uint64_t key, int i, int kernel)
+    : s(mix(key ^ mix(((uint64_t)(uint32_t) i << 8) + (uint64_t) kernel + 0x9E3779B97F4A7C15ULL))) {}
+  KOKKOS_INLINE_FUNCTION double drand() {   // [0,1)
+    return (mix(s += 0x9E3779B97F4A7C15ULL) >> 11) * (1.0 / 9007199254740992.0);
+  }
+};
+enum { RNG_MELT = 1, RNG_NUCLEATE, RNG_FLIP, RNG_SOLIDIFY, RNG_SMOOTH,
+       RNG_COLORS_SOLIDIFY, RNG_COLORS_SMOOTH };
+
 class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public AdditiveParams {
  public:
   AppAdditiveTextureKokkos(class SPPARKS *, int, char **);
@@ -222,7 +244,12 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   Kokkos::View<int*> d_active_flag;      // 0=inactive, 1=active, 2=molten, 3=solidified, 5=void
   // Per-step random order of the 8 parity colours used by the solidification
   // and smoothing kernels (multicolour Gauss-Seidel; see the .cpp).
-  void shuffled_colors(int order[8]);
+  void shuffled_colors(int order[8], int kernel);
+  // This step's RNG key (KeyedRNG): the deck seed, the step and the rank.
+  uint64_t rng_key() const;
+  uint64_t rng_seed = 0;          // the deck seed
+  uint64_t rng_step = 0;          // app_update calls so far
+  Kokkos::View<int*> d_nuclei;    // this step's nuclei, in site order (particle_flipper_kernel)
   Kokkos::View<double*> d_solid_d;       // Solid front distance
 
   // Compact list of sites needing smoothing, rebuilt each step by a parallel_scan.

@@ -144,8 +144,16 @@ added with "set i2 hdf5 ... skip_novalue", say) therefore alters the
 microstructure only through the physics around it, so runs with and
 without voids can be compared site for site.  A different processor
 count changes the update order at subdomain boundaries and gives a
-different microstructure.  {additive/texture/kk} microstructure is not
-repeatable run to run (its device RNG pool and parallel kernels).
+different microstructure.  {additive/texture/kk} is repeatable in the
+same way, on any backend and any number of OpenMP threads: its kernels
+draw from streams keyed by the seed, step, rank, site and kernel, the
+solidification and smoothing kernels sweep the 8 parity colours in a
+per-step order keyed by the seed, and the nuclei of a step grow one
+after another in site order, so a contested liquid site always goes to
+the same nucleus.  Its per-spin nucleation tables are the CPU app's.
+The two styles still differ from each other (sequential vs coloured
+update order), and kk microstructures from versions before 2026-10-22
+cannot be reproduced.
 
 :line
 

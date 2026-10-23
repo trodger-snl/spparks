@@ -359,6 +359,8 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   const size_t nplane = 2 * (size_t) std::max(NYL, NXL) * nz;   // T + phase
   sbuf = Kokkos::View<double*>("cond_sbuf", 2 * nplane);
   rbuf = Kokkos::View<double*>("cond_rbuf", 2 * nplane);
+  hsbuf = Kokkos::create_mirror_view(sbuf);
+  hrbuf = Kokkos::create_mirror_view(rbuf);
   // halo phases, so a cell sees its neighbours' material across ranks
   exchange();
   Kokkos::deep_copy(hP, P);
@@ -680,17 +682,19 @@ void ConductionSolverKokkos::exchange()
         sb((2*side + 1) * np + p) = (double) P_(i, j, k);
       }
     });
-    auto hs = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), sbuf);
-    auto hr = Kokkos::create_mirror_view(Kokkos::HostSpace(), rbuf);
+    // stage only this direction's 4*np values, through buffers made at build
+    const auto used = std::make_pair(0, 4 * np);
+    Kokkos::deep_copy(Kokkos::subview(hsbuf, used), Kokkos::subview(sbuf, used));
+    double *hs = hsbuf.data(), *hr = hrbuf.data();
     MPI_Request req[4];
     int nreq = 0;
     // tag = direction of travel: 0 toward lo, 1 toward hi
-    if (lo_n >= 0) MPI_Irecv(hr.data(), 2*np, MPI_DOUBLE, lo_n, 1, world, &req[nreq++]);
-    if (hi_n >= 0) MPI_Irecv(hr.data() + 2*np, 2*np, MPI_DOUBLE, hi_n, 0, world, &req[nreq++]);
-    if (lo_n >= 0) MPI_Isend(hs.data(), 2*np, MPI_DOUBLE, lo_n, 0, world, &req[nreq++]);
-    if (hi_n >= 0) MPI_Isend(hs.data() + 2*np, 2*np, MPI_DOUBLE, hi_n, 1, world, &req[nreq++]);
+    if (lo_n >= 0) MPI_Irecv(hr, 2*np, MPI_DOUBLE, lo_n, 1, world, &req[nreq++]);
+    if (hi_n >= 0) MPI_Irecv(hr + 2*np, 2*np, MPI_DOUBLE, hi_n, 0, world, &req[nreq++]);
+    if (lo_n >= 0) MPI_Isend(hs, 2*np, MPI_DOUBLE, lo_n, 0, world, &req[nreq++]);
+    if (hi_n >= 0) MPI_Isend(hs + 2*np, 2*np, MPI_DOUBLE, hi_n, 1, world, &req[nreq++]);
     MPI_Waitall(nreq, req, MPI_STATUSES_IGNORE);
-    Kokkos::deep_copy(rbuf, hr);
+    Kokkos::deep_copy(Kokkos::subview(rbuf, used), Kokkos::subview(hrbuf, used));
     const bool has_lo = lo_n >= 0, has_hi = hi_n >= 0;
     Kokkos::parallel_for("ConductionUnpack", np, KOKKOS_LAMBDA(const int p) {
       const int a = p / nz_, k = p % nz_;

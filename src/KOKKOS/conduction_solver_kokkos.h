@@ -86,6 +86,8 @@ class ConductionSolverKokkos : protected Pointers {
   Kokkos::View<int*[3]> site_cell;   // local (i,j,k) per site, i<0 = above grid
 
   Kokkos::View<double*> sbuf, rbuf;
+  Kokkos::View<double*>::host_mirror_type hsbuf, hrbuf;   // staging; alias sbuf/rbuf
+                                                    // where device memory is host-accessible
 
   void build(Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz, Kokkos::View<int*> d_af,
              int nlocal, int nall, double ts);

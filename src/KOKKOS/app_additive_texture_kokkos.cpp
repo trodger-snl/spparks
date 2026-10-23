@@ -1565,8 +1565,15 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
   // grow one after another in that order, in a single-thread launch: a liquid
   // site two nuclei reach goes to the lower-index one every run, where
   // concurrent CAS claims gave it to whichever thread got there first.
-  // ponytail: serial over the step's nuclei (few); a two-phase priority claim
-  // if nucleation-heavy decks make it slow.
+  // ponytail: serial over the step's nuclei, ~11-100 us per nucleus on
+  // gfx1151 (0.1-1 s for a 1e4-nucleus step; unmeasurable on a GP700 box,
+  // even at 10x nucleation). If a profile shows it: a nucleus reaches at most
+  // R = round(V_max/dx^3) + 1 sites (claims + the carry-on reads), so bin the
+  // nuclei into cells wider than 2R, colour the cells 2x2x2, and launch one
+  // thread per occupied cell per colour (site order inside a cell), reusing
+  // this body. Still repeatable; bits change (neighbouring cells grow in
+  // colour order, not site order). A plain propose/atomic_min claim is
+  // smaller but shrinks the losers (no retry), unlike the CPU.
   if ((int) d_nuclei.extent(0) < n_active)
     d_nuclei = Kokkos::View<int*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, "nuclei"),
                                   Kokkos::max(n_active, 2 * (int) d_nuclei.extent(0)));

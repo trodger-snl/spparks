@@ -343,46 +343,65 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   kT2 = plate_on ? up("cond_kT2", pm.k_T) : kT;
   kV2 = plate_on ? up("cond_kV2", pm.k_v) : kV;
 
-  // Stable step: C_min V / sum of face conductances at k_max (+ linearised
-  // surface losses at 4000 K), global min so every rank count steps alike.
+  const size_t nplane = 2 * (size_t) std::max(NYL, NXL) * nz;   // T + phase
+  sbuf = Kokkos::View<double*>("cond_sbuf", 2 * nplane);
+  rbuf = Kokkos::View<double*>("cond_rbuf", 2 * nplane);
+  // halo phases, so a cell sees its neighbours' material across ranks
+  exchange();
+  Kokkos::deep_copy(hP, P);
+
+  // Stable step, per cell: C_min V / sum of face conductances at each side's
+  // k_max (in series across a material interface), + linearised surface
+  // losses at 4000 K; global min so every rank count steps alike. Each
+  // material is bounded over its own tables: the part's k_max covers its
+  // powder (powder melts to dense), the plate has its own C_min and k_max.
   double kmax = cfg.k_powder;
   for (double v : cfg.k_v) kmax = std::max(kmax, v);
   double cmin = 1e300;
   for (double v : cfg.cp_v) cmin = std::min(cmin, v);
   cmin *= src->density() * std::min(1.0, cfg.packing);
+  double kmax_p = kmax, cmin_p = cmin;
   if (plate_on) {
-    for (double v : pm.k_v) kmax = std::max(kmax, v);
-    for (double v : pm.cp_v) cmin = std::min(cmin, v * pm.rho);
+    kmax_p = 0.0;
+    for (double v : pm.k_v) kmax_p = std::max(kmax_p, v);
+    cmin_p = 1e300;
+    for (double v : pm.cp_v) cmin_p = std::min(cmin_p, v * pm.rho);
   }
   const double hsurf = cfg.h + 4.0 * cfg.emissivity * SIGMA_SB * 4000.0 * 4000.0 * 4000.0;
   // an adiabatic far face carries no flux, so it does not limit the step
-  const double farG = cfg.far_bc == ConductionTemperatureSource::FAR_FIXED ? kmax : 0.0;
+  const bool far_fixed = cfg.far_bc == ConductionTemperatureSource::FAR_FIXED;
   double dtl = 1e300;
   auto W = [](const Axis &a, int c) { return a.hi[c] - a.lo[c]; };
+  // local cell (li, lj, k), halo included -> its material's k_max
+  auto kof = [&](int li, int lj, int k) { return (hP(li, lj, k) & PLATE) ? kmax_p : kmax; };
+  // face conductance; one material keeps the single-k form (bit-identical)
+  auto face = [](double A, double wc, double kc, double wn, double kn) {
+    return kc == kn ? A * kc / (0.5 * (wc + wn)) : A / (0.5 * wc / kc + 0.5 * wn / kn);
+  };
   for (int i = 0; i < nxo; i++)
     for (int j = 0; j < nyo; j++)
       for (int k = 0; k < nz; k++) {
-        const int cx = cx0 + i, cy = cy0 + j;
+        const int cx = cx0 + i, cy = cy0 + j, li = i + 1, lj = j + 1;
         const double wxc = W(ax, cx), wyc = W(ay, cy), wzc = W(az, k);
+        const double kc = kof(li, lj, k);
+        const double farG = far_fixed ? kc : 0.0;
         double G = 0.0;
         for (int d = 0; d < 2; d++) {
-          const int nx = cx + (d ? 1 : -1), ny = cy + (d ? 1 : -1), nk = k + (d ? 1 : -1);
+          const int s = d ? 1 : -1;
+          const int nx = cx + s, ny = cy + s, nk = k + s;
           const double ax_ = wyc * wzc, ay_ = wxc * wzc, az_ = wxc * wyc;
           G += (nx < 0 || nx >= NX) ? farG * ax_ / (0.5 * wxc)
-                                    : ax_ * kmax / (0.5 * (wxc + W(ax, nx)));
+                                    : face(ax_, wxc, kc, W(ax, nx), kof(li + s, lj, k));
           G += (ny < 0 || ny >= NY) ? farG * ay_ / (0.5 * wyc)
-                                    : ay_ * kmax / (0.5 * (wyc + W(ay, ny)));
+                                    : face(ay_, wyc, kc, W(ay, ny), kof(li, lj + s, k));
           G += (nk < 0) ? farG * az_ / (0.5 * wzc)
-             : (nk >= nz) ? az_ * hsurf : az_ * kmax / (0.5 * (wzc + W(az, nk)));
+             : (nk >= nz) ? az_ * hsurf : face(az_, wzc, kc, W(az, nk), kof(li, lj, nk));
         }
-        dtl = std::min(dtl, cmin * wxc * wyc * wzc / G);
+        const double c = (hP(li, lj, k) & PLATE) ? cmin_p : cmin;
+        dtl = std::min(dtl, c * wxc * wyc * wzc / G);
       }
   MPI_Allreduce(&dtl, &dt_fd, 1, MPI_DOUBLE, MPI_MIN, world);
   dt_fd *= 0.9;
-
-  const size_t nplane = 2 * (size_t) std::max(NYL, NXL) * nz;   // T + phase
-  sbuf = Kokkos::View<double*>("cond_sbuf", 2 * nplane);
-  rbuf = Kokkos::View<double*>("cond_rbuf", 2 * nplane);
 
   built = true;
   built_nall = nall;

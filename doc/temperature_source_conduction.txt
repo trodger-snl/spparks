@@ -145,7 +145,8 @@ and radiation to T_inf.  The outer faces of the thermal domain are held
 at T0 or insulated ({far_bc}).
 
 [Time stepping.]  The solver takes explicit sub-steps at 0.9 times the
-stable step.  Intervals with the laser off are advanced with RKL2
+stable step, the minimum over cells of each cell's own material limit.
+With {plate_material} the more conductive material usually sets it.  Intervals with the laser off are advanced with RKL2
 super-time-stepping of up to {sts} stages.  Once the field is below the
 liquidus with no pass active, the app fast-forwards to the next pass,
 and the skipped interval is still integrated.

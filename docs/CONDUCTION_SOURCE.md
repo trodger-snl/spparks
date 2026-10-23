@@ -119,8 +119,13 @@ in `processors`.
   right on coarse cells too. Power is scaled by the fraction of the
   sub-step the laser is on.
 - **Time.** Explicit, sub-cycled at 0.9× the global stable step: the minimum
-  over cells of ρ·cp_min·V / Σ conductance at k_max. The step is the same on
-  every rank. T(H) comes from a 1 K table.
+  over cells of ρ·cp_min·V / Σ conductance at k_max, each bounded over the
+  cell's own material (the part's k_max includes its powder); a face between
+  materials takes the two k_max in series. The step is the same on every
+  rank. T(H) comes from a 1 K table. With `plate_material` the steel-like
+  plate usually sets the step; plate cells only below the box are wider in
+  z but keep the box's x/y spacing (tensor-product grid), so that buys at
+  most 1.5× (6/4 faces), ~1.14× for the first 1.25·dx plate layer.
 - **MPI.** x/y follow the lattice processor grid, with a 1-cell halo of T and
   phase exchanged in x then y every sub-step. Edge ranks also own the margin
   cells; that load imbalance is not rebalanced.

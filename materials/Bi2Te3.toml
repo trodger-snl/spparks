@@ -1,0 +1,152 @@
+# Material parameter card: bismuth telluride, Bi2Te3 (undoped, stoichiometric).
+# Format: docs/MATERIAL_CARDS.md (schema 1). SI units; every value carries a ref.
+#
+# Model caveats specific to this material (read before using the card):
+# - Congruent melter. solidus is set a few K below liquidus by choice, see its note.
+# - Anisotropic layered crystal (trigonal R-3m): k in the cleavage plane is ~2x
+#   the c-axis value. The solver takes one scalar k(T); see the conductivity note.
+#   The quaternion apps offer only 'cubic' or 'hcp' symmetry; Bi2Te3's Laue group
+#   is -3m, so 'hcp' (6/mmm) folds together misorientations that are distinct.
+# - Te volatility: Te vaporises from hot Bi2Te3 (goldsmid2014). Laser-melted tracks
+#   deviate from stoichiometry both ways (oztan2022 EDS: Te/Bi 1.15-8.3 against
+#   1.5, plus oxide), and 5 rescans flipped the Seebeck sign (oztan2022_sff).
+#   oztan2022 model evaporation from ~1000 K (latent 6.34e5 J/kg). Neither the
+#   conduction source nor the app models evaporation, its enthalpy or the
+#   composition change, so peak temperatures above ~1000 K are overestimated.
+# - No front-velocity law or nucleation values: Bi2Te3 grows faceted and no
+#   published SPPARKS-style law was found. Give solid_front_vel and the five
+#   nucleation values in the deck (init_app stops with an error until you do).
+
+[card]
+schema_version = 1
+material = "Bi2Te3"
+designation = { CAS = "1304-82-1", spec = "commercial undoped powder (Alfa Aesar 99.98%, American Elements in the cited LPBF work), sieved < 53 um" }
+composition_wt_pct = { Bi = "52.20", Te = "47.80", note = "stoichiometric Bi2Te3 (M = 800.76 g/mol); not a measured heat. LPBF melting shifts it locally (Te-rich and Te-deficient regions and oxide in oztan2022 EDS/TEM)." }
+version = "1.0.0"
+created = 2026-10-23
+modified = 2026-10-23
+status = "draft"
+reviewed_by = ""
+
+[[changelog]]
+version = "1.0.0"
+date = 2026-10-23
+author = "research agent (Claude)"
+changes = "Initial draft: Zhang & LeBlanc 2022 melting point, density, optics and LPBF sets; Oztan 2022 latent heat, emissivity, absorptivity, powder porosity and LPBF set; Wang 2021 / Goldsmid 2014 anisotropic lattice k; solid cp from the Tang et al. patent polynomial. No front law or nucleation values."
+
+[references.zhang_leblanc2022]
+citation = "H. Zhang, S. LeBlanc, Laser additive manufacturing process development for bismuth telluride thermoelectric material, J. Mater. Eng. Perform. 31 (2022) 6196-6204"
+doi = "10.1007/s11665-022-07084-w"
+url = "https://par.nsf.gov/servlets/purl/10393223"
+
+[references.zhang2018]
+citation = "H. Zhang, D. Hobbis, G.S. Nolas, S. LeBlanc, Laser additive manufacturing of powdered bismuth telluride, J. Mater. Res. 33 (2018) 4031-4039"
+doi = "10.1557/jmr.2018.390"
+
+[references.oztan2022]
+citation = "C. Oztan, B. Sisik, R. Welch, S. LeBlanc, Process-microstructure relationship of laser processed thermoelectric material Bi2Te3, Front. Electron. Mater. 2 (2022) 1046694"
+doi = "10.3389/femat.2022.1046694"
+url = "https://par.nsf.gov/servlets/purl/10393222"
+
+[references.oztan2022_sff]
+citation = "C. Oztan, E. Fodran, E. Barnes, S. LeBlanc, Laser powder bed fusion of bismuth telluride: process-structure-property relationships, Proc. 33rd Annual Int. Solid Freeform Fabrication Symposium (2022) 141-148"
+url = "https://utw10945.utweb.utexas.edu/sites/default/files/2022/Laser%20Powder%20Bed%20Fusion%20of%20Bismuth%20Telluride_%20Proc.pdf"
+
+[references.bolling1960]
+citation = "G.F. Bolling, Some thermal data for Bi2Te3, J. Chem. Phys. 33 (1960) 305-306"
+doi = "10.1063/1.1731116"
+
+[references.liu2013]
+citation = "C. Liu, H. Wu, S. Chen, Liquidus projection of the ternary Bi-Sb-Te thermoelectric material system, Metall. Mater. Trans. A 44 (2013) 5424-5433"
+doi = "10.1007/s11661-013-1883-8"
+
+[references.carter2019]
+citation = "M.J. Carter, A. El-Desouky, M.A. Andre, P. Bardet, S. LeBlanc, Pulsed laser melting of bismuth telluride thermoelectric materials, J. Manuf. Process. 43 (2019) 35-46"
+doi = "10.1016/j.jmapro.2019.04.021"
+
+[references.goldsmid2014]
+citation = "H.J. Goldsmid, Bismuth telluride and its alloys as materials for thermoelectric generation, Materials 7 (2014) 2577-2592"
+doi = "10.3390/ma7042577"
+
+[references.wang2021]
+citation = "S. Wang, X. Lu, A. Negi, J. He, K. Kim, H. Shao, P. Jiang, J. Liu, Q. Hao, Revisiting the reduction of thermal conductivity in nano- to micro-grained bismuth telluride: the importance of grain-boundary thermal resistance, arXiv:2108.05972 (2021)"
+url = "https://arxiv.org/abs/2108.05972"
+
+[references.tang_patent2021]
+citation = "X. Tang, X. Su, Q. Zhang, X. Cheng, D. Yang, G. Zheng, F. Fu, T. Liang, Q. Zhang (Wuhan University of Technology), Thermoelectric materials synthesized by self-propagating high temperature synthesis process and methods thereof, US Patent 10,913,117 B2 (2021)"
+url = "https://patents.google.com/patent/US10913117B2/en"
+
+[references.bowley1961]
+citation = "A.E. Bowley, L.E.J. Cowles, G.J. Williams, H.J. Goldsmid, Measurement of the figure of merit of a thermoelectric material, J. Sci. Instrum. 38 (1961) 433-435"
+doi = "10.1088/0950-7671/38/11/309"
+
+[references.sobolev1968]
+citation = "V.V. Sobolev, S.D. Shutov, Yu.V. Popov, S.N. Shestatskii, Reflectivity spectra of the rhombohedral crystals Bi2Te3, Bi2Se3, and Sb2Te3 over the range from 0.7 to 12.5 eV, Phys. Status Solidi (b) 30 (1968) 349-355"
+doi = "10.1002/pssb.19680300141"
+
+[references.greenaway1965]
+citation = "D.L. Greenaway, G. Harbeke, Band structure of bismuth telluride, bismuth selenide and their respective alloys, J. Phys. Chem. Solids 26 (1965) 1585-1604"
+doi = "10.1016/0022-3697(65)90092-2"
+
+[references.kamath2016]
+citation = "C. Kamath, Data mining and statistical inference in selective laser melting, Int. J. Adv. Manuf. Technol. 86 (2016) 1659-1677"
+doi = "10.1007/s00170-015-8289-2"
+
+[thermal]
+density = { value = 7740, unit = "kg/m^3", ref = ["zhang_leblanc2022", "zhang2018"], uncertainty = [7554, 7740], uncertainty_type = "bounds", T_range = [293, 300], note = "full density implied by zhang_leblanc2022 Sec. 2.2: LPBF disks of 6.27 and 6.81 g/cm^3 are quoted as 81 and 88% relative density (both ratios give 7.74 g/cm^3); the value is not printed as such. Lower bound: 7554 kg/m^3 'bulk density' used by oztan2022 Table 1 (citing carter2019, not read). One dense density for the conduction solver." }
+liquidus = { value = 858, unit = "K", ref = "zhang_leblanc2022", uncertainty = [846, 858], uncertainty_type = "bounds", note = "congruent melting point 858 K, quoted by zhang_leblanc2022 from the CRC Handbook 95th ed. (not read). oztan2022 Table 1 uses 846 K (citing liu2013, not read); that spread is the lower bound." }
+solidus = { value = 853, unit = "K", ref = "estimate", note = "MODELLING CHOICE. Bi2Te3 melts congruently, so physically solidus = liquidus. The app divides by tl - ts (undercooling normalisation t_cool_max = tl - ts; timestep rule dx/V(tl - ts)) and the conduction source releases latent heat linearly over [ts, tl], so a zero gap is degenerate. 5 K is chosen because (a) it is smaller than the 12 K spread between published melting points (846-858 K), (b) the Bi2Te3 phase has a narrow homogeneity range about 60 at.% Te (general Bi-Te phase-diagram knowledge, not cited here) and laser-melted tracks deviate from stoichiometry (oztan2022 EDS), so real melts freeze over a small range rather than at one temperature, and (c) it keeps the latent heat on five 1 K H(T) table steps. Consequences: misorientation-diffusion's Tcool/(tl - ts) saturates at 5 K undercooling, and the CPU-app timestep check dx/V(5 K) is loose." }
+latent_fusion = { value = 1.51e5, unit = "J/kg", ref = ["oztan2022", "bolling1960"], note = "oztan2022 Table 1, citing Bolling 1960 (not read; paywalled, with a later erratum/addendum J. Chem. Phys. 36 (1962) 1085). Equals 121 kJ/mol at M = 800.76 g/mol." }
+conductivity = { T = [300, 858], value = [1.6, 1.6], unit = "W/(m K)", extrapolation = "clamp", ref = ["wang2021", "goldsmid2014", "estimate"], uncertainty = [0.7, 3.0], uncertainty_type = "bounds", note = "ESTIMATE: one isotropic value for a randomly oriented polycrystal, held constant from 300 K through the melt and in the liquid. Basis: 300 K lattice k is ~1.65 W/(m K) in the cleavage plane and 0.64-0.79 along c (wang2021 review of measurements), a ~2:1 ratio (goldsmid2014); the orientation average (2*1.65 + 0.7)/3 = 1.33 plus an electronic part of a few tenths for undoped material gives ~1.6. Bounds: 0.7 = c-axis lattice value (strong c-axis texture, as LPBF columnar grains can produce), 3.0 = the 300 K value zhang_leblanc2022 quotes from the CRC Handbook. Doping (carrier concentration) shifts the electronic and bipolar parts. Temperature dependence is not tabulated: the lattice part falls roughly as 1/T while the bipolar part rises in undoped material above ~400 K (goldsmid2014), and no solid data up to 858 K were found. Liquid k was not found: oztan2022 fit Fedorov & Kazandzhan, Sov. Phys. Semicond. 2 (1968) 17 (liquid bismuth chalcogenides; not obtained), so the clamp holds the solid value in the liquid. Porosity of the 71-88% dense LPBF parts lowers effective k further." }
+heat_capacity = { T = [300, 400, 500, 600, 700, 800, 858], value = [155.5, 162.4, 169.3, 176.2, 183.1, 190.0, 194.0], unit = "J/(kg K)", extrapolation = "clamp", ref = "tang_patent2021", note = "solid cp = 107.989 + 55.229e-3 T J/(mol K) as printed in US 10,913,117 B2 (Embodiment 1.1), divided by M = 0.80076 kg/mol; the patent does not name its source (the a + bT form is that of the Kubaschewski/Barin compilations, not checked). Check: 300 K value equals Dulong-Petit 15R/M = 155.7 J/(kg K). No liquid cp was found, so it is held at the 858 K value by the clamp. No latent peak here (latent_fusion carries it)." }
+emissivity = { value = 0.66, unit = "1", ref = ["oztan2022", "bowley1961"], note = "'average powder bed thermal emissivity' of Bi2Te3 used by oztan2022 Table 1, citing Bowley 1961 (not read; a figure-of-merit measurement paper, so the value's provenance is weak). Applied to every top face in the conduction solver, dense or powder; a smooth melt is probably lower." }
+
+[thermal.linear]
+# Rosenthal/Moser need one k and cp: the tables evaluated at T_ref unless
+# conductivity/heat_capacity are given here.
+T_ref = { value = 600, unit = "K", ref = "estimate", note = "between preheat and the 858 K melting point; k is constant, so only cp (176 J/(kg K)) depends on it" }
+
+[powder]
+conductivity = { value = 0.1, unit = "W/(m K)", ref = "estimate", uncertainty = [0.05, 0.3], uncertainty_type = "bounds", note = "ESTIMATE, no Bi2Te3 powder-bed measurement found. Loose irregular powder (< 53 um, cohesive: angle of repose 50.7 deg, zhang_leblanc2022) in Ar or N2 is gas-dominated; with solid k ~1.6 (vs 15-30 for steels) the bed is expected at or below the ~0.1-0.3 typical of metal beds. Measure or calibrate it." }
+packing = { value = 0.60, unit = "1", ref = ["oztan2022", "kamath2016"], note = "1 - powder bed porosity 0.40 used by oztan2022 Table 1, citing Kamath 2016 (a generic LPBF value, not a Bi2Te3 measurement). The cited LPBF builds are 71-88% dense, and the cohesive irregular powder spreads poorly (zhang_leblanc2022), so a real bed may be looser. Recorded only; not passed to the solver." }
+
+[optical]
+absorptivity = { value = 0.5, unit = "1", ref = ["oztan2022", "sobolev1968"], note = "absorptivity used by oztan2022 Table 1 for Bi2Te3 at 1070 nm, citing the Sobolev 1968 reflectivity spectra (0.7-12.5 eV; 1070 nm = 1.16 eV; not read). A flat, room-temperature surface at normal incidence absorbs less: n = 6.7, kappa = 5.9 at 1070 nm (greenaway1965 as quoted by zhang_leblanc2022) give R = 0.715, A = 0.285. A rough powder bed absorbs more (multiple reflection), and oztan2022 report enhanced absorption above ~30 W (keyhole onset). Calibrate against melt pools." }
+
+[microstructure]
+# Deliberately empty. solid_front_vel and the nucleation values are SPPARKS
+# calibrations and none was found for Bi2Te3 (a faceted, anisotropically growing
+# compound, for which KGT dendrite-tip laws do not apply directly). Supply
+# solid_front_vel, nucleation_density, critical_undercooling,
+# undercooling_deviation, mean_nuclei_volume and nuclei_volume_deviation in the
+# deck after `material`. Do not reuse the 316L numbers.
+
+# Process sets: published LPBF builds of undoped Bi2Te3 powder on custom
+# machines. None reports spot convention, preheat, absorptivity or the
+# substrate, so those records are left out. Layer thicknesses are POWDER layer
+# heights: at packing ~0.6 the consolidated layer the model wants
+# (docs/CONDUCTION_SOURCE.md, Density) is ~0.6x these.
+
+[process.zhang_leblanc2022_25W]
+note = "Table 1 row j (rectangular part, Fig. 4j): volumetric energy 9 J/mm^3, in the 9-11 J/mm^3 window the paper recommends; the paper's summary set for successful macroscale parts. Nominal parameters. N2 atmosphere, O2 <= 4%. Disks built at 9 J/mm^3 reached 88% relative density (zhang2018). Spot 'about 50 um', no convention, so no spot record."
+machine = "custom LPBF rig, IPG YLR-series CW Yb fibre laser, 1070 nm, up to 100 W, mid-power scanner"
+power = { value = 25, unit = "W", ref = "zhang_leblanc2022" }
+speed = { value = 0.5, unit = "m/s", ref = "zhang_leblanc2022" }
+hatch = { value = 37.5e-6, unit = "m", ref = "zhang_leblanc2022" }
+layer_thickness = { value = 150e-6, unit = "m", ref = "zhang_leblanc2022", note = "powder layer height" }
+
+[process.zhang_leblanc2022_20W]
+note = "Table 1 row l (disk, Fig. 4l): 11 J/mm^3, Ar atmosphere; one of the two mechanically strongest, smoothest parts. Same machine and spot caveat as zhang_leblanc2022_25W."
+machine = "custom LPBF rig, IPG YLR-series CW Yb fibre laser, 1070 nm, up to 100 W"
+power = { value = 20, unit = "W", ref = "zhang_leblanc2022" }
+speed = { value = 0.5, unit = "m/s", ref = "zhang_leblanc2022" }
+hatch = { value = 37.5e-6, unit = "m", ref = "zhang_leblanc2022" }
+layer_thickness = { value = 100e-6, unit = "m", ref = "zhang_leblanc2022", note = "powder layer height" }
+
+[process.oztan2022_sff_25W]
+note = "bulk 15 x 2 mm prisms, >= 2 mm tall; 25 W and 350 mm/s held constant while layer height (100/150/200 um), hatch (25/37.5 um), scan pattern and number of scans (1-5) varied. 150 um layers gave the best electrical conductivity; best relative density 71% (chess-plane pattern). Ar with O2 < 0.01%. Sieved < 53 um American Elements powder. '50 um spot size', no convention, so no spot record. oztan2022 ran single tracks at the same 25 W / 350 mm/s on 86%-dense compacts mounted on 304L."
+machine = "custom LPBF rig, 0-100 W IPG fibre ('YAG' in the paper) laser, 1070 nm, F-theta lens, galvanometer scanner"
+power = { value = 25, unit = "W", ref = "oztan2022_sff" }
+speed = { value = 0.35, unit = "m/s", ref = "oztan2022_sff" }
+hatch = { value = 37.5e-6, unit = "m", ref = "oztan2022_sff", note = "25 um also tested" }
+layer_thickness = { value = 150e-6, unit = "m", ref = "oztan2022_sff", note = "powder layer height; 100 and 200 um also tested" }

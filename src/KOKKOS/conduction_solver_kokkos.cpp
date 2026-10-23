@@ -248,6 +248,8 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   // Phase: lattice cells from i2; elsewhere plate / layer / part rule.
   auto hP = Kokkos::create_mirror_view(P);
   const double plate_top = cfg.plate_top_set ? cfg.plate_top : (glo[2] - 0.5) * dx;
+  const bool plate_on = cfg.plate_mat.on;
+  const double zplate = src->plate_surface();
   Region *part = nullptr;
   if (!cfg.part_region.empty())
     part = domain->regions[domain->find_region((char *) cfg.part_region.c_str())];
@@ -264,7 +266,7 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
           const double xc = 0.5 * (ax.lo[cx] + ax.hi[cx]);
           const double yc = 0.5 * (ay.lo[cy] + ay.hi[cy]);
           const double zc = 0.5 * (az.lo[k] + az.hi[k]);
-          if (zc < plate_top) p = DENSE;
+          if (zc < plate_top) p = plate_on ? (DENSE | PLATE) : DENSE;
           else if (zc > zl - cfg.layer_thickness) p = POWDER;
           else if (!part || part->match(xc / dx, yc / dx, zc / dx)) p = DENSE;
           else p = POWDER;
@@ -275,7 +277,7 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   // Site -> local cell; owned sites set the phase of their cell.
   site_cell = Kokkos::View<int*[3]>("cond_site_cell", nall);
   auto hsc = Kokkos::create_mirror_view(site_cell);
-  int out = 0;
+  int out = 0, bad6 = 0;
   for (int s = 0; s < nall; s++) {
     const int i = ax.nlo + g[3*s] - glo[0] - cx0 + 1;
     const int j = ay.nlo + g[3*s+1] - glo[1] - cy0 + 1;
@@ -287,12 +289,19 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
       // Inside the box i2 alone decides, at every depth: melted (2, 3) is
       // dense, never melted (0, 1) is powder, 5 is gas. So the part's walls
       // are wherever the pools melted, rough as they are. A substrate must be
-      // loaded as i2 = 3.
+      // loaded as i2 = 3, or as i2 = 6 to take the plate material.
       const int af = haf(s);
-      hP(i, j, k) = (af == 2 || af == 3) ? DENSE : (af == 0 || af == 1) ? POWDER : GAS;
+      if (af == 6 && !(plate_on && hx(s, 2) * dx < zplate)) bad6 = 1;
+      hP(i, j, k) = af == 6 ? (DENSE | PLATE)
+                  : (af == 2 || af == 3) ? DENSE : (af == 0 || af == 1) ? POWDER : GAS;
     }
   }
   if (out) error->one(FLERR,"conduction: a ghost site lies outside the 1-cell halo");
+  int any6;
+  MPI_Allreduce(&bad6, &any6, 1, MPI_INT, MPI_MAX, world);
+  if (any6)
+    error->all(FLERR,"conduction: i2 = 6 (plate) needs plate_material, and only below "
+               "plate_top + plate_growth");
   // packing < 1: powder cells carry that fraction of the dense mass (LOOSE),
   // and keep it once melted (the bed melts in place, it does not shrink).
   if (cfg.packing < 1.0)
@@ -302,20 +311,26 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   Kokkos::deep_copy(P, hP);
 
   // Property tables.
-  std::vector<double> Ht;
-  src->enthalpy_table(ts, tl, Htab_T0, Htab_dT, Ht);
-  double Href = 0.0;
-  if (std::is_same<fastreal, float>::value) {
-    const double u = (src->ambient() - Htab_T0) / Htab_dT;
-    const int i = std::max(0, std::min((int) Ht.size() - 2, (int) std::floor(u)));
-    Href = Ht[i] + (u - i) * (Ht[i+1] - Ht[i]);
-  }
-  Htab = Kokkos::View<fastreal*>("cond_Htab", Ht.size());
-  {
-    auto h = Kokkos::create_mirror_view(Htab);
+  // Both materials share the T grid (enthalpy_table: 0..6000 K at 1 K).
+  auto htab = [&](const char *nm, bool plate, double ts_m, double tl_m) {
+    std::vector<double> Ht;
+    src->enthalpy_table(ts_m, tl_m, Htab_T0, Htab_dT, Ht, plate);
+    double Href = 0.0;
+    if (std::is_same<fastreal, float>::value) {
+      const double u = (src->ambient() - Htab_T0) / Htab_dT;
+      const int i = std::max(0, std::min((int) Ht.size() - 2, (int) std::floor(u)));
+      Href = Ht[i] + (u - i) * (Ht[i+1] - Ht[i]);
+    }
+    Kokkos::View<fastreal*> d(nm, Ht.size());
+    auto h = Kokkos::create_mirror_view(d);
     for (size_t i = 0; i < Ht.size(); i++) h(i) = Ht[i] - Href;
-    Kokkos::deep_copy(Htab, h);
-  }
+    Kokkos::deep_copy(d, h);
+    return d;
+  };
+  const auto &pm = cfg.plate_mat;
+  Htab = htab("cond_Htab", false, ts, tl);
+  // no plate: the part's tables stand in, and no cell carries PLATE
+  Htab2 = plate_on ? htab("cond_Htab2", true, pm.ts, pm.tl) : Htab;
   auto up = [](const char *nm, const std::vector<double> &v) {
     Kokkos::View<double*> d(nm, v.size());
     auto h = Kokkos::create_mirror_view(d);
@@ -325,6 +340,8 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   };
   kT = up("cond_kT", cfg.k_T);
   kV = up("cond_kV", cfg.k_v);
+  kT2 = plate_on ? up("cond_kT2", pm.k_T) : kT;
+  kV2 = plate_on ? up("cond_kV2", pm.k_v) : kV;
 
   // Stable step: C_min V / sum of face conductances at k_max (+ linearised
   // surface losses at 4000 K), global min so every rank count steps alike.
@@ -333,6 +350,10 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   double cmin = 1e300;
   for (double v : cfg.cp_v) cmin = std::min(cmin, v);
   cmin *= src->density() * std::min(1.0, cfg.packing);
+  if (plate_on) {
+    for (double v : pm.k_v) kmax = std::max(kmax, v);
+    for (double v : pm.cp_v) cmin = std::min(cmin, v * pm.rho);
+  }
   const double hsurf = cfg.h + 4.0 * cfg.emissivity * SIGMA_SB * 4000.0 * 4000.0 * 4000.0;
   // an adiabatic far face carries no flux, so it does not limit the step
   const double farG = cfg.far_bc == ConductionTemperatureSource::FAR_FIXED ? kmax : 0.0;
@@ -383,13 +404,25 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
 
 void ConductionSolverKokkos::reset_field(double Tr)
 {
-  // H(Tr) from the table (linear interpolation, end slopes beyond).
-  auto hH = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), Htab);
-  const int n = (int) hH.extent(0);
-  const double u = (Tr - Htab_T0) / Htab_dT;
-  const int i = std::max(0, std::min(n - 2, (int) std::floor(u)));
-  const double Hr = hH(i) + (u - i) * ((double) hH(i+1) - hH(i));
-  Kokkos::deep_copy(H, Hr);
+  // H(Tr) from each material's table (linear interpolation, end slopes beyond).
+  auto H_at = [&](Kokkos::View<fastreal*> tab) {
+    auto hH = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), tab);
+    const int n = (int) hH.extent(0);
+    const double u = (Tr - Htab_T0) / Htab_dT;
+    const int i = std::max(0, std::min(n - 2, (int) std::floor(u)));
+    return hH(i) + (u - i) * ((double) hH(i+1) - hH(i));
+  };
+  const double Hr = H_at(Htab), Hr2 = H_at(Htab2);
+  if (Hr2 == Hr) Kokkos::deep_copy(H, Hr);
+  else {
+    auto H_ = H; auto P_ = P;
+    const fastreal h1 = Hr, h2 = Hr2;
+    Kokkos::parallel_for("ConductionResetH",
+      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({0, 0, 0}, {(int) H.extent(0), (int) H.extent(1), nz}),
+      KOKKOS_LAMBDA(const int i, const int j, const int k) {
+        H_(i, j, k) = (P_(i, j, k) & PLATE) ? h2 : h1;
+      });
+  }
   Kokkos::deep_copy(T, Tr);
   Kokkos::deep_copy(Tn, Tr);
   // phase is kept: a reset cools the part, it does not un-melt powder
@@ -469,7 +502,7 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<fastreal***> Y1,
   auto T_ = T; auto Tn_ = Tn; auto P_ = P; auto Pn_ = Pn;
   auto wx_ = wx, wy_ = wy, wz_ = wz;
   auto fxlo_ = fxlo, fxhi_ = fxhi, fylo_ = fylo, fyhi_ = fyhi, fzlo_ = fzlo, fzhi_ = fzhi;
-  auto Htab_ = Htab; auto kT_ = kT; auto kV_ = kV;
+  auto Htab1_ = Htab, Htab2_ = Htab2; auto kT_ = kT, kV_ = kV, kT2_ = kT2, kV2_ = kV2;
   const double H0 = Htab_T0, dTt = Htab_dT;
   const int nHt = (int) Htab.extent(0);
   const double kp = cfg.k_powder, hc = cfg.h, Tinf = cfg.T_inf;
@@ -515,11 +548,13 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<fastreal***> Y1,
         Tn_(i, j, k) = Tc; Pn_(i, j, k) = pfull; return;
       }
 
+      // p: the full phase byte (PLATE picks the plate's k table)
       auto kof = [&](double Tv, unsigned char p) {
-        return p == POWDER ? R(kp) : interp<R>(kT_, kV_, Tv);
+        return (p & 3) == POWDER ? R(kp)
+             : (p & PLATE) ? interp<R>(kT2_, kV2_, Tv) : interp<R>(kT_, kV_, Tv);
       };
       const R Tr = R(Tc);
-      const R kc = kof(Tr, pc);
+      const R kc = kof(Tr, pfull);
       auto surf = [&](R A) {
         return -A * (R(hc) * (Tr - R(Tinf)) + R(es) * (Tr*Tr*Tr*Tr - R(Tinf)*R(Tinf)*R(Tinf)*R(Tinf)));
       };
@@ -527,8 +562,8 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<fastreal***> Y1,
         return fixed ? A * kc / half * (R(Tfar) - Tr) : R(0);
       };
       auto face = [&](R A, R half_c, int ii, int jj, int kk, R half_n) {
-        const unsigned char pn = P_(ii, jj, kk) & 3;
-        if (pn == GAS) return surf(A);
+        const unsigned char pn = P_(ii, jj, kk);
+        if ((pn & 3) == GAS) return surf(A);
         const R Tv = R(T_(ii, jj, kk));
         const R G = A / (half_c / kc + half_n / kof(Tv, pn));
         return G * (Tv - Tr);
@@ -559,6 +594,7 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<fastreal***> Y1,
         Yo_(i, j, k) = Hn;
       }
       // T(H): table search, end slopes beyond.
+      const auto &Htab_ = (pfull & PLATE) ? Htab2_ : Htab1_;
       R Tv;
       const R H0r = R(H0), dTr = R(dTt);
       if (Hn <= Htab_(0)) {

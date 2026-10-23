@@ -12,6 +12,7 @@
 ------------------------------------------------------------------------- */
 
 #include "temperature_source_conduction.h"
+#include "material_card.h"
 #include "domain.h"
 #include "error.h"
 
@@ -53,6 +54,7 @@ void ConductionTemperatureSource::setup_temperature_source(
 
   std::vector<std::string> moser_args;
   double k_powder = -1.0;
+  std::string plate_card;
   for (size_t i = 0; i < args.size(); i++) {
     const std::string &a = args[i];
     if (a == "keyhole")
@@ -73,6 +75,11 @@ void ConductionTemperatureSource::setup_temperature_source(
       if (++i >= args.size()) error->all(FLERR,"setup_temperature_source conduction: part needs a region ID");
       cfg.part_region = args[i];
     }
+    else if (a == "plate_material") {
+      if (++i >= args.size()) error->all(FLERR,"setup_temperature_source conduction: plate_material needs a card file");
+      plate_card = args[i];
+    }
+    else if (a == "plate_growth") cfg.plate_growth = num(++i);
     else if (a == "layer_thickness") cfg.layer_thickness = num(++i);
     else if (a == "packing") cfg.packing = num(++i);
     else if (a == "sts") cfg.sts_smax = (int) num(++i);
@@ -103,6 +110,37 @@ void ConductionTemperatureSource::setup_temperature_source(
   if (!cfg.part_region.empty() &&
       domain->find_region((char *) cfg.part_region.c_str()) < 0)
     error->all(FLERR,"setup_temperature_source conduction: part region ID does not exist");
+  if (!plate_card.empty()) {
+    if (!cfg.plate_top_set)
+      error->all(FLERR,"setup_temperature_source conduction: plate_material needs plate_top (the plate surface)");
+    if (cfg.plate_growth < 0.0)
+      error->all(FLERR,"setup_temperature_source conduction: plate_growth must be >= 0");
+    auto &pm = cfg.plate_mat;
+    try {
+      const MaterialCard c = MaterialCard::load(plate_card, "", world);
+      auto need = [&](std::optional<double> v, const char *key) {
+        if (!v) throw std::runtime_error("plate_material " + plate_card + ": " + key + " is not in the card");
+        return *v;
+      };
+      auto tab = [&](const MaterialCard::Table &t, std::optional<double> lin, const char *key,
+                     std::vector<double> &T, std::vector<double> &v) {
+        if (!t.T.empty()) { T = t.T; v = t.v; }
+        else { T = {0.0}; v = {need(lin, key)}; }
+      };
+      tab(c.k, c.k_lin, "thermal.conductivity", pm.k_T, pm.k_v);
+      tab(c.cp, c.cp_lin, "thermal.heat_capacity", pm.cp_T, pm.cp_v);
+      pm.rho = need(c.density, "thermal.density");
+      pm.latent = need(c.latent, "thermal.latent_fusion");
+      pm.ts = need(c.solidus, "thermal.solidus");
+      pm.tl = need(c.liquidus, "thermal.liquidus");
+      pm.name = c.material;
+    } catch (const std::exception &e) {
+      error->all(FLERR, e.what());
+    }
+    if (pm.tl < pm.ts)
+      error->all(FLERR,"setup_temperature_source conduction: plate_material liquidus is below its solidus");
+    pm.on = true;
+  }
   configured = true;
   print_source_info();
 }
@@ -124,6 +162,18 @@ void ConductionTemperatureSource::print_source_info() const
             << "-point k table, " << cfg.cp_T.size() << "-point cp table, latent="
             << cfg.latent << " J/kg, h=" << cfg.h << ", emissivity="
             << cfg.emissivity << ", stretch=" << cfg.stretch << std::endl;
+  const auto &pm = cfg.plate_mat;
+  if (pm.on)
+    std::cout << "conduction: plate " << pm.name << " below z=" << cfg.plate_top
+              << " m (i2 = 6 up to " << plate_surface() << " m): rho=" << pm.rho << ", "
+              << pm.k_T.size() << "-point k table, " << pm.cp_T.size() << "-point cp table, latent="
+              << pm.latent << " J/kg, solidus " << pm.ts << " K, liquidus " << pm.tl << " K"
+              << std::endl;
+}
+
+double ConductionTemperatureSource::plate_surface() const
+{
+  return cfg.plate_top + cfg.plate_growth;
 }
 
 void ConductionTemperatureSource::reset_history_and_start(double t_start,
@@ -202,10 +252,13 @@ double ConductionTemperatureSource::next_laser_on(double t) const
 
 void ConductionTemperatureSource::enthalpy_table(double ts, double tl,
                                                  double &T_lo, double &dT,
-                                                 std::vector<double> &H) const
+                                                 std::vector<double> &H, bool plate) const
 {
+  const auto &pm = cfg.plate_mat;
+  const double rho_m = plate ? pm.rho : rho;
+  const double latent = plate ? pm.latent : cfg.latent;
   auto cp_at = [&](double T) {
-    const auto &Tt = cfg.cp_T, &v = cfg.cp_v;
+    const auto &Tt = plate ? pm.cp_T : cfg.cp_T, &v = plate ? pm.cp_v : cfg.cp_v;
     if (T <= Tt.front()) return v.front();
     if (T >= Tt.back()) return v.back();
     const size_t j = std::upper_bound(Tt.begin(), Tt.end(), T) - Tt.begin();
@@ -213,7 +266,7 @@ void ConductionTemperatureSource::enthalpy_table(double ts, double tl,
     return v[j-1] + w * (v[j] - v[j-1]);
   };
   auto melt = [&](double T) {
-    if (cfg.latent <= 0.0) return 0.0;
+    if (latent <= 0.0) return 0.0;
     if (tl <= ts) return T >= tl ? 1.0 : 0.0;
     return std::min(1.0, std::max(0.0, (T - ts) / (tl - ts)));
   };
@@ -225,8 +278,8 @@ void ConductionTemperatureSource::enthalpy_table(double ts, double tl,
   double sens = 0.0;
   for (int i = 1; i < n; i++) {
     const double Ta = T_lo + (i-1) * dT, Tb = Ta + dT;
-    sens += 0.5 * (cp_at(Ta) + cp_at(Tb)) * dT * rho;
+    sens += 0.5 * (cp_at(Ta) + cp_at(Tb)) * dT * rho_m;
     H[i] = sens;
   }
-  for (int i = 0; i < n; i++) H[i] += rho * cfg.latent * melt(T_lo + i * dT);
+  for (int i = 0; i < n; i++) H[i] += rho_m * latent * melt(T_lo + i * dT);
 }

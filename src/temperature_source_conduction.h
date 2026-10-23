@@ -68,6 +68,15 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
     double packing = 1.0;              // powder mass fraction of dense (1 = dense)
     int    far_bc = FAR_FIXED;
     int    sts_smax = 32;               // RKL2 stages per laser-off super-step; 0 = explicit
+    // plate_material: the dense material of i2 = 6 sites and of the cells
+    // below plate_top outside the box. Same keys as the part above.
+    struct Plate {
+      bool on = false;
+      std::vector<double> k_T, k_v, cp_T, cp_v;
+      double rho = 0.0, latent = 0.0, ts = 0.0, tl = 0.0;
+      std::string name;
+    } plate_mat;
+    double plate_growth = 0.0;          // i2 = 6 reaches plate_top + this (m)
   };
   const Config &config() const { return cfg; }
 
@@ -93,9 +102,13 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
   bool take_reset(double &T_reset);
 
   // Enthalpy table H(T) on a uniform T grid (J/m^3), built from cp(T),
-  // density and latent heat released linearly over [ts, tl].
+  // density and latent heat released linearly over [ts, tl]; the plate
+  // material's when plate is true.
   void enthalpy_table(double ts, double tl, double &T_lo, double &dT,
-                      std::vector<double> &H) const;
+                      std::vector<double> &H, bool plate = false) const;
+
+  // Sites solidifying below this z (m) return to i2 = 6 (plate_mat.on only).
+  double plate_surface() const;
 
  private:
   Config cfg;

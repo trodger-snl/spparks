@@ -47,7 +47,8 @@ class ConductionSolverKokkos : protected Pointers {
               Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz, Kokkos::View<int*> d_af,
               int nlocal, int nall, double dx, double ts, double tl);
 
-  enum Phase { GAS = 0, POWDER = 1, DENSE = 3, LOOSE = 4 };   // LOOSE: flag bit, see packing
+  // LOOSE: flag bit, see packing. PLATE: flag bit, the plate material
+  enum Phase { GAS = 0, POWDER = 1, DENSE = 3, LOOSE = 4, PLATE = 8 };
 
  private:
   class ConductionTemperatureSource *src;
@@ -76,8 +77,8 @@ class ConductionSolverKokkos : protected Pointers {
   Kokkos::View<double*> wx, wy, wz, fxlo, fxhi, fylo, fyhi, fzlo, fzhi;
   Kokkos::View<double*> Ex, Ey, Ez;   // per-axis Gaussian integrals, per sub-step
   double zsrc = 0.0;                  // source plane: laser plane, capped at the top face
-  Kokkos::View<fastreal*> Htab;   // H(T) - Href
-  Kokkos::View<double*> kT, kV;
+  Kokkos::View<fastreal*> Htab, Htab2;   // H(T) - Href, part and plate
+  Kokkos::View<double*> kT, kV, kT2, kV2;
   double Htab_T0 = 0.0, Htab_dT = 1.0;
   Kokkos::View<int*[3]> site_cell;   // local (i,j,k) per site, i<0 = above grid
 
@@ -85,7 +86,6 @@ class ConductionSolverKokkos : protected Pointers {
 
   void build(Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz, Kokkos::View<int*> d_af,
              int nlocal, int nall, double ts);
-  void reset_field(double Tr);
   // One stage update. Explicit Euler (sts = false): H += h L(H). RKL2 stage
   // (sts = true): Yout = mu Y1 + nu Y2 + (1-mu-nu) H + mut L(Y1) + gat L0,
   // with T holding T(Y1); store_L0 saves L(Y1) (stage 1, Y1 = H).
@@ -103,6 +103,7 @@ class ConductionSolverKokkos : protected Pointers {
   void stage(const Stage &c, Kokkos::View<fastreal***> Y1,
              Kokkos::View<fastreal***> Y2, Kokkos::View<fastreal***> Yout);
   void exchange();
+  void reset_field(double Tr);
   double sample(Kokkos::View<double*> d_T, int nlocal, int nall);
 };
 

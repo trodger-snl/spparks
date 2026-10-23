@@ -21,6 +21,8 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <fstream>
+#include <iterator>
 #include <sstream>
 #include <stdexcept>
 
@@ -232,6 +234,27 @@ MaterialCard MaterialCard::parse(const std::string &text, const std::string &pat
     }
   }
   return c;
+}
+
+/* ---------------------------------------------------------------------- */
+
+MaterialCard MaterialCard::load(const std::string &path, const std::string &process,
+                                MPI_Comm world)
+{
+  int me;
+  MPI_Comm_rank(world, &me);
+  std::string text;
+  int n = 0;
+  if (me == 0) {
+    std::ifstream f(path, std::ios::binary);
+    if (f) text.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    n = f ? (int) text.size() : -1;
+  }
+  MPI_Bcast(&n, 1, MPI_INT, 0, world);
+  if (n < 0) throw std::runtime_error("material: cannot open " + path);
+  text.resize(n);
+  MPI_Bcast(text.data(), n, MPI_CHAR, 0, world);
+  return parse(text, path, process);
 }
 
 /* ----------------------------------------------------------------------

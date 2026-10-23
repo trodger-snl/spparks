@@ -14,6 +14,7 @@
 #ifndef SPK_MATERIAL_CARD_H
 #define SPK_MATERIAL_CARD_H
 
+#include <mpi.h>
 #include <optional>
 #include <string>
 #include <vector>
@@ -53,6 +54,9 @@ struct MaterialCard {
 
   static MaterialCard parse(const std::string &text, const std::string &path,
                             const std::string &process);
+  // Rank 0 reads the file, every rank parses the broadcast text.
+  static MaterialCard load(const std::string &path, const std::string &process,
+                           MPI_Comm world);
   // setup_temperature_source tokens for <type> from this card; args are the
   // deck tokens after "card" (Q, lambda, T0, spot overrides; the rest appended)
   std::vector<std::string> source_tokens(const std::string &type,

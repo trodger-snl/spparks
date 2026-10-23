@@ -35,8 +35,6 @@
 #include <cmath>
 #include <limits>
 #include <algorithm>
-#include <fstream>
-#include <iterator>
 #include <stdexcept>
 
 using namespace SPPARKS_NS;
@@ -84,27 +82,15 @@ ThermalManager::ThermalManager(SPPARKS *spk, ThermalHost *host) :
 
 /* ----------------------------------------------------------------------
    material <file> [process <name>]: load a material card (docs/MATERIAL_CARDS.md).
-   Rank 0 reads the file; every rank parses the broadcast text.
 ------------------------------------------------------------------------- */
 
 void ThermalManager::material_cmd(int narg, char **arg)
 {
   if (narg != 1 && !(narg == 3 && strcmp(arg[1],"process") == 0))
     error->all(FLERR,"Illegal material command: material <file> [process <name>]");
-  std::string text;
-  int n = 0;
-  if (domain->me == 0) {
-    std::ifstream f(arg[0], std::ios::binary);
-    if (f) text.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
-    n = f ? (int) text.size() : -1;
-  }
-  MPI_Bcast(&n, 1, MPI_INT, 0, world);
-  if (n < 0) error->all(FLERR,(std::string("material: cannot open ") + arg[0]).c_str());
-  text.resize(n);
-  MPI_Bcast(text.data(), n, MPI_CHAR, 0, world);
   try {
     card_ = std::make_unique<MaterialCard>(
-      MaterialCard::parse(text, arg[0], narg == 3 ? arg[2] : ""));
+      MaterialCard::load(arg[0], narg == 3 ? arg[2] : "", world));
   } catch (const std::exception &e) {
     error->all(FLERR, e.what());
   }

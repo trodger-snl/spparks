@@ -4,6 +4,7 @@
 usage: stitch_layers.py selftest
        stitch_layers.py <spparks-binary> <outdir> [--layers N] [--window W]
                         [--min-window W] [--factor F] [--floor D]
+                        [--plate-card CARD]
 
 Box n holds layer n: the full 360 x 250-site part plane, from its layer top
 down W sites, continuing the microstructure through <outdir>/stitch.st. Each
@@ -19,6 +20,11 @@ with layer (heat builds up in the part), so a fixed depth is a guess.
 Completed boxes (completion.marker) are skipped; touch <outdir>/STOP to end
 after the current box. Never kill a running box (HIP kernels mid-flight wedge
 the GPU). Per-box windows and melt depths go to <outdir>/boxes.txt.
+
+--plate-card gives the baseplate (below plate_top, z 18.5 sites) its own
+material: box 0 loads the substrate as i2 = 6, every box's conduction source
+gets plate_material CARD, and plate that remelts solidifies back to 6 (the
+stitch file carries it). The part stays the 316L written in DECK.
 """
 import argparse, math, os, re, subprocess, sys
 
@@ -59,7 +65,7 @@ setup_temperature_source conduction 150.0 1.0 13.8 3.6166e-6 300.0 483.0 59.4e-6
     k_powder 0.3 k_table 6 300 13.8 600 20.0 900 24.8 1200 28.4 1500 30.6 1675 31.3 &
     cp_table 7 300 483 473 528 873 595 1073 611 1253 624 1675 714 1708 847 &
     latent 2.9e5 convection 25 300 emissivity 0.4 &
-    margin 0.5e-3 0.5e-3 0.5e-3 0.5e-3 plate {plate} plate_top 92.5e-6 part part far_bc fixed sts 128
+    margin 0.5e-3 0.5e-3 0.5e-3 0.5e-3 plate {plate} plate_top 92.5e-6 part part far_bc fixed sts 128{plate_material}
 laser_path file {path} speed 1.4 scale 5e-6 shift 0 0 2.5e-6 jump_time {pause}
 stats            1e-3
 dump             st stitch {t1} {st} i1 i2 d1 d2 d3 d4 d8 d9 d10
@@ -71,7 +77,7 @@ run              {t1} upto
 # orientation per site.
 INIT0 = '''set site range 1 1000000
 region           substrate block 0 360 0 250 0 18.5
-set i2 value 3 region substrate
+set i2 value {substrate_i2} region substrate
 set i1 value 42 region substrate
 set d1 value 1.0 region substrate
 set d2 value 0.0 region substrate
@@ -88,9 +94,15 @@ set d4 value 0.0 if i2 < 1
 set i1 range 1 1000000 if i2 < 1
 set i2 value 1 if i2 < 2
 set d6 value 300
-set d8 value 0.0 if i2 != 3
-set d9 value 0.0 if i2 != 3
-set d10 value 0.0 if i2 != 3'''
+set d8 value 0.0 if i2 < 3
+set d9 value 0.0 if i2 < 3
+set d10 value 0.0 if i2 < 3'''
+
+
+def plate_keys(card):
+    """INIT0's substrate i2 and the conduction source suffix for --plate-card."""
+    if not card: return 3, ''
+    return 6, f' &\n    plate_material {os.path.abspath(card)}'
 
 
 def split_layers(path):
@@ -129,7 +141,10 @@ def main():
     ap.add_argument('--min-window', type=int, default=12, help='never shallower than this, sites')
     ap.add_argument('--factor', type=float, default=1.5, help='next window = factor x deepest melt + floor')
     ap.add_argument('--floor', type=int, default=3, help='floor_check distance, sites')
+    ap.add_argument('--plate-card', help='material card of the baseplate (i2 = 6 below plate_top)')
     a = ap.parse_args()
+    if a.plate_card and not os.path.isfile(a.plate_card): sys.exit(f'no plate card {a.plate_card}')
+    sub_i2, plate_material = plate_keys(a.plate_card)
     binary, out = os.path.abspath(a.binary), os.path.abspath(a.outdir)
     os.makedirs(out, exist_ok=True)
     st = f'{out}/stitch.st'
@@ -147,12 +162,13 @@ def main():
         open(path, 'w').write(''.join(' '.join(r) + '\n' for r in L))
         t0 = 10.0 * n
         t1 = round(t0 + duration(L) + 0.005, 6)
-        init = INIT0 if n == 0 else INITN.format(loads=''.join(f'set {k} stitch {st} last\n' for k in FIELDS))
+        init = INIT0.format(substrate_i2=sub_i2) if n == 0 else INITN.format(loads=''.join(f'set {k} stitch {st} last\n' for k in FIELDS))
         while True:
             zlo = max(0, ztop - win)
             open(f'{d}/in.deck', 'w').write(DECK.format(
                 seed=56789 + n, zlo=zlo, zhi=ztop + 1, init=init, floor=a.floor * DX, t0=t0,
-                plate=round(zlo * DX + 0.5e-3, 9), path=path, pause=PAUSE, t1=t1, st=st))
+                plate=round(zlo * DX + 0.5e-3, 9), plate_material=plate_material,
+                path=path, pause=PAUSE, t1=t1, st=st))
             print(f'box {n}: z [{zlo}, {ztop}] window {ztop - zlo}', flush=True)
             with open(f'{d}/in.deck') as fi, open(f'{d}/out.txt', 'w') as fo:
                 rc = subprocess.call(['mpirun', '-np', '1', '--bind-to', 'none', binary, '-log', 'log.spparks'],
@@ -177,6 +193,9 @@ def selftest():
     L = split_layers(f'{HERE}/large_rectangle.path')
     assert len(L) == 21 and [int(float(l[0][2])) for l in L[:3]] == [21, 27, 33], [l[0][2] for l in L[:3]]
     assert [round(duration(l) * 1e3, 1) for l in L[:2]] == [116.4, 171.0], [duration(l) for l in L[:2]]
+    assert plate_keys(None) == (3, '')
+    i2, pm = plate_keys('../../materials/316L.toml')
+    assert i2 == 6 and pm.endswith('/materials/316L.toml') and os.path.isabs(pm.split()[-1]), pm
     print('selftest ok')
 
 

@@ -84,6 +84,9 @@ struct GwCached {
 using namespace SPPARKS_NS;
 using namespace MathConst;
 
+// i2 = 6 is solid baseplate (conduction plate_material): solid wherever 3 is.
+KOKKOS_INLINE_FUNCTION static bool is_solid(int f) { return f == 3 || f == 6; }
+
 // Upload a host array into a fresh device View, casting element-wise. A
 // zero-length source yields a zero-extent View (legal; never indexed).
 template<typename U, typename T>
@@ -385,6 +388,14 @@ void AppAdditiveTextureKokkos::init_app()
       thermal->update_temperatures(time);
   }
 
+  // i2 = 6 (plate) only means something to the conduction source's plate
+  int n6 = 0, any6;
+  for (int i = 0; i < nlocal; i++) if (active_flag[i] == 6) n6 = 1;
+  MPI_Allreduce(&n6, &any6, 1, MPI_INT, MPI_MAX, world);
+  if (any6 && !plate_rule().on)
+    error->all(FLERR,"additive/texture/kk: i2 = 6 (plate) needs setup_temperature_source "
+               "conduction ... plate_material");
+
   // Note: Powder activation happens after meltpool appears, not during init
 }
 
@@ -448,6 +459,12 @@ void AppAdditiveTextureKokkos::refresh_thermal_host()
   thermal_host_.dx = dx;
   thermal_host_.tl = tl;
   thermal_host_.ts = ts;
+  // fast-forward and layer end wait for the lower-melting material
+  if (ConductionTemperatureSource *c = thermal->conduction_source())
+    if (c->config().plate_mat.on) {
+      thermal_host_.tl = std::min(tl, c->config().plate_mat.tl);
+      thermal_host_.ts = std::min(ts, c->config().plate_mat.ts);
+    }
   if (!thermal_host_.any_liquid)
     thermal_host_.any_liquid = [this]() {
       auto af = d_active_flag;
@@ -1212,7 +1229,7 @@ void AppAdditiveTextureKokkos::fill_temperature_hdf5_device(
       // i2 == 5 (void) never enters the list, so it never melts or solidifies
       if (af != 5 && (af == 2 || Ti >= tl_f ||
           (sd > -nrefine_f - 1 && sd < 0.0) ||
-          (af == 3 && sd == -nrefine_f - 2))) {
+          (is_solid(af) && sd == -nrefine_f - 2))) {
         const int slot = Kokkos::atomic_fetch_add(&d_acount(), 1);
         d_asites(slot) = i;
       }
@@ -1306,7 +1323,9 @@ int AppAdditiveTextureKokkos::melting_kernel(Kokkos::View<int*> d_active_sites, 
   auto d_spath_local = d_spath;
 
   // Capture parameters for lambda
-  double tl_local = this->tl;
+  const PlateRule pr = plate_rule();
+  ensure_device_xyz();
+  auto k_xyz_d = d_xyz;
   int nspins_local = this->nspins;
   const uint64_t key_local = rng_key();   // KeyedRNG: this step's draws
 
@@ -1321,7 +1340,7 @@ int AppAdditiveTextureKokkos::melting_kernel(Kokkos::View<int*> d_active_sites, 
       int active_flag_i = d_active_flag_local(i);
 
       // Check if site should melt: T >= liquidus && not already liquid
-      if (T_i >= tl_local && active_flag_i != 2) {
+      if (T_i >= pr.tl_at(k_xyz_d(i, 2)) && active_flag_i != 2) {
         KeyedRNG generator(key_local, i, RNG_MELT);
 
         // Transition to liquid state
@@ -1411,7 +1430,7 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
   auto d_solid_d_local = d_solid_d;
 
   // Capture parameters for lambda
-  double tl_local = this->tl;
+  const PlateRule pr = plate_rule();
   int nrefine_local = this->nrefine;
   const uint64_t key_local = rng_key();   // KeyedRNG: this step's draws
   auto d_nucleation_flags_local = this->d_nucleation_flags;
@@ -1439,16 +1458,17 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
       int spin_i = d_spin_local(i);
 
       // Check if site is liquid and below liquidus (undercooled)
-      if (active_flag_i == 2 && T_i < tl_local) {
+      const double tl_i = pr.tl_at(k_xyz_d(i, 2));
+      if (active_flag_i == 2 && T_i < tl_i) {
         // Check if this spin can nucleate
         if (d_nucleation_flags_local(spin_i) == 1) {
           // Calculate undercooling
-          double Tcool = tl_local - T_i;
+          double Tcool = tl_i - T_i;
 
           // Check if undercooling exceeds critical value for this spin
           if (Tcool >= d_nucleation_temps_local(spin_i)) {
             // Nucleate: transition to solid
-            d_active_flag_local(i) = 3;  // SOLID
+            d_active_flag_local(i) = pr.solid(k_xyz_d(i, 2));  // SOLID
             count++;  // Track nucleation event
 
             // Set solid_d flag to prevent disappearance during smoothing
@@ -1543,7 +1563,7 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
   const double mis_diffusion_local = mis_diffusion;
   const double misorient_alpha_local = misorient_alpha;
   const double t_cool_max_local = t_cool_max;
-  const double tl_local = tl;
+  const PlateRule pr = plate_rule();
   const double mis_thresh_local = mis_thresh;
   const int nspins_local = nspins;
   const int misori_mode_local = misorientation_target_mode;
@@ -1582,7 +1602,7 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
   Kokkos::parallel_scan("FindNuclei", n_active,
     KOKKOS_LAMBDA(int idx, int& off, bool final) {
       const int i = d_active_sites_local(idx);
-      if (d_active_flag_local(i) == 3 && d_solid_d_local(i) == -nrefine_local - 2) {
+      if (is_solid(d_active_flag_local(i)) && d_solid_d_local(i) == -nrefine_local - 2) {
         if (final) d_nuc(off) = i;
         off++;
       }
@@ -1602,7 +1622,7 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
       double G_i = d_G_local(i);
       double V_i = d_V_local(i);
 
-      const double Tcool_seed = tl_local - d_T_local(i);
+      const double Tcool_seed = pr.tl_at(k_xyz_d(i, 2)) - d_T_local(i);
 
       // Grow the nucleus as the CPU app's nucleation_particle_flipper does:
       // claim round(V/dx^3) liquid sites besides the seed, shell by shell
@@ -1646,7 +1666,8 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
           // Owned sites only, as on the CPU: a claimed ghost never reaches its
           // owner and is overwritten by the next exchange.
           if (nbr >= nlocal_local) continue;
-          if (Kokkos::atomic_compare_exchange(&d_active_flag_local(nbr), 2, 3) != 2) continue;
+          if (Kokkos::atomic_compare_exchange(&d_active_flag_local(nbr), 2,
+                                              pr.solid(k_xyz_d(nbr, 2))) != 2) continue;
           remaining--;
 
           int spin_nbr = spin_i;
@@ -1697,7 +1718,7 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
         int nc = 0;
         for (int j = 0; j < nn; j++) {
           const int nbr = k_neighbor_d((size_t) center, j);
-          if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) == spin_c) cand[nc++] = nbr;
+          if (is_solid(d_active_flag_local(nbr)) && d_spin_local(nbr) == spin_c) cand[nc++] = nbr;
         }
         if (nc == 0) break;
         const int next = cand[static_cast<int>(Kokkos::round((nc - 1) * generator.drand()))];
@@ -1720,6 +1741,16 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
    Solidification kernel: Epitaxial growth with texture weighting
    Phase 3.3: Liquid sites captured by solid neighbors based on texture
 ------------------------------------------------------------------------- */
+
+PlateRule AppAdditiveTextureKokkos::plate_rule() const
+{
+  PlateRule r{false, 0.0, dx, tl, tl};
+  if (ConductionTemperatureSource *c = thermal->conduction_source())
+    if (c->config().plate_mat.on) {
+      r.on = true; r.zplate = c->plate_surface(); r.tl_plate = c->config().plate_mat.tl;
+    }
+  return r;
+}
 
 // This step's KeyedRNG key: the deck seed, the rank and the step. A site's
 // draws are then fixed by (key, site index, kernel) -- repeatable at a fixed
@@ -1770,7 +1801,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
   auto k_xyz_d = d_xyz;
 
   // Capture parameters
-  double tl_local = this->tl;
+  const PlateRule pr = plate_rule();
   double dt_local = this->dt;
   double dx_local = this->dx;
   auto d_solid_front_coeffs_local = this->d_solid_front_coeffs;
@@ -1822,8 +1853,9 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
       int active_flag_i = d_active_flag_local(i);
 
       // Check if site is liquid and below liquidus
-      if (active_flag_i == 2 && T_i < tl_local) {
-        double Tcool = tl_local - T_i;
+      const double tl_i = pr.tl_at(k_xyz_d(i, 2));
+      if (active_flag_i == 2 && T_i < tl_i) {
+        double Tcool = tl_i - T_i;
         double solid_d_i = d_solid_d_local(i);
 
         // CPU parity (site_event_solidification): the front distance advances
@@ -1836,7 +1868,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
         bool adjacent_solid = (nn < 26);
         for (int j = 0; j < nn && j < 26 && !adjacent_solid; j++) {
           const int f = d_active_flag_local(k_neighbor_d((size_t) i, j));
-          if (f == 1 || f == 3) adjacent_solid = true;
+          if (f == 1 || is_solid(f)) adjacent_solid = true;
         }
         if (!adjacent_solid) return;
 
@@ -1861,8 +1893,8 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
           int nbr = k_neighbor_d((size_t) i, j);
           int nbr_flag = d_active_flag_local(nbr);   // live: same-colour sites are never neighbours
 
-          // Check if neighbor is solid (active_flag == 1 or 3) and within reach
-          if ((nbr_flag == 1 || nbr_flag == 3) && solid_reach * dx_local <= solid_d_i) {
+          // Check if neighbor is solid (active_flag == 1, 3 or 6) and within reach
+          if ((nbr_flag == 1 || is_solid(nbr_flag)) && solid_reach * dx_local <= solid_d_i) {
             // Compute gradient on-demand (only once, on first solid neighbor)
             if (!gradient_computed) {
               // Use ThermalOps to compute temperature gradient at site i
@@ -1997,7 +2029,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
           d_spin_local(i) = new_spin;
 
           // Set to solid state
-          d_active_flag_local(i) = 3;  // SOLID
+          d_active_flag_local(i) = pr.solid(k_xyz_d(i, 2));  // SOLID
           count++;  // Track solidification event
 
           // Set solid_d flag to trigger smoothing countdown
@@ -2075,7 +2107,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
       const double solid_d_i = d_solid_d_local(i);
 
       // CPU-aligned Potts boundary smoothing (AppAdditiveTexture::smooth_site).
-      // Energy = number of SOLID (active_flag==3) neighbors with a different spin
+      // Energy = number of SOLID (active_flag 3 or 6) neighbors with a different spin
       // (site_energy_smooth). Candidates = distinct neighbor spins != self.
       // Proposal: greedy steepest-descent (evaluate every candidate, keep the
       // bond-energy minimizer; first-encounter tie-break -> deterministic) or a
@@ -2106,7 +2138,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
         int einitial = 0;
         for (int n = 0; n < nn; n++) {
           const int nbr = k_neighbor_d((size_t) i, n);
-          if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != spin_i) einitial++;
+          if (is_solid(d_active_flag_local(nbr)) && d_spin_local(nbr) != spin_i) einitial++;
         }
 
         KeyedRNG generator(key_local, i, RNG_SMOOTH);
@@ -2117,14 +2149,14 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
           efinal = 0;
           for (int n = 0; n < nn; n++) {
             const int nbr = k_neighbor_d((size_t) i, n);
-            if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != new_spin) efinal++;
+            if (is_solid(d_active_flag_local(nbr)) && d_spin_local(nbr) != new_spin) efinal++;
           }
           for (int c = 1; c < nevent; c++) {
             const int cand = unique_spins[c];
             int e = 0;
             for (int n = 0; n < nn; n++) {
               const int nbr = k_neighbor_d((size_t) i, n);
-              if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != cand) e++;
+              if (is_solid(d_active_flag_local(nbr)) && d_spin_local(nbr) != cand) e++;
             }
             if (e < efinal) { efinal = e; new_spin = cand; }  // strict -> first-encounter
           }
@@ -2135,7 +2167,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
           efinal = 0;
           for (int n = 0; n < nn; n++) {
             const int nbr = k_neighbor_d((size_t) i, n);
-            if (d_active_flag_local(nbr) == 3 && d_spin_local(nbr) != new_spin) efinal++;
+            if (is_solid(d_active_flag_local(nbr)) && d_spin_local(nbr) != new_spin) efinal++;
           }
         }
 
@@ -2383,7 +2415,9 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     auto d_T_act = d_temp;
     auto d_active_flag_act = d_active_flag;
     auto d_solid_d_act = d_solid_d;
-    const double tl_act = this->tl;
+    const PlateRule pr = plate_rule();
+    ensure_device_xyz();
+    auto k_xyz_d = d_xyz;
     const int nrefine_act = this->nrefine;
     Kokkos::parallel_scan("BuildActiveList", nlocal_act,
       KOKKOS_LAMBDA(int i, int& offset, bool final) {
@@ -2393,9 +2427,9 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
         // of every melt/nucleate/solidify/smooth kernel.
         const bool active = af != 5 && (
             (af == 2) ||
-            (d_T_act(i) >= tl_act) ||
+            (d_T_act(i) >= pr.tl_at(k_xyz_d(i, 2))) ||
             (sd > -nrefine_act - 1 && sd < 0.0) ||
-            (af == 3 && sd == -nrefine_act - 2));
+            (is_solid(af) && sd == -nrefine_act - 2));
         if (active) {
           if (final) d_active_sites_local(offset) = i;
           offset++;

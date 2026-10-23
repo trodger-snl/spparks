@@ -57,6 +57,18 @@ struct KeyedRNG {
     return ((mix(s += 0x9E3779B97F4A7C15ULL) >> 11) + 0.5) * (1.0 / 9007199254740992.0);
   }
 };
+// Where the baseplate is (conduction plate_material): below zplate (m) a site
+// melts and freezes at the plate's liquidus and solidifies back to i2 = 6.
+// Without a plate (on = false) every site takes tl and solidifies to 3.
+// A flag, not an infinite zplate: the build uses -ffast-math.
+struct PlateRule {
+  bool on;
+  double zplate, dx, tl, tl_plate;
+  KOKKOS_INLINE_FUNCTION bool in(double z) const { return on && z * dx < zplate; }
+  KOKKOS_INLINE_FUNCTION double tl_at(double z) const { return in(z) ? tl_plate : tl; }
+  KOKKOS_INLINE_FUNCTION int solid(double z) const { return in(z) ? 6 : 3; }
+};
+
 enum { RNG_MELT = 1, RNG_NUCLEATE, RNG_FLIP, RNG_SOLIDIFY, RNG_SMOOTH,
        RNG_COLORS_SOLIDIFY, RNG_COLORS_SMOOTH };
 
@@ -241,10 +253,11 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   Kokkos::View<double*> d_mobility_out; // 1 once a site has been smoothed (d5), as on the CPU
 
   // Phase state arrays (device views - simple Views are race-safe for these kernels)
-  Kokkos::View<int*> d_active_flag;      // 0=inactive, 1=active, 2=molten, 3=solidified, 5=void
+  Kokkos::View<int*> d_active_flag;      // 0=inactive, 1=active, 2=molten, 3=solidified, 5=void, 6=plate
   // Per-step random order of the 8 parity colours used by the solidification
   // and smoothing kernels (multicolour Gauss-Seidel; see the .cpp).
   void shuffled_colors(int order[8], int kernel);
+  PlateRule plate_rule() const;   // z in lattice units, as in d_xyz
   // This step's RNG key (KeyedRNG): the deck seed, the step and the rank.
   uint64_t rng_key() const;
   uint64_t rng_seed = 0;          // the deck seed

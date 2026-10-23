@@ -233,9 +233,9 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   fylo = axis_view("cond_fylo", ay, cy0 - 1, NYL, 1);
   fyhi = axis_view("cond_fyhi", ay, cy0 - 1, NYL, 2);
   wz = axis_view("cond_wz", az, 0, nz, 0);
-  Ex = Kokkos::View<double*>("cond_Ex", NXL);
-  Ey = Kokkos::View<double*>("cond_Ey", NYL);
-  Ez = Kokkos::View<double*>("cond_Ez", nz);
+  Ex = Kokkos::View<fastreal*>("cond_Ex", NXL);
+  Ey = Kokkos::View<fastreal*>("cond_Ey", NYL);
+  Ez = Kokkos::View<fastreal*>("cond_Ez", nz);
   fzlo = axis_view("cond_fzlo", az, 0, nz, 1);
   fzhi = axis_view("cond_fzhi", az, 0, nz, 2);
 
@@ -549,7 +549,7 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<fastreal***> Y1,
   const double pack = cfg.packing;
 
   // The Gaussian separates: integrate it over each cell's extent per axis.
-  auto Ex_ = Ex, Ey_ = Ey, Ez_ = Ez;
+  auto Ex_ = Ex, Ey_ = Ey, Ez_ = Ez;   // fastreal: rounded once, as the stencil used them
   if (Pq > 0.0) {
     const int nmax = std::max(std::max((int) Ex.extent(0), (int) Ey.extent(0)), nz_);
     Kokkos::parallel_for("ConductionSource", nmax, KOKKOS_LAMBDA(const int n) {
@@ -565,91 +565,155 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<fastreal***> Y1,
     });
   }
 
-  // All math in fastreal (float under SPPARKS_FP32; gfx1151 runs FP64 at a
-  // small fraction of FP32 and this kernel is FP64-bound), H relative to
-  // Href. With fastreal == double every expression is the original one.
+  // All math in fastreal (float under SPPARKS_FP32), H relative to Href.
+  // With fastreal == double every expression is the original one.
+  //
+  // A team owns a TX x TY column of cells and marches it up through z. A
+  // face conductance is A / (r_c + r_n) with r = (w/2) / k(T) of each side,
+  // so each cell's r per axis is computed once (one k(T) table lookup and
+  // three divisions) and shared: x/y neighbours through team scratch (plus a
+  // ring of halo cells around the tile), z neighbours in registers as the
+  // column advances. The operands are the ones a per-face evaluation uses,
+  // so the result is bit-identical to it, at a seventh of the lookups and
+  // about a third of the divisions. One barrier per plane: the scratch is
+  // double-buffered by plane parity.
   using R = fastreal;
+  // host backends (OpenMP, Serial) cannot run 256-thread teams: 1 x 1 tiles
+  constexpr bool host = std::is_same<Kokkos::DefaultExecutionSpace,
+                                     Kokkos::DefaultHostExecutionSpace>::value;
+  constexpr int TX = host ? 1 : 32, TY = host ? 1 : 8;
+  const int nbx = (nxo_ + TX - 1) / TX, nby = (nyo_ + TY - 1) / TY;
+  const int nsx = TY * (TX + 2), nsy = (TY + 2) * TX;   // rx and ry slots per plane
+  using Scratch = Kokkos::View<R*, Kokkos::DefaultExecutionSpace::scratch_memory_space,
+                               Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
+  const size_t shmem = Scratch::shmem_size(2 * (nsx + nsy));
+  using Team = Kokkos::TeamPolicy<>::member_type;
   Kokkos::parallel_for("ConductionStep",
-    Kokkos::MDRangePolicy<Kokkos::Rank<3, Kokkos::Iterate::Left, Kokkos::Iterate::Left>>(
-      {1, 1, 0}, {nxo_ + 1, nyo_ + 1, nz_}),
-    KOKKOS_LAMBDA(const int i, const int j, const int k) {
-      // H is the dense-equivalent enthalpy H(T); a LOOSE cell holds
-      // pack * H(T) * V, so its heat capacity is scaled by pack.
-      const unsigned char pfull = P_(i, j, k), pc = pfull & 3;
-      const R Tc = T_(i, j, k);
-      if (pc == GAS) {
-        if (sts) Yo_(i, j, k) = H_(i, j, k);
-        Tn_(i, j, k) = Tc; Pn_(i, j, k) = pfull; return;
-      }
-
-      // p: the full phase byte (PLATE picks the plate's k table)
+    Kokkos::TeamPolicy<>(nbx * nby, TX * TY).set_scratch_size(0, Kokkos::PerTeam(shmem)),
+    KOKKOS_LAMBDA(const Team &team) {
+      Scratch sbuf(team.team_scratch(0), 2 * (nsx + nsy));
+      const int t = team.team_rank(), nt = team.team_size();
+      const int i0 = 1 + (team.league_rank() % nbx) * TX, j0 = 1 + (team.league_rank() / nbx) * TY;
+      const int tx = t % TX, ty = t / TX;
+      const int i = i0 + tx, j = j0 + ty;
+      // mine: an owned cell this thread updates. has: a cell in the local
+      // arrays (owned or halo) whose r this thread publishes, so the halo
+      // cells inside a partial tile at a rank boundary are covered too.
+      const bool mine = t < TX * TY && i <= nxo_ && j <= nyo_;
+      const bool has = t < TX * TY && i <= nxo_ + 1 && j <= nyo_ + 1;
+      const R half = R(0.5);
+      // k(T) of a cell; p is the full phase byte (PLATE picks the plate's table)
       auto kof = [&](R Tv, unsigned char p) {
         return (p & 3) == POWDER ? R(kp)
              : (p & PLATE) ? interp<R>(kT2_, kV2_, Tv) : interp<R>(kT_, kV_, Tv);
       };
-      const R Tr = Tc;
-      const R kc = kof(Tr, pfull);
-      auto surf = [&](R A) {
-        return -A * (R(hc) * (Tr - R(Tinf)) + R(es) * (Tr*Tr*Tr*Tr - R(Tinf)*R(Tinf)*R(Tinf)*R(Tinf)));
-      };
-      auto far = [&](R A, R half) {
-        return fixed ? A * kc / half * (R(Tfar) - Tr) : R(0);
-      };
-      auto face = [&](R A, R half_c, int ii, int jj, int kk, R half_n) {
-        const unsigned char pn = P_(ii, jj, kk);
-        if ((pn & 3) == GAS) return surf(A);
-        const R Tv = R(T_(ii, jj, kk));
-        const R G = A / (half_c / kc + half_n / kof(Tv, pn));
-        return G * (Tv - Tr);
-      };
+      auto kcell = [&](int ii, int jj, int kk) { return kof(R(T_(ii, jj, kk)), P_(ii, jj, kk)); };
+      // halo ring: 2*TY cells left/right (need rx), 2*TX below/above (need ry)
+      const int nhalo = 2 * TY + 2 * TX;
 
-      const R dxc = R(wx_(i)), dyc = R(wy_(j)), dzc = R(wz_(k));
-      const R Ax = dyc * dzc, Ay = dxc * dzc, Az = dxc * dyc, half = R(0.5);
-      R q = R(0);
-      q += (i == 1 && exlo) ? far(Ax, half*dxc) : face(Ax, half*dxc, i-1, j, k, half*R(wx_(i-1)));
-      q += (i == nxo_ && exhi) ? far(Ax, half*dxc) : face(Ax, half*dxc, i+1, j, k, half*R(wx_(i+1)));
-      q += (j == 1 && eylo) ? far(Ay, half*dyc) : face(Ay, half*dyc, i, j-1, k, half*R(wy_(j-1)));
-      q += (j == nyo_ && eyhi) ? far(Ay, half*dyc) : face(Ay, half*dyc, i, j+1, k, half*R(wy_(j+1)));
-      q += (k == 0) ? far(Az, half*dzc) : face(Az, half*dzc, i, j, k-1, half*R(wz_(k-1)));
-      q += (k == nz_ - 1) ? surf(Az) : face(Az, half*dzc, i, j, k+1, half*R(wz_(k+1)));
+      R kc_next = has ? kcell(i, j, 0) : R(1);
+      R rz_prev = R(0);
+      for (int k = 0; k < nz_; k++) {
+        R *rx = sbuf.data() + (k & 1) * (nsx + nsy), *ry = rx + nsx;
+        const R kc = kc_next;
+        const R dxc = R(wx_(i < nxo_ + 2 ? i : 0)), dyc = R(wy_(j < nyo_ + 2 ? j : 0));
+        const R dzc = R(wz_(k));
+        const R rxc = half * dxc / kc, ryc = half * dyc / kc, rzc = half * dzc / kc;
+        if (has) {
+          rx[ty * (TX + 2) + tx + 1] = rxc;
+          ry[(ty + 1) * TX + tx] = ryc;
+          kc_next = k + 1 < nz_ ? kcell(i, j, k + 1) : R(1);
+        }
+        for (int hcell = t; hcell < nhalo; hcell += nt) {
+          if (hcell < 2 * TY) {                       // x halo: column i0-1 or i0+TX
+            const int side = hcell / TY, hy = hcell % TY;
+            const int ii = side ? i0 + TX : i0 - 1, jj = j0 + hy;
+            if (ii <= nxo_ + 1 && jj <= nyo_)
+              rx[hy * (TX + 2) + (side ? TX + 1 : 0)] = half * R(wx_(ii)) / kcell(ii, jj, k);
+          } else {                                    // y halo: row j0-1 or j0+TY
+            const int g = hcell - 2 * TY, side = g / TX, hx = g % TX;
+            const int ii = i0 + hx, jj = side ? j0 + TY : j0 - 1;
+            if (ii <= nxo_ && jj <= nyo_ + 1)
+              ry[(side ? TY + 1 : 0) * TX + hx] = half * R(wy_(jj)) / kcell(ii, jj, k);
+          }
+        }
+        team.team_barrier();
 
-      if (Pq > 0.0) q += R(Pq) * R(Ex_(i)) * R(Ey_(j)) * R(Ez_(k));
+        if (mine) {
+          // H is the dense-equivalent enthalpy H(T); a LOOSE cell holds
+          // pack * H(T) * V, so its heat capacity is scaled by pack.
+          const unsigned char pfull = P_(i, j, k), pc = pfull & 3;
+          const R Tr = T_(i, j, k);
+          if (pc == GAS) {
+            if (sts) Yo_(i, j, k) = H_(i, j, k);
+            Tn_(i, j, k) = Tr; Pn_(i, j, k) = pfull;
+          } else {
+            auto surf = [&](R A) {
+              return -A * (R(hc) * (Tr - R(Tinf)) + R(es) * (Tr*Tr*Tr*Tr - R(Tinf)*R(Tinf)*R(Tinf)*R(Tinf)));
+            };
+            auto far = [&](R A, R halfw) {
+              return fixed ? A * kc / halfw * (R(Tfar) - Tr) : R(0);
+            };
+            // r_c, r_n: (w/2)/k of this cell and of the neighbour across the face
+            auto face = [&](R A, R rc, int ii, int jj, int kk, R rn) {
+              const unsigned char pn = P_(ii, jj, kk);
+              if ((pn & 3) == GAS) return surf(A);
+              const R Tv = R(T_(ii, jj, kk));
+              const R G = A / (rc + rn);
+              return G * (Tv - Tr);
+            };
+            const R rz_next = k + 1 < nz_ ? half * R(wz_(k + 1)) / kc_next : R(0);
+            const R Ax = dyc * dzc, Ay = dxc * dzc, Az = dxc * dyc;
+            const int sx_ = ty * (TX + 2) + tx + 1, sy_ = (ty + 1) * TX + tx;
+            R q = R(0);
+            q += (i == 1 && exlo) ? far(Ax, half*dxc) : face(Ax, rxc, i-1, j, k, rx[sx_ - 1]);
+            q += (i == nxo_ && exhi) ? far(Ax, half*dxc) : face(Ax, rxc, i+1, j, k, rx[sx_ + 1]);
+            q += (j == 1 && eylo) ? far(Ay, half*dyc) : face(Ay, ryc, i, j-1, k, ry[sy_ - TX]);
+            q += (j == nyo_ && eyhi) ? far(Ay, half*dyc) : face(Ay, ryc, i, j+1, k, ry[sy_ + TX]);
+            q += (k == 0) ? far(Az, half*dzc) : face(Az, rzc, i, j, k-1, rz_prev);
+            q += (k == nz_ - 1) ? surf(Az) : face(Az, rzc, i, j, k+1, rz_next);
 
-      const R vol = dxc * dyc * dzc * ((pfull & LOOSE) ? R(pack) : R(1));
-      R Hn;
-      if (!sts) {
-        Hn = H_(i, j, k) + R(h) * q / vol;
-        H_(i, j, k) = Hn;
-      } else {
-        const R Lc = q / vol;
-        Hn = R(mu) * Y1_(i, j, k) + R(nu) * Y2_(i, j, k) + R(1.0 - mu - nu) * H_(i, j, k)
-           + R(mut) * Lc + R(gat) * (store_L0 ? Lc : L0_(i, j, k));
-        if (store_L0) L0_(i, j, k) = Lc;
-        Yo_(i, j, k) = Hn;
+            if (Pq > 0.0) q += R(Pq) * Ex_(i) * Ey_(j) * Ez_(k);
+
+            const R vol = dxc * dyc * dzc * ((pfull & LOOSE) ? R(pack) : R(1));
+            R Hn;
+            if (!sts) {
+              Hn = H_(i, j, k) + R(h) * q / vol;
+              H_(i, j, k) = Hn;
+            } else {
+              const R Lc = q / vol;
+              Hn = R(mu) * Y1_(i, j, k) + R(nu) * Y2_(i, j, k) + R(1.0 - mu - nu) * H_(i, j, k)
+                 + R(mut) * Lc + R(gat) * (store_L0 ? Lc : L0_(i, j, k));
+              if (store_L0) L0_(i, j, k) = Lc;
+              Yo_(i, j, k) = Hn;
+            }
+            // T(H): table search, end slopes beyond.
+            const auto &Htab_ = (pfull & PLATE) ? Htab2_ : Htab1_;
+            R Tv;
+            const R H0r = R(H0), dTr = R(dTt);
+            if (Hn <= Htab_(0)) {
+              Tv = H0r + (Hn - Htab_(0)) / (Htab_(1) - Htab_(0)) * dTr;
+            } else if (Hn >= Htab_(nHt - 1)) {
+              Tv = H0r + R(nHt - 1) * dTr +
+                   (Hn - Htab_(nHt - 1)) / (Htab_(nHt - 1) - Htab_(nHt - 2)) * dTr;
+            } else {
+              // H rises strictly with T, so the bracket Htab(lo) <= Hn < Htab(lo+1)
+              // is unique: walk to it from the cell's previous T (a few K away)
+              // instead of a 13-level binary search.
+              const R u = (Tr - H0r) / dTr;
+              int lo = u <= R(0) ? 0 : (u >= R(nHt - 2) ? nHt - 2 : (int) u);
+              while (lo > 0 && Htab_(lo) > Hn) lo--;
+              while (lo < nHt - 2 && Htab_(lo + 1) <= Hn) lo++;
+              const R dH = Htab_(lo + 1) - Htab_(lo);
+              Tv = H0r + (R(lo) + (dH > R(0) ? (Hn - Htab_(lo)) / dH : R(0))) * dTr;
+            }
+            Tn_(i, j, k) = Tv;
+            Pn_(i, j, k) = (do_phase && pc == POWDER && Tv >= tl_)
+                         ? (unsigned char) (DENSE | (pfull & LOOSE)) : pfull;
+          }
+        }
+        rz_prev = rzc;
       }
-      // T(H): table search, end slopes beyond.
-      const auto &Htab_ = (pfull & PLATE) ? Htab2_ : Htab1_;
-      R Tv;
-      const R H0r = R(H0), dTr = R(dTt);
-      if (Hn <= Htab_(0)) {
-        Tv = H0r + (Hn - Htab_(0)) / (Htab_(1) - Htab_(0)) * dTr;
-      } else if (Hn >= Htab_(nHt - 1)) {
-        Tv = H0r + R(nHt - 1) * dTr +
-             (Hn - Htab_(nHt - 1)) / (Htab_(nHt - 1) - Htab_(nHt - 2)) * dTr;
-      } else {
-        // H rises strictly with T, so the bracket Htab(lo) <= Hn < Htab(lo+1)
-        // is unique: walk to it from the cell's previous T (a few K away)
-        // instead of a 13-level binary search.
-        const R u = (Tr - H0r) / dTr;
-        int lo = u <= R(0) ? 0 : (u >= R(nHt - 2) ? nHt - 2 : (int) u);
-        while (lo > 0 && Htab_(lo) > Hn) lo--;
-        while (lo < nHt - 2 && Htab_(lo + 1) <= Hn) lo++;
-        const R dH = Htab_(lo + 1) - Htab_(lo);
-        Tv = H0r + (R(lo) + (dH > R(0) ? (Hn - Htab_(lo)) / dH : R(0))) * dTr;
-      }
-      Tn_(i, j, k) = Tv;
-      Pn_(i, j, k) = (do_phase && pc == POWDER && Tv >= tl_)
-                   ? (unsigned char) (DENSE | (pfull & LOOSE)) : pfull;
     });
 
   std::swap(T, Tn);

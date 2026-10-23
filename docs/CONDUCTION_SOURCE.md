@@ -126,6 +126,14 @@ in `processors`.
   plate usually sets the step; plate cells only below the box are wider in
   z but keep the box's x/y spacing (tensor-product grid), so that buys at
   most 1.5× (6/4 faces), ~1.14× for the first 1.25·dx plate layer.
+- **Kernel.** `ConductionStep` runs 32×8-cell teams that march up z. Each
+  cell's (w/2)/k(T) per axis is computed once (one k-table lookup, three
+  divisions) and shared through team scratch (x/y, plus a halo ring) and
+  registers (z); a face is then A/(r_c + r_n). On gfx1151 that took FP64
+  from 48.6 to 27.2 ms per call on a 33M-cell grid (FP32: 15.9 → 8.2 ms,
+  with fastreal copies of the k tables and widths). Not bit-identical to the
+  per-face form under -ffast-math (FP64 ≤ ~1e-12 K per step). Small grids
+  (< a few hundred tiles) underfill the GPU and can be slower.
 - **MPI.** x/y follow the lattice processor grid, with a 1-cell halo of T and
   phase exchanged in x then y every sub-step. Edge ranks also own the margin
   cells; that load imbalance is not rebalanced.

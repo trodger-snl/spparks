@@ -23,7 +23,7 @@ sx, sy, sz = Gaussian source widths (m), as in "moser"_temperature_source_moser.
 {card} = take the positional values and material keywords from the loaded
 "material card"_material.html; see "setup_temperature_source"_setup_temperature_source.html :l
 zero or more keyword/value pairs may be appended :l
-keyword = {k_table} or {cp_table} or {latent} or {k_powder} or {convection} or {emissivity} or {margin} or {plate} or {stretch} or {max_cell} or {part} or {layer_thickness} or {packing} or {plate_top} or {far_bc} or {sts} :l
+keyword = {k_table} or {cp_table} or {latent} or {k_powder} or {convection} or {emissivity} or {margin} or {plate} or {stretch} or {max_cell} or {part} or {layer_thickness} or {packing} or {plate_top} or {plate_material} or {plate_growth} or {far_bc} or {sts} :l
   {k_table} values = n T1 k1 ... Tn kn
     dense conductivity k(T), piecewise linear, held at the end values (K, W/(m K))
   {cp_table} values = n T1 c1 ... Tn cn
@@ -52,6 +52,10 @@ keyword = {k_table} or {cp_table} or {latent} or {k_powder} or {convection} or {
     powder cells hold f times the dense mass, 0 < f <= 1
   {plate_top} value = z
     every cell below z is dense (m)
+  {plate_material} value = file
+    material card of the baseplate: the dense material of {i2} = 6 sites and of the cells below {plate_top}
+  {plate_growth} value = d
+    {i2} = 6 may reach d above {plate_top} (m)
   {far_bc} value = {fixed} or {adiabatic}
     outer faces of the thermal domain held at T0, or insulated
   {sts} value = s
@@ -70,6 +74,12 @@ setup_temperature_source conduction 340.0 0.355 19.442 4.517691892111699e-06 573
 material ../../materials/316L.toml process single_track_340W
 setup_temperature_source conduction card margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 &
     part part plate_top -0.2e-3 far_bc fixed :pre
+
+material ../../materials/Ti6Al4V.toml
+set i2 value 6 region substrate
+setup_temperature_source conduction card Q 340 T0 573 spot 50e-6 50e-6 75e-6 &
+    layer_thickness 30e-6 convection 25 300 margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 &
+    part part plate_top 122.5e-6 plate_material ../../materials/316L.toml far_bc fixed :pre
 
 [Description:]
 
@@ -107,6 +117,20 @@ stitch file is kept.  Outside the box the cell is dense below
 dense inside the {part} region (the whole domain if {part} is not
 given); else powder.  Powder becomes dense the first time it reaches the
 liquidus.  The solver tracks the phase itself and never writes {i2}.
+
+[Baseplate.]  {plate_material} gives the plate a second material: its
+density, conductivity, specific heat, latent heat, solidus and liquidus
+come from that card (emissivity and convection stay the part's).
+Plate cells are the sites with {i2} = 6 and, outside the box, the cells
+below {plate_top}, which must be given and should be the plate
+surface.  {i2} = 6 is allowed only below {plate_top} + {plate_growth}.
+In the microstructure model a plate site is solid like {i2} = 3 and is
+a growth parent.  Below {plate_top} + {plate_growth} sites melt and
+freeze at the plate's liquidus and solidify back to {i2} = 6; above it
+they solidify to {i2} = 3.  Both use the same solid_front_vel law.
+Fast-forward and the end of a layer wait for the lower of the two
+liquidus and solidus temperatures.  A
+cell's material is fixed when the grid is built (once per layer).
 
 [Density.]  One density, rho = k/(alpha*cp), is used for every phase.
 Give the dense value and make the model layer the consolidated layer
@@ -159,7 +183,7 @@ z (use processors * * 1).
 k_table = constant k, cp_table = constant cp, latent = 0, k_powder =
 k/100, convection h = 0 (T_inf = 300), emissivity = 0, margin = 0, plate
 = 0, stretch = 1.25, max_cell = none, part = whole domain dense,
-layer_thickness = 0, packing = 1, plate_top = box bottom, far_bc =
-fixed, sts = 32.  With a material card loaded, none of these material
+layer_thickness = 0, packing = 1, plate_top = box bottom, plate_material
+= none, plate_growth = 0, far_bc = fixed, sts = 32.  With a material card loaded, none of these material
 defaults (latent, k_powder, convection, emissivity, layer_thickness) is
 used: each must come from the card or the command.

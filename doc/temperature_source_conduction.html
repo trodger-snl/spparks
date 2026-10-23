@@ -35,7 +35,7 @@ setup_temperature_source conduction card overrides keyword values ...
 
 <LI>zero or more keyword/value pairs may be appended 
 
-<LI>keyword = <I>k_table</I> or <I>cp_table</I> or <I>latent</I> or <I>k_powder</I> or <I>convection</I> or <I>emissivity</I> or <I>margin</I> or <I>plate</I> or <I>stretch</I> or <I>max_cell</I> or <I>part</I> or <I>layer_thickness</I> or <I>packing</I> or <I>plate_top</I> or <I>far_bc</I> or <I>sts</I> 
+<LI>keyword = <I>k_table</I> or <I>cp_table</I> or <I>latent</I> or <I>k_powder</I> or <I>convection</I> or <I>emissivity</I> or <I>margin</I> or <I>plate</I> or <I>stretch</I> or <I>max_cell</I> or <I>part</I> or <I>layer_thickness</I> or <I>packing</I> or <I>plate_top</I> or <I>plate_material</I> or <I>plate_growth</I> or <I>far_bc</I> or <I>sts</I> 
 
 <PRE>  <I>k_table</I> values = n T1 k1 ... Tn kn
     dense conductivity k(T), piecewise linear, held at the end values (K, W/(m K))
@@ -65,6 +65,10 @@ setup_temperature_source conduction card overrides keyword values ...
     powder cells hold f times the dense mass, 0 < f <= 1
   <I>plate_top</I> value = z
     every cell below z is dense (m)
+  <I>plate_material</I> value = file
+    material card of the baseplate: the dense material of <I>i2</I> = 6 sites and of the cells below <I>plate_top</I>
+  <I>plate_growth</I> value = d
+    <I>i2</I> = 6 may reach d above <I>plate_top</I> (m)
   <I>far_bc</I> value = <I>fixed</I> or <I>adiabatic</I>
     outer faces of the thermal domain held at T0, or insulated
   <I>sts</I> value = s
@@ -84,6 +88,12 @@ setup_temperature_source conduction card overrides keyword values ...
 <PRE>material ../../materials/316L.toml process single_track_340W
 setup_temperature_source conduction card margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 &
     part part plate_top -0.2e-3 far_bc fixed 
+</PRE>
+<PRE>material ../../materials/Ti6Al4V.toml
+set i2 value 6 region substrate
+setup_temperature_source conduction card Q 340 T0 573 spot 50e-6 50e-6 75e-6 &
+    layer_thickness 30e-6 convection 25 300 margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 &
+    part part plate_top 122.5e-6 plate_material ../../materials/316L.toml far_bc fixed 
 </PRE>
 <P><B>Description:</B>
 </P>
@@ -121,6 +131,20 @@ stitch file is kept.  Outside the box the cell is dense below
 dense inside the <I>part</I> region (the whole domain if <I>part</I> is not
 given); else powder.  Powder becomes dense the first time it reaches the
 liquidus.  The solver tracks the phase itself and never writes <I>i2</I>.
+</P>
+<P><B>Baseplate.</B>  <I>plate_material</I> gives the plate a second material: its
+density, conductivity, specific heat, latent heat, solidus and liquidus
+come from that card (emissivity and convection stay the part's).
+Plate cells are the sites with <I>i2</I> = 6 and, outside the box, the cells
+below <I>plate_top</I>, which must be given and should be the plate
+surface.  <I>i2</I> = 6 is allowed only below <I>plate_top</I> + <I>plate_growth</I>.
+In the microstructure model a plate site is solid like <I>i2</I> = 3 and is
+a growth parent.  Below <I>plate_top</I> + <I>plate_growth</I> sites melt and
+freeze at the plate's liquidus and solidify back to <I>i2</I> = 6; above it
+they solidify to <I>i2</I> = 3.  Both use the same solid_front_vel law.
+Fast-forward and the end of a layer wait for the lower of the two
+liquidus and solidus temperatures.  A
+cell's material is fixed when the grid is built (once per layer).
 </P>
 <P><B>Density.</B>  One density, rho = k/(alpha*cp), is used for every phase.
 Give the dense value and make the model layer the consolidated layer
@@ -173,8 +197,8 @@ z (use processors * * 1).
 <P>k_table = constant k, cp_table = constant cp, latent = 0, k_powder =
 k/100, convection h = 0 (T_inf = 300), emissivity = 0, margin = 0, plate
 = 0, stretch = 1.25, max_cell = none, part = whole domain dense,
-layer_thickness = 0, packing = 1, plate_top = box bottom, far_bc =
-fixed, sts = 32.  With a material card loaded, none of these material
+layer_thickness = 0, packing = 1, plate_top = box bottom, plate_material
+= none, plate_growth = 0, far_bc = fixed, sts = 32.  With a material card loaded, none of these material
 defaults (latent, k_powder, convection, emissivity, layer_thickness) is
 used: each must come from the card or the command.
 </P>

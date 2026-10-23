@@ -333,6 +333,12 @@ once the melt pool reaches their height.  At the start of the run,
 i2 != 3; {additive/texture/kk} gives one to every site whose
 quaternion is zero (and normalizes the others).
 
+Baseplate sites (i2 = 6, {additive/texture/kk} with the
+"conduction"_temperature_source_conduction.html source and its
+{plate_material} keyword) take the plate's thermal properties and
+liquidus.  They are solid parents like i2 = 3, and sites that solidify
+below the plate surface return to 6.
+
 Void sites (i2 = 5) are permanent in both styles.  They are thermally
 air (the conduction source treats them as gas), never melt, solidify,
 or become powder, and never lend their spin or orientation to a

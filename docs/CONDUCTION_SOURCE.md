@@ -63,6 +63,8 @@ per-move speed).
 | `layer_thickness t` | outside the box: powder within `t` of the laser plane | 0 |
 | `packing f` | powder (and powder melted in place) holds f × the dense mass | 1 |
 | `plate_top z` | everything below `z` (m) is dense | box bottom face |
+| `plate_material card` | baseplate material (see Phase per cell) | none |
+| `plate_growth d` | `i2 = 6` may reach `d` above `plate_top` (m) | 0 |
 | `far_bc fixed\|adiabatic` | outer faces of the thermal domain | fixed at `T0` |
 | `sts s` | RKL2 stages per laser-off super-step; 0 = explicit only | 32 |
 
@@ -89,6 +91,20 @@ in `processors`.
   the box, `part`, `layer_thickness` and `plate_top` decide. After that the
   solver tracks it itself: powder becomes dense the first time it reaches the
   liquidus.
+- **Baseplate.** `plate_material <card>` adds a second dense material
+  (flag bit `PLATE` in the phase byte, so it rides the existing halo
+  exchange). Plate cells are `i2 = 6` sites and, outside the box, cells below
+  `plate_top`, which is then required. The card gives ρ, k(T), cp(T),
+  latent, solidus and liquidus; each material has its own k table and H(T)
+  table on the shared 1 K grid, and the face flux is the same harmonic mean,
+  so the interface needs nothing extra. Emissivity, convection and k_powder
+  stay the part's. Material is fixed per cell at grid build (once per layer);
+  plate still liquid at a rebuild would be meshed as part.
+  In the kk app, `i2 = 6` is solid wherever 3 is (growth parent, smoothing,
+  nuclei). Below `plate_top + plate_growth` a site melts and freezes at the
+  plate's liquidus and solidifies back to 6; above, to 3. One
+  solid_front_vel law for both. Fast-forward and the layer end use the lower
+  of the two liquidus/solidus values (`ThermalHost` tl/ts).
 - **Density.** One ρ (from `k`, `alpha`, `cp`) for every phase: give the
   dense value, and make the model layer the consolidated thickness (the path
   z step). Melting t of powder then takes the same energy as the real t/φ of

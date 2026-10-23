@@ -79,6 +79,9 @@ class ConductionSolverKokkos : protected Pointers {
   double zsrc = 0.0;                  // source plane: laser plane, capped at the top face
   Kokkos::View<fastreal*> Htab, Htab2;   // H(T) - Href, part and plate
   Kokkos::View<double*> kT, kV, kT2, kV2;
+  // fastreal copies for the stencil (aliases under FP64): FP32 then reads
+  // floats instead of converting doubles at FP64 rate
+  Kokkos::View<fastreal*> kTr, kVr, kT2r, kV2r, wxr, wyr, wzr;
   double Htab_T0 = 0.0, Htab_dT = 1.0;
   Kokkos::View<int*[3]> site_cell;   // local (i,j,k) per site, i<0 = above grid
 

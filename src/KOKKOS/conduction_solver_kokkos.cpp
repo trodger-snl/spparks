@@ -71,9 +71,9 @@ Axis make_axis(int g_lo, int g_hi, double dx, double mlo, double mhi,
   return a;
 }
 
-template <typename R>
+template <typename R, typename E>
 KOKKOS_INLINE_FUNCTION
-R interp(const Kokkos::View<double*> &X, const Kokkos::View<double*> &V, R x)
+R interp(const Kokkos::View<E*> &X, const Kokkos::View<E*> &V, R x)
 {
   const int n = (int) X.extent(0);
   if (x <= R(X(0))) return R(V(0));
@@ -342,6 +342,19 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   kV = up("cond_kV", cfg.k_v);
   kT2 = plate_on ? up("cond_kT2", pm.k_T) : kT;
   kV2 = plate_on ? up("cond_kV2", pm.k_v) : kV;
+  auto to_r = [](Kokkos::View<double*> d) {
+    if constexpr (std::is_same<fastreal, double>::value) return d;
+    else {
+      Kokkos::View<fastreal*> r(d.label() + "_r", d.extent(0));
+      auto hd = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), d);
+      auto hr = Kokkos::create_mirror_view(r);
+      for (size_t i = 0; i < d.extent(0); i++) hr(i) = (fastreal) hd(i);
+      Kokkos::deep_copy(r, hr);
+      return r;
+    }
+  };
+  kTr = to_r(kT); kVr = to_r(kV); kT2r = to_r(kT2); kV2r = to_r(kV2);
+  wxr = to_r(wx); wyr = to_r(wy); wzr = to_r(wz);
 
   const size_t nplane = 2 * (size_t) std::max(NYL, NXL) * nz;   // T + phase
   sbuf = Kokkos::View<double*>("cond_sbuf", 2 * nplane);
@@ -519,9 +532,9 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<fastreal***> Y1,
 
   auto H_ = H; auto Y1_ = Y1; auto Y2_ = Y2; auto Yo_ = Yout; auto L0_ = L0;
   auto T_ = T; auto Tn_ = Tn; auto P_ = P; auto Pn_ = Pn;
-  auto wx_ = wx, wy_ = wy, wz_ = wz;
+  auto wx_ = wxr, wy_ = wyr, wz_ = wzr;
   auto fxlo_ = fxlo, fxhi_ = fxhi, fylo_ = fylo, fyhi_ = fyhi, fzlo_ = fzlo, fzhi_ = fzhi;
-  auto Htab1_ = Htab, Htab2_ = Htab2; auto kT_ = kT, kV_ = kV, kT2_ = kT2, kV2_ = kV2;
+  auto Htab1_ = Htab, Htab2_ = Htab2; auto kT_ = kTr, kV_ = kVr, kT2_ = kT2r, kV2_ = kV2r;
   const double H0 = Htab_T0, dTt = Htab_dT;
   const int nHt = (int) Htab.extent(0);
   const double kp = cfg.k_powder, hc = cfg.h, Tinf = cfg.T_inf;
@@ -561,18 +574,18 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<fastreal***> Y1,
       // H is the dense-equivalent enthalpy H(T); a LOOSE cell holds
       // pack * H(T) * V, so its heat capacity is scaled by pack.
       const unsigned char pfull = P_(i, j, k), pc = pfull & 3;
-      const double Tc = T_(i, j, k);
+      const R Tc = T_(i, j, k);
       if (pc == GAS) {
         if (sts) Yo_(i, j, k) = H_(i, j, k);
         Tn_(i, j, k) = Tc; Pn_(i, j, k) = pfull; return;
       }
 
       // p: the full phase byte (PLATE picks the plate's k table)
-      auto kof = [&](double Tv, unsigned char p) {
+      auto kof = [&](R Tv, unsigned char p) {
         return (p & 3) == POWDER ? R(kp)
              : (p & PLATE) ? interp<R>(kT2_, kV2_, Tv) : interp<R>(kT_, kV_, Tv);
       };
-      const R Tr = R(Tc);
+      const R Tr = Tc;
       const R kc = kof(Tr, pfull);
       auto surf = [&](R A) {
         return -A * (R(hc) * (Tr - R(Tinf)) + R(es) * (Tr*Tr*Tr*Tr - R(Tinf)*R(Tinf)*R(Tinf)*R(Tinf)));

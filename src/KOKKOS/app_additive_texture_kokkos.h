@@ -53,8 +53,8 @@ struct KeyedRNG {
   }
   KOKKOS_INLINE_FUNCTION KeyedRNG(uint64_t key, int i, int kernel)
     : s(mix(key ^ mix(((uint64_t)(uint32_t) i << 8) + (uint64_t) kernel + 0x9E3779B97F4A7C15ULL))) {}
-  KOKKOS_INLINE_FUNCTION double drand() {   // [0,1)
-    return (mix(s += 0x9E3779B97F4A7C15ULL) >> 11) * (1.0 / 9007199254740992.0);
+  KOKKOS_INLINE_FUNCTION double drand() {   // (0,1): never 0, so log(drand()) is finite
+    return ((mix(s += 0x9E3779B97F4A7C15ULL) >> 11) + 0.5) * (1.0 / 9007199254740992.0);
   }
 };
 enum { RNG_MELT = 1, RNG_NUCLEATE, RNG_FLIP, RNG_SOLIDIFY, RNG_SMOOTH,

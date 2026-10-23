@@ -134,7 +134,7 @@ output steps see current values.
 <LI><I>temperature_smooth</I> forces the host temperature path (slower), and
 is not supported with the conduction source. 
 
-<LI>Solidification, nucleation, and smoothing kernels run in parallel over
+<LI>Solidification and smoothing kernels run in parallel over
 an 8-colour parity ordering of the lattice, so the lattice spacing in
 lattice units must be 1 (see Restrictions). 
 
@@ -161,7 +161,9 @@ microstructure only through the physics around it, so runs with and
 without voids can be compared site for site.  A different processor
 count changes the update order at subdomain boundaries and gives a
 different microstructure.  <I>additive/texture/kk</I> is repeatable in the
-same way, on any backend and any number of OpenMP threads: its kernels
+same way on each Kokkos backend, at any number of OpenMP threads
+(different backends, e.g. HIP and OpenMP, give different
+microstructures from the same seed): its kernels
 draw from streams keyed by the seed, step, rank, site and kernel, the
 solidification and smoothing kernels sweep the 8 parity colours in a
 per-step order keyed by the seed, and the nuclei of a step grow one

@@ -133,7 +133,8 @@ falls back to the host path.
 ## Validating the GPU port
 
 Microstructure output of both apps is repeatable bit for bit at a fixed seed and
-rank count (keyed RNG; the kk app on any backend/thread count), but the two apps
+rank count (keyed RNG; the kk app on each backend at any thread count, though HIP and
+OpenMP differ from each other), but the two apps
 differ from each other and change with the rank count. Only the
 **temperature field is deterministic across apps** — validate by comparing the CPU app
 (`additive/texture`) against the Kokkos app (`additive/texture/kk`) on the

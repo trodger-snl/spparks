@@ -80,7 +80,6 @@ struct GwCached {
 };
 #include <cstring>
 #include <limits>
-#include <random>
 
 using namespace SPPARKS_NS;
 using namespace MathConst;
@@ -278,7 +277,7 @@ void AppAdditiveTextureKokkos::allocate_app_views()
 void AppAdditiveTextureKokkos::init_app()
 {
   // Call parent initialization - sets up color lists, syncs neighbors, etc.
-  // Parent also initializes rand_pool with seed from MPI rank
+  // (The parent also builds rand_pool; this app's kernels draw from KeyedRNG.)
   AppPottsQuaternionKokkos::init_app();
   // The inherited colour sweep reads d_neighbor, which this app never fills
   // (it keeps the row-major d_neighbor_rm).
@@ -1505,14 +1504,14 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
    4. Copy nucleus spin, quaternion, G, and V to flipped sites
    5. Set flipped sites to solid_d = -nrefine-3 (ready for smoothing)
 
-   Note: Simplified parallel version - flips immediate neighbors only.
-   CPU version uses recursive shell-based expansion which is complex
-   to parallelize. This version achieves similar physics with simpler logic.
+   The nuclei of a step are grown one after another in site order (one
+   device thread) so a contested liquid site always goes to the same
+   nucleus; the run is then repeatable at a fixed seed and rank count.
 ------------------------------------------------------------------------- */
 
 int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_active_sites, int n_active)
 {
-  // Get device views - simple Views (atomic CAS makes neighbor writes race-safe)
+  // Get device views
   auto d_active_sites_local = d_active_sites;
   auto d_spin_local = d_spin;
   auto d_q0_local = d_q0;
@@ -1603,8 +1602,8 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
       // (6 faces, 12 edges, 8 corners), each shell in random order; when a
       // centre's shells run out, carry on from a random owned solid
       // neighbour of the same spin, until the nucleus is full or a round
-      // claims nothing. Claims are CAS'd, so competing nuclei never share a
-      // site; a lost claim does not count, as on the CPU.
+      // claims nothing. A site an earlier nucleus already took is not
+      // claimed again and does not count, as on the CPU.
       double nucleus_volume = d_nucleation_sizes_local(spin_i);
       double voxel_volume = dx_local * dx_local * dx_local;
       int remaining = static_cast<int>(Kokkos::round(nucleus_volume / voxel_volume));
@@ -1728,7 +1727,7 @@ uint64_t AppAdditiveTextureKokkos::rng_key() const
 // class (x&1, y&1, z&1) of the lattice coordinates: no two SC_26N neighbours
 // share a colour, so within one colour's launch every neighbour read is
 // race-free and sees the results of the colours already processed (parallel
-// Gauss-Seidel). The colour order is shuffled every step from the host RNG so
+// Gauss-Seidel). The colour order is shuffled every step (keyed by the seed and step) so
 // the update order is spatially random, like the CPU app's random sweep, and
 // never the site-index order (which grew grains along +x). Non-periodic
 // boxes only: parity would not match across a periodic wrap of odd length.
@@ -2458,9 +2457,9 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     auto d_active_sites_local = d_active_sites;
 
     // Scan the active-front list (size n_active) rather than nlocal: every
-    // smoothing-band site is in d_active_sites (band clause), and the active
-    // list is in ascending site-index order, so this builds the IDENTICAL
-    // compact smoothing list at O(n_active) instead of O(nlocal).
+    // smoothing-band site is in d_active_sites (band clause), so this builds
+    // the same compact smoothing list (in list order, which the parity-
+    // coloured smoothing does not depend on) at O(n_active), not O(nlocal).
     Kokkos::parallel_scan("BuildSmoothingList", n_active,
       KOKKOS_LAMBDA(int idx, int& offset, bool final) {
         const int i = d_active_sites_local(idx);

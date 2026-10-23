@@ -2,7 +2,7 @@
 # Run every deck pair with two binaries and diff the d6 sum/max columns.
 # usage: compare.sh <spparks-A> [spparks-B]      (default B = A: CPU vs kk only)
 # For each case the .cpu deck runs on A and the .kk deck on B; identical
-# columns are the pass criterion (the microstructure is not deterministic).
+# columns are the pass criterion (the microstructure differs between the two apps).
 cd "$(dirname "$0")"
 A=$1; B=${2:-$1}; fail=0
 d6() { awk '/^ *Time +Naccept/{p=1;next} p&&/^ *[0-9]/{print $1,$(NF-1),$NF} p&&/^Loop/{p=0}' "$1"; }

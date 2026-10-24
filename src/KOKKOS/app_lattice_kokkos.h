@@ -25,10 +25,22 @@
 
 namespace SPPARKS_NS {
 
-class AppLatticeKokkos : public AppLattice {
+// The Kokkos lattice layer as a mixin over any AppLattice subclass Base, so
+// a kk app can derive from its CPU twin (LatticeKokkos<AppPottsQuaternion>)
+// and inherit its parsing and host code; AppLatticeKokkos is the layer over
+// AppLattice itself. Member definitions: app_lattice_kokkos_impl.h, compiled
+// by explicit instantiation in the file that owns each Base.
+template <class Base>
+class LatticeKokkos : public Base {
 public:
-  AppLatticeKokkos(class SPPARKS *, int, char **);
-  virtual ~AppLatticeKokkos();
+  LatticeKokkos(class SPPARKS *, int, char **);
+  virtual ~LatticeKokkos();
+
+  // Base's members are dependent names inside this template
+  using Base::nlocal; using Base::nghost; using Base::nmax; using Base::maxneigh;
+  using Base::numneigh; using Base::neighbor; using Base::xyz; using Base::iarray;
+  using Base::darray; using Base::ninteger; using Base::ndouble; using Base::comm;
+  using Base::time; using Base::app_update;
 
   // === Kokkos type aliases ===
   using pool_type = Kokkos::Random_XorShift64_Pool<>;
@@ -131,7 +143,19 @@ public:
   // Shared neighbor sync. Public only because it defines a device lambda,
   // which nvcc rejects in a private or protected member function.
   void sync_neighbors_to_device();
+
+protected:
+  using typename Base::Set;
+  using Base::error; using Base::memory; using Base::domain; using Base::screen;
+  using Base::world; using Base::ranmaster; using Base::timer; using Base::output;
+  using Base::nprocs; using Base::nattempt; using Base::nsweeps; using Base::dt_rkmc;
+  using Base::allow_app_update; using Base::app_update_only; using Base::sweepflag;
+  using Base::sectorflag; using Base::nsector; using Base::ncolors; using Base::bothflag;
+  using Base::siteseeds; using Base::Lmask; using Base::set; using Base::nextoutput;
+  using Base::boundary_clear_mask;
 };
+
+using AppLatticeKokkos = LatticeKokkos<AppLattice>;
 
 }
 

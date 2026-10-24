@@ -23,46 +23,20 @@ AppStyle(potts/quaternion/kk,AppPottsQuaternionKokkos)
 #ifndef SPK_APP_POTTS_QUATERNION_KOKKOS_H
 #define SPK_APP_POTTS_QUATERNION_KOKKOS_H
 
-#include "app_lattice_kokkos.h"
+#include "app_potts_quaternion.h"
+#include "quaternion_kokkos.h"
 #include "crystalline_orientations/quaternion_ops.h"
 #include <vector>
 
 namespace SPPARKS_NS {
 
-class AppPottsQuaternionKokkos : public AppLatticeKokkos {
+// The CPU AppPottsQuaternion (arguments, symmetries, extract) with its device
+// layer; the colour sweep and host KMC are this class's, in KK_FLOAT precision.
+class AppPottsQuaternionKokkos : public QuaternionKokkos<AppPottsQuaternion> {
 public:
   AppPottsQuaternionKokkos(class SPPARKS *, int, char **);
-  virtual ~AppPottsQuaternionKokkos();
 
-  // App-specific data
-  int nspins;
-  int spin_lo = 1;                        // lowest valid spin (highest is nspins)
-  int *spin;                              // Host pointer (from iarray[0])
-  double *q0, *qx, *qy, *qz;              // Host pointers (from darray[])
-
-  // Device views
-  Kokkos::View<int*> d_spin;
-  Kokkos::View<double*> d_q0, d_qx, d_qy, d_qz;
-
-  // Symmetries (copied to device once, read-only)
-  Kokkos::View<double*> d_symmetries;
-  std::vector<double> symmetries;
-  int num_symmetries;
-  int crystal_index = 0;    // CRYSTAL::index of the symmetries
-  double theta_cut;
-
-  // "crystal" -> &crystal_index, for dump image ipf
-  virtual void *extract_app(char *) override;
-
-  // Override base class methods
-  virtual void grow_app() override;
   virtual void init_app() override;
-
-  // Implement required virtual methods from AppLatticeKokkos
-  virtual void sync_app_data_to_device() override;
-  virtual void sync_app_data_to_host() override;
-  void sync_ghosts_to_device() override;
-  virtual void allocate_app_views() override;
   virtual void sweep_color_kokkos(int color, int start, int count) override;
 
   // Site methods (required by AppLattice base)
@@ -187,13 +161,6 @@ protected:
 public:
   // Public for nvcc: a __global__ kernel's template argument must be accessible.
   struct ColorSweepFunctor;
-
-private:
-  // Temporary arrays for KMC
-  int *sites, *unique_neigh;
-
-  // Helper to normalize quaternion arrays on host
-  void normalize_host(int n, bool off_unit_only);
 };
 
 }

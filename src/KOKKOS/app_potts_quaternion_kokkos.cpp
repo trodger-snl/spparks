@@ -20,6 +20,7 @@
 #include "string.h"
 #include "stdlib.h"
 #include "app_potts_quaternion_kokkos.h"
+#include "app_lattice_kokkos_impl.h"
 #include "random_park.h"
 #include "random_mars.h"
 #include "random_park_kokkos.h"
@@ -34,106 +35,9 @@ using namespace SPPARKS_NS;
 /* ---------------------------------------------------------------------- */
 
 AppPottsQuaternionKokkos::AppPottsQuaternionKokkos(SPPARKS *spk, int narg, char **arg) :
-  AppLatticeKokkos(spk, narg, arg), num_symmetries(0), theta_cut(15.0)
+  QuaternionKokkos<AppPottsQuaternion>(spk, narg, arg)
 {
-  // Quaternion Potts setup
-  ninteger = 1;
-  ndouble = 4;
-  delpropensity = 1;
-  delevent = 0;
-  allow_kmc = 1;
-  allow_rejection = 1;
-  allow_masking = 1;
-  numrandom = 2;
-
-  create_arrays();
-
-  // Parse arguments
-  if (narg != 3 && narg != 4)
-    error->all(FLERR, "Illegal 'potts/quaternion/kk' command");
-
-  nspins = atoi(arg[1]);
-  if (nspins <= 0)
-    error->all(FLERR, "Illegal app_style command");
-
-  // Parse crystal structure
-  symmetries = CRYSTAL::get_symmetries(arg[2]);
-  crystal_index = CRYSTAL::index(arg[2]);
-  if (symmetries.empty())
-    error->all(FLERR, "Illegal 'potts/quaternion/kk' command; expected 'cubic', 'hcp', "
-                      "'trigonal', 'tetragonal' or 'orthorhombic'");
-
-  // Parse optional theta_cut
-  if (narg == 4) {
-    theta_cut = atof(arg[3]);
-    if (theta_cut <= 0.0)
-      error->all(FLERR, "Illegal 'potts/quaternion/kk' command; theta_cut must be positive");
-    const double max = CRYSTAL::max_disorientation(arg[2]);
-    if (theta_cut > max) {
-      char msg[160];
-      snprintf(msg, sizeof(msg), "Illegal 'potts/quaternion/kk' command; theta_cut for '%s' "
-               "must be between 0.0 and %g degrees", arg[2], max);
-      error->all(FLERR, msg);
-    }
-  }
-
-  // dt_sweep set in init_app() when maxneigh is known
-
-  // Initialize pointers
-  spin = nullptr;
-  q0 = qx = qy = qz = nullptr;
-  sites = nullptr;
-  unique_neigh = nullptr;
-
-  // Copy symmetries to device
-  num_symmetries = symmetries.size() / 4;
-  d_symmetries = Kokkos::View<double*>("symmetries", symmetries.size());
-  auto h_symmetries = Kokkos::create_mirror_view(d_symmetries);
-  for (size_t i = 0; i < symmetries.size(); i++) {
-    h_symmetries(i) = symmetries[i];
-  }
-  Kokkos::deep_copy(d_symmetries, h_symmetries);
-}
-
-/* ---------------------------------------------------------------------- */
-
-AppPottsQuaternionKokkos::~AppPottsQuaternionKokkos()
-{
-  memory->destroy(sites);
-  memory->destroy(unique_neigh);
-}
-
-/* ----------------------------------------------------------------------
-   set site value ptrs each time iarray/darray are reallocated
-------------------------------------------------------------------------- */
-
-void AppPottsQuaternionKokkos::grow_app()
-{
-  // Set spin pointer to iarray[0]
-  spin = iarray[0];
-
-  // Set quaternion pointers to darray
-  q0 = darray[0];
-  qx = darray[1];
-  qy = darray[2];
-  qz = darray[3];
-
-  // Call parent (allocates neighbors and calls allocate_app_views)
-  AppLatticeKokkos::grow_app();
-}
-
-/* ----------------------------------------------------------------------
-   allocate app-specific Kokkos views
-------------------------------------------------------------------------- */
-
-void AppPottsQuaternionKokkos::allocate_app_views()
-{
-  int nall = nlocal + nghost;
-  d_spin = site_view("spin", spin, nall);
-  d_q0 = site_view("q0", q0, nall);
-  d_qx = site_view("qx", qx, nall);
-  d_qy = site_view("qy", qy, nall);
-  d_qz = site_view("qz", qz, nall);
+  numrandom = 2;   // AppPotts sets the rest of the Potts flags
 }
 
 /* ----------------------------------------------------------------------
@@ -142,127 +46,14 @@ void AppPottsQuaternionKokkos::allocate_app_views()
 
 void AppPottsQuaternionKokkos::init_app()
 {
-  // Set dt_sweep now that maxneigh is known (matches CPU version)
-  dt_sweep = 1.0/maxneigh;
-
-  // Validate spin values
-  int flag = 0;
-  for (int i = 0; i < nlocal; i++)
-    if (spin[i] < spin_lo || spin[i] > nspins) flag = 1;
-  int flagall;
-  MPI_Allreduce(&flag, &flagall, 1, MPI_INT, MPI_SUM, world);
-  if (flagall) error->all(FLERR,"One or more sites have invalid values");
-
-  // Initialize random quaternions for sites that don't have one, keyed to each
-  // site's GLOBAL id. Same idiom as the color/strict per-site seeds in
-  // AppLattice::init(): the stream depends only on the deck's `seed` and the
-  // site id, so the field is repeatable run to run AND identical at any rank
-  // count -- which is what makes an np=1 vs np=N regression test possible.
-  // Derived from ranmaster's stored seed rather than ranmaster->uniform() so
-  // that no other stream shifts.
-  const uint64_t qseed = (uint64_t) ranmaster->initial_seed();
-
-  #pragma omp parallel for schedule(static)
-  for (int i = 0; i < nlocal; i++) {
-    double norm = sqrt(q0[i]*q0[i] + qx[i]*qx[i] + qy[i]*qy[i] + qz[i]*qz[i]);
-    if (norm < 1.0e-6) {
-      quaternion::SiteOrientationRNG rng(qseed, (uint64_t) id[i]);
-      std::vector<double> quat = quaternion::generate_unit_quaternion(rng);
-      q0[i] = quat[0];
-      qx[i] = quat[1];
-      qy[i] = quat[2];
-      qz[i] = quat[3];
-    }
-  }
-
-  // Allocate temp arrays for KMC if needed
+  // host KMC scratch (AppPotts and AppPottsQuaternion free it)
   if (allow_kmc) {
-    memory->destroy(sites);
-    memory->destroy(unique_neigh);
-    memory->create(sites, 1 + maxneigh, "app:sites");
-    memory->create(unique_neigh, 1 + maxneigh, "app:unique_neigh");
+    delete[] sites;
+    delete[] unique_neigh;
+    sites = new int[1 + maxneigh];
+    unique_neigh = new int[1 + maxneigh];
   }
-
-  // Call parent (validates coloring, sets up color lists, syncs neighbors)
-  AppLatticeKokkos::init_app();
-
-  // Normalise once, in place on the host, then upload an exact copy: the
-  // host and device hold the same bits from here on.
-  normalize_host(nlocal + nghost, false);
-  sync_app_data_to_device();
-}
-
-/* ----------------------------------------------------------------------
-   normalise host quaternions in place. off_unit_only: leave any quaternion
-   within 1e-10 of unit length untouched.
-
-   Renormalising is not idempotent in the last bit -- a value can flip between
-   two neighbours on alternate passes -- so values that came from the device
-   must never be renormalised, or the trajectory depends on how often the data
-   happened to cross the bus (rank count, number of runs). init_app does the
-   one full pass; later uploads only fix clearly non-unit input (a `set`
-   between runs). Per-element independent, so threading is bit-identical.
-------------------------------------------------------------------------- */
-
-void AppPottsQuaternionKokkos::normalize_host(int n, bool off_unit_only)
-{
-  #pragma omp parallel for schedule(static)
-  for (int i = 0; i < n; i++) {
-    double norm = sqrt(q0[i]*q0[i] + qx[i]*qx[i] + qy[i]*qy[i] + qz[i]*qz[i]);
-    if (norm > 1.0e-15 && (!off_unit_only || fabs(norm - 1.0) > 1.0e-10)) {
-      double inv_norm = 1.0 / norm;
-      q0[i] *= inv_norm;
-      qx[i] *= inv_norm;
-      qy[i] *= inv_norm;
-      qz[i] *= inv_norm;
-    }
-  }
-}
-
-/* ----------------------------------------------------------------------
-   sync spin and quaternion data to device: an exact copy, apart from
-   normalising clearly non-unit host input (see normalize_host)
-------------------------------------------------------------------------- */
-
-void AppPottsQuaternionKokkos::sync_app_data_to_device()
-{
-  const int nall = nlocal + nghost;
-  normalize_host(nall, true);
-  upload_range(d_spin, spin, 0, nall);
-  upload_range(d_q0, q0, 0, nall);
-  upload_range(d_qx, qx, 0, nall);
-  upload_range(d_qy, qy, 0, nall);
-  upload_range(d_qz, qz, 0, nall);
-}
-
-/* ----------------------------------------------------------------------
-   sync owned spin and quaternion data to host: an exact copy. Host ghost
-   entries come from the ghost exchange, not from here.
-------------------------------------------------------------------------- */
-
-void AppPottsQuaternionKokkos::sync_app_data_to_host()
-{
-  download_range(spin, d_spin, nlocal);
-  download_range(q0, d_q0, nlocal);
-  download_range(qx, d_qx, nlocal);
-  download_range(qy, d_qy, nlocal);
-  download_range(qz, d_qz, nlocal);
-}
-
-/* ----------------------------------------------------------------------
-   upload the ghost range after a forward exchange. A pure copy: ghosts are
-   another rank's owned values, which are already unit (the run-start upload
-   normalises, and sweeps only copy whole quaternions between sites).
-------------------------------------------------------------------------- */
-
-void AppPottsQuaternionKokkos::sync_ghosts_to_device()
-{
-  const int first = nlocal, last = nlocal + nghost;
-  upload_range(d_spin, spin, first, last);
-  upload_range(d_q0, q0, first, last);
-  upload_range(d_qx, qx, first, last);
-  upload_range(d_qy, qy, first, last);
-  upload_range(d_qz, qz, first, last);
+  QuaternionKokkos<AppPottsQuaternion>::init_app();
 }
 
 /* ----------------------------------------------------------------------
@@ -618,9 +409,6 @@ void AppPottsQuaternionKokkos::sweep_color_kokkos(int color, int start, int coun
   naccept += naccept_color;
 }
 
-/* ---------------------------------------------------------------------- */
-
-void *AppPottsQuaternionKokkos::extract_app(char *name) {
-  if (strcmp(name, "crystal") == 0) return (void *) &crystal_index;
-  return nullptr;
+namespace SPPARKS_NS {
+template class LatticeKokkos<AppPottsQuaternion>;
 }

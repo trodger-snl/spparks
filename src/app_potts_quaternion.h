@@ -35,7 +35,7 @@ namespace SPPARKS_NS {
 class AppPottsQuaternion : public AppPotts {
 public:
   AppPottsQuaternion(class SPPARKS *, int, char **);
-  virtual ~AppPottsQuaternion() {}
+  virtual ~AppPottsQuaternion() { delete[] unique_neigh; }
   virtual void init_app();
   virtual void grow_app();
   virtual double site_energy(int i);

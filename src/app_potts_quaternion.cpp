@@ -34,33 +34,33 @@ using namespace SPPARKS_NS;
 AppPottsQuaternion::AppPottsQuaternion(SPPARKS *spk, int narg, char **arg)
     : AppPotts(spk, narg, arg), symmetries(), q0(nullptr), qx(nullptr),
       qy(nullptr), qz(nullptr), theta_cut(15.0), unique_neigh(nullptr) {
-  // parse arguments for PottsNeighOnly class only, not children
+  // parse arguments for this class and its kk twin only, not children
   // args: nspins, crystal structure, Read-Shockley angle
 
-  if (strcmp(style, "potts/quaternion") != 0)
+  if (strcmp(style, "potts/quaternion") != 0 && strcmp(style, "potts/quaternion/kk") != 0)
     return;
 
-  if (narg != 3 && narg != 4)
-    error->all(FLERR, "Illegal 'potts/quaternion' command");
+  char msg[200];
+  auto illegal = [&](const char *why) {
+    snprintf(msg, sizeof(msg), "Illegal '%s' command%s", style, why);
+    error->all(FLERR, msg);
+  };
+  if (narg != 3 && narg != 4) illegal("");
 
   // Check crystal structure input
   symmetries = CRYSTAL::get_symmetries(arg[2]);
   crystal_index = CRYSTAL::index(arg[2]);
   if (symmetries.empty())
-    error->all(FLERR, "Illegal 'potts/quaternion command; expected 'cubic', "
-                      "'hcp', 'trigonal', 'tetragonal' or 'orthorhombic'");
+    illegal("; expected 'cubic', 'hcp', 'trigonal', 'tetragonal' or 'orthorhombic'");
   if (4 == narg) {
     theta_cut = atof(arg[3]);
-    if (theta_cut <= 0.0)
-      error->all(
-          FLERR,
-          "Illegal 'potts/quaternion command; theta_cut must be positive");
+    if (theta_cut <= 0.0) illegal("; theta_cut must be positive");
     const double max = CRYSTAL::max_disorientation(arg[2]);
     if (theta_cut > max) {
-      char msg[160];
-      snprintf(msg, sizeof(msg), "Illegal 'potts/quaternion command; theta_cut for '%s' "
-               "must be between 0.0 and %g degrees", arg[2], max);
-      error->all(FLERR, msg);
+      char why[120];
+      snprintf(why, sizeof(why), "; theta_cut for '%s' must be between 0.0 and %g degrees",
+               arg[2], max);
+      illegal(why);
     }
   } else {
     // Default value theta_cut=15.0

@@ -49,9 +49,11 @@ AppPottsQuaternion::AppPottsQuaternion(SPPARKS *spk, int narg, char **arg)
     symmetries = CUBIC::get_symmetries();
   } else if (strcmp(arg[2], "hcp") == 0) {
     symmetries = HCP::get_symmetries();
+  } else if (strcmp(arg[2], "trigonal") == 0) {
+    symmetries = TRIGONAL::get_symmetries();
   } else {
     error->all(FLERR, "Illegal 'potts/quaternion command; expected "
-                      "'cubic' or 'hcp'");
+                      "'cubic', 'hcp' or 'trigonal'");
   }
   if (4 == narg) {
     theta_cut = atof(arg[3]);
@@ -67,6 +69,10 @@ AppPottsQuaternion::AppPottsQuaternion(SPPARKS *spk, int narg, char **arg)
       error->all(FLERR, "Illegal 'potts/quaternion command; "
                         "theta_cut for 'hcp' must "
                         "be between 0.0 and 93.8 degrees");
+    } else if (strcmp(arg[2], "trigonal") == 0 && theta_cut > 104.4) {
+      error->all(FLERR, "Illegal 'potts/quaternion command; "
+                        "theta_cut for 'trigonal' must "
+                        "be between 0.0 and 104.4 degrees");
     }
   } else {
     // Default value theta_cut=15.0

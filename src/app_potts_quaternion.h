@@ -58,7 +58,7 @@ protected:
 protected:
   int *unique_neigh;
 
-  // symmetries: expect 'cubic'(24) or 'hcp'(12)
+  // symmetries: expect 'cubic'(24), 'hcp'(12) or 'trigonal'(6)
   vector<double> symmetries;
   
   // Read-Shockley disorientation cutoff

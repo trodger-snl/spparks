@@ -62,8 +62,10 @@ AppPottsQuaternionKokkos::AppPottsQuaternionKokkos(SPPARKS *spk, int narg, char 
     symmetries = CUBIC::get_symmetries();
   } else if (strcmp(arg[2], "hcp") == 0) {
     symmetries = HCP::get_symmetries();
+  } else if (strcmp(arg[2], "trigonal") == 0) {
+    symmetries = TRIGONAL::get_symmetries();
   } else {
-    error->all(FLERR, "Illegal 'potts/quaternion/kk' command; expected 'cubic' or 'hcp'");
+    error->all(FLERR, "Illegal 'potts/quaternion/kk' command; expected 'cubic', 'hcp' or 'trigonal'");
   }
 
   // Parse optional theta_cut
@@ -77,6 +79,9 @@ AppPottsQuaternionKokkos::AppPottsQuaternionKokkos(SPPARKS *spk, int narg, char 
     } else if (strcmp(arg[2], "hcp") == 0 && theta_cut > 93.8) {
       error->all(FLERR, "Illegal 'potts/quaternion/kk' command; "
                         "theta_cut for 'hcp' must be between 0.0 and 93.8 degrees");
+    } else if (strcmp(arg[2], "trigonal") == 0 && theta_cut > 104.4) {
+      error->all(FLERR, "Illegal 'potts/quaternion/kk' command; "
+                        "theta_cut for 'trigonal' must be between 0.0 and 104.4 degrees");
     }
   }
 

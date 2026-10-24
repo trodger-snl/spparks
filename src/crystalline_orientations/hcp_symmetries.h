@@ -131,6 +131,23 @@ inline vector<double> get_symmetries() {
 
 } // namespace HCP
 
+namespace TRIGONAL {
+
+inline vector<double> get_symmetries() {
+  // Trigonal (point group 32, Laue -3m1) rotational symmetries: the subgroup
+  // of the HCP set above with the 3-fold c axis (0, +-120 degrees) and the
+  // three 2-fold 'corner' axes (|| a_1, a_2, a_3).
+  const vector<double> hcp = HCP::get_symmetries();
+  const std::size_t keep[6] = {0, 2, 4, 6, 7, 8};
+  vector<double> uq(6 * 4);
+  for (std::size_t i = 0; i < 6; i++)
+    for (std::size_t j = 0; j < 4; j++)
+      uq[4 * i + j] = hcp[4 * keep[i] + j];
+  return uq;
+}
+
+} // namespace TRIGONAL
+
 } // namespace SPPARKS_NS
 
 #endif

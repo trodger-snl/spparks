@@ -45,6 +45,7 @@ AppPottsQuaternion::AppPottsQuaternion(SPPARKS *spk, int narg, char **arg)
 
   // Check crystal structure input
   symmetries = CRYSTAL::get_symmetries(arg[2]);
+  crystal_index = CRYSTAL::index(arg[2]);
   if (symmetries.empty())
     error->all(FLERR, "Illegal 'potts/quaternion command; expected 'cubic', "
                       "'hcp', 'trigonal', 'tetragonal' or 'orthorhombic'");
@@ -244,4 +245,11 @@ double AppPottsQuaternion::site_propensity(int) {
   error->all(FLERR, "Illegal potts/quaternion solver used.  KMC not "
                     "implemented.  Use rKMC.");
   return -1.0;
+}
+
+/* ---------------------------------------------------------------------- */
+
+void *AppPottsQuaternion::extract_app(char *name) {
+  if (strcmp(name, "crystal") == 0) return (void *) &crystal_index;
+  return nullptr;
 }

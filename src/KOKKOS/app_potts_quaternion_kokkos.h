@@ -47,7 +47,11 @@ public:
   Kokkos::View<double*> d_symmetries;
   std::vector<double> symmetries;
   int num_symmetries;
+  int crystal_index = 0;    // CRYSTAL::index of the symmetries
   double theta_cut;
+
+  // "crystal" -> &crystal_index, for dump image ipf
+  virtual void *extract_app(char *) override;
 
   // Override base class methods
   virtual void grow_app() override;

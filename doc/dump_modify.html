@@ -80,7 +80,7 @@ this keyword applies only to the <I>vtk</I> dump style
 <LI>these keywords apply only to the <I>image</I> <A HREF = "dump_image.html">style</A> 
 
 <LI>keyword = <I>backcolor</I> or <I>boundcolor</I> or <I>boxcolor</I> or <I>color</I> or <I>cwrap</I> or 
-<I>dwrap</I> or <I>ipf</I> or <I>scolor</I> or <I>sdiam</I> or <I>smap</I> 
+<I>dwrap</I> or <I>ipf</I> or <I>ipf_crystal</I> or <I>scolor</I> or <I>sdiam</I> or <I>smap</I> 
 
 <PRE>  <I>backcolor</I> arg = color
     color = name of color for background
@@ -95,9 +95,10 @@ this keyword applies only to the <I>vtk</I> dump style
     yes/no = do or do not wrap out-of-range color values into the defined crange
   <I>dwrap</I> arg = <I>yes</I> or <I>no</I>
     yes/no = do or do not wrap out-of-range diameter values into the defined drange
-  <I>ipf</I> args = Dx Dy Dz [crystal]
+  <I>ipf</I> args = Dx Dy Dz
     Dx,Dy,Dz = sample direction for inverse-pole-figure coloring (default 0 0 1)
-    crystal = optional <I>cubic</I> (default), <I>hcp</I>, <I>trigonal</I>, <I>tetragonal</I> or <I>orthorhombic</I>
+  <I>ipf_crystal</I> arg = <I>auto</I> (default) or <I>cubic</I> or <I>hcp</I> or <I>trigonal</I> or <I>tetragonal</I> or <I>orthorhombic</I>
+    auto = use the application's crystal symmetry
   <I>scolor</I> args = I color
     I = integer value or range of values (see below)
     color = name of color or color1/color2/... or <I>random</I>
@@ -491,10 +492,14 @@ as how the <I>cwrap</I> keyword operates of colors, as described above.
 <A HREF = "dump_image.html">dump image</A> <I>color</I> setting is <I>ipf</I>.  The vector need
 not be normalized.  The default is 0 0 1, i.e. the color of each site
 shows which crystal direction points along +z (the build direction in
-the additive apps).  The optional <I>crystal</I> selects the symmetry whose
-fundamental sector the coloring uses (default cubic); set it to match
-the crystal of the application.  See the <A HREF = "dump_image.html">dump image</A>
-doc page.
+the additive apps).  See the <A HREF = "dump_image.html">dump image</A> doc page.
+</P>
+<P>The <I>ipf_crystal</I> keyword sets the crystal symmetry whose fundamental
+sector the <I>ipf</I> coloring uses.  The default <I>auto</I> takes it from the
+application when each image is drawn: the crystal argument of
+<A HREF = "app_potts_quaternion.html">potts/quaternion</A>, or the <I>crystal</I> command
+of the <A HREF = "app_additive_texture.html">additive/texture</A> apps (cubic for an
+application without one).  A crystal name overrides it.
 </P>
 <P>The <I>scolor</I> keyword can be used with the <A HREF = "dump_image.html">dump image</A>
 command, when its site color setting is an integer attribute, and a

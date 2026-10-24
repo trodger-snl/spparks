@@ -41,6 +41,8 @@ public:
   virtual double site_energy(int i);
   virtual void site_event_rejection(int, class RandomPark *);
   virtual double site_propensity(int);
+  // "crystal" -> &crystal_index, for dump image ipf
+  virtual void *extract_app(char *);
 
   friend struct SiteState;
   struct SiteState {
@@ -61,6 +63,7 @@ protected:
   // symmetries: 'cubic'(24), 'hcp'(12), 'trigonal'(6), 'tetragonal'(8) or
   // 'orthorhombic'(4); see crystalline_orientations/crystal_symmetries.h
   vector<double> symmetries;
+  int crystal_index = 0;     // CRYSTAL::index of the symmetries
   
   // Read-Shockley disorientation cutoff
   double theta_cut;

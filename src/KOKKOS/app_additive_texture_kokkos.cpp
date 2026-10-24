@@ -35,6 +35,7 @@
 #include "temperature_source_hdf5_unstructured.h"
 #include "grain_walk.h"
 #include "random_mars.h"
+#include "crystalline_orientations/crystal_symmetries.h"
 #include "crystalline_orientations/quaternion.h"
 #include <Kokkos_Sort.hpp>
 #include <type_traits>
@@ -290,6 +291,7 @@ void AppAdditiveTextureKokkos::init_app()
   check_texture(error, screen, domain->me);
   check_material_complete(error, *thermal);
   check_sector_stop(error, nstop, tstop);
+  crystal_index = CRYSTAL::index(crystal.c_str());
   d_growth_dirs = Kokkos::View<double*>("growth_dirs", growth_dirs.size());
   Kokkos::deep_copy(d_growth_dirs, Kokkos::View<const double*, Kokkos::HostSpace,
                     Kokkos::MemoryTraits<Kokkos::Unmanaged>>(growth_dirs.data(), growth_dirs.size()));

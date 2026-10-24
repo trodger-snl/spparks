@@ -141,11 +141,11 @@ crystal's Laue group, red at [001] (for cubic, green [101] and
 blue [111]).  This requires an application that stores a unit
 quaternion per site in <I>d1</I>-<I>d4</I>, such as
 <A HREF = "app_potts_quaternion.html">potts/quaternion</A> and the additive/texture
-apps.  The symmetry defaults to cubic (m-3m) and is not taken from the
-application: for <I>hcp</I> (6/mmm), <I>trigonal</I> (-3m), <I>tetragonal</I>
-(4/mmm) or <I>orthorhombic</I> (mmm) orientations, name it as the optional
-last argument of <A HREF = "dump_modify.html">dump_modify ipf</A>, which also sets
-the reference direction (default +z).
+apps.  The symmetry is the application's crystal (<I>cubic</I> m-3m, <I>hcp</I>
+6/mmm, <I>trigonal</I> -3m, <I>tetragonal</I> 4/mmm or <I>orthorhombic</I> mmm)
+unless <A HREF = "dump_modify.html">dump_modify ipf_crystal</A> names another.  The
+reference direction defaults to +z and can be changed with <A HREF = "dump_modify.html">dump_modify
+ipf</A>.
 </P>
 <P>If an integer attribute such as <I>site</I> or <I>i2</I> is specified for the
 <I>color</I> setting, then you must use the optional <I>crange</I> keyword to

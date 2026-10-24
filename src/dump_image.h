@@ -56,7 +56,8 @@ class DumpImage : public DumpText {
   double boxdiam,axeslen,axesdiam; // params for drawing box and axes
   int cwrap,dwrap;                 // 0/1 for wrapping color/diam to c/drange
   double ipfdir[3];                // sample direction for ipf color (unit)
-  int ipfcrystal;                  // CRYSTAL::index of the ipf symmetry (0 = cubic)
+  int ipfcrystal;                  // CRYSTAL::index of the ipf symmetry, -1 = the app's
+  int ipfcur;                      // symmetry of the image being drawn
 
   int viewflag;                    // overall view is static or dynamic
 

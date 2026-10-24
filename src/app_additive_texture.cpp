@@ -492,6 +492,7 @@ void AppAdditiveTexture::init_app()
   check_material_complete(error, *thermal);
   check_sector_stop(error, nstop, tstop);
   symmetries = CRYSTAL::get_symmetries(crystal.c_str());
+  crystal_index = CRYSTAL::index(crystal.c_str());
 
   // Duplicate parent's array allocation logic without quaternion randomization
   delete[] sites;

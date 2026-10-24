@@ -96,7 +96,7 @@ DumpImage::DumpImage(SPPARKS *spk, int narg, char **arg) :
   cxstr = cystr = czstr = NULL;
   cwrap = dwrap = 0;
   ipfdir[0] = ipfdir[1] = 0.0; ipfdir[2] = 1.0;
-  ipfcrystal = 0;
+  ipfcrystal = -1;
 
   if (domain->dimension == 3) {
     image->up[0] = 0.0; image->up[1] = 0.0; image->up[2] = 1.0;
@@ -602,6 +602,13 @@ void DumpImage::create_image()
   double *color;
   double ipfrgb[3];
 
+  // ipf symmetry: dump_modify ipf_crystal, else the app's (cubic if it has none)
+  ipfcur = ipfcrystal;
+  if (scolor == IPF && ipfcur < 0) {
+    int *c = (int *) app->extract((char *) "crystal");
+    ipfcur = c ? *c : 0;
+  }
+
   // render my sites
 
   double **xyz = app->xyz;
@@ -840,10 +847,19 @@ int DumpImage::modify_param(int narg, char **arg)
     double n = sqrt(ipfdir[0]*ipfdir[0]+ipfdir[1]*ipfdir[1]+ipfdir[2]*ipfdir[2]);
     if (n == 0.0) error->all(FLERR,"Illegal dump_modify command");
     ipfdir[0] /= n; ipfdir[1] /= n; ipfdir[2] /= n;
-    ipfcrystal = narg > 4 ? CRYSTAL::index(arg[4]) : -1;
-    if (ipfcrystal >= 0) return 5;
-    ipfcrystal = 0;                  // no crystal given: cubic
     return 4;
+  }
+
+  if (strcmp(arg[0],"ipf_crystal") == 0) {
+    if (narg < 2) error->all(FLERR,"Illegal dump_modify command");
+    if (strcmp(arg[1],"auto") == 0) ipfcrystal = -1;
+    else if ((ipfcrystal = CRYSTAL::index(arg[1])) < 0) {
+      char msg[256];
+      snprintf(msg,sizeof(msg),"Dump_modify ipf_crystal: unknown crystal '%s'; expected "
+               "auto, cubic, hcp, trigonal, tetragonal or orthorhombic",arg[1]);
+      error->all(FLERR,msg);
+    }
+    return 2;
   }
 
   if (strcmp(arg[0],"cwrap") == 0) {
@@ -987,7 +1003,7 @@ void DumpImage::bounds(char *str, int lo, int hi, int &nlo, int &nhi)
 
 /* ----------------------------------------------------------------------
    inverse-pole-figure colour of site i for the sample direction ipfdir
-   quaternion (w,x,y,z) = d1-d4; symmetry ipfcrystal; EDAX/TSL colour key as in
+   quaternion (w,x,y,z) = d1-d4; symmetry ipfcur; EDAX/TSL colour key as in
    MTEX/orix (see ipf_color.h), the key spparks-micro-analysis
    generate_ipf_colors uses, so images match that tooling
 ------------------------------------------------------------------------- */
@@ -996,5 +1012,5 @@ void DumpImage::ipf_color(int i, double *rgb)
 {
   double **darray = app->darray;
   ipf::quaternion_rgb(darray[0][i],darray[1][i],darray[2][i],darray[3][i],
-                      ipfdir,rgb,ipfcrystal);
+                      ipfdir,rgb,ipfcur);
 }

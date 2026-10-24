@@ -128,11 +128,11 @@ crystal's Laue group, red at \[001\] (for cubic, green \[101\] and
 blue \[111\]).  This requires an application that stores a unit
 quaternion per site in {d1}-{d4}, such as
 "potts/quaternion"_app_potts_quaternion.html and the additive/texture
-apps.  The symmetry defaults to cubic (m-3m) and is not taken from the
-application: for {hcp} (6/mmm), {trigonal} (-3m), {tetragonal}
-(4/mmm) or {orthorhombic} (mmm) orientations, name it as the optional
-last argument of "dump_modify ipf"_dump_modify.html, which also sets
-the reference direction (default +z).
+apps.  The symmetry is the application's crystal ({cubic} m-3m, {hcp}
+6/mmm, {trigonal} -3m, {tetragonal} 4/mmm or {orthorhombic} mmm)
+unless "dump_modify ipf_crystal"_dump_modify.html names another.  The
+reference direction defaults to +z and can be changed with "dump_modify
+ipf"_dump_modify.html.
 
 If an integer attribute such as {site} or {i2} is specified for the
 {color} setting, then you must use the optional {crange} keyword to

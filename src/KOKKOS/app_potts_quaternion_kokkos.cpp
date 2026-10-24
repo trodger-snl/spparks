@@ -58,6 +58,7 @@ AppPottsQuaternionKokkos::AppPottsQuaternionKokkos(SPPARKS *spk, int narg, char 
 
   // Parse crystal structure
   symmetries = CRYSTAL::get_symmetries(arg[2]);
+  crystal_index = CRYSTAL::index(arg[2]);
   if (symmetries.empty())
     error->all(FLERR, "Illegal 'potts/quaternion/kk' command; expected 'cubic', 'hcp', "
                       "'trigonal', 'tetragonal' or 'orthorhombic'");
@@ -615,4 +616,11 @@ void AppPottsQuaternionKokkos::sweep_color_kokkos(int color, int start, int coun
   int naccept_color = 0;
   Kokkos::parallel_reduce("QuaternionSweep", count, functor, naccept_color);
   naccept += naccept_color;
+}
+
+/* ---------------------------------------------------------------------- */
+
+void *AppPottsQuaternionKokkos::extract_app(char *name) {
+  if (strcmp(name, "crystal") == 0) return (void *) &crystal_index;
+  return nullptr;
 }

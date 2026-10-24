@@ -96,6 +96,7 @@ DumpImage::DumpImage(SPPARKS *spk, int narg, char **arg) :
   cxstr = cystr = czstr = NULL;
   cwrap = dwrap = 0;
   ipfdir[0] = ipfdir[1] = 0.0; ipfdir[2] = 1.0;
+  ipfcrystal = 0;
 
   if (domain->dimension == 3) {
     image->up[0] = 0.0; image->up[1] = 0.0; image->up[2] = 1.0;
@@ -839,6 +840,10 @@ int DumpImage::modify_param(int narg, char **arg)
     double n = sqrt(ipfdir[0]*ipfdir[0]+ipfdir[1]*ipfdir[1]+ipfdir[2]*ipfdir[2]);
     if (n == 0.0) error->all(FLERR,"Illegal dump_modify command");
     ipfdir[0] /= n; ipfdir[1] /= n; ipfdir[2] /= n;
+    if (narg > 4 && CRYSTAL::index(arg[4]) >= 0) {
+      ipfcrystal = CRYSTAL::index(arg[4]);
+      return 5;
+    }
     return 4;
   }
 
@@ -983,7 +988,7 @@ void DumpImage::bounds(char *str, int lo, int hi, int &nlo, int &nhi)
 
 /* ----------------------------------------------------------------------
    inverse-pole-figure colour of site i for the sample direction ipfdir
-   quaternion (w,x,y,z) = d1-d4; cubic symmetry; EDAX/TSL colour key as in
+   quaternion (w,x,y,z) = d1-d4; symmetry ipfcrystal; EDAX/TSL colour key as in
    MTEX/orix (see ipf_color.h), the key spparks-micro-analysis
    generate_ipf_colors uses, so images match that tooling
 ------------------------------------------------------------------------- */
@@ -992,5 +997,5 @@ void DumpImage::ipf_color(int i, double *rgb)
 {
   double **darray = app->darray;
   ipf::quaternion_rgb(darray[0][i],darray[1][i],darray[2][i],darray[3][i],
-                      ipfdir,rgb);
+                      ipfdir,rgb,ipfcrystal);
 }

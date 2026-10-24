@@ -123,16 +123,16 @@ setting with any valid atom attribute.
 If {ipf} is specified for the {color} setting, each site is colored by
 the inverse pole figure (IPF) of its crystallographic orientation for a
 reference sample direction, as in EBSD maps: the EDAX/TSL color key
-(as implemented in MTEX and orix) with red for \[001\], green for
-\[101\] and blue for \[111\] (cubic symmetry).  This requires an
-application that stores a unit quaternion per site in {d1}-{d4}, such
-as "potts/quaternion"_app_potts_quaternion.html and the additive/texture
-apps.  Only cubic crystal symmetry is currently supported: the coloring
-folds every direction into the cubic \[001\]-\[011\]-\[111\]
-triangle regardless of the symmetry the application was given, so
-{ipf} images of hcp orientations are not meaningful.  The reference
-direction defaults to +z and can be changed with the "dump_modify
-ipf"_dump_modify.html command.
+(as implemented in MTEX and orix) on the fundamental sector of the
+crystal's Laue group, red at \[001\] (for cubic, green \[101\] and
+blue \[111\]).  This requires an application that stores a unit
+quaternion per site in {d1}-{d4}, such as
+"potts/quaternion"_app_potts_quaternion.html and the additive/texture
+apps.  The symmetry defaults to cubic (m-3m) and is not taken from the
+application: for {hcp} (6/mmm), {trigonal} (-3m), {tetragonal}
+(4/mmm) or {orthorhombic} (mmm) orientations, name it as the optional
+last argument of "dump_modify ipf"_dump_modify.html, which also sets
+the reference direction (default +z).
 
 If an integer attribute such as {site} or {i2} is specified for the
 {color} setting, then you must use the optional {crange} keyword to

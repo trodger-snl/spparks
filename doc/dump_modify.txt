@@ -81,8 +81,9 @@ keyword = {backcolor} or {boundcolor} or {boxcolor} or {color} or {cwrap} or
     yes/no = do or do not wrap out-of-range color values into the defined crange
   {dwrap} arg = {yes} or {no}
     yes/no = do or do not wrap out-of-range diameter values into the defined drange
-  {ipf} args = Dx Dy Dz
+  {ipf} args = Dx Dy Dz \[crystal\]
     Dx,Dy,Dz = sample direction for inverse-pole-figure coloring (default 0 0 1)
+    crystal = optional {cubic} (default), {hcp}, {trigonal}, {tetragonal} or {orthorhombic}
   {scolor} args = I color
     I = integer value or range of values (see below)
     color = name of color or color1/color2/... or {random}
@@ -473,8 +474,10 @@ The {ipf} keyword sets the reference sample direction used when the
 "dump image"_dump_image.html {color} setting is {ipf}.  The vector need
 not be normalized.  The default is 0 0 1, i.e. the color of each site
 shows which crystal direction points along +z (the build direction in
-the additive apps).  The coloring assumes cubic crystal symmetry; see
-the "dump image"_dump_image.html doc page.
+the additive apps).  The optional {crystal} selects the symmetry whose
+fundamental sector the coloring uses (default cubic); set it to match
+the crystal of the application.  See the "dump image"_dump_image.html
+doc page.
 
 The {scolor} keyword can be used with the "dump image"_dump_image.html
 command, when its site color setting is an integer attribute, and a

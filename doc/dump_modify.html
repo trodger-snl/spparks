@@ -95,8 +95,9 @@ this keyword applies only to the <I>vtk</I> dump style
     yes/no = do or do not wrap out-of-range color values into the defined crange
   <I>dwrap</I> arg = <I>yes</I> or <I>no</I>
     yes/no = do or do not wrap out-of-range diameter values into the defined drange
-  <I>ipf</I> args = Dx Dy Dz
+  <I>ipf</I> args = Dx Dy Dz [crystal]
     Dx,Dy,Dz = sample direction for inverse-pole-figure coloring (default 0 0 1)
+    crystal = optional <I>cubic</I> (default), <I>hcp</I>, <I>trigonal</I>, <I>tetragonal</I> or <I>orthorhombic</I>
   <I>scolor</I> args = I color
     I = integer value or range of values (see below)
     color = name of color or color1/color2/... or <I>random</I>
@@ -490,8 +491,10 @@ as how the <I>cwrap</I> keyword operates of colors, as described above.
 <A HREF = "dump_image.html">dump image</A> <I>color</I> setting is <I>ipf</I>.  The vector need
 not be normalized.  The default is 0 0 1, i.e. the color of each site
 shows which crystal direction points along +z (the build direction in
-the additive apps).  The coloring assumes cubic crystal symmetry; see
-the <A HREF = "dump_image.html">dump image</A> doc page.
+the additive apps).  The optional <I>crystal</I> selects the symmetry whose
+fundamental sector the coloring uses (default cubic); set it to match
+the crystal of the application.  See the <A HREF = "dump_image.html">dump image</A>
+doc page.
 </P>
 <P>The <I>scolor</I> keyword can be used with the <A HREF = "dump_image.html">dump image</A>
 command, when its site color setting is an integer attribute, and a

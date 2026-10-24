@@ -49,6 +49,21 @@ public:
   Kokkos::View<double*> d_symmetries;
   int num_symmetries = 0;
 
+  // Uniform random unit quaternion (normalised 4D Gaussian), 4 draws
+  template <typename RandGenType>
+  KOKKOS_INLINE_FUNCTION static void generate_random_quaternion(double *q, RandGenType &rand_gen) {
+    double u1 = rand_gen.drand(), u2 = rand_gen.drand();
+    const double mag1 = Kokkos::sqrt(-2.0 * Kokkos::log(u1));
+    q[0] = mag1 * Kokkos::cos(2.0 * M_PI * u2);
+    q[1] = mag1 * Kokkos::sin(2.0 * M_PI * u2);
+    u1 = rand_gen.drand();
+    u2 = rand_gen.drand();
+    const double mag2 = Kokkos::sqrt(-2.0 * Kokkos::log(u1));
+    q[2] = mag2 * Kokkos::cos(2.0 * M_PI * u2);
+    q[3] = mag2 * Kokkos::sin(2.0 * M_PI * u2);
+    quaternion::normalize(q);
+  }
+
   void grow_app() override {
     Base::grow_app();   // spin, q0..qz (and a subclass's own aliases)
     LK::grow_app();

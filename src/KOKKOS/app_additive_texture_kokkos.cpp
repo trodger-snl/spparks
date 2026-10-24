@@ -17,12 +17,13 @@
    Contributing author: AI-assisted implementation (Phase 2: Temperature Integration)
 
    Kokkos GPU-accelerated version of additive manufacturing application.
-   Extends AppPottsQuaternionKokkos with temperature field integration
+   QuaternionKokkos over the CPU AppAdditiveTexture, with temperature field integration
    for AM simulations with thermal gradient-driven grain growth.
 
 ------------------------------------------------------------------------- */
 
 #include "app_additive_texture_kokkos.h"
+#include "app_lattice_kokkos_impl.h"
 #include "comm_lattice.h"
 #include "domain.h"
 #include "error.h"
@@ -106,22 +107,6 @@ static Kokkos::View<U*> upload_vec(const char *name, const std::vector<T> &v)
 }
 
 /* ----------------------------------------------------------------------
-   Helper to construct parent class args from user input
-------------------------------------------------------------------------- */
-
-static char** construct_parent_args(char **arg) {
-  static char* parent_args[3];
-  static char app_name[] = "potts/quaternion/kk";  // Use Kokkos quaternion parent
-  static char crystal_type[] = "cubic";
-
-  parent_args[0] = app_name;
-  parent_args[1] = arg[1]; // nspins
-  parent_args[2] = crystal_type;
-
-  return parent_args;
-}
-
-/* ----------------------------------------------------------------------
    Constructor
 ------------------------------------------------------------------------- */
 
@@ -146,23 +131,9 @@ static void series_release_pinned(void *p)
 /* ---------------------------------------------------------------------- */
 
 AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char **arg) :
-  AppPottsQuaternionKokkos(spk, 3, construct_parent_args(arg))
+  QuaternionKokkos<AppAdditiveTexture>(spk, narg, arg)   // parses the args, sizes the arrays
 {
-  if (narg != 5)
-    error->all(FLERR,"Illegal app_style command");
-
-  nspins = atoi(arg[1]);
   spin_lo = 0;           // kernels draw (int)(nspins*drand()); CPU app accepts 0..nspins too
-  dx = atof(arg[2]);     // Lattice spacing (meters)
-  dt = atof(arg[3]);     // Timestep (seconds)
-  nrefine = atoi(arg[4]); // Refinement MC steps after solidification
-
-  // Configure array sizes (inherit from AppPottsQuaternion)
-  // Parent AppPottsQuaternionKokkos called recreate_arrays() with ndouble=4
-  // We need MORE arrays, so call recreate_arrays() again with larger ndouble
-  ndouble = 10;  // q0, qx, qy, qz, mobility_out, T, solid_d, G, V, spath
-  ninteger = 2; // spin, active_flag
-  recreate_arrays();  // Reallocate iarray/darray pointers for ndouble=10
 
 #ifdef KOKKOS_ENABLE_HIP
   // On an integrated GPU (APU) the HDF5 time series is allocated GPU-readable
@@ -180,37 +151,6 @@ AppAdditiveTextureKokkos::AppAdditiveTextureKokkos(SPPARKS *spk, int narg, char 
   allow_app_update = 1;
   app_update_only = 1;  // Skip solid-state growth for now
   allow_kmc = 0;        // all physics is in app_update; no KMC path
-
-  // Initialize pointers
-  active_flag = nullptr;
-  mobility_out = nullptr;
-  T = nullptr;
-  solid_d = nullptr;
-  G = nullptr;
-  V = nullptr;
-  nucleation_flags = nullptr;
-  nucleation_temps = nullptr;
-  nucleation_sizes = nullptr;
-
-  // AdditiveParams holds the defaults shared with AppAdditiveTexture; the
-  // nuclei volumes need dx, as there
-  t_room = 300.0;  // Room temperature (K)
-  size_norm = pow(dx,3) * 2;
-  size_sig = pow(dx,3);
-  t_cool_max = 100.0;    // placeholder; init_app sets tl - ts like the CPU app
-
-  // Temperature-I/O orchestration (source setup/update, laser scan path,
-  // multi-pass pause/reset scheduling, fast-forward predictors, smoothing)
-  // lives in the shared ThermalManager, exactly as the CPU AppAdditiveTexture.
-  // This Kokkos app populates a ThermalHost snapshot (refresh_thermal_host)
-  // the manager reads/writes; the manager fills the host T[] which we then
-  // sync to the device d_temp.
-  thermal = std::unique_ptr<ThermalManager>(new ThermalManager(spk, &thermal_host_));
-
-  // Initialize powder activation tracking
-  last_powder_activation_time = -1.0;  // Force activation at init
-
-  // RNG pool is inherited from AppLatticeKokkos - initialized in parent
 }
 
 /* ----------------------------------------------------------------------
@@ -221,29 +161,6 @@ AppAdditiveTextureKokkos::~AppAdditiveTextureKokkos()
 {
   // Every posted non-blocking request must complete before MPI_Finalize.
   ff_finish_pending();
-  delete[] nucleation_flags;
-  delete[] nucleation_temps;
-  delete[] nucleation_sizes;
-}
-
-/* ----------------------------------------------------------------------
-   Allocate memory for site arrays
-------------------------------------------------------------------------- */
-
-void AppAdditiveTextureKokkos::grow_app()
-{
-  // Call parent chain - this sets up spin, quaternions, and neighbor arrays
-  // AppPottsQuaternionKokkos::grow_app() -> AppLatticeKokkos::grow_app() -> allocate_app_views()
-  AppPottsQuaternionKokkos::grow_app();
-
-  // Set up additional AM pointers from iarray/darray
-  active_flag = iarray[1];
-  mobility_out = darray[4];
-  T = darray[5];
-  solid_d = darray[6];
-  G = darray[7];
-  V = darray[8];
-  spath = darray[9];
 }
 
 /* ----------------------------------------------------------------------
@@ -253,7 +170,7 @@ void AppAdditiveTextureKokkos::grow_app()
 void AppAdditiveTextureKokkos::allocate_app_views()
 {
   // Call parent (allocates d_spin, d_q0, d_qx, d_qy, d_qz)
-  AppPottsQuaternionKokkos::allocate_app_views();
+  QuaternionKokkos<AppAdditiveTexture>::allocate_app_views();
 
   int nall = nlocal + nghost;
 
@@ -280,9 +197,12 @@ void AppAdditiveTextureKokkos::allocate_app_views()
 
 void AppAdditiveTextureKokkos::init_app()
 {
-  // Call parent initialization - sets up color lists, syncs neighbors, etc.
-  // (The parent also builds rand_pool; this app's kernels draw from KeyedRNG.)
-  AppPottsQuaternionKokkos::init_app();
+  // Not AppAdditiveTexture::init_app, the CPU physics setup; the parent sets up
+  // colour lists, neighbours and the device copies. (It also builds rand_pool;
+  // this app's kernels draw from KeyedRNG.) The host site_energy (diag energy)
+  // reads the crystal's symmetries.
+  symmetries = CRYSTAL::get_symmetries(crystal.c_str());
+  QuaternionKokkos<AppAdditiveTexture>::init_app();
   // The inherited colour sweep reads d_neighbor, which this app never fills
   // (it keeps the row-major d_neighbor_rm).
   if (!app_update_only)
@@ -378,7 +298,7 @@ void AppAdditiveTextureKokkos::init_app()
   dt_sweep = dt;
 
   // Initialize nucleation parameters (per-spin arrays and global params).
-  // The per-site arrays were uploaded by AppPottsQuaternionKokkos::init_app.
+  // The per-site arrays were uploaded by QuaternionKokkos::init_app.
   initialize_nucleation_parameters();
 
   // Temperature field at the run's start time via the ThermalManager (fills
@@ -412,7 +332,7 @@ void AppAdditiveTextureKokkos::init_app()
 void AppAdditiveTextureKokkos::sync_app_data_to_device()
 {
   // Call parent (syncs spin, quaternions)
-  AppPottsQuaternionKokkos::sync_app_data_to_device();
+  QuaternionKokkos<AppAdditiveTexture>::sync_app_data_to_device();
 
   // AM arrays over the full owned+ghost range. T is synced separately
   // (sync_temperature_to_device). G and V are written on the device at
@@ -435,7 +355,7 @@ void AppAdditiveTextureKokkos::sync_app_data_to_device()
 void AppAdditiveTextureKokkos::sync_app_data_to_host()
 {
   // Call parent (syncs spin, quaternions)
-  AppPottsQuaternionKokkos::sync_app_data_to_host();
+  QuaternionKokkos<AppAdditiveTexture>::sync_app_data_to_host();
 
   // Owned slice only; host ghosts are refreshed by the ghost exchange.
   // G and V are device-only and come back for the STITCH dumps.
@@ -1357,7 +1277,7 @@ int AppAdditiveTextureKokkos::melting_kernel(Kokkos::View<int*> d_active_sites, 
 
         // Randomize orientation (destroy crystallographic texture)
         double q[4];
-        QuaternionOps::generate_random_quaternion(q, generator);
+        generate_random_quaternion(q, generator);
         d_q0_local(i) = q[0];
         d_qx_local(i) = q[1];
         d_qy_local(i) = q[2];
@@ -1487,7 +1407,7 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
             // Random unit quaternion for the new grain orientation
             KeyedRNG generator(key_local, i, RNG_NUCLEATE);
             double q[4];
-            QuaternionOps::generate_random_quaternion(q, generator);
+            generate_random_quaternion(q, generator);
             d_q0_local(i) = q[0];
             d_qx_local(i) = q[1];
             d_qy_local(i) = q[2];
@@ -2689,8 +2609,7 @@ void AppAdditiveTextureKokkos::stats(char *strtmp)
   sync_app_data_to_host();
   if (host_T_stale) sync_temperature_to_host();
 
-  // Call parent class stats implementation
-  AppPottsQuaternionKokkos::stats(strtmp);
+  AppLattice::stats(strtmp);
 }
 
 /* ----------------------------------------------------------------------
@@ -2714,5 +2633,7 @@ void AppAdditiveTextureKokkos::input_app(char *command, int narg, char **arg)
   }
 
   if (!parse_command(command, narg, arg, error, screen, domain->me, *thermal))
-    AppPottsQuaternionKokkos::input_app(command, narg, arg);
+    AppLattice::input_app(command, narg, arg);   // not the CPU app's: its own commands are CPU-only
 }
+
+namespace SPPARKS_NS { template class LatticeKokkos<AppAdditiveTexture>; }

@@ -23,11 +23,11 @@ AppStyle(additive/texture/kk,AppAdditiveTextureKokkos)
 #ifndef SPK_APP_ADDITIVE_TEXTURE_KOKKOS_H
 #define SPK_APP_ADDITIVE_TEXTURE_KOKKOS_H
 
-#include "app_potts_quaternion_kokkos.h"
+#include "app_additive_texture.h"
+#include "quaternion_kokkos.h"
+#include "crystalline_orientations/quaternion_ops.h"
 #include "temperature_source.h"
 #include "thermal_manager.h"
-#include "thermal_host.h"
-#include "additive_params.h"
 #include "rosenthal_device.h"
 #include "moser_device.h"
 #include "hdf5_device.h"
@@ -72,13 +72,14 @@ struct PlateRule {
 enum { RNG_MELT = 1, RNG_NUCLEATE, RNG_FLIP, RNG_SOLIDIFY, RNG_SMOOTH,
        RNG_COLORS_SOLIDIFY, RNG_COLORS_SMOOTH };
 
-class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public AdditiveParams {
+// The CPU app owns the AM state, parameters and ThermalManager; this layer
+// adds their device copies and replaces its run setup and step with kernels.
+class AppAdditiveTextureKokkos : public QuaternionKokkos<AppAdditiveTexture> {
  public:
   AppAdditiveTextureKokkos(class SPPARKS *, int, char **);
   virtual ~AppAdditiveTextureKokkos();
 
   // Override base class methods
-  virtual void grow_app() override;
   virtual void init_app() override;
   virtual void app_update(double) override;
   virtual void input_app(char *, int, char **) override;
@@ -90,10 +91,14 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   // Back to the full upload: the quaternion parent's ghost-range version
   // moves only spin/quaternions and would drop the AM arrays.
   void sync_ghosts_to_device() override { sync_app_data_to_device(); }
+  // Never called: all the physics is in app_update (app_update_only, checked in init_app)
+  void sweep_color_kokkos(int, int, int) override {
+    error->all(FLERR, "additive/texture/kk has no colour sweep");
+  }
   virtual void allocate_app_views() override;
 
   // Temperature field management
-  void refresh_thermal_host();
+  void refresh_thermal_host() override;
   void sync_temperature_to_device();
   void sync_temperature_to_host();   // device d_temp -> host T (for diag/host code)
   // Phase 2 selective ghost sync: move only neighbor-read MC state
@@ -144,7 +149,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   int smoothing_kernel_efficient(Kokkos::View<int*> d_smoothing_sites, int n_sites);
 
   // Powder phase activation
-  void activate_powder_sites();
+  void activate_powder_sites() override;
 
  protected:
   // Temperature field (darray d6). Written by the device fills, or by the
@@ -260,8 +265,6 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   PlateRule plate_rule() const;   // z in lattice units, as in d_xyz
   // This step's RNG key (KeyedRNG): the deck seed, the step and the rank.
   uint64_t rng_key() const;
-  uint64_t rng_seed = 0;          // the deck seed
-  uint64_t rng_step = 0;          // app_update calls so far
   Kokkos::View<int*> d_nuclei;    // this step's nuclei, in site order (particle_flipper_kernel)
   Kokkos::View<double*> d_solid_d;       // Solid front distance
 
@@ -301,30 +304,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   // Global parameter arrays (device-accessible constants)
   Kokkos::View<double*> d_solid_front_coeffs;  // Solidification velocity polynomial coefficients
 
-  // Host pointers (mapped to iarray/darray like CPU version)
-  int *active_flag;
-  double *mobility_out;
-  double *T;
-  double *solid_d;
-  double *G;
-  double *V;
-  double *spath;   // d10: inheritance path length, lattice units
-
-  // Temperature-I/O orchestration: shared with the CPU app. ThermalManager owns
-  // the temperature_source, laser path, fast-forward predictors, and smoothing;
-  // it reads/writes the lattice state through the ThermalHost snapshot, which
-  // refresh_thermal_host() populates each step. See thermal_manager.h.
-  std::unique_ptr<ThermalManager> thermal;
   std::unique_ptr<ConductionSolverKokkos> cond;   // conduction source state
-  ThermalHost thermal_host_;
-
-  // Physical parameters (same as CPU version)
-  double dt;
-  double dx;
-  double t_room;
-
-  // Nucleation parameters
-  int nrefine;
 
   // misorientation_diffusion: the new-grain test here uses the direct
   // quaternion angle, the CPU app the symmetry-reduced disorientation.
@@ -339,7 +319,6 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   Kokkos::View<int*> d_gw_ngid;       // [1] next free id
   Kokkos::View<int*> d_gw_nready;     // per gid: levels 0..nready-1 are in the table
   Kokkos::View<double*[3]> d_gw_tab;  // gid*maxlev + k -> rotation vector
-  double t_cool_max;   // tl - ts, set in init_app (was a hardcoded 100 K)
   // Device copy of AdditiveParams::growth_dirs (3 per direction), set in init_app.
   Kokkos::View<double*> d_growth_dirs;
 
@@ -355,14 +334,6 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
     }
     return Kokkos::sqrt(D * hop_m);
   }
-
-  // Nucleation data
-  int *nucleation_flags;
-  double *nucleation_temps;
-  double *nucleation_sizes;
-
-  // Powder activation tracking
-  double last_powder_activation_time;  // Track when we last activated powder sites
 
   // Device-compatible thermal operations
   //

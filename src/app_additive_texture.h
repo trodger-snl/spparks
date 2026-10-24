@@ -100,7 +100,7 @@ class AppAdditiveTexture : public AppPottsQuaternion, public AdditiveParams {
   uint64_t rng_step = 0;   // app_update calls so far
 
   // Powder phase activation methods
-  void activate_powder_sites();
+  virtual void activate_powder_sites();
 
   // Void generation methods
   void generate_voids(class RandomPark *);
@@ -162,7 +162,7 @@ class AppAdditiveTexture : public AppPottsQuaternion, public AdditiveParams {
   // refresh_thermal_host() at the top of app_update() and before dispatching
   // any thermal command in input_app(). See thermal_host.h.
   ThermalHost thermal_host_;
-  void refresh_thermal_host();
+  virtual void refresh_thermal_host();
 
   // Index-based selective ghost communication.
   // Only the specified iarray/darray indices are communicated to ghost sites;

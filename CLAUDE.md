@@ -73,6 +73,17 @@ build.
 
 - `App` (pure virtual) → `AppLattice` (lattice sites + neighbors, sectors,
   coloring) → `AppPotts` → `AppPottsQuaternion` → `AppAdditiveTexture`.
+- Kokkos apps are mixins over the CPU app (LAMMPS-style):
+  `LatticeKokkos<Base>` (device neighbours, colours, syncs;
+  `AppLatticeKokkos` = `LatticeKokkos<AppLattice>`) and
+  `QuaternionKokkos<Base>` (device spin/quaternions), so
+  `AppAdditiveTextureKokkos : QuaternionKokkos<AppAdditiveTexture>` and
+  `AppPottsQuaternionKokkos : QuaternionKokkos<AppPottsQuaternion>`. The CPU
+  class owns the state, parameters and argument parsing; the kk class
+  replaces `init_app`/`app_update`/`input_app` (its fallback is
+  `AppLattice::input_app`, so CPU-only commands stay errors) and never calls
+  the CPU `init_app`. Member definitions live in `app_lattice_kokkos_impl.h`,
+  explicitly instantiated in each app's .cpp.
   Apps implement `site_event*` / `app_update`; registered via `AppStyle`.
 - Per-site data: `iarray[]` (ints) and `darray[]` (doubles). The additive app
   maps `active_flag = iarray[1]` (= `i2` in inputs) and `T = darray[5]` (= `d6`).
@@ -94,8 +105,8 @@ delegates to `thermal->advance(time, stoptime)` which returns
 (`src/thermal_host.h`), populated by each app's `refresh_thermal_host()` — NOT a
 typed back-pointer. This decoupling is what lets BOTH the CPU app
 (`AppAdditiveTexture`, style `additive/texture`) and the Kokkos app
-(`AppAdditiveTextureKokkos`, style `additive/texture/kk`, inherits
-`AppPottsQuaternionKokkos`) reuse one `ThermalManager`.
+(`AppAdditiveTextureKokkos`, style `additive/texture/kk`) reuse one
+`ThermalManager`.
 
 **GPU temperature evaluation.** The per-site temperature integral is the dominant
 cost, so it runs on the device. The host advances cheap scalar state (laser pose,

@@ -130,32 +130,6 @@ protected:
       if (ratio < (KK_FLOAT)1) return (double)(ratio * ((KK_FLOAT)1 - Kokkos::log(ratio)));
       return 1.0;
     }
-
-    template<typename RandGenType>
-    KOKKOS_INLINE_FUNCTION
-    static void generate_random_quaternion(double* q, RandGenType& rand_gen) {
-      double u1, u2, mag1, mag2;
-      double n1, n2, n3, n4;
-
-      u1 = rand_gen.drand();
-      u2 = rand_gen.drand();
-      mag1 = Kokkos::sqrt(-2.0 * Kokkos::log(u1));
-      n1 = mag1 * Kokkos::cos(2.0 * M_PI * u2);
-      n2 = mag1 * Kokkos::sin(2.0 * M_PI * u2);
-
-      u1 = rand_gen.drand();
-      u2 = rand_gen.drand();
-      mag2 = Kokkos::sqrt(-2.0 * Kokkos::log(u1));
-      n3 = mag2 * Kokkos::cos(2.0 * M_PI * u2);
-      n4 = mag2 * Kokkos::sin(2.0 * M_PI * u2);
-
-      q[0] = n1;
-      q[1] = n2;
-      q[2] = n3;
-      q[3] = n4;
-
-      quaternion::normalize(q);
-    }
   };
 
 public:

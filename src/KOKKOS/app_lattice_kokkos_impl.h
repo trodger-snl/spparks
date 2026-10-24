@@ -170,8 +170,9 @@ void LatticeKokkos<Base>::allocate_device_views()
 template <class Base>
 void LatticeKokkos<Base>::init_app()
 {
-  // Call parent initialization (sets up sweepflag, ncolors, sets, etc.)
-  Base::init_app();
+  // Not Base::init_app(): that is the CPU app's own run setup (AppLattice's
+  // is empty), which the kk app replaces -- the quaternion apps' would
+  // re-randomise every orientation, the additive app's would step the physics.
 
   // Device RNG pool, from the deck seed (unknown at construction) and the
   // rank. Made once, so a second run continues the stream, not repeats it.

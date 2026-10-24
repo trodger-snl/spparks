@@ -256,10 +256,13 @@ protected:
       m[8] = q00 - qxx - qyy + qzz;  // r33
     }
 
-    // Get cosine of minimum angle between quaternion's <100> directions and vector u
-    // Used for texture weighting in solidification
+    // Cosine of the minimum angle between vector u and the crystal q's growth
+    // directions dirs (crystal frame, 3 per direction, one per +-pair; cubic
+    // <100> = unit x, y, z). Used for texture weighting in solidification.
+    // Matches the host get_cosine_of_minumum_angle_between_q_and_u.
     KOKKOS_INLINE_FUNCTION
-    static double get_cosine_angle_q_u(const double* q, const double* u) {
+    static double get_cosine_angle_q_u(const double* q, const double* u,
+                                       const double* dirs, int ndirs) {
       // Normalize the target vector
       double n[3] = {u[0], u[1], u[2]};
       double d = Kokkos::sqrt(n[0]*n[0] + n[1]*n[1] + n[2]*n[2]);
@@ -274,16 +277,20 @@ protected:
       double m[9];
       to_rotation_matrix(q, m);
 
-      // Dot columns of 'm' with 'n' (matrix transpose times vector)
-      // Find maximum absolute dot product across all 3 columns
-      double max_dot = 0.0;
+      // r = transpose(m) n; growth direction v then has cosine |r.v|
+      double r[3];
       for (int col = 0; col < 3; col++) {
         double dot = 0.0;
         for (int row = 0; row < 3; row++) {
           int ptr = col + 3 * row;
           dot += m[ptr] * n[row];
         }
-        dot = Kokkos::fabs(dot);
+        r[col] = dot;
+      }
+      double max_dot = 0.0;
+      for (int k = 0; k < ndirs; k++) {
+        const double* v = &dirs[3 * k];
+        const double dot = Kokkos::fabs(r[0]*v[0] + r[1]*v[1] + r[2]*v[2]);
         if (dot > max_dot) max_dot = dot;
       }
       return max_dot;
@@ -292,7 +299,8 @@ protected:
     // Rotate quaternion q towards vector u by given angle (in radians)
     // If angle exceeds the misorientation, stops at alignment
     KOKKOS_INLINE_FUNCTION
-    static void rotate_q_towards_u(const double* q, const double* u, double angle, double* result) {
+    static void rotate_q_towards_u(const double* q, const double* u, double angle,
+                                   const double* dirs, int ndirs, double* result) {
       // Normalize the target vector
       double n[3] = {u[0], u[1], u[2]};
       double d = Kokkos::sqrt(n[0]*n[0] + n[1]*n[1] + n[2]*n[2]);
@@ -306,20 +314,26 @@ protected:
       n[1] *= inv_d;
       n[2] *= inv_d;
 
-      // Rotate the <100> axis nearest the target (columns of R(q) are the
-      // sample-frame [100], [010], [001]), sign-corrected to point toward it.
-      // Matches the host rotate_q_towards_u (SURGE 89089f9f).
+      // Rotate the growth direction nearest the target (crystal-frame v lies
+      // along R(q) v), sign-corrected to point toward it.
+      // Matches the host rotate_q_towards_u.
       double m[9];
       to_rotation_matrix(q, m);
+      double r[3];
+      for (int col = 0; col < 3; col++)
+        r[col] = m[col]*n[0] + m[col + 3]*n[1] + m[col + 6]*n[2];
       double best_dot = 0.0;
-      int best_col = 0;
-      for (int col = 0; col < 3; col++) {
-        const double dot = m[col]*n[0] + m[col + 3]*n[1] + m[col + 6]*n[2];
-        if (Kokkos::fabs(dot) > Kokkos::fabs(best_dot)) { best_dot = dot; best_col = col; }
+      int best = 0;
+      for (int k = 0; k < ndirs; k++) {
+        const double* v = &dirs[3 * k];
+        const double dot = r[0]*v[0] + r[1]*v[1] + r[2]*v[2];
+        if (Kokkos::fabs(dot) > Kokkos::fabs(best_dot)) { best_dot = dot; best = k; }
       }
       const double sign = (best_dot >= 0.0) ? 1.0 : -1.0;
-      double current_dir[3] = {sign * m[best_col], sign * m[best_col + 3],
-                               sign * m[best_col + 6]};
+      const double* v = &dirs[3 * best];
+      double current_dir[3];
+      for (int row = 0; row < 3; row++)
+        current_dir[row] = sign * (m[3*row]*v[0] + m[3*row + 1]*v[1] + m[3*row + 2]*v[2]);
 
       // Calculate the current misorientation angle
       double dot_product = current_dir[0]*n[0] + current_dir[1]*n[1] + current_dir[2]*n[2];

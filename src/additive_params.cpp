@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include "additive_params.h"
+#include "crystalline_orientations/crystal_symmetries.h"
 #include "error.h"
 #include "thermal_manager.h"
 #include "math_const.h"
@@ -137,31 +138,12 @@ bool AdditiveParams::parse_command(const char *command, int narg, char **arg,
     c2 = atof(arg[0]);
     c3 = atof(arg[1]);
 
-    // mob(theta) = 1 + c2*cos(c3*theta) over theta in [0, theta_max], the
-    // misorientation of the <100> family from the gradient folded into the
-    // cubic fundamental zone.
-    const double theta_max = std::acos(1.0 / std::sqrt(3.0));
     if (c2 < 0.0)
       error->all(FLERR,
         "texture_parameters: c2 must be >= 0 (negative amplitude "
         "would mean misaligned grains grow faster than aligned ones, "
         "which is unphysical for cubic solidification)");
     if (c3 < 0.0) error->all(FLERR, "texture_parameters: c3 must be >= 0");
-    // Monotonic on [0, theta_max] requires c3*theta_max <= pi.
-    if (c3 * theta_max > MY_PI + 1.0e-12) {
-      char msg[256];
-      snprintf(msg, sizeof(msg),
-        "texture_parameters: c3 = %g exceeds monotonicity limit "
-        "pi/theta_max ~ %g; mobility would be non-monotonic in "
-        "misorientation angle", c3, MY_PI / theta_max);
-      error->all(FLERR, msg);
-    }
-    // A negative minimum mobility is allowed: both apps clamp it to a
-    // zero-weight candidate (strong selection).
-    double mob_min = 1.0 + c2 * std::cos(c3 * theta_max);
-    if (mob_min < 0.0 && screen)
-      fprintf(screen, "texture_parameters: minimum mobility %g < 0 at theta_max = %g rad; "
-              "such candidates get zero weight (strong selection)\n", mob_min, theta_max);
     if (c2 == 0.0 && screen)
       fprintf(screen, "WARNING: texture_parameters c2 = 0; mobility has no "
               "orientation dependence\n");
@@ -232,6 +214,23 @@ bool AdditiveParams::parse_command(const char *command, int narg, char **arg,
                  "(shells use the misorientation_target axis rule)");
     if (screen) fprintf(screen, "nucleation_misorientation_target = %s\n", arg[0]);
 
+  } else if (strcmp(command, "crystal") == 0) {
+    if (narg != 1 && narg != 4)
+      error->all(FLERR, "Illegal crystal command: crystal <name> [gx gy gz]");
+    const vector<double> sym = CRYSTAL::get_symmetries(arg[0]);
+    if (sym.empty())
+      error->all(FLERR, "Illegal crystal command: expected cubic, hcp, trigonal, "
+                 "tetragonal or orthorhombic");
+    double g[3] = {0.0, 0.0, 1.0};
+    if (narg == 4) for (int k = 0; k < 3; k++) g[k] = atof(arg[k + 1]);
+    if (g[0] == 0.0 && g[1] == 0.0 && g[2] == 0.0)
+      error->all(FLERR, "Illegal crystal command: growth direction is zero");
+    crystal = arg[0];
+    growth_dirs = CRYSTAL::growth_family(sym, g);
+    if (screen)
+      fprintf(screen, "crystal %s, growth direction [%g %g %g]: %d equivalent axes\n",
+              arg[0], g[0], g[1], g[2], (int) growth_dirs.size() / 3);
+
   } else if (strcmp(command, "smooth_greedy_multiproposal") == 0) {
     // on: each nrefine smoothing pass picks the energy-minimizing distinct
     // neighbour spin (steepest descent) instead of one random proposal.
@@ -259,6 +258,31 @@ bool AdditiveParams::parse_command(const char *command, int narg, char **arg,
 
   } else return false;
   return true;
+}
+
+/* ---------------------------------------------------------------------- */
+
+void AdditiveParams::check_texture(Error *error, FILE *screen, int me) const
+{
+  // mob(theta) = 1 + c2*cos(c3*theta) over theta in [0, theta_max], the
+  // largest angle a gradient can make with its nearest growth direction
+  // (cubic <100>: 54.7 deg; one axis, e.g. hcp [001]: 90 deg).
+  const double theta_max = CRYSTAL::family_reach(growth_dirs);
+  // Monotonic on [0, theta_max] requires c3*theta_max <= pi.
+  if (c3 * theta_max > MY_PI + 1.0e-12) {
+    char msg[256];
+    snprintf(msg, sizeof(msg),
+      "texture_parameters: c3 = %g exceeds monotonicity limit "
+      "pi/theta_max ~ %g for crystal %s; mobility would be non-monotonic in "
+      "misorientation angle", c3, MY_PI / theta_max, crystal.c_str());
+    error->all(FLERR, msg);
+  }
+  // A negative minimum mobility is allowed: both apps clamp it to a
+  // zero-weight candidate (strong selection).
+  double mob_min = c1 + c2 * std::cos(c3 * theta_max);
+  if (mob_min < 0.0 && screen && me == 0)
+    fprintf(screen, "texture_parameters: minimum mobility %g < 0 at theta_max = %g rad; "
+            "such candidates get zero weight (strong selection)\n", mob_min, theta_max);
 }
 
 /* ---------------------------------------------------------------------- */

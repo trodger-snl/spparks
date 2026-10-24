@@ -379,27 +379,19 @@ generate_random_unit_quaternions(std::size_t n, double epsilon = 1.0e-15) {
 
 inline double
 get_cosine_of_minumum_angle_between_q_and_u(const vector<double> &q,
-                                            const vector<double> &u) {
+                                            const vector<double> &u,
+                                            const vector<double> &dirs) {
   /**
-   *
-   *  DO NOT USE THIS FUNCTION
-   *
-   *  Un-tested and may be removed.
-   *
       arg q: array shape=(4,) unit quaterion
-      arg u: array shape=(3,) unit vector
+      arg u: array shape=(3,) direction (temperature gradient)
+      arg dirs: crystal-frame growth directions, 3 per direction, one per
+                +-pair (cubic <100>: the unit x, y, z axes)
 
-      Measure/compute cosine of angle between input unit quaterion 'q'
-      representing a cube and the direction 'u'.  Input vector makes 3 different
-      angles with local cubic coordinate axes attached to cube.  The cubic
-      coordinate axes are normal to each of the faces.  Calculation of angle
-      makes no distinction between positive or negative local coordinate axes of
-      cube.   Intended application is to determine angle between u and line
-   taken normal to face of cube where u is temperature gradient.
+      Cosine of the smallest angle between u and any growth direction of
+      the crystal q, ignoring sign. Crystal-frame vector v lies along R(q) v
+      in the sample frame, and (R(q) v).n = (R(q)^T n).v.
 
       returns cos(angle)
-   *
-   *
    */
   if (4 != q.size() || 3 != u.size())
     throw std::runtime_error("len(q)!=4 or len(u)!=3");
@@ -414,19 +406,19 @@ get_cosine_of_minumum_angle_between_q_and_u(const vector<double> &q,
     n[2] *= b;
   }
   vector<double> m = to_rotation_matrix(q);
-  // Dot columns of 'm' with 'n'; which is a matrix
-  // multiplication of transpose(m) X n
-  double max = 0.0;
-  // Because 'm' is an array in 'row-major' form -- need
-  // for matrix multiply 'transpose(m)' times 'n'.
+  // r = transpose(m) n; 'm' is row-major.
+  double r[3];
   for (size_t col = 0; col < 3; col++) {
     double dot = 0.0;
     for (size_t row = 0; row < 3; row++) {
       size_t ptr = col + 3 * row;
       dot += m[ptr] * n[row];
     }
-    // Take absolute value
-    dot = std::fabs(dot);
+    r[col] = dot;
+  }
+  double max = 0.0;
+  for (size_t k = 0; k + 2 < dirs.size(); k += 3) {
+    double dot = std::fabs(r[0] * dirs[k] + r[1] * dirs[k + 1] + r[2] * dirs[k + 2]);
     if (dot > max)
       max = dot;
   }
@@ -435,7 +427,8 @@ get_cosine_of_minumum_angle_between_q_and_u(const vector<double> &q,
 
 inline vector<double> rotate_q_towards_u(const vector<double> &q,
                                         const vector<double> &u,
-                                        double angle) {
+                                        double angle,
+                                        const vector<double> &dirs) {
   /**
   Rotates quaternion 'q' towards vector 'u' by the specified angle.
   If the input angle exceeds the misorientation between the current
@@ -444,6 +437,8 @@ inline vector<double> rotate_q_towards_u(const vector<double> &q,
   arg q: array shape=(4,) unit quaternion to be rotated
   arg u: array shape=(3,) target vector direction
   arg angle: rotation angle in radians
+  arg dirs: crystal-frame growth directions (see
+            get_cosine_of_minumum_angle_between_q_and_u)
   
   returns: array shape=(4,) rotated unit quaternion
   */
@@ -469,28 +464,29 @@ inline vector<double> rotate_q_towards_u(const vector<double> &q,
   // and the target direction. We'll use the quaternion's principal axis
   // (the vector part when angle is non-zero) and cross it with the target.
   
-  // Find which <100> axis is closest to the target direction.
-  // For a cubic crystal, [100], [010], [001] are equivalent growth
-  // directions.  We want to rotate the nearest one toward the target,
-  // not the hardcoded [001].
+  // Find which growth direction is closest to the target (either sign).
+  // Rotate the nearest one toward the target, not a fixed axis.
   vector<double> m = to_rotation_matrix(q);
-  // Columns of m are the lab-frame directions of [100], [010], [001].
-  // m is row-major: column 'col' has components m[col], m[col+3], m[col+6].
+  // m is row-major; R v has components m[3*row] v0 + m[3*row+1] v1 + m[3*row+2] v2.
+  double r[3];
+  for (int col = 0; col < 3; col++)
+    r[col] = m[col] * n[0] + m[col + 3] * n[1] + m[col + 6] * n[2];
   double best_dot = 0.0;
-  int best_col = 0;
-  for (int col = 0; col < 3; col++) {
-      double dot = m[col] * n[0] + m[col + 3] * n[1] + m[col + 6] * n[2];
+  size_t best = 0;
+  for (size_t k = 0; k + 2 < dirs.size(); k += 3) {
+      double dot = r[0] * dirs[k] + r[1] * dirs[k + 1] + r[2] * dirs[k + 2];
       if (std::fabs(dot) > std::fabs(best_dot)) {
           best_dot = dot;
-          best_col = col;
+          best = k;
       }
   }
-  // current_dir = lab-frame direction of the nearest <100>, sign-corrected
-  // so it points toward (not away from) the target.
+  // current_dir = lab-frame direction of the nearest growth direction,
+  // sign-corrected so it points toward (not away from) the target.
   double sign = (best_dot >= 0.0) ? 1.0 : -1.0;
-  vector<double> current_dir{sign * m[best_col],
-                             sign * m[best_col + 3],
-                             sign * m[best_col + 6]};
+  const double *v = &dirs[best];
+  vector<double> current_dir(3);
+  for (int row = 0; row < 3; row++)
+    current_dir[row] = sign * (m[3 * row] * v[0] + m[3 * row + 1] * v[1] + m[3 * row + 2] * v[2]);
   
   // Calculate the current misorientation angle
   double dot_product = current_dir[0]*n[0] + current_dir[1]*n[1] + current_dir[2]*n[2];

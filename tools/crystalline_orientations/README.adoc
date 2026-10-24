@@ -29,8 +29,12 @@ ln -s ../../src/crystalline_orientations/burgers_orientation_relation_bcc_to_hcp
   randomly oriented cube as a the beta prior.  Use python orient_hcp.py -h to
   get help command line parameters.  Any of the 12 variants can be visualized
   with this script.
+* C++ check of all symmetry sets in src/crystalline_orientations/crystal_symmetries.h
+  (group closure, maximum disorientation, AM growth families):
+  g++ -O2 -I ../../src -o check_symmetries check_symmetries.cpp && ./check_symmetries
 * Relevant files
 [literal]
+check_symmetries.cpp
 cpp_quaternion.py
 plot_cubic_symmetry_histograms.py
 plot_hcp_symmetry_histograms.py

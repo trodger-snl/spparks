@@ -41,9 +41,8 @@
 #include "random_mars.h"
 #include "error.h"
 #include "domain.h"
-#include "crystalline_orientations/cubic_symmetries.h"
+#include "crystalline_orientations/crystal_symmetries.h"
 #include "crystalline_orientations/disorientation.h"
-#include "crystalline_orientations/hcp_symmetries.h"
 #include "crystalline_orientations/quaternion.h"
 #include "thermal_manager.h"
 
@@ -489,8 +488,10 @@ void AppAdditiveTexture::grow_app()
 void AppAdditiveTexture::init_app()
 {
   check_misorientation_step(dx, error, domain->me);
+  check_texture(error, screen, domain->me);
   check_material_complete(error, *thermal);
   check_sector_stop(error, nstop, tstop);
+  symmetries = CRYSTAL::get_symmetries(crystal.c_str());
 
   // Duplicate parent's array allocation logic without quaternion randomization
   delete[] sites;
@@ -982,9 +983,9 @@ void AppAdditiveTexture::rotate_toward_target(int i, double mis_angle, int targe
         if (m > 1e-15) {
             q_new[0] /= m; q_new[1] /= m; q_new[2] /= m; q_new[3] /= m;
         }
-    } else {  // MISORI_TARGET_RANDOM: rotate the nearest <100> toward a random direction
+    } else {  // MISORI_TARGET_RANDOM: rotate the nearest growth direction toward a random one
         vector<double> target_dir = sample_random_unit_vector(random);
-        q_new = quaternion::rotate_q_towards_u(q_site, target_dir, mis_angle);
+        q_new = quaternion::rotate_q_towards_u(q_site, target_dir, mis_angle, growth_dirs);
     }
 
     q0[i] = q_new[0];
@@ -1428,7 +1429,8 @@ std::vector<double> AppAdditiveTexture::get_average_neighbor_quaternion(int site
 ------------------------------------------------------------------------- */
 /* ----------------------------------------------------------------------
    Mobility c1 + c2*cos(c3*theta) of an orientation q against a gradient
-   [nx,ny,nz,magnitude]; theta = angle between the nearest <100> and the
+   [nx,ny,nz,magnitude]; theta = angle between the nearest growth direction
+   (growth_dirs, <100> for the default cubic) and the
    gradient. Zero gradient => no preferred direction => full mobility.
    Negative values clamp to 0 (zero-weight candidate).
 ------------------------------------------------------------------------- */
@@ -1437,7 +1439,7 @@ double AppAdditiveTexture::mobility_of_orientation(const std::vector<double> &q,
 {
 	if (grad_full[3] <= 0.0) return c1 + c2;
 	std::vector<double> dir = {grad_full[0], grad_full[1], grad_full[2]};
-	double theta = acos(quaternion::get_cosine_of_minumum_angle_between_q_and_u(q, dir));
+	double theta = acos(quaternion::get_cosine_of_minumum_angle_between_q_and_u(q, dir, growth_dirs));
 	double mob = c1 + c2 * cos(c3 * theta);
 	return mob < 0.0 ? 0.0 : mob;
 }
@@ -1462,7 +1464,7 @@ double AppAdditiveTexture::melt_misorientation(int site, double c1, double c2, d
 	
 	// Use quaternion function to get cosine of minimum angle between
 	// crystal orientation and temperature gradient
-	dotMax = quaternion::get_cosine_of_minumum_angle_between_q_and_u(q_site, grad_vector);
+	dotMax = quaternion::get_cosine_of_minumum_angle_between_q_and_u(q_site, grad_vector, growth_dirs);
 	
 	// Calculate angle from cosine
 	theta = acos(dotMax);

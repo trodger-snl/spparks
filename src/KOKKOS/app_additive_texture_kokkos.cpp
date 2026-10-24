@@ -287,8 +287,12 @@ void AppAdditiveTextureKokkos::init_app()
   if (!app_update_only)
     error->all(FLERR, "additive/texture/kk requires app_update_only yes");
   check_misorientation_step(dx, error, domain->me);
+  check_texture(error, screen, domain->me);
   check_material_complete(error, *thermal);
   check_sector_stop(error, nstop, tstop);
+  d_growth_dirs = Kokkos::View<double*>("growth_dirs", growth_dirs.size());
+  Kokkos::deep_copy(d_growth_dirs, Kokkos::View<const double*, Kokkos::HostSpace,
+                    Kokkos::MemoryTraits<Kokkos::Unmanaged>>(growth_dirs.data(), growth_dirs.size()));
 
   // The neighbour-reading kernels colour sites by coordinate parity (see
   // shuffled_colors), which is race-free only if no two owned neighbours share
@@ -1567,6 +1571,8 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
   const double mis_thresh_local = mis_thresh;
   const int nspins_local = nspins;
   const int misori_mode_local = misorientation_target_mode;
+  auto gdirs = d_growth_dirs;
+  const int ngdirs = (int) growth_dirs.size() / 3;
   const bool nucl_rotate = (mis_diffusion > 0.0 && nucleation_misorient_enabled);
 
   // Terminal solid_d for a nucleus and for the neighbours it claims. `off`
@@ -1683,7 +1689,8 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
                                                Kokkos::sqrt(ddx*ddx + ddy*ddy + ddz*ddz) * dx_local);
 
             double q_rot[4];
-            perturb_orientation(misori_mode_local, q_nbr, mis_angle, generator, q_rot);
+            perturb_orientation(misori_mode_local, q_nbr, mis_angle, gdirs.data(), ngdirs,
+                                generator, q_rot);
 
             // mis_thresh new-grain check (direct angle, matching the
             // solidification kernel's convention).
@@ -1824,6 +1831,8 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
   const double mis_thresh_local = this->mis_thresh;
   const double misorient_alpha_local = this->misorient_alpha;
   const int misori_mode_local = this->misorientation_target_mode;
+  auto gdirs = d_growth_dirs;
+  const int ngdirs = (int) growth_dirs.size() / 3;
   int nspins_local = this->nspins;
 
   // Solid-front reach threshold: a neighbor becomes eligible once the front
@@ -1946,7 +1955,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
             QuaternionOps::normalize(qm);
             double mobility = c1 + c2;
             if (grad_magnitude > 0.0) {
-              const double theta = Kokkos::acos(QuaternionOps::get_cosine_angle_q_u(qm, grad_dir));
+              const double theta = Kokkos::acos(QuaternionOps::get_cosine_angle_q_u(qm, grad_dir, gdirs.data(), ngdirs));
               mobility = c1 + c2 * Kokkos::cos(c3 * theta);
             }
             gtotal += Kokkos::fmax(mobility, 0.0);
@@ -1997,7 +2006,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
 
             double q_rotated[4];
             perturb_orientation(misori_mode_local, q_nbr_inherited,
-                                mis_angle, generator, q_rotated);
+                                mis_angle, gdirs.data(), ngdirs, generator, q_rotated);
 
             // If the rotation exceeds the threshold, create a new grain with a
             // random spin.

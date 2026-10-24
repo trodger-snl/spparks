@@ -19,7 +19,7 @@
 </PRE>
 <UL><LI>style = <I>potts/quaternion</I> or <I>potts/quaternion/kk</I>
 <LI>Q = number of spin states
-<LI>crystal = <I>cubic</I> or <I>hcp</I> or <I>trigonal</I> 
+<LI>crystal = <I>cubic</I>, <I>hcp</I>, <I>trigonal</I>, <I>tetragonal</I> or <I>orthorhombic</I> 
 <LI>theta_cut = optional positive cutoff angle (default=15.0) for Read-Shockley energy model 
 </UL>
 <P><B>Examples:</B>
@@ -35,7 +35,8 @@ Sites flip their spin as the model evolves.
 </P>
 <P>This Potts variant is designed to incorporate the effects of crystalline
 orientation into growth models, allowing more detailed and realistic
-simulations of microstructure evolution in Cubic, HCP and trigonal polycrystals.
+simulations of microstructure evolution in cubic, hexagonal, trigonal,
+tetragonal and orthorhombic polycrystals.
 Emulating crystalline orientation requires two additions to the standard Potts
 model: a choice of a reference crystal symmetry, and calculation of grain
 boundary energy based upon relative orientation differences between adjacent
@@ -51,8 +52,11 @@ is computed using the Read-Shockley relation and the angular disorientation
 between sites <I>i</I> and <I>j</I>. The energy of the entire system is the sum of Hi over
 all sites.
 </P>
-<P>The user selects <I>cubic</I> (432), <I>hcp</I> (622) or <I>trigonal</I> (32, 2-fold
-axes along a_1, a_2, a_3) crystal symmetry. To represent crystal
+<P>The user selects the crystal symmetry by its proper rotation group:
+<I>cubic</I> (432), <I>hcp</I> (622), <I>trigonal</I> (32, 2-fold axes along a_1,
+a_2, a_3), <I>tetragonal</I> (422) or <I>orthorhombic</I> (222).  The crystal
+frame is Cartesian with z along c; for <I>hcp</I> and <I>trigonal</I> x is
+along a_1. To represent crystal
 orientation, each site <I>i</I> is initialized with a randomly generated unit
 quaternion, <I>qi</I>. The app calculates the disorientation angle <I>theta_ij</I>
 between two neighboring sites <I>i</I> and <I>j</I> using quaternions for the chosen crystal
@@ -71,7 +75,8 @@ hcp orientations.
 commonly-used cutoff angle for cubic materials. To specify the low-angle
 cut-off different from the default, add the optional input value <I>theta_cut</I>.
 A maximum disorientation angle exists for each crystal symmetry: 62.7 degrees
-for <I>cubic</I>, 93.8 degrees for <I>hcp</I> and 104.4 degrees for <I>trigonal</I>. If the user's input <I>theta_cut</I> is
+for <I>cubic</I>, 93.8 for <I>hcp</I>, 104.4 for <I>trigonal</I>, 98.4 for
+<I>tetragonal</I> and 120.0 for <I>orthorhombic</I>. If the user's input <I>theta_cut</I> is
 greater than these maxima, the simulation will throw an error. A value
 <I>theta_cut=0</I> is disallowed and does not make sense for the Read-Shockley 
 model.

@@ -18,9 +18,8 @@
 #include "app_potts_quaternion.h"
 #include "error.h"
 #include "math.h"
-#include "crystalline_orientations/cubic_symmetries.h"
+#include "crystalline_orientations/crystal_symmetries.h"
 #include "crystalline_orientations/disorientation.h"
-#include "crystalline_orientations/hcp_symmetries.h"
 #include "crystalline_orientations/quaternion.h"
 #include "random_park.h"
 #include "random_mars.h"
@@ -45,34 +44,22 @@ AppPottsQuaternion::AppPottsQuaternion(SPPARKS *spk, int narg, char **arg)
     error->all(FLERR, "Illegal 'potts/quaternion' command");
 
   // Check crystal structure input
-  if (strcmp(arg[2], "cubic") == 0) {
-    symmetries = CUBIC::get_symmetries();
-  } else if (strcmp(arg[2], "hcp") == 0) {
-    symmetries = HCP::get_symmetries();
-  } else if (strcmp(arg[2], "trigonal") == 0) {
-    symmetries = TRIGONAL::get_symmetries();
-  } else {
-    error->all(FLERR, "Illegal 'potts/quaternion command; expected "
-                      "'cubic', 'hcp' or 'trigonal'");
-  }
+  symmetries = CRYSTAL::get_symmetries(arg[2]);
+  if (symmetries.empty())
+    error->all(FLERR, "Illegal 'potts/quaternion command; expected 'cubic', "
+                      "'hcp', 'trigonal', 'tetragonal' or 'orthorhombic'");
   if (4 == narg) {
     theta_cut = atof(arg[3]);
     if (theta_cut <= 0.0)
       error->all(
           FLERR,
           "Illegal 'potts/quaternion command; theta_cut must be positive");
-    if (strcmp(arg[2], "cubic") == 0 && theta_cut > 62.7) {
-      error->all(FLERR, "Illegal 'potts/quaternion command; "
-                        "theta_cut for 'cubic' must "
-                        "be between 0.0 and 62.7 degrees");
-    } else if (strcmp(arg[2], "hcp") == 0 && theta_cut > 93.8) {
-      error->all(FLERR, "Illegal 'potts/quaternion command; "
-                        "theta_cut for 'hcp' must "
-                        "be between 0.0 and 93.8 degrees");
-    } else if (strcmp(arg[2], "trigonal") == 0 && theta_cut > 104.4) {
-      error->all(FLERR, "Illegal 'potts/quaternion command; "
-                        "theta_cut for 'trigonal' must "
-                        "be between 0.0 and 104.4 degrees");
+    const double max = CRYSTAL::max_disorientation(arg[2]);
+    if (theta_cut > max) {
+      char msg[160];
+      snprintf(msg, sizeof(msg), "Illegal 'potts/quaternion command; theta_cut for '%s' "
+               "must be between 0.0 and %g degrees", arg[2], max);
+      error->all(FLERR, msg);
     }
   } else {
     // Default value theta_cut=15.0

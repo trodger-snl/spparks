@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace SPPARKS_NS {
 
@@ -76,6 +77,13 @@ struct AdditiveParams {
   // relative to the seed. `nucleation_misorientation_target off|none` disables.
   bool nucleation_misorient_enabled = true;
 
+  // `crystal <name> [gx gy gz]`: the crystal symmetry (disorientations on the
+  // CPU app) and the preferred growth directions -- the symmetry orbit of the
+  // crystal-frame direction g, default [001] (cubic: <100>). growth_dirs
+  // holds 3 doubles per direction, one per +-pair.
+  std::string crystal = "cubic";
+  std::vector<double> growth_dirs = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+
   // Boundary smoothing: greedy steepest descent over the distinct neighbour
   // spins instead of one random proposal; `copy` takes one neighbour's
   // quaternion instead of the sign-aligned average; nuclei_smooth puts
@@ -95,6 +103,10 @@ struct AdditiveParams {
   bool parse_command(const char *command, int narg, char **arg,
                      Error *error, FILE *screen, int me, ThermalManager &thermal);
 
+  // texture_parameters against the growth family (needs the crystal command,
+  // which may come after it): c3 must keep the mobility monotonic out to the
+  // family's reach; note a negative minimum mobility (rank 0).
+  void check_texture(Error *error, FILE *screen, int me) const;
   // Warn (rank 0) when even the shortest hop's rotation, sqrt(D*dx) at the
   // full D, reaches mis_thresh: nearly every solidifying site would then
   // start a new grain. dx is the lattice spacing in m.

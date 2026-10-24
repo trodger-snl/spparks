@@ -340,6 +340,8 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   Kokkos::View<int*> d_gw_nready;     // per gid: levels 0..nready-1 are in the table
   Kokkos::View<double*[3]> d_gw_tab;  // gid*maxlev + k -> rotation vector
   double t_cool_max;   // tl - ts, set in init_app (was a hardcoded 100 K)
+  // Device copy of AdditiveParams::growth_dirs (3 per direction), set in init_app.
+  Kokkos::View<double*> d_growth_dirs;
 
   // Per-hop rotation angle of the walk: sqrt(D_eff * hop_m). The sqrt(hop)
   // scaling keeps RMS^2 = D * distance independent of lattice spacing.
@@ -408,13 +410,14 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
 
   // Perturb orientation q by `angle` per a misorientation-target mode:
   // RANDOM_ROTATION composes a rotation about a uniformly random axis;
-  // RANDOM rotates the nearest <100> toward a uniformly random unit vector
+  // RANDOM rotates the nearest growth direction (dirs, ndirs: crystal frame,
+  // 3 per direction) toward a uniformly random unit vector
   // (same z/phi sampling as AppAdditiveTexture's sample_random_unit_vector).
   // Two RNG draws either way.
   template<typename Gen>
   KOKKOS_INLINE_FUNCTION
-  static void perturb_orientation(int mode, const double *q,
-                                  double angle, Gen &gen, double *out) {
+  static void perturb_orientation(int mode, const double *q, double angle,
+                                  const double *dirs, int ndirs, Gen &gen, double *out) {
     if (mode == MISORI_TARGET_RANDOM_ROTATION) {
       const double z = 2.0 * gen.drand() - 1.0;
       const double phi = 2.0 * MathConst::MY_PI * gen.drand();
@@ -439,7 +442,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
       dir[1] = radial * Kokkos::sin(phi);
       dir[2] = z;
     }
-    QuaternionOps::rotate_q_towards_u(q, dir, angle, out);
+    QuaternionOps::rotate_q_towards_u(q, dir, angle, dirs, ndirs, out);
   }
 
   struct ThermalOps {

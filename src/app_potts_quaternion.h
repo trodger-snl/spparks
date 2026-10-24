@@ -58,7 +58,8 @@ protected:
 protected:
   int *unique_neigh;
 
-  // symmetries: expect 'cubic'(24), 'hcp'(12) or 'trigonal'(6)
+  // symmetries: 'cubic'(24), 'hcp'(12), 'trigonal'(6), 'tetragonal'(8) or
+  // 'orthorhombic'(4); see crystalline_orientations/crystal_symmetries.h
   vector<double> symmetries;
   
   // Read-Shockley disorientation cutoff

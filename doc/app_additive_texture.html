@@ -223,12 +223,29 @@ only.
 </UL>
 <P>Texture and misorientation:
 </P>
-<UL><LI><I>texture_parameters</I> <I>c2 c3</I> : mobility model
-mob(theta) = 1 + c2 * cos(c3 * theta), where theta is the
-misorientation between the grain's <100> family and the local thermal
-gradient.  <I>c2 >= 0</I>, <I>c3 >= 0</I>, and <I>c3 * acos(1/sqrt(3)) <= pi</I>
-(monotonicity) are enforced; a negative mobility is allowed and gives
-the candidate zero weight.  The old three-argument form (c1 c2 c3) is
+<UL><LI><I>crystal</I> <I>name</I> [<I>gx gy gz</I>] : crystal symmetry and preferred
+growth direction.  <I>name</I> = <I>cubic</I> (default), <I>hcp</I>, <I>trigonal</I>,
+<I>tetragonal</I> or <I>orthorhombic</I>, with the same symmetry sets and crystal
+frames as <A HREF = "app_potts_quaternion.html">potts/quaternion</A>.  The growth
+directions are <I>gx gy gz</I> (crystal-frame Cartesian components, default
+0 0 1) and every direction equivalent to it under the symmetry: cubic
+[001] gives the <100> family of the default model, hcp, tetragonal
+and orthorhombic [001] the c axis alone, cubic 1 1 1 the four <111>
+directions.  The growth directions are what the mobility angle theta
+and <I>misorientation_target random</I> use.  The symmetry also sets the
+disorientation for the new-grain test of <I>additive/texture</I>
+(<I>additive/texture/kk</I> uses the direct quaternion angle there). 
+
+<LI><I>texture_parameters</I> <I>c2 c3</I> : mobility model
+mob(theta) = 1 + c2 * cos(c3 * theta), where theta is the angle
+between the local thermal gradient and the nearest growth direction
+(see <I>crystal</I>).  <I>c2 >= 0</I> and <I>c3 >= 0</I> are enforced, and at the
+start of each run <I>c3 * theta_max <= pi</I> (monotonicity), where
+theta_max is the largest angle a gradient can make with its nearest
+growth direction: acos(1/sqrt(3)) = 54.7 deg for cubic <100>, 90 deg
+for a single axis such as hcp [001] (so c3 <= 2 there; the default
+c3 = 2.5 needs a texture_parameters command).  A negative mobility is
+allowed and gives the candidate zero weight.  The old three-argument form (c1 c2 c3) is
 rejected with a message explaining the conversion. 
 
 <LI><I>misorientation_diffusion</I> <I>D</I> [<I>thresh</I>] [<I>alpha</I>] : per-hop
@@ -249,8 +266,8 @@ bending); the level is the inheritance path length in lattice units
 
 <LI><I>misorientation_target</I> <I>random_rotation|random</I> : rotation axis of
 the misorientation step; <I>random_rotation</I> (default) rotates about a
-uniformly random axis, <I>random</I> rotates the nearest <100> toward a
-random direction. 
+uniformly random axis, <I>random</I> rotates the nearest growth direction
+(<100> for the default <I>crystal</I>) toward a random direction. 
 
 <LI><I>nucleation_misorientation_target</I> <I>on|off|none</I> : when on (default)
 and <I>misorientation_diffusion</I> is active, the sites a nucleus claims
@@ -488,6 +505,7 @@ mobility = 0.5 + 0.5*cos(2.5 theta) until texture_parameters is given
   (the same ratios as texture_parameters 1 2.5)
 misorientation_diffusion off (thresh 2 deg, alpha 0)
 misorientation_grain_walk off
+crystal = cubic 0 0 1 (the <100> growth family)
 misorientation_target = random_rotation
 nucleation_misorientation_target = on
 smooth_greedy_multiproposal = off, smooth_orientation = average, nuclei_smooth = off

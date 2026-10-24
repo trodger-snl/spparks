@@ -233,15 +233,15 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   fylo = axis_view("cond_fylo", ay, cy0 - 1, NYL, 1);
   fyhi = axis_view("cond_fyhi", ay, cy0 - 1, NYL, 2);
   wz = axis_view("cond_wz", az, 0, nz, 0);
-  Ex = Kokkos::View<fastreal*>("cond_Ex", NXL);
-  Ey = Kokkos::View<fastreal*>("cond_Ey", NYL);
-  Ez = Kokkos::View<fastreal*>("cond_Ez", nz);
+  Ex = Kokkos::View<KK_FLOAT*>("cond_Ex", NXL);
+  Ey = Kokkos::View<KK_FLOAT*>("cond_Ey", NYL);
+  Ez = Kokkos::View<KK_FLOAT*>("cond_Ez", nz);
   fzlo = axis_view("cond_fzlo", az, 0, nz, 1);
   fzhi = axis_view("cond_fzhi", az, 0, nz, 2);
 
-  H = Kokkos::View<fastreal***>("cond_H", NXL, NYL, nz);
-  T = Kokkos::View<fastreal***>("cond_T", NXL, NYL, nz);
-  Tn = Kokkos::View<fastreal***>("cond_Tn", NXL, NYL, nz);
+  H = Kokkos::View<KK_FLOAT***>("cond_H", NXL, NYL, nz);
+  T = Kokkos::View<KK_FLOAT***>("cond_T", NXL, NYL, nz);
+  Tn = Kokkos::View<KK_FLOAT***>("cond_Tn", NXL, NYL, nz);
   P = Kokkos::View<unsigned char***>("cond_P", NXL, NYL, nz);
   Pn = Kokkos::View<unsigned char***>("cond_Pn", NXL, NYL, nz);
 
@@ -316,12 +316,12 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
     std::vector<double> Ht;
     src->enthalpy_table(ts_m, tl_m, Htab_T0, Htab_dT, Ht, plate);
     double Href = 0.0;
-    if (std::is_same<fastreal, float>::value) {
+    if (std::is_same<KK_FLOAT, float>::value) {
       const double u = (src->ambient() - Htab_T0) / Htab_dT;
       const int i = std::max(0, std::min((int) Ht.size() - 2, (int) std::floor(u)));
       Href = Ht[i] + (u - i) * (Ht[i+1] - Ht[i]);
     }
-    Kokkos::View<fastreal*> d(nm, Ht.size());
+    Kokkos::View<KK_FLOAT*> d(nm, Ht.size());
     auto h = Kokkos::create_mirror_view(d);
     for (size_t i = 0; i < Ht.size(); i++) h(i) = Ht[i] - Href;
     Kokkos::deep_copy(d, h);
@@ -343,12 +343,12 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   kT2 = plate_on ? up("cond_kT2", pm.k_T) : kT;
   kV2 = plate_on ? up("cond_kV2", pm.k_v) : kV;
   auto to_r = [](Kokkos::View<double*> d) {
-    if constexpr (std::is_same<fastreal, double>::value) return d;
+    if constexpr (std::is_same<KK_FLOAT, double>::value) return d;
     else {
-      Kokkos::View<fastreal*> r(d.label() + "_r", d.extent(0));
+      Kokkos::View<KK_FLOAT*> r(d.label() + "_r", d.extent(0));
       auto hd = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), d);
       auto hr = Kokkos::create_mirror_view(r);
-      for (size_t i = 0; i < d.extent(0); i++) hr(i) = (fastreal) hd(i);
+      for (size_t i = 0; i < d.extent(0); i++) hr(i) = (KK_FLOAT) hd(i);
       Kokkos::deep_copy(r, hr);
       return r;
     }
@@ -439,7 +439,7 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
 void ConductionSolverKokkos::reset_field(double Tr)
 {
   // H(Tr) from each material's table (linear interpolation, end slopes beyond).
-  auto H_at = [&](Kokkos::View<fastreal*> tab) {
+  auto H_at = [&](Kokkos::View<KK_FLOAT*> tab) {
     auto hH = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), tab);
     const int n = (int) hH.extent(0);
     const double u = (Tr - Htab_T0) / Htab_dT;
@@ -450,7 +450,7 @@ void ConductionSolverKokkos::reset_field(double Tr)
   if (Hr2 == Hr) Kokkos::deep_copy(H, Hr);
   else {
     auto H_ = H; auto P_ = P;
-    const fastreal h1 = Hr, h2 = Hr2;
+    const KK_FLOAT h1 = Hr, h2 = Hr2;
     Kokkos::parallel_for("ConductionResetH",
       Kokkos::MDRangePolicy<Kokkos::Rank<3>>({0, 0, 0}, {(int) H.extent(0), (int) H.extent(1), nz}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
@@ -487,9 +487,9 @@ void ConductionSolverKokkos::step(double h, double t0)
 void ConductionSolverKokkos::sts_step(double tau, int s)
 {
   if (Ya.extent(0) != H.extent(0) || Ya.extent(1) != H.extent(1) || Ya.extent(2) != H.extent(2)) {
-    Ya = Kokkos::View<fastreal***>("cond_Ya", H.extent(0), H.extent(1), H.extent(2));
-    Yb = Kokkos::View<fastreal***>("cond_Yb", H.extent(0), H.extent(1), H.extent(2));
-    L0 = Kokkos::View<fastreal***>("cond_L0", H.extent(0), H.extent(1), H.extent(2));
+    Ya = Kokkos::View<KK_FLOAT***>("cond_Ya", H.extent(0), H.extent(1), H.extent(2));
+    Yb = Kokkos::View<KK_FLOAT***>("cond_Yb", H.extent(0), H.extent(1), H.extent(2));
+    L0 = Kokkos::View<KK_FLOAT***>("cond_L0", H.extent(0), H.extent(1), H.extent(2));
   }
   auto b = [](int j) { return j < 2 ? 1.0 / 3.0 : (j*j + j - 2.0) / (2.0 * j * (j + 1)); };
   const double w1 = 4.0 / (s*s + s - 2.0);
@@ -498,7 +498,7 @@ void ConductionSolverKokkos::sts_step(double tau, int s)
   c.sts = true; c.store_L0 = true; c.phase = (s == 1);
   c.mu = 1.0; c.nu = 0.0; c.mut = b(1) * w1 * tau; c.gat = 0.0;
   stage(c, H, H, Ya);                       // Y1 = H + mu~1 tau L(H)
-  Kokkos::View<fastreal***> y1 = Ya, y2 = H, spare = Yb;
+  Kokkos::View<KK_FLOAT***> y1 = Ya, y2 = H, spare = Yb;
   for (int j = 2; j <= s; j++) {
     c.store_L0 = false; c.phase = (j == s);
     c.mu = (2.0*j - 1.0) / j * b(j) / b(j-1);
@@ -506,12 +506,12 @@ void ConductionSolverKokkos::sts_step(double tau, int s)
     c.mut = c.mu * w1 * tau;
     c.gat = -(1.0 - b(j-1)) * c.mut;
     // Y_j overwrites Y_{j-2} in place, except while Y_{j-2} is H (Y0)
-    Kokkos::View<fastreal***> out = (j == 2) ? spare : y2;
+    Kokkos::View<KK_FLOAT***> out = (j == 2) ? spare : y2;
     stage(c, y1, y2, out);
     y2 = y1; y1 = out;
   }
   // y1 = Y_s: make it H; keep the other two as stage buffers
-  Kokkos::View<fastreal***> oldH = H;
+  Kokkos::View<KK_FLOAT***> oldH = H;
   H = y1;
   Ya = (y2.data() == oldH.data()) ? spare : y2;
   Yb = oldH;
@@ -521,9 +521,9 @@ void ConductionSolverKokkos::sts_step(double tau, int s)
    Flux divergence + source at T (the state Y1), then the stage update.
 ------------------------------------------------------------------------- */
 
-void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<fastreal***> Y1,
-                                   Kokkos::View<fastreal***> Y2,
-                                   Kokkos::View<fastreal***> Yout)
+void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
+                                   Kokkos::View<KK_FLOAT***> Y2,
+                                   Kokkos::View<KK_FLOAT***> Yout)
 {
   const auto &cfg = src->config();
   const double xl = c.xl, yl = c.yl, Pq = c.Pq, h = c.h;
@@ -549,7 +549,7 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<fastreal***> Y1,
   const double pack = cfg.packing;
 
   // The Gaussian separates: integrate it over each cell's extent per axis.
-  auto Ex_ = Ex, Ey_ = Ey, Ez_ = Ez;   // fastreal: rounded once, as the stencil used them
+  auto Ex_ = Ex, Ey_ = Ey, Ez_ = Ez;   // KK_FLOAT: rounded once, as the stencil used them
   if (Pq > 0.0) {
     const int nmax = std::max(std::max((int) Ex.extent(0), (int) Ey.extent(0)), nz_);
     Kokkos::parallel_for("ConductionSource", nmax, KOKKOS_LAMBDA(const int n) {
@@ -565,8 +565,8 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<fastreal***> Y1,
     });
   }
 
-  // All math in fastreal (float under SPPARKS_FP32), H relative to Href.
-  // With fastreal == double every expression is the original one.
+  // All math in KK_FLOAT (float under KOKKOS_PREC=mixed/single), H relative to Href.
+  // With KK_FLOAT == double every expression is the original one.
   //
   // A team owns a TX x TY column of cells and marches it up through z. A
   // face conductance is A / (r_c + r_n) with r = (w/2) / k(T) of each side,
@@ -577,7 +577,7 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<fastreal***> Y1,
   // so the result is bit-identical to it, at a seventh of the lookups and
   // about a third of the divisions. One barrier per plane: the scratch is
   // double-buffered by plane parity.
-  using R = fastreal;
+  using R = KK_FLOAT;
   // host backends (OpenMP, Serial) cannot run 256-thread teams: 1 x 1 tiles
   constexpr bool host = std::is_same<Kokkos::DefaultExecutionSpace,
                                      Kokkos::DefaultHostExecutionSpace>::value;

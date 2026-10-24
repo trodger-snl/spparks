@@ -214,14 +214,14 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
   // layer -- re-uploaded only when the host cache generation changes. The
   // per-node temperature slice (length n_nodes) is re-uploaded every step.
   // See fill_temperature_hdf5_device().
-  // fastreal (spktype.h) is double by default, float under
-  // -DSPPARKS_FP32: this kernel is gather-bound, so narrowing the streamed
+  // KK_FLOAT (spktype.h) is double by default, float under
+  // KOKKOS_PREC=mixed/single: this kernel is gather-bound, so narrowing the streamed
   // arrays is the win. Node indices stay int and TIMES stay double -- see the
   // header for why d_ts_times must not be narrowed.
   Kokkos::View<int*[4]>      d_hdf5_node_idx;   // [nlocal] tet-node indices into nodal slice
-  Kokkos::View<fastreal*[3]> d_hdf5_weights;    // [nlocal] barycentric weights
+  Kokkos::View<KK_FLOAT*[3]> d_hdf5_weights;    // [nlocal] barycentric weights
   Kokkos::View<int*>         d_hdf5_valid;      // [nlocal] 1 = has containing element
-  Kokkos::View<fastreal*>    d_hdf5_nodal_temps;// [n_nodes] per-node T for the step
+  Kokkos::View<KK_FLOAT*>    d_hdf5_nodal_temps;// [n_nodes] per-node T for the step
   long d_hdf5_cache_version = -1;   // cache generation the static Views hold
   int  d_hdf5_nsites = -1;          // site count (nall) the static Views were sized for
 
@@ -236,7 +236,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
                                       // double: absolute sim times ~3.9e4 s on
                                       // a 3e-6 s step; float would quantize to
                                       // ~4e-3 s and break the search bracket
-  Kokkos::View<fastreal*> d_ts_temps; // flat per-node sample temperatures
+  Kokkos::View<KK_FLOAT*> d_ts_temps; // flat per-node sample temperatures
   Kokkos::View<int64_t*[2]> d_ts_offsets; // [n_active] {start,end}; row k = node d_active_nodes(k)
   Kokkos::View<int*>    d_active_nodes;  // the ~33k nodes the blend reads (interp only these)
   int  d_n_active_nodes = 0;

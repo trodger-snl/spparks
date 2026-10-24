@@ -375,7 +375,7 @@ The device temperature kernels carry their per-site transcendental math in a
 compile-time `fastreal` type (`src/spktype.h`; was `AMReal` in
 `src/KOKKOS/am_temp_precision.h` when these numbers were taken). Default is FP64
 (`double`) — HPC production precision and the bit-for-bit CPU-validation
-reference. `-DSPPARKS_FP32=ON` (formerly `-DSPPARKS_AM_TEMP_FP32=ON`) switches the eval math to `float`. FP32 is
+reference. `-DKOKKOS_PREC=mixed` (formerly `-DSPPARKS_FP32=ON` / `-DSPPARKS_AM_TEMP_FP32=ON`) switches the eval math to `float`. FP32 is
 scoped to the transcendental work only: `k_T` and the plan PODs stay double, and
 the cancellation-prone site−laser / time-delta differences (and Moser's
 quadrature order selection) stay double, so both precisions run the identical

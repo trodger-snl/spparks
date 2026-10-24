@@ -274,7 +274,7 @@ void AppPottsQuaternionKokkos::sync_ghosts_to_device()
 
 double AppPottsQuaternionKokkos::site_energy(int i)
 {
-  double eng = 0.0;
+  KK_ACC_FLOAT eng = 0.0;
   const double qi[4] = {q0[i], qx[i], qy[i], qz[i]};
 
   for (int j = 0; j < numneigh[i]; j++) {
@@ -285,7 +285,7 @@ double AppPottsQuaternionKokkos::site_energy(int i)
     const double qj[4] = {q0[nj], qx[nj], qy[nj], qz[nj]};
 
     // device formula on host too: no per-call vector allocations (KMC calls
-    // this nevent+1 times per site), and precision follows fastreal
+    // this nevent+1 times per site), and precision follows KK_FLOAT
     double di = QuaternionOps::compute_disorientation(
       symmetries.data(), num_symmetries, qi, qj);
 
@@ -486,7 +486,7 @@ struct AppPottsQuaternionKokkos::ColorSweepFunctor {
 
   KOKKOS_INLINE_FUNCTION
   double compute_energy(int i, const double* qi) const {
-    double eng = 0.0;
+    KK_ACC_FLOAT eng = 0.0;
 
     for (int j = 0; j < numneigh(i); j++) {
       int nj = neighbor((size_t) i, j);

@@ -184,7 +184,7 @@ the handoff data path:
   The Phase 7 temperature check is bit-for-bit **per backend** (inmemory-vs-file on
   the *same* backend) — **NOT** CUDA==HIP: the build uses `-ffast-math
   -funroll-loops` (`src/CMakeLists.txt:80`), so FMA contraction makes CUDA and HIP
-  bits differ. FP precision (`SPPARKS_FP32`) is fixed identically per deployment.
+  bits differ. FP precision (`KOKKOS_PREC`) is fixed identically per deployment.
 
 ## Phased implementation
 
@@ -394,7 +394,7 @@ installed `src/…` copy, and re-run `cmake -S src -B <build>` after editing a
 ## Risks / notes
 - **ABI:** the thermal app and `libspparks` must link the **same Kokkos build +
   backend** (CUDA on H100, HIP on the AMD cluster) and matching flags. The
-  temperature FP precision toggle (`SPPARKS_FP32`) must match on both sides of
+  temperature FP precision toggle (`KOKKOS_PREC`) must match on both sides of
   the View handoff.
 - **GPU contention (platform-dependent):** SPPARKS microstructure kernels
   time-share the GPU with the thermal solver. **On H100** the fallback — run

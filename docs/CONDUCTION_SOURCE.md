@@ -315,7 +315,7 @@ Identity is checked on `%g` text dumps (6 significant digits). GP700 runs and
 `compare.py`: `/home/tron/gp700_runs/cond_cmp`.
 
 **Precision.** The stage kernel is FP64-bound on gfx1151 (about 20 FP64
-divisions per cell). Built with `-DSPPARKS_FP32=ON` (`build-fp32`) the
+divisions per cell). Built with `-DKOKKOS_PREC=mixed` (`build-fp32`) the
 solver runs entirely in `fastreal` = float, state included; H is stored
 relative to H(T0), which keeps cold cells (small H increments) resolved.
 The default FP64 build is unchanged bit for bit.

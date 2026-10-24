@@ -134,26 +134,36 @@ else()
     add_compile_definitions(SPPARKS_SMALLBIG)
 endif()
 
-# Hot-kernel floating-point precision (fastreal, src/spktype.h). Default OFF =>
-# FP64: production precision (production always runs FP64) and the
-# bit-for-bit CPU-validation reference. ON => FP32 everywhere code opts in via
-# fastreal: a testing/development build for desktop GPUs (gfx1151) whose FP64
-# rate is heavily reduced. One switch on purpose. Measured gains:
+# Kokkos floating-point precision (KK_FLOAT / KK_ACC_FLOAT, src/spktype.h),
+# named as in LAMMPS: double (default) = FP64, production precision and the
+# bit-for-bit CPU-validation reference; mixed = FP32 math with FP64 per-site
+# sums; single = FP32 sums too. mixed/single are testing/development builds
+# for desktop GPUs (gfx1151) whose FP64 rate is heavily reduced. Measured
+# gains (mixed, as the former SPPARKS_FP32=ON):
 #   * additive/texture/kk Rosenthal/Moser: compute-bound transcendental kernels.
 #   * additive/texture/kk HDF5 unstructured: memory-bound gather-and-blend;
 #     halved traffic (ct15 10-layer decks: that fill is ~33% of per-box wall,
 #     flat across OMP_NUM_THREADS 1/4/16).
 #   * potts/quaternion/kk: 256^3 sweep color/strict loop 59.5 -> 32.4 s
 #     (cubic), 40.9 -> 21.1 s (hcp); disorientation within ~2e-5 deg of FP64.
-option(SPPARKS_FP32 "Use FP32 for hot-kernel math that opts in via fastreal (additive/texture/kk temperature incl. conduction fluxes, potts/quaternion/kk disorientation)" OFF)
-foreach(_old SPPARKS_AM_TEMP_FP32 SPPARKS_QUAT_FP32)
+set(KOKKOS_PREC "double" CACHE STRING "Kokkos floating-point precision: double, mixed or single")
+set_property(CACHE KOKKOS_PREC PROPERTY STRINGS double mixed single)
+foreach(_old SPPARKS_FP32 SPPARKS_AM_TEMP_FP32 SPPARKS_QUAT_FP32)
     if(${_old})
-        message(FATAL_ERROR "${_old} was replaced by SPPARKS_FP32 (one switch for all fastreal code)")
+        message(FATAL_ERROR "${_old} was replaced by KOKKOS_PREC (=mixed for the old FP32 build); unset it with -U${_old}")
     endif()
 endforeach()
-if(SPPARKS_FP32)
-    add_compile_definitions(SPPARKS_FP32)
+string(TOLOWER "${KOKKOS_PREC}" _prec)
+if(_prec STREQUAL "double")
+    add_compile_definitions(SPPARKS_KOKKOS_DOUBLE_DOUBLE)
+elseif(_prec STREQUAL "mixed")
+    add_compile_definitions(SPPARKS_KOKKOS_SINGLE_DOUBLE)
+elseif(_prec STREQUAL "single")
+    add_compile_definitions(SPPARKS_KOKKOS_SINGLE_SINGLE)
+else()
+    message(FATAL_ERROR "KOKKOS_PREC must be double, mixed or single (got '${KOKKOS_PREC}')")
 endif()
+message(STATUS "Kokkos precision: ${_prec}")
 
 # Configure features
 if(SPPARKS_ENABLE_GZIP)

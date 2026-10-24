@@ -647,7 +647,7 @@ submodule in lib/kokkos; fetch it once with
 -DSPPARKS_KOKKOS_BACKEND=name     # OPENMP (default), CUDA, HIP, SYCL or SERIAL
 -DSPPARKS_KOKKOS_ARCH=token       # GPU architecture; required by CUDA and HIP
 -DSPPARKS_KOKKOS_HOST_OPENMP=ON   # OpenMP host threads with a GPU backend (default: OFF)
--DSPPARKS_FP32=ON                 # single precision in the hot kernels (default: OFF) 
+-DKOKKOS_PREC=value               # double (default), mixed or single 
 </PRE>
 <P>The architecture token is the Kokkos name of the GPU: for example
 AMD_GFX942_APU (MI300A), AMD_GFX942 (MI300X), AMD_GFX90A (MI200),
@@ -666,10 +666,14 @@ cmake --build build-hip -j
 <PRE>cd src
 ./build_cmake.sh --kokkos --kokkos-backend HIP --kokkos-arch AMD_GFX1151 
 </PRE>
-<P>SPPARKS_FP32 computes the temperature fields of additive/texture/kk and
-the disorientation angle of potts/quaternion/kk in single precision.
-It is meant for testing on GPUs with a reduced FP64 rate; results
-differ from the default double-precision build in the low bits.
+<P>KOKKOS_PREC sets the floating-point precision of the Kokkos kernels,
+with the same names as LAMMPS.  <I>double</I> computes everything in double
+precision.  <I>mixed</I> computes the temperature fields of
+additive/texture/kk and the disorientation angle of potts/quaternion/kk
+in single precision, but sums them per site in double precision.
+<I>single</I> does the sums in single precision as well.  <I>mixed</I> and
+<I>single</I> are meant for testing on GPUs with a reduced FP64 rate;
+their results differ from the <I>double</I> build in the low bits.
 </P>
 <P><B>Running:</B>
 </P>

@@ -67,21 +67,21 @@ class ConductionSolverKokkos : protected Pointers {
   int nbr[4] = {-1, -1, -1, -1};
   double zl = 0.0;
 
-  // State in fastreal. H is stored relative to Href = H(T0) under
-  // SPPARKS_FP32 (float resolves small increments near T0 that way; 0 in
+  // State in KK_FLOAT. H is stored relative to Href = H(T0) when
+  // KK_FLOAT is float (it resolves small increments near T0 that way; 0 in
   // FP64, so the FP64 arithmetic is the original).
-  Kokkos::View<fastreal***> H, T, Tn;
-  Kokkos::View<fastreal***> Ya, Yb, L0;   // RKL2 stage buffers (allocated on demand)
+  Kokkos::View<KK_FLOAT***> H, T, Tn;
+  Kokkos::View<KK_FLOAT***> Ya, Yb, L0;   // RKL2 stage buffers (allocated on demand)
   Kokkos::View<unsigned char***> P, Pn;
   // per local cell: width and lower/upper face per axis (halo included)
   Kokkos::View<double*> wx, wy, wz, fxlo, fxhi, fylo, fyhi, fzlo, fzhi;
-  Kokkos::View<fastreal*> Ex, Ey, Ez;   // per-axis Gaussian integrals, per sub-step
+  Kokkos::View<KK_FLOAT*> Ex, Ey, Ez;   // per-axis Gaussian integrals, per sub-step
   double zsrc = 0.0;                  // source plane: laser plane, capped at the top face
-  Kokkos::View<fastreal*> Htab, Htab2;   // H(T) - Href, part and plate
+  Kokkos::View<KK_FLOAT*> Htab, Htab2;   // H(T) - Href, part and plate
   Kokkos::View<double*> kT, kV, kT2, kV2;
-  // fastreal copies for the stencil (aliases under FP64): FP32 then reads
+  // KK_FLOAT copies for the stencil (aliases under FP64): FP32 then reads
   // floats instead of converting doubles at FP64 rate
-  Kokkos::View<fastreal*> kTr, kVr, kT2r, kV2r, wxr, wyr, wzr;
+  Kokkos::View<KK_FLOAT*> kTr, kVr, kT2r, kV2r, wxr, wyr, wzr;
   double Htab_T0 = 0.0, Htab_dT = 1.0;
   Kokkos::View<int*[3]> site_cell;   // local (i,j,k) per site, i<0 = above grid
 
@@ -105,8 +105,8 @@ class ConductionSolverKokkos : protected Pointers {
   // These define device lambdas (KOKKOS_LAMBDA), which nvcc rejects in a
   // private or protected member function; not part of the class interface.
  public:
-  void stage(const Stage &c, Kokkos::View<fastreal***> Y1,
-             Kokkos::View<fastreal***> Y2, Kokkos::View<fastreal***> Yout);
+  void stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
+             Kokkos::View<KK_FLOAT***> Y2, Kokkos::View<KK_FLOAT***> Yout);
   void exchange();
   void reset_field(double Tr);
   double sample(Kokkos::View<double*> d_T, int nlocal, int nall);

@@ -122,7 +122,7 @@ protected:
     KOKKOS_INLINE_FUNCTION
     static double compute_disorientation(const double* symmetries, int num_sym,
                                          const double* q1, const double* q2) {
-#ifdef SPPARKS_FP32
+#ifndef SPPARKS_KOKKOS_DOUBLE_DOUBLE
       // float argmax of |m0| over symmetries, then the angle of that one
       // misorientation from its vector part: acos near 1 would lose small
       // angles in float, atan2 does not
@@ -179,9 +179,9 @@ protected:
     // theta_cut: r (1 - ln r) for r = di/theta_cut < 1, else 1
     KOKKOS_INLINE_FUNCTION
     static double read_shockley(double di, double theta_cut) {
-      fastreal ratio = (fastreal)(di / theta_cut);
-      if (ratio <= (fastreal)0) return 0.0;
-      if (ratio < (fastreal)1) return (double)(ratio * ((fastreal)1 - Kokkos::log(ratio)));
+      KK_FLOAT ratio = (KK_FLOAT)(di / theta_cut);
+      if (ratio <= (KK_FLOAT)0) return 0.0;
+      if (ratio < (KK_FLOAT)1) return (double)(ratio * ((KK_FLOAT)1 - Kokkos::log(ratio)));
       return 1.0;
     }
 

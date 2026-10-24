@@ -272,7 +272,7 @@ void AdditiveParams::check_texture(Error *error, FILE *screen, int me) const
   if (c3 * theta_max > MY_PI + 1.0e-12) {
     char msg[256];
     snprintf(msg, sizeof(msg),
-      "texture_parameters: c3 = %g exceeds monotonicity limit "
+      "texture_parameters: c3 = %g (default 2.5 if not given) exceeds monotonicity limit "
       "pi/theta_max ~ %g for crystal %s; mobility would be non-monotonic in "
       "misorientation angle", c3, MY_PI / theta_max, crystal.c_str());
     error->all(FLERR, msg);

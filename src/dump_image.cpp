@@ -840,10 +840,9 @@ int DumpImage::modify_param(int narg, char **arg)
     double n = sqrt(ipfdir[0]*ipfdir[0]+ipfdir[1]*ipfdir[1]+ipfdir[2]*ipfdir[2]);
     if (n == 0.0) error->all(FLERR,"Illegal dump_modify command");
     ipfdir[0] /= n; ipfdir[1] /= n; ipfdir[2] /= n;
-    if (narg > 4 && CRYSTAL::index(arg[4]) >= 0) {
-      ipfcrystal = CRYSTAL::index(arg[4]);
-      return 5;
-    }
+    ipfcrystal = narg > 4 ? CRYSTAL::index(arg[4]) : -1;
+    if (ipfcrystal >= 0) return 5;
+    ipfcrystal = 0;                  // no crystal given: cubic
     return 4;
   }
 

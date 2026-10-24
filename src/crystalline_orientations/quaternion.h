@@ -29,6 +29,8 @@
 #include <stdexcept>
 #include <vector>
 
+#include "quaternion_ops.h"
+
 using std::vector;
 
 namespace SPPARKS_NS {
@@ -133,107 +135,45 @@ inline vector<double> vector_cross_product(const vector<double> &q,
                                            const vector<double> &r) {
   if (3 != q.size() || 3 != r.size())
     throw std::runtime_error("len(q)!=3 or len(r)!=3");
-  double qx = q[0], qy = q[1], qz = q[2];
-  double rx = r[0], ry = r[1], rz = r[2];
-  vector<double> s{qy * rz - qz * ry, -(qx * rz - qz * rx), qx * ry - qy * rx};
-  return std::move(s);
+  vector<double> s(3);
+  vector_cross_product(q.data(), r.data(), s.data());
+  return s;
 }
 inline vector<double> composition(const vector<double> &a,
                                   const vector<double> &b, bool unit = true) {
-  // Computes quaternion composition a b
-  //   args: a quaternion array len=4.
-  //   args: b quaternion array len=4.
-  //   if unit=true (default) a and b must be unit quaternions
-  //   returns: quaternion array len=4;
-
-  // if (a.size() != 4 || b.size() != 4)
-  //   error->all(FLERR, "vector storing quaternion must have size 4.");
-
+  // Quaternion composition a b; if unit=true (default) a and b must be unit
+  // quaternions.
   if (unit) {
     check_validity(a);
     check_validity(b);
   }
-  double ar = a[0];
-  double br = b[0];
-  double ax = a[1], ay = a[2], az = a[3];
-  double bx = b[1], by = b[2], bz = b[3];
-  // scalar qr=ar br - a[1:] dot b[1:]
-  double qr = ar * br - (ax * bx + ay * by + az * bz);
-  vector<double> cross{ay * bz - az * by, -(ax * bz - az * bx),
-                       ax * by - ay * bx};
-  // 3d vector qv=ar b[1:] + br a[1:] - a[1:] cross b[1:]
-  vector<double> qv{ar * bx + br * ax + cross[0], ar * by + br * ay + cross[1],
-                    ar * bz + br * az + cross[2]};
-  return std::move(vector<double>{qr, qv[0], qv[1], qv[2]});
+  vector<double> q(4);
+  composition(a.data(), b.data(), q.data());
+  return q;
 }
 
 inline vector<double> conjugate(const vector<double> &q) {
-  // if (q.size() != 4)
-  //   error->all(FLERR, "vector storing quaternion must have size 4.");
   check_validity(q);
-  return std::move(vector<double>{q[0], -q[1], -q[2], -q[3]});
+  return vector<double>{q[0], -q[1], -q[2], -q[3]};
 }
 
 inline vector<double> rotate_vector(const vector<double> &q,
                                     const vector<double> &r) {
-  // """
-  // Rotates vector 'r' with input quaternion q.
-  // args: q unit quaternion array len=4.
-  // args: r array len=3.
-  // return value array len=3
-  // Vec(r)+2 Real(q)Vec(q) CROSS Vec(r)+2 Vec(q) CROSS (Vec(q) CROSS Vec(r))
-  // """
+  // Rotates vector 'r' with unit quaternion q; returns len 3.
   if (4 != q.size() || 3 != r.size())
     throw std::runtime_error("len(q)!=4 or len(r)!=3");
   check_validity(q);
-  // Real and vector parts of q
-  double qr = q[0];
-  vector<double> qv{q[1], q[2], q[3]};
-  // rot=r+2*qr*c+2*numpy.cross(qv,c)
-  vector<double> c = vector_cross_product(qv, r);
-  vector<double> c2 = vector_cross_product(qv, c);
-  vector<double> rot{r[0] + 2.0 * qr * c[0] + 2.0 * c2[0],
-                     r[1] + 2.0 * qr * c[1] + 2.0 * c2[1],
-                     r[2] + 2.0 * qr * c[2] + 2.0 * c2[2]};
-  return std::move(rot);
+  vector<double> rot(3);
+  rotate_vector(q.data(), r.data(), rot.data());
+  return rot;
 }
 
 inline vector<double> to_rotation_matrix(const vector<double> &q) {
-  //     """
-  //     Converts quaternion q to 3x3 unitary matrix
-  //     returns 'row major' 3x3 matrix.
-  //
-  //     Return value: Columns of matrix express local site orientation
-  //     (per input quaternion) with respect to problem
-  //     global coordinate axes.  Depending on context, it may
-  //     be necessary to transpose this matrix.
-  //     """
-  //     check_validity(q,unit=True)
-
-  // if (q.size() != 4)
-  //   error->all(FLERR, "vector storing quaternion must have size 4.");
-  const double q0 = q[0], qx = q[1], qy = q[2], qz = q[3];
-  const double q00 = q0 * q0;
-  const double q0x = q0 * qx;
-  const double q0y = q0 * qy;
-  const double q0z = q0 * qz;
-  const double qxx = qx * qx;
-  const double qxy = qx * qy;
-  const double qxz = qx * qz;
-  const double qyy = qy * qy;
-  const double qyz = qy * qz;
-  const double qzz = qz * qz;
-  const double r11 = q00 + qxx - qyy - qzz;
-  const double r22 = q00 - qxx + qyy - qzz;
-  const double r33 = q00 - qxx - qyy + qzz;
-  const double r12 = 2 * (qxy - q0z);
-  const double r21 = 2 * (qxy + q0z);
-  const double r13 = 2 * (qxz + q0y);
-  const double r31 = 2 * (qxz - q0y);
-  const double r23 = 2 * (qyz - q0x);
-  const double r32 = 2 * (qyz + q0x);
-  vector<double> m{r11, r12, r13, r21, r22, r23, r31, r32, r33};
-  return std::move(m);
+  // Row-major 3x3; columns express the local site orientation in the
+  // global axes (transpose as needed).
+  vector<double> m(9);
+  to_rotation_matrix(q.data(), m.data());
+  return m;
 }
 
 inline double trace_of_rotation_matrix(const vector<double> &q) {
@@ -381,169 +321,26 @@ inline double
 get_cosine_of_minumum_angle_between_q_and_u(const vector<double> &q,
                                             const vector<double> &u,
                                             const vector<double> &dirs) {
-  /**
-      arg q: array shape=(4,) unit quaterion
-      arg u: array shape=(3,) direction (temperature gradient)
-      arg dirs: crystal-frame growth directions, 3 per direction, one per
-                +-pair (cubic <100>: the unit x, y, z axes)
-
-      Cosine of the smallest angle between u and any growth direction of
-      the crystal q, ignoring sign. Crystal-frame vector v lies along R(q) v
-      in the sample frame, and (R(q) v).n = (R(q)^T n).v.
-
-      returns cos(angle)
-   */
+  // See cosine_angle_q_u in quaternion_ops.h.
   if (4 != q.size() || 3 != u.size())
     throw std::runtime_error("len(q)!=4 or len(u)!=3");
-
-  // Take a copy of 'u' and normalize
-  vector<double> n{u[0], u[1], u[2]};
-  {
-    double d = norm(n);
-    double b = 1 / d;
-    n[0] *= b;
-    n[1] *= b;
-    n[2] *= b;
-  }
-  vector<double> m = to_rotation_matrix(q);
-  // r = transpose(m) n; 'm' is row-major.
-  double r[3];
-  for (size_t col = 0; col < 3; col++) {
-    double dot = 0.0;
-    for (size_t row = 0; row < 3; row++) {
-      size_t ptr = col + 3 * row;
-      dot += m[ptr] * n[row];
-    }
-    r[col] = dot;
-  }
-  double max = 0.0;
-  for (size_t k = 0; k + 2 < dirs.size(); k += 3) {
-    double dot = std::fabs(r[0] * dirs[k] + r[1] * dirs[k + 1] + r[2] * dirs[k + 2]);
-    if (dot > max)
-      max = dot;
-  }
-  return max;
+  return cosine_angle_q_u(q.data(), u.data(), dirs.data(), (int) dirs.size() / 3);
 }
 
 inline vector<double> rotate_q_towards_u(const vector<double> &q,
                                         const vector<double> &u,
                                         double angle,
                                         const vector<double> &dirs) {
-  /**
-  Rotates quaternion 'q' towards vector 'u' by the specified angle.
-  If the input angle exceeds the misorientation between the current
-  orientation and target vector, the rotation stops when they are aligned.
-  
-  arg q: array shape=(4,) unit quaternion to be rotated
-  arg u: array shape=(3,) target vector direction
-  arg angle: rotation angle in radians
-  arg dirs: crystal-frame growth directions (see
-            get_cosine_of_minumum_angle_between_q_and_u)
-  
-  returns: array shape=(4,) rotated unit quaternion
-  */
+  // See rotate_q_towards_u in quaternion_ops.h; returns the rotated unit
+  // quaternion.
   if (4 != q.size() || 3 != u.size())
     throw std::runtime_error("len(q)!=4 or len(u)!=3");
-  
   check_validity(q);
-  
-  // Normalize the target vector
-  vector<double> n{u[0], u[1], u[2]};
-  {
-    double d = norm(n);
-    if (d < 1.0e-15)
-      throw std::runtime_error("target vector has zero magnitude");
-    double b = 1.0 / d;
-    n[0] *= b;
-    n[1] *= b;
-    n[2] *= b;
-  }
-  
-  // Get the rotation axis
-  // The rotation axis is perpendicular to both the current orientation
-  // and the target direction. We'll use the quaternion's principal axis
-  // (the vector part when angle is non-zero) and cross it with the target.
-  
-  // Find which growth direction is closest to the target (either sign).
-  // Rotate the nearest one toward the target, not a fixed axis.
-  vector<double> m = to_rotation_matrix(q);
-  // m is row-major; R v has components m[3*row] v0 + m[3*row+1] v1 + m[3*row+2] v2.
-  double r[3];
-  for (int col = 0; col < 3; col++)
-    r[col] = m[col] * n[0] + m[col + 3] * n[1] + m[col + 6] * n[2];
-  double best_dot = 0.0;
-  size_t best = 0;
-  for (size_t k = 0; k + 2 < dirs.size(); k += 3) {
-      double dot = r[0] * dirs[k] + r[1] * dirs[k + 1] + r[2] * dirs[k + 2];
-      if (std::fabs(dot) > std::fabs(best_dot)) {
-          best_dot = dot;
-          best = k;
-      }
-  }
-  // current_dir = lab-frame direction of the nearest growth direction,
-  // sign-corrected so it points toward (not away from) the target.
-  double sign = (best_dot >= 0.0) ? 1.0 : -1.0;
-  const double *v = &dirs[best];
-  vector<double> current_dir(3);
-  for (int row = 0; row < 3; row++)
-    current_dir[row] = sign * (m[3 * row] * v[0] + m[3 * row + 1] * v[1] + m[3 * row + 2] * v[2]);
-  
-  // Calculate the current misorientation angle
-  double dot_product = current_dir[0]*n[0] + current_dir[1]*n[1] + current_dir[2]*n[2];
-  // Clamp dot product to avoid numerical issues with acos
-  dot_product = std::max(-1.0, std::min(1.0, dot_product));
-  double current_misorientation = std::acos(dot_product);
-  
-  // Check if already aligned (within tolerance)
-  if (current_misorientation < 1.0e-10) {
-    return vector<double>{q[0], q[1], q[2], q[3]};
-  }
-  
-  // Limit the rotation angle to not exceed the current misorientation
-  double actual_angle = std::min(std::fabs(angle), current_misorientation);
-  
-  // Calculate the rotation axis as the cross product
-  vector<double> rot_axis = vector_cross_product(current_dir, n);
-  
-  // Check if vectors are parallel (cross product near zero)
-  double axis_norm = norm(rot_axis);
-  if (axis_norm < 1.0e-10) {
-    // Vectors are parallel, no rotation needed or 180° rotation
-    // Check if they point in the same direction
-    if (dot_product > 0.99999) {
-      // Same direction, return original quaternion
-      return vector<double>{q[0], q[1], q[2], q[3]};
-    } else {
-      // Opposite directions (180° apart), need to find a perpendicular axis
-      // Use any perpendicular vector
-      if (std::fabs(n[0]) < 0.9) {
-        rot_axis = vector<double>{1.0, 0.0, 0.0};
-      } else {
-        rot_axis = vector<double>{0.0, 1.0, 0.0};
-      }
-      rot_axis = vector_cross_product(n, rot_axis);
-      axis_norm = norm(rot_axis);
-    }
-  }
-  
-  // Normalize the rotation axis
-  rot_axis[0] /= axis_norm;
-  rot_axis[1] /= axis_norm;
-  rot_axis[2] /= axis_norm;
-  
-  // Create the rotation quaternion for the actual angle
-  double half_angle = actual_angle * 0.5;
-  double cos_half = std::cos(half_angle);
-  double sin_half = std::sin(half_angle);
-  
-  vector<double> rot_q{cos_half, 
-                      sin_half * rot_axis[0],
-                      sin_half * rot_axis[1], 
-                      sin_half * rot_axis[2]};
-  
-  // Apply the rotation to the original quaternion
-  vector<double> result = composition(rot_q, q);
-  
+  if (norm(u) < 1.0e-15)
+    throw std::runtime_error("target vector has zero magnitude");
+  vector<double> result(4);
+  rotate_q_towards_u(q.data(), u.data(), angle, dirs.data(), (int) dirs.size() / 3,
+                     result.data());
   return result;
 }
 

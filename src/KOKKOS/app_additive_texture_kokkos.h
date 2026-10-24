@@ -428,8 +428,8 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
                             s * radial * Kokkos::cos(phi),
                             s * radial * Kokkos::sin(phi),
                             s * z};
-      QuaternionOps::composition(dq, q, out);
-      QuaternionOps::normalize(out);
+      quaternion::composition(dq, q, out);
+      quaternion::normalize(out);
       return;
     }
     // MISORI_TARGET_RANDOM
@@ -442,7 +442,7 @@ class AppAdditiveTextureKokkos : public AppPottsQuaternionKokkos, public Additiv
       dir[1] = radial * Kokkos::sin(phi);
       dir[2] = z;
     }
-    QuaternionOps::rotate_q_towards_u(q, dir, angle, dirs, ndirs, out);
+    quaternion::rotate_q_towards_u(q, dir, angle, dirs, ndirs, out);
   }
 
   struct ThermalOps {

@@ -24,6 +24,7 @@ AppStyle(potts/quaternion/kk,AppPottsQuaternionKokkos)
 #define SPK_APP_POTTS_QUATERNION_KOKKOS_H
 
 #include "app_lattice_kokkos.h"
+#include "crystalline_orientations/quaternion_ops.h"
 #include <vector>
 
 namespace SPPARKS_NS {
@@ -81,43 +82,10 @@ protected:
   // q = (q0, qx, qy, qz) where:
   //   q0 = cos(theta/2)          (scalar/real component)
   //   (qx, qy, qz) = sin(theta/2)*axis  (vector/imaginary components)
-  // This matches the CPU reference implementation in quaternion.h
+  // Shared host/device math (normalize, composition, rotate_q_towards_u, ...)
+  // is in crystalline_orientations/quaternion_ops.h; these are kk-only.
   //
   struct QuaternionOps {
-    // Numerical thresholds for quaternion operations
-    static constexpr double QUATERNION_ZERO_THRESHOLD = 1.0e-15;
-
-    KOKKOS_INLINE_FUNCTION
-    static void normalize(double* q) {
-      double norm = Kokkos::sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
-      if (norm > QUATERNION_ZERO_THRESHOLD) {
-        double inv_norm = 1.0 / norm;
-        q[0] *= inv_norm;
-        q[1] *= inv_norm;
-        q[2] *= inv_norm;
-        q[3] *= inv_norm;
-      }
-    }
-
-    KOKKOS_INLINE_FUNCTION
-    static void composition(const double* a, const double* b, double* result) {
-      double ar = a[0], ax = a[1], ay = a[2], az = a[3];
-      double br = b[0], bx = b[1], by = b[2], bz = b[3];
-
-      result[0] = ar * br - (ax * bx + ay * by + az * bz);
-      result[1] = ar * bx + br * ax + (ay * bz - az * by);
-      result[2] = ar * by + br * ay - (ax * bz - az * bx);
-      result[3] = ar * bz + br * az + (ax * by - ay * bx);
-    }
-
-    KOKKOS_INLINE_FUNCTION
-    static void conjugate(const double* q, double* result) {
-      result[0] = q[0];
-      result[1] = -q[1];
-      result[2] = -q[2];
-      result[3] = -q[3];
-    }
-
     // m = q1 * conj(q2 * s) is the misorientation under symmetry s, and for
     // unit quaternions trace(R(m)) = 4 m0^2 - 1. Its scalar part is
     // m0 = q1 . (q2 s) = (conj(q2) q1) . s, so d = conj(q2) q1 is formed once
@@ -157,8 +125,8 @@ protected:
       return (double)theta * 180.0 / M_PI;
 #else
       double q2c[4], d[4];
-      conjugate(q2, q2c);
-      composition(q2c, q1, d);
+      quaternion::conjugate(q2, q2c);
+      quaternion::composition(q2c, q1, d);
 
       double t = 0.0;
 
@@ -189,26 +157,6 @@ protected:
       return 1.0;
     }
 
-    KOKKOS_INLINE_FUNCTION
-    static void vector_cross_product(const double* a, const double* b, double* result) {
-      result[0] = a[1] * b[2] - a[2] * b[1];
-      result[1] = -(a[0] * b[2] - a[2] * b[0]);
-      result[2] = a[0] * b[1] - a[1] * b[0];
-    }
-
-    KOKKOS_INLINE_FUNCTION
-    static void rotate_vector(const double* q, const double* r, double* result) {
-      double q_vec[3] = {q[1], q[2], q[3]};
-      double cross1[3], cross2[3];
-
-      vector_cross_product(q_vec, r, cross1);
-      vector_cross_product(q_vec, cross1, cross2);
-
-      result[0] = r[0] + 2.0 * q[0] * cross1[0] + 2.0 * cross2[0];
-      result[1] = r[1] + 2.0 * q[0] * cross1[1] + 2.0 * cross2[1];
-      result[2] = r[2] + 2.0 * q[0] * cross1[2] + 2.0 * cross2[2];
-    }
-
     template<typename RandGenType>
     KOKKOS_INLINE_FUNCTION
     static void generate_random_quaternion(double* q, RandGenType& rand_gen) {
@@ -232,170 +180,7 @@ protected:
       q[2] = n3;
       q[3] = n4;
 
-      normalize(q);
-    }
-
-    // Convert quaternion to rotation matrix (row-major 3x3)
-    KOKKOS_INLINE_FUNCTION
-    static void to_rotation_matrix(const double* q, double* m) {
-      const double q0 = q[0], qx = q[1], qy = q[2], qz = q[3];
-      const double q00 = q0 * q0;
-      const double q0x = q0 * qx;
-      const double q0y = q0 * qy;
-      const double q0z = q0 * qz;
-      const double qxx = qx * qx;
-      const double qxy = qx * qy;
-      const double qxz = qx * qz;
-      const double qyy = qy * qy;
-      const double qyz = qy * qz;
-      const double qzz = qz * qz;
-      m[0] = q00 + qxx - qyy - qzz;  // r11
-      m[1] = 2 * (qxy - q0z);        // r12
-      m[2] = 2 * (qxz + q0y);        // r13
-      m[3] = 2 * (qxy + q0z);        // r21
-      m[4] = q00 - qxx + qyy - qzz;  // r22
-      m[5] = 2 * (qyz - q0x);        // r23
-      m[6] = 2 * (qxz - q0y);        // r31
-      m[7] = 2 * (qyz + q0x);        // r32
-      m[8] = q00 - qxx - qyy + qzz;  // r33
-    }
-
-    // Cosine of the minimum angle between vector u and the crystal q's growth
-    // directions dirs (crystal frame, 3 per direction, one per +-pair; cubic
-    // <100> = unit x, y, z). Used for texture weighting in solidification.
-    // Matches the host get_cosine_of_minumum_angle_between_q_and_u.
-    KOKKOS_INLINE_FUNCTION
-    static double get_cosine_angle_q_u(const double* q, const double* u,
-                                       const double* dirs, int ndirs) {
-      // Normalize the target vector
-      double n[3] = {u[0], u[1], u[2]};
-      double d = Kokkos::sqrt(n[0]*n[0] + n[1]*n[1] + n[2]*n[2]);
-      if (d > 1.0e-15) {
-        double inv_d = 1.0 / d;
-        n[0] *= inv_d;
-        n[1] *= inv_d;
-        n[2] *= inv_d;
-      }
-
-      // Get rotation matrix from quaternion
-      double m[9];
-      to_rotation_matrix(q, m);
-
-      // r = transpose(m) n; growth direction v then has cosine |r.v|
-      double r[3];
-      for (int col = 0; col < 3; col++) {
-        double dot = 0.0;
-        for (int row = 0; row < 3; row++) {
-          int ptr = col + 3 * row;
-          dot += m[ptr] * n[row];
-        }
-        r[col] = dot;
-      }
-      double max_dot = 0.0;
-      for (int k = 0; k < ndirs; k++) {
-        const double* v = &dirs[3 * k];
-        const double dot = Kokkos::fabs(r[0]*v[0] + r[1]*v[1] + r[2]*v[2]);
-        if (dot > max_dot) max_dot = dot;
-      }
-      return max_dot;
-    }
-
-    // Rotate quaternion q towards vector u by given angle (in radians)
-    // If angle exceeds the misorientation, stops at alignment
-    KOKKOS_INLINE_FUNCTION
-    static void rotate_q_towards_u(const double* q, const double* u, double angle,
-                                   const double* dirs, int ndirs, double* result) {
-      // Normalize the target vector
-      double n[3] = {u[0], u[1], u[2]};
-      double d = Kokkos::sqrt(n[0]*n[0] + n[1]*n[1] + n[2]*n[2]);
-      if (d < 1.0e-15) {
-        // Zero magnitude target, return original quaternion
-        result[0] = q[0]; result[1] = q[1]; result[2] = q[2]; result[3] = q[3];
-        return;
-      }
-      double inv_d = 1.0 / d;
-      n[0] *= inv_d;
-      n[1] *= inv_d;
-      n[2] *= inv_d;
-
-      // Rotate the growth direction nearest the target (crystal-frame v lies
-      // along R(q) v), sign-corrected to point toward it.
-      // Matches the host rotate_q_towards_u.
-      double m[9];
-      to_rotation_matrix(q, m);
-      double r[3];
-      for (int col = 0; col < 3; col++)
-        r[col] = m[col]*n[0] + m[col + 3]*n[1] + m[col + 6]*n[2];
-      double best_dot = 0.0;
-      int best = 0;
-      for (int k = 0; k < ndirs; k++) {
-        const double* v = &dirs[3 * k];
-        const double dot = r[0]*v[0] + r[1]*v[1] + r[2]*v[2];
-        if (Kokkos::fabs(dot) > Kokkos::fabs(best_dot)) { best_dot = dot; best = k; }
-      }
-      const double sign = (best_dot >= 0.0) ? 1.0 : -1.0;
-      const double* v = &dirs[3 * best];
-      double current_dir[3];
-      for (int row = 0; row < 3; row++)
-        current_dir[row] = sign * (m[3*row]*v[0] + m[3*row + 1]*v[1] + m[3*row + 2]*v[2]);
-
-      // Calculate the current misorientation angle
-      double dot_product = current_dir[0]*n[0] + current_dir[1]*n[1] + current_dir[2]*n[2];
-      dot_product = Kokkos::fmax(-1.0, Kokkos::fmin(1.0, dot_product));
-      double current_misorientation = Kokkos::acos(dot_product);
-
-      // Check if already aligned (within tolerance)
-      if (current_misorientation < 1.0e-10) {
-        result[0] = q[0]; result[1] = q[1]; result[2] = q[2]; result[3] = q[3];
-        return;
-      }
-
-      // Limit the rotation angle to not exceed the current misorientation
-      double actual_angle = Kokkos::fmin(Kokkos::fabs(angle), current_misorientation);
-
-      // Calculate the rotation axis as the cross product
-      double rot_axis[3];
-      vector_cross_product(current_dir, n, rot_axis);
-
-      // Check if vectors are parallel (cross product near zero)
-      double axis_norm = Kokkos::sqrt(rot_axis[0]*rot_axis[0] + rot_axis[1]*rot_axis[1] + rot_axis[2]*rot_axis[2]);
-      if (axis_norm < 1.0e-10) {
-        // Vectors are parallel
-        if (dot_product > 0.99999) {
-          // Same direction, return original quaternion
-          result[0] = q[0]; result[1] = q[1]; result[2] = q[2]; result[3] = q[3];
-          return;
-        } else {
-          // Opposite directions (180° apart), find a perpendicular axis
-          if (Kokkos::fabs(n[0]) < 0.9) {
-            double tmp[3] = {1.0, 0.0, 0.0};
-            vector_cross_product(n, tmp, rot_axis);
-          } else {
-            double tmp[3] = {0.0, 1.0, 0.0};
-            vector_cross_product(n, tmp, rot_axis);
-          }
-          axis_norm = Kokkos::sqrt(rot_axis[0]*rot_axis[0] + rot_axis[1]*rot_axis[1] + rot_axis[2]*rot_axis[2]);
-        }
-      }
-
-      // Normalize the rotation axis
-      double inv_axis_norm = 1.0 / axis_norm;
-      rot_axis[0] *= inv_axis_norm;
-      rot_axis[1] *= inv_axis_norm;
-      rot_axis[2] *= inv_axis_norm;
-
-      // Create the rotation quaternion for the actual angle
-      double half_angle = actual_angle * 0.5;
-      double cos_half = Kokkos::cos(half_angle);
-      double sin_half = Kokkos::sin(half_angle);
-
-      double rot_q[4] = {cos_half, sin_half * rot_axis[0], sin_half * rot_axis[1], sin_half * rot_axis[2]};
-
-      // Apply the rotation to the original quaternion
-      composition(rot_q, q, result);
-
-      // Normalize the result
-      normalize(result);
+      quaternion::normalize(q);
     }
   };
 

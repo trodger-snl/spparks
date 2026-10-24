@@ -547,7 +547,7 @@ struct AppPottsQuaternionKokkos::ColorSweepFunctor {
     int neighran = unique_neigh[iran];
     int newstate = unique[iran];
     double q_new[4] = {q0(neighran), qx(neighran), qy(neighran), qz(neighran)};
-    QuaternionOps::normalize(q_new);
+    quaternion::normalize(q_new);
 
     // Compute new energy
     double efinal = compute_energy(i, q_new);

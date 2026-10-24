@@ -1954,10 +1954,10 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
                 for (int c = 0; c < 4; c++) qn[c] = -qn[c];   // q and -q are one orientation
               for (int c = 0; c < 4; c++) qm[c] += qn[c];
             }
-            QuaternionOps::normalize(qm);
+            quaternion::normalize(qm);
             double mobility = c1 + c2;
             if (grad_magnitude > 0.0) {
-              const double theta = Kokkos::acos(QuaternionOps::get_cosine_angle_q_u(qm, grad_dir, gdirs.data(), ngdirs));
+              const double theta = Kokkos::acos(quaternion::cosine_angle_q_u(qm, grad_dir, gdirs.data(), ngdirs));
               mobility = c1 + c2 * Kokkos::cos(c3 * theta);
             }
             gtotal += Kokkos::fmax(mobility, 0.0);
@@ -2004,7 +2004,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
                                                hop_distance(k_xyz_d, i, selected_nbr) * dx_local);
 
             // Normalize the inherited quaternion (should already be unit length)
-            QuaternionOps::normalize(q_nbr_inherited);
+            quaternion::normalize(q_nbr_inherited);
 
             double q_rotated[4];
             perturb_orientation(misori_mode_local, q_nbr_inherited,

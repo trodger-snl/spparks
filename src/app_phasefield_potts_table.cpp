@@ -252,21 +252,22 @@ void AppPhaseFieldPottsTable::init_app()
 }
 
 /* ----------------------------------------------------------------------
-   check the tables and pack every phase's G and dG/dc, scaled by
-   scale_free_energy, into tab
+   check each table (T rows > 0, c columns 0 to 1, both evenly spaced) and
+   pack every table's G and dG/dc, scaled by scale_free, into tab; spin
+   ranges are left to the caller
 ------------------------------------------------------------------------- */
 
-void AppPhaseFieldPottsTable::process_phases()
+void pftable::pack_tables(Error *error, Table **tables, int n_tables,
+                          double scale_free, std::vector<PFPhaseTable> &ptab,
+                          std::vector<double> &tab)
 {
   int i,j,k;
 
-  ptab.resize(nphases);
+  ptab.assign(n_tables,PFPhaseTable());
   tab.clear();
-  params.penalty = scale_comp_energy_penalty * scale_free_energy;
 
-  for (i=0; i<nphases; i++) {
-    Phase *p = phases[i];
-    Table *t = p->table;
+  for (i=0; i<n_tables; i++) {
+    Table *t = tables[i];
     if (!t->getTableReady())
       error->all(FLERR,"Not all tables loaded for phases");
     if (!t->hasRowColVals())
@@ -315,8 +316,6 @@ void AppPhaseFieldPottsTable::process_phases()
     PFPhaseTable &pt = ptab[i];
     pt.nrow = nRow;
     pt.ncol = nCol;
-    pt.spin_lo = p->spin_start;
-    pt.spin_hi = p->spin_end;
     pt.t0 = rowvals[0];
     pt.inv_dt = 1.0/dT;
     pt.inv_dc = 1.0/dC;
@@ -332,11 +331,27 @@ void AppPhaseFieldPottsTable::process_phases()
     for (j=0; j<nRow; j++) {
       double *g = &tab[pt.g + j*nCol];
       double *dg = &tab[pt.dg + j*nCol];
-      for (k=0; k<nCol; k++) g[k] = G[j][k] * scale_free_energy;
+      for (k=0; k<nCol; k++) g[k] = G[j][k] * scale_free;
       dg[0] = (-g[2] + 4*g[1] - 3*g[0])/(2*h);
       for (k=1; k<n; k++) dg[k] = (g[k+1] - g[k-1])/(2*h);
       dg[n] = (3*g[n] - 4*g[n-1] + g[n-2])/(2*h);
     }
+  }
+}
+
+/* ----------------------------------------------------------------------
+   pack the phases' tables, then add each phase's spin range
+------------------------------------------------------------------------- */
+
+void AppPhaseFieldPottsTable::process_phases()
+{
+  std::vector<Table *> tables(nphases);
+  for (int i=0; i<nphases; i++) tables[i] = phases[i]->table;
+  pftable::pack_tables(error,tables.data(),nphases,scale_free_energy,ptab,tab);
+  params.penalty = scale_comp_energy_penalty * scale_free_energy;
+  for (int i=0; i<nphases; i++) {
+    ptab[i].spin_lo = phases[i]->spin_start;
+    ptab[i].spin_hi = phases[i]->spin_end;
   }
 }
 

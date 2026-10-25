@@ -26,6 +26,9 @@ AppStyle(phasefield/potts/table,AppPhaseFieldPottsTable)
 
 namespace SPPARKS_NS {
 
+class Error;
+class Table;
+
 /* ----------------------------------------------------------------------
    Per-site physics, shared by the CPU app and phasefield/potts/table/kk so
    both evaluate the same arithmetic. Arrays are anything indexable with []
@@ -155,8 +158,13 @@ FD_FN double chem_potential(const FDStencil &st, const N &nbr, const P &phase,
 // one explicit step of the coupled composition / heat equations at site i:
 //   dc/dt    = M (2 lap(mu) + Q* div(grad T / T))
 //   Cp dT/dt = 2 M Q* lap(mu) + k lap(T)
-// div(grad T / T) = lap(T)/T - |grad T|^2/T^2. Returns flag bits:
-// 1 = c left [0,1], 2 = T reached 0.
+// div(grad T / T) in flux form (1/T averaged onto faces), so composition is
+// conserved exactly. Returns flag bits: 1 = c left [0,1], 2 = T reached 0.
+template <class D> struct Inverse {
+  D f;
+  FD_FN double operator[](int s) const { return 1.0 / f[s]; }
+};
+
 template <class N, class D>
 FD_FN int step(const FDStencil &st, const N &nbr, const D &c, const D &T,
                const D &mu, int i, const PFParams &q, double &cnew, double &Tnew)
@@ -164,7 +172,7 @@ FD_FN int step(const FDStencil &st, const N &nbr, const D &c, const D &T,
   double lapmu = st.lap(nbr, mu, i);
   double lapT = st.lap(nbr, T, i);
   double Ti = T[i];
-  double soret = lapT / Ti - st.grad_dot(nbr, T, T, i) / (Ti * Ti);
+  double soret = st.div_k_grad(nbr, T, Inverse<D>{T}, i);
 
   cnew = c[i] + q.dt * q.mobility * (2.0 * lapmu + q.heat_of_transport * soret);
   Tnew = Ti + (q.dt / q.specific_heat) *
@@ -176,6 +184,10 @@ FD_FN int step(const FDStencil &st, const N &nbr, const D &c, const D &T,
   if (!(Tnew > 0.0)) flag |= 2;
   return flag;
 }
+
+// host: check and pack tables (app_phasefield_potts_table.cpp)
+void pack_tables(SPPARKS_NS::Error *, SPPARKS_NS::Table **, int n, double scale_free,
+                 std::vector<PFPhaseTable> &ptab, std::vector<double> &tab);
 
 }
 

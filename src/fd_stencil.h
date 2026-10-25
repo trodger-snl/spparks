@@ -67,6 +67,18 @@ struct FDStencil {
     return (s - 2.0 * dim * f[i]) * inv_h2;
   }
 
+  // div(k grad f) at site i, k at each face the mean of its two sites:
+  // conservative (each face's flux leaves one site and enters the other)
+  template <class N, class F, class K>
+  FD_FN double div_k_grad(const N &nbr, const F &f, const K &k, int i) const {
+    double s = 0.0;
+    for (int m = 0; m < 2 * dim; m++) {
+      const int j = nb(nbr, i, m);
+      s += 0.5 * (k[i] + k[j]) * (f[j] - f[i]);
+    }
+    return s * inv_h2;
+  }
+
   // grad f . grad g at site i
   template <class N, class F, class G>
   FD_FN double grad_dot(const N &nbr, const F &f, const G &g, int i) const {

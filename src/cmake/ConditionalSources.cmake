@@ -58,6 +58,7 @@ function(configure_conditional_sources)
     if(SPPARKS_PACKAGE_KOKKOS)
         list(APPEND SPPARKS_SOURCES
             KOKKOS/app_lattice_kokkos.cpp
+            KOKKOS/app_diffusion_multiphase_kokkos.cpp
             KOKKOS/app_potts_kokkos.cpp
             KOKKOS/app_potts_neigh_kokkos.cpp
             KOKKOS/app_potts_neighonly_kokkos.cpp

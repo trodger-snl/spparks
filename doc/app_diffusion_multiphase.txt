@@ -7,10 +7,13 @@
 :line
 
 app_style diffusion/multiphase command :h3
+app_style diffusion/multiphase/kk command :h3
 
 [Syntax:]
 
-app_style diffusion/multiphase :pre
+app_style style :pre
+
+style = {diffusion/multiphase} or {diffusion/multiphase/kk} :ul
 
 [Examples:]
 
@@ -86,6 +89,18 @@ in.pin_filler
 in.pairwise_weighs
 in.variable_volume_fraction :ul
 
+Style {diffusion/multiphase/kk} is a Kokkos version of the same model,
+which runs the rKMC sweep in parallel on a GPU or with OpenMP threads.
+It takes the same commands. It sweeps the lattice only with "sweep
+color"_sweep.html or "sweep color/strict"_sweep.html. Because a swap
+changes a neighbor site, the coloring needs sites three neighbors
+apart: sq/8n or sc/26n lattices with a box a multiple of 4 sites along
+each dimension. With {color/strict} it gives the same answer as
+{diffusion/multiphase} on the OpenMP backend; on a GPU the device exp()
+can round the Boltzmann factor differently from the host's, so a rare
+uphill swap may be decided differently. With a KMC solver it runs the
+host code of {diffusion/multiphase}.
+
 :line
 
 The following additional command is defined by this application.
@@ -94,7 +109,11 @@ The following additional command is defined by this application.
 
 :line
 
-[Restrictions:] none
+[Restrictions:]
+
+Style {diffusion/multiphase/kk} is part of the KOKKOS package.  It is
+only enabled if SPPARKS was built with that package.  See the "Making
+SPPARKS"_Section_start.html#start_3 section for more info.
 
 [Related commands:]
 

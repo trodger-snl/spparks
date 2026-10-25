@@ -269,7 +269,7 @@ void AppDiffusionMultiphase::site_event_rejection(int i, RandomPark *random)
   // need to double check neighborhood
 
   int iran = (int) (maxneigh*random->uniform());
-  if (iran > maxneigh) iran = maxneigh-1;
+  if (iran >= maxneigh) iran = maxneigh-1;
   int j = neighbor[i][iran];
 
   // if site j pinned or if site i and site j have same spin, just return

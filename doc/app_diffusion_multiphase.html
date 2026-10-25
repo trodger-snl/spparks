@@ -11,10 +11,14 @@
 
 <H3>app_style diffusion/multiphase command 
 </H3>
+<H3>app_style diffusion/multiphase/kk command 
+</H3>
 <P><B>Syntax:</B>
 </P>
-<PRE>app_style diffusion/multiphase 
+<PRE>app_style style 
 </PRE>
+<UL><LI>style = <I>diffusion/multiphase</I> or <I>diffusion/multiphase/kk</I> 
+</UL>
 <P><B>Examples:</B>
 </P>
 <PRE>app_style diffusion/multiphase
@@ -89,6 +93,18 @@ initializing phase distributions.
 <LI>in.pairwise_weighs
 <LI>in.variable_volume_fraction 
 </UL>
+<P>Style <I>diffusion/multiphase/kk</I> is a Kokkos version of the same model,
+which runs the rKMC sweep in parallel on a GPU or with OpenMP threads.
+It takes the same commands. It sweeps the lattice only with <A HREF = "sweep.html">sweep
+color</A> or <A HREF = "sweep.html">sweep color/strict</A>. Because a swap
+changes a neighbor site, the coloring needs sites three neighbors
+apart: sq/8n or sc/26n lattices with a box a multiple of 4 sites along
+each dimension. With <I>color/strict</I> it gives the same answer as
+<I>diffusion/multiphase</I> on the OpenMP backend; on a GPU the device exp()
+can round the Boltzmann factor differently from the host's, so a rare
+uphill swap may be decided differently. With a KMC solver it runs the
+host code of <I>diffusion/multiphase</I>.
+</P>
 <HR>
 
 <P>The following additional command is defined by this application.
@@ -99,7 +115,11 @@ initializing phase distributions.
 
 <HR>
 
-<P><B>Restrictions:</B> none
+<P><B>Restrictions:</B>
+</P>
+<P>Style <I>diffusion/multiphase/kk</I> is part of the KOKKOS package.  It is
+only enabled if SPPARKS was built with that package.  See the <A HREF = "Section_start.html#start_3">Making
+SPPARKS</A> section for more info.
 </P>
 <P><B>Related commands:</B>
 </P>

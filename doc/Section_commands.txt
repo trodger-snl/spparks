@@ -330,6 +330,7 @@ full description:
 "chemistry"_app_chemistry.html,
 "diffusion"_app_diffusion.html,
 "diffusion/multiphase"_app_diffusion_multiphase.html,
+"diffusion/multiphase/kk"_app_diffusion_multiphase.html,
 "erbium"_app_erbium.html,
 "ising"_app_ising.html,
 "ising/single"_app_ising.html,

@@ -45,7 +45,7 @@ class AppDiffusionMultiphase : public AppLattice {
   double site_propensity(int);
   void site_event(int, class RandomPark *);
 
- private:
+ protected:
   int engstyle;
   int allocated;
   int *esites;

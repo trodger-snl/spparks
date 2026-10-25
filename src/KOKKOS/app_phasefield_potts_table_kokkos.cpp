@@ -257,8 +257,10 @@ void AppPhaseFieldPottsTableKokkos::app_update(double stoptime)
     }
   }
 
+  // the kernels finish here (the copy fences): charge them to Solve
   int f;
   Kokkos::deep_copy(f, flags);
+  timer->stamp(TIME_SOLVE);
   check_step_flags(f);
 
   if (app_update_only) sync_app_data_to_host();

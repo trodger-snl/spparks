@@ -123,13 +123,6 @@ void ReadTable::header()
   int n,nRows=0,nCols=0,rowcolvals=0;
   char *ptr;
   
-  // skip 1st line of file
-  
-  if (me == 0) {
-    char *eof = fgets(line,MAXLINE,fp);
-    if (eof == NULL) error->one(FLERR,"Unexpected end of table file");
-  }
-  
   while (1) {
     
     // read a line and bcast length

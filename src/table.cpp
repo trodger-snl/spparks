@@ -37,6 +37,8 @@ Table::Table(SPPARKS *spk,char *table) : Pointers(spk)
   
   tableReady=false;
   rowcolvals=false;
+  table=NULL;
+  rowvals=colvals=NULL;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -44,12 +46,9 @@ Table::Table(SPPARKS *spk,char *table) : Pointers(spk)
 Table::~Table() 
 {
   memory->destroy(table);
+  memory->destroy(rowvals);
+  memory->destroy(colvals);
   delete [] tableName;
-  
-  if (rowcolvals) {
-    memory->destroy(rowvals);
-    memory->destroy(colvals);
-  }
 }
 
 /* ---------------------------------------------------------------------- */
@@ -59,6 +58,9 @@ void Table::initTable(int rows,int cols,int rowcolvalsflag)
   nRows=rows;
   nCols=cols;
   
+  memory->destroy(table);
+  memory->destroy(rowvals);
+  memory->destroy(colvals);
   memory->create(table,nRows,nCols,tableName);
   
   if (rowcolvalsflag) {
@@ -112,7 +114,7 @@ bool Table::tableNameCompare(const char *table)
   if (strcmp(tableLower,tableName) == 0) cmp=true;
   else cmp=false;
   
-  delete tableLower;
+  delete [] tableLower;
   return cmp;
 }
 

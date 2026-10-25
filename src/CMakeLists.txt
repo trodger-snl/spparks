@@ -522,6 +522,7 @@ set(SPPARKS_SOURCES
     app_membrane.cpp
     app_off_lattice.cpp
     app_phasefield_potts.cpp
+    app_phasefield_potts_table.cpp
     app_potts.cpp
     app_potts_am_bezier.cpp
     app_potts_am_path_gen.cpp
@@ -561,6 +562,7 @@ set(SPPARKS_SOURCES
     dump_text.cpp
     dump_vtk.cpp
     error.cpp
+    fd_stencil.cpp
     finish.cpp
     fourth_order_bezier.cpp
     groups.cpp
@@ -578,6 +580,7 @@ set(SPPARKS_SOURCES
     random_mars.cpp
     random_park.cpp
     read_sites.cpp
+    read_table.cpp
     region.cpp
     region_block.cpp
     region_cylinder.cpp
@@ -591,6 +594,7 @@ set(SPPARKS_SOURCES
     solve_linear.cpp
     solve_tree.cpp
     spparks.cpp
+    table.cpp
     timer.cpp
     universe.cpp
     variable.cpp

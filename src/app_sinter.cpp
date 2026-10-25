@@ -148,11 +148,6 @@ void AppSinter::init_app()
   if (maxneigh > MAXNEIGH)
     error->all(FLERR,"App sinter supports at most 32 neighbors per site");
 
-  // without sectors, the reverse comm after a set would send the other
-  // ranks' unchanged copies of a site back over the owner's change
-  if (nprocs > 1 && sectorflag == 0)
-    error->all(FLERR,"App sinter in parallel requires sectors");
-
   key = ranmaster->initial_seed();
 
   // owned sites by lattice cell: a rank owns a box of cells

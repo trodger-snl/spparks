@@ -153,9 +153,8 @@ since the previous stats output.
 Style {sinter/kk} is part of the KOKKOS package.
 
 The sites must be created by "create_sites box"_create_sites.html in
-a fully periodic box. In parallel, "sectors"_sector.html are required,
-because an event changes a neighbor site. Since an event reads sites
-two neighbors away and changes sites one neighbor away, "sweep color"
+a fully periodic box. Since an event reads sites two neighbors away
+and changes sites one neighbor away, "sweep color"
 needs a lattice that can be colored with that spacing: sq/8n or
 sc/26n, with a box a multiple of 4 sites along each dimension.
 

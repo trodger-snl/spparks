@@ -74,8 +74,10 @@ At the end of each sweep the vacancies it created are annihilated, in
 site ID order. A vacancy that is still a vacancy (a pore site whose
 neighbors are all grain sites) moves to the surface of the compact
 along the line from it through the center of mass of its adjacent
-grain (the grain that holds most of its neighbors, ties broken at
-random) to the box face beyond: each site on the line takes the spin
+grain (the spin that holds most of its neighbors, ties broken at
+random; the center of mass is that of all sites with that spin, as in
+the parallel algorithm of "Garcia-Cardona"_#Garcia-Cardona) to the box
+face beyond: each site on the line takes the spin
 of the next one, up to the frame, where the vacancy ends up. This
 shrinks the compact. The result does not depend on the number of
 processors.

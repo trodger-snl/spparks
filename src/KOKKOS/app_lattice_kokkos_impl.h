@@ -465,6 +465,7 @@ void LatticeKokkos<Base>::iterate_rejection(double stoptime)
 
     // Time advancement. app_update runs on the host arrays, unless the app
     // runs it on the device (device_app_update), which keeps them there.
+    timer->stamp();
     if (allow_app_update && device_app_update) {
       app_update(dt_rkmc);
       host_data_stale = true;
@@ -474,6 +475,7 @@ void LatticeKokkos<Base>::iterate_rejection(double stoptime)
       sync_app_data_to_device();
       host_data_stale = true;
     }
+    timer->stamp(TIME_APP);
     nsweeps++;
     time += dt_rkmc;
 

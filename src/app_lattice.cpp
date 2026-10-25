@@ -734,7 +734,11 @@ void AppLattice::iterate_rejection(double stoptime)
       }
     }
 
-    if (allow_app_update) app_update(dt_rkmc);
+    if (allow_app_update) {
+      timer->stamp();
+      app_update(dt_rkmc);
+      timer->stamp(TIME_APP);
+    }
 
     nsweeps++;
     time += dt_rkmc;

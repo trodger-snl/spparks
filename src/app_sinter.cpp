@@ -36,6 +36,20 @@ using namespace sinter;
 static const int FRAME_DEPTH = 1;    // frame sites at the box faces
 static const int BORDER_DEPTH = 2;   // then pore sites around the compact
 
+// sort by bits lo..63: LSD radix, 16 bits a pass (std::sort of the path
+// sites was 40% of a 16-rank 256^3 run)
+static void radix_sort(std::vector<unsigned long long> &a, int lo)
+{
+  std::vector<unsigned long long> b(a.size());
+  for (int shift = lo; shift < 64; shift += 16) {
+    std::vector<size_t> count(65537,0);
+    for (unsigned long long x : a) count[(x >> shift & 0xffff) + 1]++;
+    for (int k = 0; k < 65536; k++) count[k+1] += count[k];
+    for (unsigned long long x : a) b[count[x >> shift & 0xffff]++] = x;
+    a.swap(b);
+  }
+}
+
 /* ---------------------------------------------------------------------- */
 
 AppSinter::AppSinter(SPPARKS *spk, int narg, char **arg) :
@@ -281,7 +295,7 @@ void AppSinter::annihilate()
   // of their distinct sites
 
   std::vector<size_t> start(vac.size()+1);
-  std::vector<std::pair<tagint,int>> occ;
+  std::vector<unsigned long long> occ;
   std::vector<tagint> p;
   for (size_t r = 0; r < vac.size(); r++) {
     const size_t g = std::lower_bound(grains.begin(),grains.end(),
@@ -289,17 +303,17 @@ void AppSinter::annihilate()
     p.clear();
     path(vac[r].gid,&sums[4*g],p);
     start[r] = occ.size();
-    for (tagint s : p) occ.push_back({s,(int) occ.size()});
+    for (tagint s : p) occ.push_back((unsigned long long) s << 32 | occ.size());
   }
   start[vac.size()] = occ.size();
 
   std::vector<int> at(occ.size());    // place in the paths -> in sites
   std::vector<tagint> sites;
-  std::sort(occ.begin(),occ.end());
+  radix_sort(occ,32);
   for (size_t k = 0; k < occ.size(); k++) {
-    if (k == 0 || occ[k].first != occ[k-1].first)
-      sites.push_back(occ[k].first);
-    at[occ[k].second] = sites.size() - 1;
+    if (k == 0 || occ[k] >> 32 != occ[k-1] >> 32)
+      sites.push_back(occ[k] >> 32);
+    at[occ[k] & 0xffffffff] = sites.size() - 1;
   }
 
   std::vector<int> idx(sites.size()), val(sites.size(),INT_MIN);
@@ -374,10 +388,25 @@ void AppSinter::path(tagint gid, const long long *sum, std::vector<tagint> &p)
   }
   if (steps < 2) return;
 
+  // cell s = v + near((e-v) s, steps), stepped: near's numerator
+  // 2 (e-v) s + steps grows by 2 (e-v) <= 2 steps a cell
+  long long c[3], r[3];
+  for (int d = 0; d < 3; d++) {
+    c[d] = v[d];
+    r[d] = steps;
+  }
   p.push_back(gid);
   for (int s = 1; s <= steps; s++) {
-    tagint c[3];
-    for (int d = 0; d < 3; d++) c[d] = v[d] + near((e[d]-v[d])*s,steps);
+    for (int d = 0; d < 3; d++) {
+      r[d] += 2*(e[d]-v[d]);
+      if (r[d] >= 2*steps) {
+        r[d] -= 2*steps;
+        c[d]++;
+      } else if (r[d] < 0) {
+        r[d] += 2*steps;
+        c[d]--;
+      }
+    }
     p.push_back(((c[2]*ny + c[1])*nx + c[0])*nbasis + 1);
   }
 }
@@ -509,7 +538,7 @@ double AppSinter::gb_average()
   MPI_Gatherv(shared.data(),nshared,MPI_UNSIGNED_LONG_LONG,all.data(),
               counts.data(),displs.data(),MPI_UNSIGNED_LONG_LONG,0,world);
   if (me == 0) {
-    std::sort(all.begin(),all.end());
+    radix_sort(all,0);
     count[1] += std::unique(all.begin(),all.end()) - all.begin();
   }
   MPI_Allreduce(MPI_IN_PLACE,count,2,MPI_LONG_LONG,MPI_SUM,world);
@@ -538,7 +567,7 @@ void AppSinter::gb_faces(long long &fsites,
       faces.push_back((unsigned long long) s << 32 | (unsigned) u[m]);
     if (spans) split.push_back(s);
   }
-  std::sort(faces.begin(),faces.end());
+  radix_sort(faces,0);
   faces.erase(std::unique(faces.begin(),faces.end()),faces.end());
   std::sort(split.begin(),split.end());
   split.erase(std::unique(split.begin(),split.end()),split.end());

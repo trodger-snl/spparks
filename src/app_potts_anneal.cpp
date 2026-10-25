@@ -58,36 +58,7 @@ AppPottsAnneal::AppPottsAnneal(SPPARKS *spk, int narg, char **arg) :
   nrate = rrecover = theta_m = 0.0;
   nradius = 1;
   nuc = rx::Nucleation{nspins, 0.0, 0.0, 0, 0, 0};
-  int iarg = 4;
-  while (iarg < narg) {
-    if (strcmp(arg[iarg],"nucleation") == 0) {
-      if (iarg+3 > narg) error->all(FLERR,"Illegal app_style command");
-      nrate = atof(arg[iarg+1]);
-      nuc.hmin = atof(arg[iarg+2]);
-      if (nrate < 0.0) error->all(FLERR,"Illegal app_style command");
-      iarg += 3;
-      while (iarg < narg) {
-        if (strcmp(arg[iarg],"boundary") == 0) {
-          nuc.boundary = 1;
-          iarg++;
-        } else if (strcmp(arg[iarg],"radius") == 0 && iarg+1 < narg) {
-          nradius = atoi(arg[iarg+1]);
-          if (nradius < 1) error->all(FLERR,"Illegal app_style command");
-          iarg += 2;
-        } else break;
-      }
-    } else if (strcmp(arg[iarg],"recovery") == 0) {
-      if (iarg+2 > narg) error->all(FLERR,"Illegal app_style command");
-      rrecover = atof(arg[iarg+1]);
-      if (rrecover < 0.0) error->all(FLERR,"Illegal app_style command");
-      iarg += 2;
-    } else if (strcmp(arg[iarg],"mobility") == 0) {
-      if (iarg+2 > narg) error->all(FLERR,"Illegal app_style command");
-      theta_m = atof(arg[iarg+1]);
-      if (theta_m < 0.0) error->all(FLERR,"Illegal app_style command");
-      iarg += 2;
-    } else error->all(FLERR,"Illegal app_style command");
-  }
+  keywords(narg-4,&arg[4],"app_style");
 
   key = ranmaster->initial_seed();
 
@@ -98,6 +69,49 @@ AppPottsAnneal::AppPottsAnneal(SPPARKS *spk, int narg, char **arg) :
     quaternion::SiteOrientationRNG rng(key ^ 0x5bd1e995ULL,(uint64_t) k);
     std::vector<double> q = quaternion::generate_unit_quaternion(rng);
     for (int c = 0; c < 4; c++) orient[4*k+c] = q[c];
+  }
+}
+
+/* ----------------------------------------------------------------------
+   nucleation / recovery / mobility settings, from app_style or, between
+   runs (one stage of a heat treatment to the next), anneal_modify
+------------------------------------------------------------------------- */
+
+void AppPottsAnneal::keywords(int narg, char **arg, const char *cmd)
+{
+  char msg[64];
+  snprintf(msg,64,"Illegal %s command",cmd);
+  int iarg = 0;
+  while (iarg < narg) {
+    if (strcmp(arg[iarg],"nucleation") == 0) {
+      if (iarg+3 > narg) error->all(FLERR,msg);
+      nrate = atof(arg[iarg+1]);
+      nuc.hmin = atof(arg[iarg+2]);
+      if (nrate < 0.0) error->all(FLERR,msg);
+      nuc.boundary = 0;
+      nradius = 1;
+      iarg += 3;
+      while (iarg < narg) {
+        if (strcmp(arg[iarg],"boundary") == 0) {
+          nuc.boundary = 1;
+          iarg++;
+        } else if (strcmp(arg[iarg],"radius") == 0 && iarg+1 < narg) {
+          nradius = atoi(arg[iarg+1]);
+          if (nradius < 1) error->all(FLERR,msg);
+          iarg += 2;
+        } else break;
+      }
+    } else if (strcmp(arg[iarg],"recovery") == 0) {
+      if (iarg+2 > narg) error->all(FLERR,msg);
+      rrecover = atof(arg[iarg+1]);
+      if (rrecover < 0.0) error->all(FLERR,msg);
+      iarg += 2;
+    } else if (strcmp(arg[iarg],"mobility") == 0) {
+      if (iarg+2 > narg) error->all(FLERR,msg);
+      theta_m = atof(arg[iarg+1]);
+      if (theta_m < 0.0) error->all(FLERR,msg);
+      iarg += 2;
+    } else error->all(FLERR,msg);
   }
 }
 
@@ -179,6 +193,7 @@ void AppPottsAnneal::setup_end_app()
 void AppPottsAnneal::input_app(char *command, int narg, char **arg)
 {
   if (strcmp(command,"stored_energy") == 0) stored_energy(narg,arg);
+  else if (strcmp(command,"anneal_modify") == 0) keywords(narg,arg,command);
   else error->all(FLERR,"Unrecognized command");
 }
 

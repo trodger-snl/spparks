@@ -94,12 +94,20 @@ is physically, which is what {radius} is for. The app warns when the
 stored energy of a deformed site reaches maxneigh-2, above which fronts
 grow without regard to curvature and come out rough.
 
-The following additional command is defined by this application:
+The following additional commands are defined by this application:
 
-stored_energy pdas K rho0 theta_c b rho_ref Hmax :pre
+stored_energy pdas K rho0 theta_c b rho_ref Hmax
+anneal_modify keyword values ... :pre
 
-It sets H (d5) of every solidified site (i2 = 3) with G > 0 and V > 0
-from its primary dendrite arm spacing:
+{anneal_modify} takes the {nucleation}, {recovery} and {mobility}
+keywords of app_style and changes them for the following runs, so one
+input can run the stages of a heat treatment (a stress relief, then a
+recrystallization anneal). {nucleation} given again replaces all its
+settings ({boundary} off and {radius} 1 unless named); {nucleation} 0
+turns nucleation off.
+
+{stored_energy} sets H (d5) of every solidified site (i2 = 3) with G > 0
+and V > 0 from its primary dendrite arm spacing:
 
 lambda = K G^(-1/2) V^(-1/4)         (Hunt; microns, G in K/m, V in m/s)
 rho    = rho0 + theta_c/(b lambda)   (m^-2; theta_c in radians, b in m)

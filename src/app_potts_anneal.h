@@ -187,6 +187,7 @@ class AppPottsAnneal : public AppPottsQuaternion {
     return {spin, phase, q0, qx, qy, qz, h};
   }
   void stored_energy(int, char **);
+  void keywords(int, char **, const char *);
 };
 
 }

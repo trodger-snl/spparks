@@ -161,6 +161,9 @@ AppAdditiveTextureKokkos::~AppAdditiveTextureKokkos()
 {
   // Every posted non-blocking request must complete before MPI_Finalize.
   ff_finish_pending();
+  // Before ~LatticeKokkos frees the pinned site arrays: the temperature
+  // source and its fill callbacks see this app's T through thermal_host_.
+  thermal.reset();
 }
 
 /* ----------------------------------------------------------------------

@@ -135,6 +135,9 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
     ghost_dindices = gd;
     sites = unique = NULL;
     neigh_dist = NULL;
+    // site-array aliases: set by grow_app once sites exist
+    active_flag = NULL;
+    mobility_out = T = solid_d = G = V = spath = NULL;
     nucleation_flags = NULL;
     nucleation_temps = NULL;
     nucleation_sizes = NULL;

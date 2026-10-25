@@ -139,7 +139,11 @@ falls back to the host path.
   private or protected members; HIP and OpenMP accept them, so local builds never
   catch it (it broke a colleague's CUDA build). Run
   `python3 tools/check_kokkos_lambda_access.py` before committing Kokkos code;
-  it exits 1 and names any offender.
+  it exits 1 and names any offender. Other nvcc-only rejections (a private
+  nested type passed to a kernel, headers nvcc cannot parse) need a real CUDA
+  compile: `build-cuda/` is a compile-and-link-only CUDA build (nvcc 12.8 + gcc
+  13 from the conda env `cuda-build`, Kokkos CUDA AMPERE80; there is no NVIDIA
+  GPU here, so it cannot run). `. build-cuda/env.sh && cmake --build build-cuda`.
 
 ## Validating the GPU port
 

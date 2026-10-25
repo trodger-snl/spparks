@@ -91,6 +91,13 @@ class ConductionSolverKokkos : protected Pointers {
 
   void build(Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz, Kokkos::View<int*> d_af,
              int nlocal, int nall, double ts);
+  void step(double h, double t0);
+  void sts_step(double tau, int s);
+
+  // These define device lambdas (KOKKOS_LAMBDA), which nvcc rejects in a
+  // private or protected member function, and Stage is a kernel argument,
+  // which nvcc also needs public; not part of the class interface.
+ public:
   // One stage update. Explicit Euler (sts = false): H += h L(H). RKL2 stage
   // (sts = true): Yout = mu Y1 + nu Y2 + (1-mu-nu) H + mut L(Y1) + gat L0,
   // with T holding T(Y1); store_L0 saves L(Y1) (stage 1, Y1 = H).
@@ -99,12 +106,6 @@ class ConductionSolverKokkos : protected Pointers {
     double h = 0.0, mu = 1.0, nu = 0.0, mut = 0.0, gat = 0.0;
     double Pq = 0.0, xl = 0.0, yl = 0.0;
   };
-  void step(double h, double t0);
-  void sts_step(double tau, int s);
-
-  // These define device lambdas (KOKKOS_LAMBDA), which nvcc rejects in a
-  // private or protected member function; not part of the class interface.
- public:
   void stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
              Kokkos::View<KK_FLOAT***> Y2, Kokkos::View<KK_FLOAT***> Yout);
   void exchange();

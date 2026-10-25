@@ -28,6 +28,11 @@ function(configure_conditional_sources)
             temperature_source_hdf5_unstructured.cpp
             temperature_source_hdf5_csr.cpp
         )
+        # nvcc's front end cannot parse toml++ (toml.hpp:8127, '__T0' not
+        # declared, nvcc 12.8); the file has no device code, so it skips nvcc
+        if(SPPARKS_PACKAGE_KOKKOS AND SPPARKS_KOKKOS_BACKEND STREQUAL "CUDA")
+            set_source_files_properties(material_card.cpp PROPERTIES COMPILE_OPTIONS --host-only)
+        endif()
         if(SPPARKS_ENABLE_HIGHFIVE)
             message(STATUS "Added additive/texture sources (HDF5 temperature sources: ON)")
         else()

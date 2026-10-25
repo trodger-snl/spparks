@@ -82,7 +82,9 @@ build.
   (`AppPhaseFieldPottsTableKokkos : LatticeKokkos<AppPhaseFieldPottsTable>`
   shares its per-site physics with the CPU app through `pftable::` inline
   functions and `src/fd_stencil.h`, a host/device central-difference
-  stencil for site fields). The CPU
+  stencil for site fields; the phase-field-only `phasefield`/`phasefield/kk`
+  runs one model struct from `src/phasefield_models.h` -- add a PDE there).
+  The CPU
   class owns the state, parameters and argument parsing; the kk class
   replaces `init_app`/`app_update`/`input_app` (its fallback is
   `AppLattice::input_app`, so CPU-only commands stay errors) and never calls

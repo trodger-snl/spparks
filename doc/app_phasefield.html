@@ -1,0 +1,111 @@
+<HTML>
+<CENTER><A HREF = "https://spparks.github.io">SPPARKS Website</A> - <A HREF = "Manual.html">SPPARKS Documentation</A> - <A HREF = "Section_commands.html#comm">SPPARKS Commands</A> 
+</CENTER>
+
+
+
+
+
+
+<HR>
+
+<H3>app_style phasefield command 
+</H3>
+<H3>app_style phasefield/kk command 
+</H3>
+<P><B>Syntax:</B>
+</P>
+<PRE>app_style style dt model args ... 
+</PRE>
+<UL><LI>style = <I>phasefield</I> or <I>phasefield/kk</I> 
+
+<LI>dt = time step 
+
+<LI>model = <I>allen_cahn</I> or <I>cahn_hilliard</I> or <I>grain_growth</I> or <I>ch_heat</I> 
+
+<PRE>  <I>allen_cahn</I> args = L kappa W
+    L = mobility, kappa = gradient energy coefficient, W = double-well height
+  <I>cahn_hilliard</I> args = M kappa W
+    M = mobility, kappa, W as for allen_cahn
+  <I>grain_growth</I> args = N L kappa alpha beta gamma
+    N = number of order parameters (1 to 32), L, kappa as for allen_cahn
+    alpha, beta, gamma = Fan-Chen free energy coefficients
+  <I>ch_heat</I> args = M kappa k Qstar Cp phase1 phase2 ...
+    as <A HREF = "app_phasefield_potts_table.html">app_style phasefield/potts/table</A>
+    phaseN = name of a phase whose G(c,T) table read_table reads 
+</PRE>
+
+</UL>
+<P><B>Examples:</B>
+</P>
+<PRE>app_style phasefield 0.01 allen_cahn 1 16 0.5
+app_style phasefield 0.01 cahn_hilliard 1 1 1
+app_style phasefield/kk 0.02 grain_growth 8 1 1 1 1 1
+app_style phasefield 0.0009765625 ch_heat 0.5 4 1 0.1 1 fcc dia liquid 
+</PRE>
+<P><B>Description:</B>
+</P>
+<P>An on-lattice application that evolves phase fields only: no spins and
+no Monte Carlo events. Each step of length dt advances the fields of one
+model by an explicit (forward Euler) step, with second-order central
+differences on the lattice's axis neighbours. No <A HREF = "sweep.html">sweep</A>
+command is needed.
+</P>
+<P><I>allen_cahn</I>: a non-conserved order parameter phi (d1), with
+f = W phi^2 (1-phi)^2:
+</P>
+<PRE>dphi/dt = -L (f'(phi) - kappa lap phi) 
+</PRE>
+<P><I>cahn_hilliard</I>: a conserved composition c (d1), same f:
+</P>
+<PRE>dc/dt = M lap mu,  mu = f'(c) - kappa lap c 
+</PRE>
+<P><I>grain_growth</I>: the Fan-Chen model, N order parameters eta_1..eta_N
+(d1..dN), with f = sum_i (-alpha/2 eta_i^2 + beta/4 eta_i^4) + gamma
+sum_(i<j) eta_i^2 eta_j^2:
+</P>
+<PRE>deta_i/dt = -L (df/deta_i - kappa lap eta_i) 
+</PRE>
+<P><I>ch_heat</I>: composition c (d1) and temperature T (d2), coupled through
+the heat of transport, with each site's free energy G(c,T) tabulated
+for its phase (i1 = phase index, 0 for phase1, ...). These are the
+field equations of <A HREF = "app_phasefield_potts_table.html">phasefield/potts/table</A>
+without the Potts model; tables, limits and errors are as described
+there.
+</P>
+<P>The energy diagnostic sums each site's bulk free energy and gradient
+energy kappa/2 |grad|^2. A warning is printed when dt exceeds an
+estimate of the explicit stability limit for the model.
+</P>
+<P>Style <I>phasefield/kk</I> runs the same models on a Kokkos device; with the
+same dt it reproduces style <I>phasefield</I> bit for bit when the host and
+device floating-point arithmetic agree (e.g. strict builds).
+</P>
+<P>The lattice must be line/2n, sq/4n, sq/8n, sc/6n or sc/26n, and all
+boundaries periodic.
+</P>
+<HR>
+
+<P>The following additional commands are defined by this application:
+</P>
+<DIV ALIGN=center><TABLE  BORDER=1 >
+<TR><TD >phasefield/command enforce_concentration_limits yes/no </TD><TD > ch_heat</TD><TD > clamp c to [0,1] (else warn once)</TD></TR>
+<TR><TD >phasefield/command scale_energy free/penalty value ... </TD><TD > ch_heat</TD><TD > scale the tables' G, the out-of-range penalty</TD></TR>
+<TR><TD >read_table file phase </TD><TD > ch_heat</TD><TD > read a phase's G(c,T) table 
+</TD></TR></TABLE></DIV>
+
+<HR>
+
+<P><B>Restrictions:</B>
+</P>
+<P><I>phasefield/kk</I> is part of the KOKKOS package.
+</P>
+<P><B>Related commands:</B>
+</P>
+<P><A HREF = "app_phasefield_potts_table.html">app_style phasefield/potts/table</A>
+</P>
+<P><B>Default:</B>
+</P>
+<P>enforce_concentration_limits no, scale_energy 1.0 for each.
+</P>
+</HTML>

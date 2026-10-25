@@ -334,6 +334,8 @@ full description:
 "ising"_app_ising.html,
 "ising/single"_app_ising.html,
 "membrane"_app_membrane.html,
+"phasefield"_app_phasefield.html,
+"phasefield/kk"_app_phasefield.html,
 "phasefield/potts"_app_phasefield_potts.html,
 "phasefield/potts/table"_app_phasefield_potts_table.html,
 "phasefield/potts/table/kk"_app_phasefield_potts_table.html,

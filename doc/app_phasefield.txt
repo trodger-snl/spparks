@@ -1,0 +1,99 @@
+"SPPARKS Website"_sws - "SPPARKS Documentation"_sd - "SPPARKS Commands"_sc :c
+
+:link(sws,https://spparks.github.io)
+:link(sd,Manual.html)
+:link(sc,Section_commands.html#comm)
+
+:line
+
+app_style phasefield command :h3
+app_style phasefield/kk command :h3
+
+[Syntax:]
+
+app_style style dt model args ... :pre
+
+style = {phasefield} or {phasefield/kk} :ulb,l
+dt = time step :l
+model = {allen_cahn} or {cahn_hilliard} or {grain_growth} or {ch_heat} :l
+  {allen_cahn} args = L kappa W
+    L = mobility, kappa = gradient energy coefficient, W = double-well height
+  {cahn_hilliard} args = M kappa W
+    M = mobility, kappa, W as for allen_cahn
+  {grain_growth} args = N L kappa alpha beta gamma
+    N = number of order parameters (1 to 32), L, kappa as for allen_cahn
+    alpha, beta, gamma = Fan-Chen free energy coefficients
+  {ch_heat} args = M kappa k Qstar Cp phase1 phase2 ...
+    as "app_style phasefield/potts/table"_app_phasefield_potts_table.html
+    phaseN = name of a phase whose G(c,T) table read_table reads :pre
+:ule
+
+[Examples:]
+
+app_style phasefield 0.01 allen_cahn 1 16 0.5
+app_style phasefield 0.01 cahn_hilliard 1 1 1
+app_style phasefield/kk 0.02 grain_growth 8 1 1 1 1 1
+app_style phasefield 0.0009765625 ch_heat 0.5 4 1 0.1 1 fcc dia liquid :pre
+
+[Description:]
+
+An on-lattice application that evolves phase fields only: no spins and
+no Monte Carlo events. Each step of length dt advances the fields of one
+model by an explicit (forward Euler) step, with second-order central
+differences on the lattice's axis neighbours. No "sweep"_sweep.html
+command is needed.
+
+{allen_cahn}: a non-conserved order parameter phi (d1), with
+f = W phi^2 (1-phi)^2:
+
+dphi/dt = -L (f'(phi) - kappa lap phi) :pre
+
+{cahn_hilliard}: a conserved composition c (d1), same f:
+
+dc/dt = M lap mu,  mu = f'(c) - kappa lap c :pre
+
+{grain_growth}: the Fan-Chen model, N order parameters eta_1..eta_N
+(d1..dN), with f = sum_i (-alpha/2 eta_i^2 + beta/4 eta_i^4) + gamma
+sum_(i<j) eta_i^2 eta_j^2:
+
+deta_i/dt = -L (df/deta_i - kappa lap eta_i) :pre
+
+{ch_heat}: composition c (d1) and temperature T (d2), coupled through
+the heat of transport, with each site's free energy G(c,T) tabulated
+for its phase (i1 = phase index, 0 for phase1, ...). These are the
+field equations of "phasefield/potts/table"_app_phasefield_potts_table.html
+without the Potts model; tables, limits and errors are as described
+there.
+
+The energy diagnostic sums each site's bulk free energy and gradient
+energy kappa/2 |grad|^2. A warning is printed when dt exceeds an
+estimate of the explicit stability limit for the model.
+
+Style {phasefield/kk} runs the same models on a Kokkos device; with the
+same dt it reproduces style {phasefield} bit for bit when the host and
+device floating-point arithmetic agree (e.g. strict builds).
+
+The lattice must be line/2n, sq/4n, sq/8n, sc/6n or sc/26n, and all
+boundaries periodic.
+
+:line
+
+The following additional commands are defined by this application:
+
+phasefield/command enforce_concentration_limits yes/no : ch_heat: clamp c to \[0,1\] (else warn once)
+phasefield/command scale_energy free/penalty value ... : ch_heat: scale the tables' G, the out-of-range penalty
+read_table file phase : ch_heat: read a phase's G(c,T) table :tb(s=:)
+
+:line
+
+[Restrictions:]
+
+{phasefield/kk} is part of the KOKKOS package.
+
+[Related commands:]
+
+"app_style phasefield/potts/table"_app_phasefield_potts_table.html
+
+[Default:]
+
+enforce_concentration_limits no, scale_energy 1.0 for each.

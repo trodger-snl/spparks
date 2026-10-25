@@ -28,6 +28,7 @@ ising:            2d Ising model
 thin_film_growth: 2d thin file growth with diffusion app
 membrane:         2d membrane model of lipid, fluid, protein states
 multiphase:       multiphase diffusion
+phasefield:       phase-field-only models (Allen-Cahn, Cahn-Hilliard, grain growth, CH + heat)
 phasefield_potts: 3d Potts with phase field model
 phasefield_potts_table: Potts + phase field, tabulated G(c,T), coupled heat (+ kk)
 potts:            3d Potts model

@@ -11,16 +11,19 @@
 
 <H3>app_style potts/pin command 
 </H3>
+<H3>app_style potts/pin/kk command 
+</H3>
 <P><B>Syntax:</B>
 </P>
-<PRE>app_style potts/pin Q 
+<PRE>app_style style Q 
 </PRE>
-<UL><LI>potts/pin = application style name
+<UL><LI>style = <I>potts/pin</I> or <I>potts/pin/kk</I>
 <LI>Q = number of spin states 
 </UL>
 <P><B>Examples:</B>
 </P>
-<PRE>app_style potts/pin 100 
+<PRE>app_style potts/pin 100
+app_style potts/pin/kk 100 
 </PRE>
 <P><B>Description:</B>
 </P>
@@ -69,6 +72,15 @@ min[1,exp(-dE/kT)], else it is rejected.
 </P>
 <HR>
 
+<P>Style <I>potts/pin/kk</I> is a Kokkos version of the same model, which runs
+the rKMC sweep in parallel on a GPU or with OpenMP threads. It takes
+the same arguments and commands. It sweeps the lattice only with
+<A HREF = "sweep.html">sweep color</A> or <A HREF = "sweep.html">sweep color/strict</A>, without a
+mask; with <I>color/strict</I> it gives the same answer as <I>potts/pin</I>. With
+a KMC solver it runs the host code of <I>potts/pin</I>.
+</P>
+<HR>
+
 <P>The following additional commands are defined by this application:
 </P>
 <DIV ALIGN=center><TABLE  BORDER=1 >
@@ -78,7 +90,11 @@ min[1,exp(-dE/kT)], else it is rejected.
 
 <HR>
 
-<P><B>Restrictions:</B> none
+<P><B>Restrictions:</B>
+</P>
+<P>Style <I>potts/pin/kk</I> is part of the KOKKOS package.  It is only enabled
+if SPPARKS was built with that package.  See the <A HREF = "Section_start.html#start_3">Making
+SPPARKS</A> section for more info.
 </P>
 <P><B>Related commands:</B>
 </P>

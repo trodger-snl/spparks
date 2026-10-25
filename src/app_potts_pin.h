@@ -20,6 +20,9 @@ AppStyle(potts/pin,AppPottsPin)
 
 #else
 
+#ifndef SPK_APP_POTTS_PIN_H
+#define SPK_APP_POTTS_PIN_H
+
 #include "app_potts.h"
 
 namespace SPPARKS_NS {
@@ -45,6 +48,7 @@ class AppPottsPin : public AppPotts {
 
 }
 
+#endif
 #endif
 
 /* ERROR/WARNING messages:

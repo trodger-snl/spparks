@@ -7,17 +7,19 @@
 :line
 
 app_style potts/pin command :h3
+app_style potts/pin/kk command :h3
 
 [Syntax:]
 
-app_style potts/pin Q :pre
+app_style style Q :pre
 
-potts/pin = application style name
+style = {potts/pin} or {potts/pin/kk}
 Q = number of spin states :ul
 
 [Examples:]
 
-app_style potts/pin 100 :pre
+app_style potts/pin 100
+app_style potts/pin/kk 100 :pre
 
 [Description:]
 
@@ -66,6 +68,15 @@ min\[1,exp(-dE/kT)\], else it is rejected.
 
 :line
 
+Style {potts/pin/kk} is a Kokkos version of the same model, which runs
+the rKMC sweep in parallel on a GPU or with OpenMP threads. It takes
+the same arguments and commands. It sweeps the lattice only with
+"sweep color"_sweep.html or "sweep color/strict"_sweep.html, without a
+mask; with {color/strict} it gives the same answer as {potts/pin}. With
+a KMC solver it runs the host code of {potts/pin}.
+
+:line
+
 The following additional commands are defined by this application:
 
 "pin"_pin.html : create a set of pinned sites
@@ -73,7 +84,11 @@ The following additional commands are defined by this application:
 
 :line
 
-[Restrictions:] none
+[Restrictions:]
+
+Style {potts/pin/kk} is part of the KOKKOS package.  It is only enabled
+if SPPARKS was built with that package.  See the "Making
+SPPARKS"_Section_start.html#start_3 section for more info.
 
 [Related commands:]
 

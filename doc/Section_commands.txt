@@ -350,6 +350,7 @@ full description:
 "potts/neighonly"_app_potts.html,
 "potts/neighonly/kk"_app_potts.html,
 "potts/pin"_app_potts_pin.html,
+"potts/pin/kk"_app_potts_pin.html,
 "potts/quaternion"_app_potts_quaternion.html,
 "potts/quaternion/kk"_app_potts_quaternion.html,
 "potts/strain"_app_potts_strain.html,

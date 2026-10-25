@@ -36,7 +36,8 @@ AppPottsPin::AppPottsPin(SPPARKS *spk, int narg, char **arg) :
 {
   // parse arguments for PottsPin class only, not children
 
-  if (strcmp(style,"potts/pin") != 0) return;
+  if (strcmp(style,"potts/pin") != 0 && strcmp(style,"potts/pin/kk") != 0)
+    return;
 
   if (narg != 2) error->all(FLERR,"Illegal app_style command");
   

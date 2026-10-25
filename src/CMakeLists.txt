@@ -521,6 +521,7 @@ set(SPPARKS_SOURCES
     app_lattice.cpp
     app_membrane.cpp
     app_off_lattice.cpp
+    app_phasefield.cpp
     app_phasefield_potts.cpp
     app_phasefield_potts_table.cpp
     app_potts.cpp

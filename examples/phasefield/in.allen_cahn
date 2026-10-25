@@ -1,0 +1,23 @@
+# Allen-Cahn check: two flat interfaces in 1d relax to the equilibrium
+# profile; the total energy (diag energy) tends to 2 sigma, with
+# sigma = sqrt(2 kappa W)/6 = 0.6667 for kappa = 16, W = 0.5 (1.3333 total;
+# ~0.5% low from the h = 1 grid at an interface ~16 sites wide)
+
+seed             56789
+
+#                          dt   model      L kappa W
+app_style        phasefield 0.01 allen_cahn 1 16    0.5
+
+dimension        1
+lattice          line/2n 1.0
+region           box block 0 200 -0.5 0.5 -0.5 0.5
+create_box       box
+create_sites     box
+
+set              d1 value 0.0
+set              d1 value 1.0 if x > 49 if x < 150
+
+diag_style       energy
+diag_style       array d1 sum d1 min d1 max
+stats            20.0
+run              200.0

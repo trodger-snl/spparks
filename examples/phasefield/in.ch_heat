@@ -1,0 +1,30 @@
+# Cahn-Hilliard + coupled heat on the phasefield/potts/table equations,
+# without the Potts model: fixed phases (i1) with tabulated G(c,T), c (d1),
+# T (d2). The same field update as phasefield/potts/table with PFsteps 128
+# (dt = dt_sweep/128 = 1/1024) and app_update_only yes, bit for bit.
+
+seed             56789
+
+#                          dt      model   M   kappa k Qstar Cp phases
+app_style        phasefield 0.0009765625 ch_heat 0.5 4 1 0.1 1 fcc dia liquid
+
+dimension        2
+lattice          sq/8n 1.0
+region           box block 0 99 0 99 -0.5 0.5
+create_box       box
+create_sites     box
+
+set              i1 range 0 2
+set              d1 value 0.5
+set              d2 value 400
+set              d2 value 450 if x > 50
+
+read_table       ../phasefield_potts_table/G_fcc.txt fcc
+read_table       ../phasefield_potts_table/G_dia.txt dia
+read_table       ../phasefield_potts_table/G_liquid.txt liquid
+phasefield/command scale_energy free 10.0 penalty 1.0
+
+diag_style       energy
+diag_style       array d1 sum d1 min d1 max d2 sum d2 min d2 max
+stats            1.0
+run              5.0

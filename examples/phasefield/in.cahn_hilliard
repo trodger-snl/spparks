@@ -1,0 +1,21 @@
+# Cahn-Hilliard spinodal decomposition from c = 0.5 +- 0.05 noise: sum(d1)
+# stays fixed (conserved), the energy falls as domains coarsen
+
+seed             56789
+
+#                          dt   model         M kappa W
+app_style        phasefield 0.01 cahn_hilliard 1 1     1
+
+dimension        2
+lattice          sq/4n 1.0
+region           box block 0 128 0 128 -0.5 0.5
+create_box       box
+create_sites     box
+
+set              d1 range 0.45 0.55
+
+diag_style       energy
+diag_style       array d1 sum d1 min d1 max
+stats            20.0
+dump             1 text 100.0 dump.cahn_hilliard id x y d1
+run              200.0

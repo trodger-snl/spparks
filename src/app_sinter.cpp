@@ -303,7 +303,8 @@ void AppSinter::annihilate()
     p.clear();
     path(vac[r].gid,&sums[4*g],p);
     start[r] = occ.size();
-    for (tagint s : p) occ.push_back((unsigned long long) s << 32 | occ.size());
+    for (tagint s : p)
+      occ.push_back((unsigned long long) s << 32 | occ.size());
   }
   start[vac.size()] = occ.size();
 
@@ -355,11 +356,12 @@ void AppSinter::annihilate()
 
 void AppSinter::path(tagint gid, const long long *sum, std::vector<tagint> &p)
 {
-  // nearest integer to a/b (b > 0), halves up
-  auto near = [](long long a, long long b) {
-    long long q = (2*a + b) / (2*b);
+  // nearest integer to a/b (b > 0), halves up; a/b is a cell offset, but
+  // a = w D can pass 2^62 on a big 2D box (D ~ N n), so 128 bits
+  auto near = [](__int128 a, __int128 b) {
+    __int128 q = (2*a + b) / (2*b);
     if ((2*a + b) % (2*b) != 0 && 2*a + b < 0) q--;
-    return q;
+    return (long long) q;
   };
 
   // direction N cm - N v = D; the line leaves the box at t = w_m/|D_m|
@@ -372,7 +374,7 @@ void AppSinter::path(tagint gid, const long long *sum, std::vector<tagint> &p)
     D[d] = sum[1+d] - sum[0]*v[d];
     if (D[d] == 0) continue;
     const long long wd = D[d] > 0 ? n[d] - v[d] : v[d];
-    if (dm == 0 || wd * llabs(dm) < w * llabs(D[d])) {
+    if (dm == 0 || (__int128) wd * llabs(dm) < (__int128) w * llabs(D[d])) {
       w = wd;
       dm = D[d];
     }
@@ -382,7 +384,7 @@ void AppSinter::path(tagint gid, const long long *sum, std::vector<tagint> &p)
   long long e[3];
   int steps = 0;
   for (int d = 0; d < 3; d++) {
-    e[d] = v[d] + near(w*D[d],llabs(dm));
+    e[d] = v[d] + near((__int128) w * D[d],llabs(dm));
     e[d] = MAX(0,MIN(n[d]-1,e[d]));
     steps = MAX(steps,(int) llabs(e[d]-v[d]));
   }

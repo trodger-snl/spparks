@@ -277,18 +277,30 @@ void AppSinter::annihilate()
   MPI_Allreduce(MPI_IN_PLACE,sums.data(),sums.size(),MPI_LONG_LONG,MPI_SUM,
                 world);
 
-  // the paths, and the current spins of all their sites
+  // the paths, as (site id, place in the paths), then the current spins
+  // of their distinct sites
 
-  std::vector<std::vector<tagint>> paths(vac.size());
-  std::vector<tagint> sites;
+  std::vector<size_t> start(vac.size()+1);
+  std::vector<std::pair<tagint,int>> occ;
+  std::vector<tagint> p;
   for (size_t r = 0; r < vac.size(); r++) {
     const size_t g = std::lower_bound(grains.begin(),grains.end(),
                                       vac[r].grain) - grains.begin();
-    path(vac[r].gid,&sums[4*g],paths[r]);
-    sites.insert(sites.end(),paths[r].begin(),paths[r].end());
+    p.clear();
+    path(vac[r].gid,&sums[4*g],p);
+    start[r] = occ.size();
+    for (tagint s : p) occ.push_back({s,(int) occ.size()});
   }
-  std::sort(sites.begin(),sites.end());
-  sites.erase(std::unique(sites.begin(),sites.end()),sites.end());
+  start[vac.size()] = occ.size();
+
+  std::vector<int> at(occ.size());    // place in the paths -> in sites
+  std::vector<tagint> sites;
+  std::sort(occ.begin(),occ.end());
+  for (size_t k = 0; k < occ.size(); k++) {
+    if (k == 0 || occ[k].first != occ[k-1].first)
+      sites.push_back(occ[k].first);
+    at[occ[k].second] = sites.size() - 1;
+  }
 
   std::vector<int> idx(sites.size()), val(sites.size(),INT_MIN);
   for (size_t s = 0; s < sites.size(); s++) idx[s] = local_of(sites[s]);
@@ -296,20 +308,21 @@ void AppSinter::annihilate()
   MPI_Allreduce(MPI_IN_PLACE,val.data(),val.size(),MPI_INT,MPI_MAX,world);
 
   // collapse the paths in turn; the vacancy ends before the frame
+  // ponytail: every rank replays every path (O(total path length) per
+  // sweep, not divided by ranks); split into independent groups of paths
+  // if that dominates at high rank counts
 
-  auto at = [&](tagint g) -> int & {
-    return val[std::lower_bound(sites.begin(),sites.end(),g) - sites.begin()];
-  };
-  for (const auto &p : paths) {
-    if (p.empty() || at(p[0]) != VACANT) continue;   // an earlier path moved it
-    int *a = &at(p[0]);
-    for (size_t s = 1; s < p.size(); s++) {
-      int &b = at(p[s]);
-      if (s+1 == p.size() || b == FRAME) break;
-      *a = b;
-      a = &b;
+  for (size_t r = 0; r < vac.size(); r++) {
+    const int *q = &at[start[r]], n = start[r+1] - start[r];
+    if (n == 0 || val[q[0]] != VACANT) continue;   // an earlier path moved it
+    int a = q[0];
+    for (int s = 1; s < n; s++) {
+      const int b = q[s];
+      if (s+1 == n || val[b] == FRAME) break;
+      val[a] = val[b];
+      a = b;
     }
-    *a = VACANT;
+    val[a] = VACANT;
     if (me == 0) vac_made++;
   }
 

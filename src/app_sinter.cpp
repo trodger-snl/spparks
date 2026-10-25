@@ -15,6 +15,7 @@
    LICENSE in top-level SPPARKS directory.
 ------------------------------------------------------------------------- */
 
+#include "math.h"
 #include "mpi.h"
 #include "string.h"
 #include "stdlib.h"
@@ -27,7 +28,6 @@
 #include "error.h"
 
 #include <algorithm>
-#include <cfloat>
 #include <climits>
 
 using namespace SPPARKS_NS;
@@ -57,10 +57,9 @@ AppSinter::AppSinter(SPPARKS *spk, int narg, char **arg) :
 
   par.gg = par.pm = par.anni = 1.0/3.0;
   par.gb_factor = 1.0;
-  temperature = par.Tpm = 1.0;
-  par.Tanni = 15.0;
-  t_inverse = par.tpminv = 1.0;
-  par.tanniinv = 1.0/par.Tanni;
+  temperature = par.T[PM] = 1.0;
+  t_inverse = 1.0;
+  par.T[VAC] = 15.0;
   dt_sweep = 1.0/par.gg;
   time_sinter_start = 50.0;
 
@@ -98,13 +97,11 @@ void AppSinter::input_app(char *command, int narg, char **arg)
              strcmp(command,"events_temperatures") == 0) {
     if (narg != 3) error->all(FLERR,"Illegal event_temperatures command");
     temperature = atof(arg[0]);
-    par.Tpm = atof(arg[1]);
-    par.Tanni = atof(arg[2]);
-    if (temperature < 0.0 || par.Tpm < 0.0 || par.Tanni < 0.0)
+    par.T[PM] = atof(arg[1]);
+    par.T[VAC] = atof(arg[2]);
+    if (temperature < 0.0 || par.T[PM] < 0.0 || par.T[VAC] < 0.0)
       error->all(FLERR,"Illegal event_temperatures command");
     t_inverse = 1.0/temperature;
-    par.tpminv = 1.0/par.Tpm;
-    par.tanniinv = 1.0/par.Tanni;
 
   } else if (strcmp(command,"time_sinter_start") == 0) {
     if (narg != 1) error->all(FLERR,"Illegal time_sinter_start command");
@@ -199,8 +196,11 @@ void AppSinter::overimpose_frame()
 
 void AppSinter::set_params(double t)
 {
-  par.T = temperature;
-  par.tinv = t_inverse;
+  par.T[GG] = temperature;   // the temperature command may set it
+  const double tinv[3] = {t_inverse,1.0/par.T[PM],1.0/par.T[VAC]};
+  for (int k = 0; k < 3; k++)
+    for (int de = 0; de <= MAXDE; de++)
+      par.boltz[k][de] = par.T[k] > 0.0 ? exp(-de*tinv[k]) : 0.0;
   par.sintering = t > time_sinter_start;
 }
 
@@ -284,9 +284,7 @@ void AppSinter::annihilate()
   for (size_t r = 0; r < vac.size(); r++) {
     const size_t g = std::lower_bound(grains.begin(),grains.end(),
                                       vac[r].grain) - grains.begin();
-    double cm[3];
-    for (int d = 0; d < 3; d++) cm[d] = (double) sums[4*g+1+d] / sums[4*g];
-    path(vac[r].gid,cm,paths[r]);
+    path(vac[r].gid,&sums[4*g],paths[r]);
     sites.insert(sites.end(),paths[r].begin(),paths[r].end());
   }
   std::sort(sites.begin(),sites.end());
@@ -319,52 +317,56 @@ void AppSinter::annihilate()
 }
 
 /* ----------------------------------------------------------------------
-   the sites from vacancy gid towards cm (cell coords) to the box face
-   beyond it: the vacancy, then one basis-0 site per cell along the line,
-   cells rounded to nearest as the original app's xyz walk; false (and an
-   empty path) if under 2 cells, so a vacancy next to the frame stays put.
-   ponytail: cell coords ignore basis offsets (< 1 cell off for fcc/bcc)
+   the sites from vacancy gid towards its grain's centre of mass (sum =
+   # of sites, sums of their cells) to the box face beyond it: the
+   vacancy, then one basis-0 site per cell along the line, rounded to the
+   nearest cell as the original app's xyz walk; empty if under 2 cells,
+   so a vacancy next to the frame stays put. In integers, so that every
+   build and device takes the same path.
+   ponytail: cells ignore basis offsets (< 1 cell off for fcc/bcc)
 ------------------------------------------------------------------------- */
 
-bool AppSinter::path(tagint gid, const double *cm, std::vector<tagint> &p)
+void AppSinter::path(tagint gid, const long long *sum, std::vector<tagint> &p)
 {
-  const int n[3] = {nx,ny,nz};
-  int v[3], e[3];
-  cell(gid,nbasis,nx,ny,v);
-
-  double dir[3], t = DBL_MAX;
-  for (int d = 0; d < dimension; d++) {
-    dir[d] = cm[d] - v[d];
-    if (fabs(dir[d]) > DBL_MIN) {
-      double hi = (n[d] - v[d]) / dir[d], lo = -v[d] / dir[d];
-      t = MIN(t,hi > 0.0 ? hi : lo);
-    }
-  }
-  if (t == DBL_MAX) return false;     // vacancy at the centre of mass
-
-  int steps = 0;
-  for (int d = 0; d < 3; d++) {
-    e[d] = v[d];
-    if (d >= dimension) continue;
-    e[d] = MAX(0,MIN(n[d]-1,(int) floor(v[d] + t*dir[d] + 0.5)));
-    steps = MAX(steps,abs(e[d]-v[d]));
-  }
-  if (steps < 2) return false;
-
-  // cell s of the walk: v + (e-v) s/steps rounded half up, in integers
+  // nearest integer to a/b (b > 0), halves up
   auto near = [](long long a, long long b) {
     long long q = (2*a + b) / (2*b);
     if ((2*a + b) % (2*b) != 0 && 2*a + b < 0) q--;
     return q;
   };
+
+  // direction N cm - N v = D; the line leaves the box at t = w_m/|D_m|
+  // (in units of N), the least w_d/|D_d| over the axes it moves along
+  const int n[3] = {nx,ny,nz};
+  int v[3];
+  cell(gid,nbasis,nx,ny,v);
+  long long D[3] = {0,0,0}, w = 0, dm = 0;
+  for (int d = 0; d < dimension; d++) {
+    D[d] = sum[1+d] - sum[0]*v[d];
+    if (D[d] == 0) continue;
+    const long long wd = D[d] > 0 ? n[d] - v[d] : v[d];
+    if (dm == 0 || wd * llabs(dm) < w * llabs(D[d])) {
+      w = wd;
+      dm = D[d];
+    }
+  }
+  if (dm == 0) return;              // vacancy at the centre of mass
+
+  long long e[3];
+  int steps = 0;
+  for (int d = 0; d < 3; d++) {
+    e[d] = v[d] + near(w*D[d],llabs(dm));
+    e[d] = MAX(0,MIN(n[d]-1,e[d]));
+    steps = MAX(steps,(int) llabs(e[d]-v[d]));
+  }
+  if (steps < 2) return;
+
   p.push_back(gid);
   for (int s = 1; s <= steps; s++) {
     tagint c[3];
-    for (int d = 0; d < 3; d++)
-      c[d] = v[d] + near((long long) (e[d]-v[d])*s,steps);
+    for (int d = 0; d < 3; d++) c[d] = v[d] + near((e[d]-v[d])*s,steps);
     p.push_back(((c[2]*ny + c[1])*nx + c[0])*nbasis + 1);
   }
-  return true;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -472,53 +474,26 @@ double AppSinter::gb_average()
 {
   update_ghosts();
 
-  // owned grain sites by grain
-  std::vector<std::pair<int,int>> sites;
-  for (int i = 0; i < nlocal; i++)
-    if (spin[i] > VACANT) sites.push_back({spin[i],i});
-  std::sort(sites.begin(),sites.end());
-
   long long count[2] = {0,0};    // face sites, faces
-  std::vector<unsigned long long> split;   // faces of grains split over ranks
-  std::vector<int> others;
-  for (size_t a = 0, b; a < sites.size(); a = b) {
-    const int s = sites[a].first;
-    bool spans = false;
-    others.clear();
-    for (b = a; b < sites.size() && sites[b].first == s; b++) {
-      const int i = sites[b].second;
-      int unique[MAXNEIGH], nu = 0;
-      for (int k = 0; k < numneigh[i]; k++) {
-        const int j = neighbor[i][k], v = spin[j];
-        if (v == s && j >= nlocal) spans = true;
-        if (v <= VACANT || v == s) continue;
-        int m;
-        for (m = 0; m < nu; m++)
-          if (unique[m] == v) break;
-        if (m == nu) unique[nu++] = v;
-      }
-      count[0] += nu;
-      others.insert(others.end(),unique,unique+nu);
-    }
-    std::sort(others.begin(),others.end());
-    const int nf = std::unique(others.begin(),others.end()) - others.begin();
-    if (!spans) count[1] += nf;
-    else
-      for (int f = 0; f < nf; f++)
-        split.push_back((unsigned long long) s << 32 | (unsigned) others[f]);
-  }
+  std::vector<unsigned long long> faces, shared, all;
+  std::vector<int> split;
+  gb_faces(count[0],faces,split);
 
-  // a face of a grain split over ranks is counted once
+  // a face of a grain split over ranks is counted once, at rank 0
 
-  int nsplit = split.size();
+  for (unsigned long long f : faces)
+    if (std::binary_search(split.begin(),split.end(),(int) (f >> 32)))
+      shared.push_back(f);
+    else count[1]++;
+
+  int nshared = shared.size();
   std::vector<int> counts(nprocs), displs(nprocs);
-  std::vector<unsigned long long> all;
-  MPI_Gather(&nsplit,1,MPI_INT,counts.data(),1,MPI_INT,0,world);
+  MPI_Gather(&nshared,1,MPI_INT,counts.data(),1,MPI_INT,0,world);
   if (me == 0) {
     for (int p = 1; p < nprocs; p++) displs[p] = displs[p-1] + counts[p-1];
     all.resize(displs[nprocs-1] + counts[nprocs-1]);
   }
-  MPI_Gatherv(split.data(),nsplit,MPI_UNSIGNED_LONG_LONG,all.data(),
+  MPI_Gatherv(shared.data(),nshared,MPI_UNSIGNED_LONG_LONG,all.data(),
               counts.data(),displs.data(),MPI_UNSIGNED_LONG_LONG,0,world);
   if (me == 0) {
     std::sort(all.begin(),all.end());
@@ -526,6 +501,34 @@ double AppSinter::gb_average()
   }
   MPI_Allreduce(MPI_IN_PLACE,count,2,MPI_LONG_LONG,MPI_SUM,world);
   return count[1] ? (double) count[0] / count[1] : 0.0;
+}
+
+/* ----------------------------------------------------------------------
+   over the owned grain sites: the # of (site, other grain beside it)
+   pairs, the distinct (grain, other grain beside it) pairs, sorted, and
+   the grains split over ranks (a ghost neighbour of the same grain)
+------------------------------------------------------------------------- */
+
+void AppSinter::gb_faces(long long &fsites,
+                         std::vector<unsigned long long> &faces,
+                         std::vector<int> &split)
+{
+  for (int i = 0; i < nlocal; i++) {
+    const int s = spin[i];
+    if (s <= VACANT) continue;
+    int u[MAXNEIGH];
+    bool spans = false;
+    const int nu = other_grains(i,nlocal,numneigh,FDHostNbr{neighbor},spin,
+                                u,spans);
+    fsites += nu;
+    for (int m = 0; m < nu; m++)
+      faces.push_back((unsigned long long) s << 32 | (unsigned) u[m]);
+    if (spans) split.push_back(s);
+  }
+  std::sort(faces.begin(),faces.end());
+  faces.erase(std::unique(faces.begin(),faces.end()),faces.end());
+  std::sort(split.begin(),split.end());
+  split.erase(std::unique(split.begin(),split.end()),split.end());
 }
 
 /* ----------------------------------------------------------------------

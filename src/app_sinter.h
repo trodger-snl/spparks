@@ -24,7 +24,6 @@ AppStyle(sinter,AppSinter)
 #ifndef APP_SINTER_H
 #define APP_SINTER_H
 
-#include <math.h>
 #include <vector>
 
 #include "app_lattice.h"
@@ -39,13 +38,14 @@ namespace SPPARKS_NS {
 namespace sinter {
 
 enum {FRAME = -1, VACANT = 0};   // spin values; grains are > 0
-enum {MAXNEIGH = 32};
+enum {MAXNEIGH = 32, MAXDE = 2*MAXNEIGH};
+enum {GG, PM, VAC};              // the events, for T and boltz
 
 struct Params {
   double gg, pm, anni;           // event frequencies, summing to 1
   double gb_factor;              // scales anni with the grain-boundary area
-  double T, Tpm, Tanni;          // grain growth, pore migration, vacancy
-  double tinv, tpminv, tanniinv;
+  double T[3];                   // temperatures
+  double boltz[3][MAXDE+1];      // exp(-dE/T), dE = 0..MAXDE, if T > 0
   int sintering;                 // time > time_sinter_start: make vacancies
 };
 
@@ -60,13 +60,15 @@ FD_FN int energy(int i, const NN &nn, const N &nbr, const S &spin)
   return e;
 }
 
-// Metropolis test: a draw only if uphill at T > 0
+// Metropolis test for event k: a draw only if uphill at T > 0. The table
+// (made on the host) keeps exp() out of the device code, whose fast-math
+// exp differs from the host's.
 template <class G>
-FD_FN bool accept(int ei, int ef, double T, double tinv, G &g)
+FD_FN bool accept(int ei, int ef, int k, const Params &p, G &g)
 {
   if (ef <= ei) return true;
-  if (T == 0.0) return false;
-  return !(g.uniform() > exp((ei - ef) * tinv));
+  if (p.T[k] == 0.0) return false;
+  return !(g.uniform() > p.boltz[k][ef - ei]);
 }
 
 // the neighbouring grain spin (not old) that minimises site i's energy,
@@ -134,8 +136,7 @@ FD_FN int event(int i, G &g, const NN &nn, const N &nbr, const S &spin,
     }
     int ef = energy(i, nn, nbr, spin);
     spin[i] = min_energy_spin(i, ns, g, nn, nbr, spin, ef);
-    if (!accept(ei, ef + ej, make ? p.Tanni : p.Tpm,
-                make ? p.tanniinv : p.tpminv, g)) {
+    if (!accept(ei, ef + ej, make ? VAC : PM, p, g)) {
       spin[i] = old;
       spin[j] = ns;
       return 0;
@@ -159,7 +160,7 @@ FD_FN int event(int i, G &g, const NN &nn, const N &nbr, const S &spin,
   const int r = (int) (nu * g.uniform());
   if (r >= nu) return 0;
   spin[i] = unique[r];
-  if (!accept(ei, energy(i, nn, nbr, spin), p.T, p.tinv, g)) {
+  if (!accept(ei, energy(i, nn, nbr, spin), GG, p, g)) {
     spin[i] = old;
     return 0;
   }
@@ -196,6 +197,26 @@ FD_FN int adjacent_grain(int j, unsigned k0, const NN &nn, const N &nbr,
       best = unique[m];
     }
   return best;
+}
+
+// the other grains beside grain site i, distinct, into u; split is set if
+// a ghost neighbour (index >= nlocal) is of i's grain
+template <class NN, class N, class S>
+FD_FN int other_grains(int i, int nlocal, const NN &nn, const N &nbr,
+                       const S &spin, int *u, bool &split)
+{
+  const int s = spin[i];
+  int nu = 0;
+  for (int k = 0; k < nn[i]; k++) {
+    const int j = nbr((size_t) i, k), v = spin[j];
+    if (v == s && j >= nlocal) split = true;
+    if (v <= VACANT || v == s) continue;
+    int m;
+    for (m = 0; m < nu; m++)
+      if (u[m] == v) break;
+    if (m == nu) u[nu++] = v;
+  }
+  return nu;
 }
 
 // splitmix64: a draw keyed to (site, sweep), the same on any rank or device
@@ -264,11 +285,13 @@ class AppSinter : public AppLattice {
   double gb_ini, delta_t, density, next_gb;
   double gb_average();
   double gb_update(double);
+  virtual void gb_faces(long long &, std::vector<unsigned long long> &,
+                        std::vector<int> &);
 
   // the end-of-sweep annihilation, the same on any # of ranks; the hooks
   // are where sinter/kk works on its device copy
   void annihilate();
-  bool path(tagint, const double *, std::vector<tagint> &);
+  void path(tagint, const long long *, std::vector<tagint> &);
   virtual int nmade() {return made.size();}
   virtual void update_ghosts();
   virtual void candidates(std::vector<Vac> &);

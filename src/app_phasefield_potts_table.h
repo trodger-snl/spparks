@@ -98,7 +98,7 @@ FD_FN int rejection_event(int i, Gen &gen, const NN &numneigh, const N &nbr,
 
 // AppPhaseField's ch_heat fields (c = d1, T = d2, phase = i2) under Potts
 // grains (spin = i1): rKMC sweeps flip spins (and phases), each Potts step
-// runs dt_phasefield_mult field steps
+// runs pf_nsteps field steps
 class AppPhaseFieldPottsTable : public AppPhaseField {
  public:
 
@@ -122,7 +122,7 @@ class AppPhaseFieldPottsTable : public AppPhaseField {
 
   bool init_site_phase;
   std::vector<int> spin_lo, spin_hi;   // each phase's spin range
-  double dt_phasefield_mult;      // number of PF iterations per rkmc event
+  int pf_nsteps;                  // PF steps per rkmc step (dt_rkmc)
 
   //variables for reseting the concentration (constant sink and source)
   std::vector<int> pf_resetlist;

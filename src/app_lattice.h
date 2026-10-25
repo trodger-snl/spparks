@@ -114,6 +114,7 @@ class AppLattice : public App {
   int bothflag;                // 1 if both sectors and colors
   int use_xyz_color;           // 1 if using xyz-based coloring (non-contiguous IDs)
   int app_update_only;         // 1 if skip KMC and rKMC updates
+  int exact_steps;             // 1 if update-only steps land on outputs, stop
 
   class RandomPark *ranapp;    // RN generator for KMC and rejection KMC
   class RandomPark *ranstrict; // RN generator for per-site strict rKMC

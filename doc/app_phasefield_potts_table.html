@@ -23,7 +23,7 @@
 
 <LI>Nphases = number of phases 
 
-<LI>PFsteps = number of phase field steps per rKMC sweep 
+<LI>PFsteps = number of phase field steps per rKMC step (an integer >= 1) 
 
 <LI>M = mobility of the composition 
 
@@ -52,18 +52,20 @@ pottspf/command scale_energy potts 1.0 free 10.0 penalty 1.0
 </P>
 <P>An on-lattice application coupling a Q-state Potts model of grains to
 a composition field c (d1) and a temperature field T (d2). Each site's
-phase (i2) follows from its spin. Each phase has a free energy G(c,T),
+phase (i2) is set from its spin by <I>set_site_phase yes</I> (else by the
+input script), and follows its spin whenever the spin flips. Each phase has a free energy G(c,T),
 read as a table with read_table.
 </P>
 <P>A site's energy is its bulk free energy G(c,T) for its phase, plus the
 Potts energy (unlike neighbours, scaled by <I>scale_energy potts</I>). The
-energy diagnostic also adds the gradient energy kappa/2 |grad c|^2.
+energy diagnostic also adds the gradient energy kappa/2 |grad c|^2,
+summed over lattice bonds as for <A HREF = "app_phasefield.html">app_style phasefield</A>.
 Spins evolve by rejection KMC (flip to a random unlike neighbour spin,
 Metropolis at the <A HREF = "temperature.html">temperature</A> command's value, which
 is separate from the field T).
 </P>
-<P>After each sweep, PFsteps explicit steps, each 1/PFsteps of the sweep's
-time, advance c and T together, with second-order central differences
+<P>After each rKMC step (one sweep, or the n sweeps of a sector's
+<I>nstop</I>), PFsteps explicit steps, each 1/PFsteps of its time, advance c and T together, with second-order central differences
 on the lattice's axis neighbours:
 </P>
 <PRE>dc/dt    = M (2 lap(mu) + Qstar div(grad T / T))

@@ -86,6 +86,7 @@ FD_FN double lookup(const PFPhaseTable &p, const double *tab,
 
   double y = c * p.inv_dc;
   int iC = (int) y;
+  if (iC < 0) iC = 0;            // c = NaN passes both range tests
   if (iC > p.ncol - 2) iC = p.ncol - 2;
   double fC = y - iC;
   const double *n = m + p.ncol;
@@ -179,7 +180,7 @@ struct PFAllenCahn {
   template <class C> FD_FN double energy(const C &x, int i) const {
     const double p = x.f[0][i];
     return W * p * p * (1.0 - p) * (1.0 - p) +
-           0.5 * kappa * x.st.grad_dot(x.nbr, x.f[0], x.f[0], i);
+           0.5 * kappa * x.st.bond_sq(x.nbr, x.f[0], i);
   }
 
   // forward-Euler bound: dt L (max|f''| + kappa lambda_max) <= 2
@@ -212,7 +213,7 @@ struct PFCahnHilliard {
   template <class C> FD_FN double energy(const C &x, int i) const {
     const double c = x.f[0][i];
     return W * c * c * (1.0 - c) * (1.0 - c) +
-           0.5 * kappa * x.st.grad_dot(x.nbr, x.f[0], x.f[0], i);
+           0.5 * kappa * x.st.bond_sq(x.nbr, x.f[0], i);
   }
 
   double dt_max(const FDStencil &st) const {
@@ -253,7 +254,7 @@ struct PFGrainGrowth {
       const double e2 = x.f[k][i] * x.f[k][i];
       s2 += e2;
       s4 += e2 * e2;
-      g += x.st.grad_dot(x.nbr, x.f[k], x.f[k], i);
+      g += x.st.bond_sq(x.nbr, x.f[k], i);
     }
     return -0.5 * alpha * s2 + 0.25 * beta * s4 + 0.5 * gamma * (s2 * s2 - s4) +
            0.5 * kappa * g;
@@ -287,7 +288,7 @@ struct PFCHHeat {
 
   template <class C> FD_FN double energy(const C &x, int i) const {
     return pftable::lookup(x.pt[x.phase[i]], x.tab, x.f[0][i], x.f[1][i], 0, q.penalty) +
-           0.5 * q.ch_energy * x.st.grad_dot(x.nbr, x.f[0], x.f[0], i);
+           0.5 * q.ch_energy * x.st.bond_sq(x.nbr, x.f[0], i);
   }
 
   // composition (curvature of G unknown: kappa term only) and heat bounds

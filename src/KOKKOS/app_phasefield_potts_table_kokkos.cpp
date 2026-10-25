@@ -166,7 +166,7 @@ void AppPhaseFieldPottsTableKokkos::sweep_color_kokkos(int, int start, int count
    exchanged through the host after each step (np > 1)
 ------------------------------------------------------------------------- */
 
-void AppPhaseFieldPottsTableKokkos::app_update(double stoptime)
+void AppPhaseFieldPottsTableKokkos::app_update(double /*dt_rkmc*/)
 {
   // ponytail: the update-only loop (AppLattice::iterate_app_update_only)
   // never syncs, so do the full round trip here; it is the validation path
@@ -188,9 +188,7 @@ void AppPhaseFieldPottsTableKokkos::app_update(double stoptime)
   const int nreset = rs.extent(0);
   const int dsel[2] = {0, 1};
 
-  double localtime = 0.0;
-  int done = 0;
-  while (!done) {
+  for (int n = 0; n < pf_nsteps; n++) {
     timer->stamp();
     pf.step(chh, stencil, d_neighbor, d_numneigh, nlocal, nall, maxneigh, 2);
     auto cc = pf.f[0];
@@ -211,16 +209,6 @@ void AppPhaseFieldPottsTableKokkos::app_update(double stoptime)
       upload_range(pf.f[1], T, nlocal, nall);
     }
     timer->stamp(TIME_SOLVE);
-
-    localtime += dt;
-    if (localtime >= (stoptime - 1e-6)) done = 1;
-    if (localtime > (stoptime + 1e-6)) {
-      char errorstr[128];
-      snprintf(errorstr, sizeof(errorstr),
-               "PF step time (%f) in excess of Potts step time (%f)",
-               localtime, stoptime);
-      error->all(FLERR, errorstr);
-    }
   }
 
   // the kernels finish here (the copy fences): charge them to Solve

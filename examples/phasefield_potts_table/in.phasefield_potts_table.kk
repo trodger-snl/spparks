@@ -46,7 +46,7 @@ read_table G_liquid.txt liquid
 
 sweep		 color/strict    # kk needs colours; strict reproduces the CPU app with this sweep
 
-#update_only 		yes #no
+#app_update_only 	yes #no
 pottspf/command set_site_phase yes
 
 #pottspf/command 	reset_phasefield 	sink 0.3 source 0.7

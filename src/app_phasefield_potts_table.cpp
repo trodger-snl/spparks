@@ -49,23 +49,30 @@ AppPhaseFieldPottsTable(SPPARKS *spk, int narg, char **arg) :
     error->all(FLERR,"Illegal app_style command for phasefield/potts/table");
 
   // dt (the phase-field step) is set as a fraction of dt_rkmc in
-  // setup_end_app(): dt = dt_rkmc / dt_phasefield_mult
+  // setup_end_app(): dt = dt_rkmc / pf_nsteps
 
-  dt_phasefield_mult = atof(arg[3]);
+  pf_nsteps = atoi(arg[3]);
+  if (pf_nsteps < 1 || atof(arg[3]) != pf_nsteps)
+    error->all(FLERR,"Illegal app_style command -- PF steps must be an "
+               "integer >= 1");
 
   // the ch_heat model of AppPhaseField, plus the Potts interface energy
 
   model = CH_HEAT;
   chh.q = {0.0,atof(arg[4]),atof(arg[5]),atof(arg[6]),atof(arg[7]),atof(arg[8]),
            0.0,1.0,0};
+  check_ch_heat();
   nfield = 2;
   naux = 1;
 
   int currentspin=0;
   for (int iarg=9; iarg<narg; iarg+=2) {
     add_phase(arg[iarg]);
+    int nspin = atoi(arg[iarg+1]);
+    if (nspin < 1) error->all(FLERR,"Illegal app_style command -- "
+                              "a phase needs at least one spin");
     spin_lo.push_back(currentspin+1);
-    currentspin += atoi(arg[iarg+1]);
+    currentspin += nspin;
     spin_hi.push_back(currentspin);
   }
   if (currentspin != nspins) error->all(FLERR,"Illegal app_style command -- "
@@ -188,7 +195,7 @@ void AppPhaseFieldPottsTable::init_app()
 
 void AppPhaseFieldPottsTable::setup_end_app()
 {
-  dt = dt_rkmc / dt_phasefield_mult;
+  dt = dt_rkmc / pf_nsteps;
   set_dt(dt);
   AppPhaseField::setup_end_app();
 }
@@ -214,7 +221,7 @@ double AppPhaseFieldPottsTable::site_energy(int i)
   FDHostNbr nbr{neighbor};
   return pftable::site_energy(numneigh,nbr,spin,c,T,i,spin[i],phase[i],
                               ptab.data(),tab.data(),chh.q) +
-         0.5 * chh.q.ch_energy * stencil.grad_dot(nbr,c,c,i);
+         0.5 * chh.q.ch_energy * stencil.bond_sq(nbr,c,i);
 }
 
 /* ----------------------------------------------------------------------
@@ -238,12 +245,10 @@ void AppPhaseFieldPottsTable::site_event_rejection(int i, RandomPark *random)
    the phase-field steps of one Potts step, each followed by the reset list
 ------------------------------------------------------------------------- */
 
-void AppPhaseFieldPottsTable::app_update(double stoptime)
+void AppPhaseFieldPottsTable::app_update(double /*dt_rkmc*/)
 {
-  double localtime=0.0;
   int flags = 0;
-  int done = 0;
-  while (!done) {
+  for (int n=0; n<pf_nsteps; n++) {
     flags |= step_fields();
 
     // reset the certain values if appropriate
@@ -251,21 +256,6 @@ void AppPhaseFieldPottsTable::app_update(double stoptime)
     for (size_t m=0; m < pf_resetlist.size(); m++)
       c[pf_resetlist[m]]=pf_resetlistvals[m];
     timer->stamp(TIME_SOLVE);
-
-    // increment time and determine when to finish
-
-    localtime += dt;
-    if (localtime >= (stoptime- 1e-6)) done = 1;
-
-    // throw exception when PF has iterated too far
-
-    if (localtime > (stoptime + 1e-6)) {
-      char errorstr[128];
-      snprintf(errorstr,sizeof(errorstr),
-               "PF step time (%f) in excess of Potts step time (%f)",
-               localtime,stoptime);
-      error->all(FLERR,errorstr);
-    }
   }
 
   // ghosts current for the sweeps and output that follow

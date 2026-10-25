@@ -69,6 +69,7 @@ AppPhaseField::AppPhaseField(SPPARKS *spk, int narg, char **arg, int parse) :
     model = CH_HEAT;
     chh.q = {dt,atof(a[0]),atof(a[1]),atof(a[2]),atof(a[3]),atof(a[4]),
              0.0,0.0,0};
+    check_ch_heat();
     for (int i = 5; i < nargs; i++) add_phase(a[i]);
   } else error->all(FLERR,"Illegal app_style phasefield model or arguments");
 
@@ -83,6 +84,7 @@ AppPhaseField::AppPhaseField(SPPARKS *spk, int narg, char **arg, int parse) :
   allow_masking = 0;
   allow_app_update = 1;
   app_update_only = 1;
+  exact_steps = 1;
   dt_sweep = dt;
   create_arrays();
 }
@@ -95,6 +97,17 @@ AppPhaseField::~AppPhaseField()
   for (int k = 0; k < PF_MAXF; k++) memory->destroy(fnew[k]);
   for (Table *t : tables) delete t;
   for (char *p : phase_names) delete [] p;
+}
+
+/* ---------------------------------------------------------------------- */
+
+void AppPhaseField::check_ch_heat()
+{
+  const PFParams &q = chh.q;
+  if (q.mobility < 0.0 || q.ch_energy < 0.0 || q.conductivity < 0.0 ||
+      q.specific_heat <= 0.0)
+    error->all(FLERR,"Illegal app_style command -- ch_heat needs M, kappa, "
+               "k >= 0 and Cp > 0");
 }
 
 /* ----------------------------------------------------------------------

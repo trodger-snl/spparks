@@ -89,6 +89,7 @@ AppLattice::AppLattice(SPPARKS *spk, int narg, char **arg) : App(spk,narg,arg)
   nsweeps = 0;
 
   app_update_only = 0;
+  exact_steps = 0;
   use_xyz_color = 0;
 }
 
@@ -751,13 +752,29 @@ void AppLattice::iterate_rejection(double stoptime)
 
 void AppLattice::iterate_app_update_only(double stoptime,double dt)
 {
+  // exact_steps: time = start + k dt, not a sum of dt (whose rounding can
+  // add a step), snapped onto the next output time or stoptime when within
+  // rounding of it; the last step is cut short to end at stoptime
+
+  const double t0 = time;
+  const double eps = 1.0e-9*dt;
+  bigint k = 0;
   int done = 0;
   while (!done) {
+    double step = dt;
+    double tnext = time + dt;
+    if (exact_steps) {
+      tnext = t0 + (++k)*dt;
+      if (fabs(tnext - nextoutput) < eps) tnext = nextoutput;
+      if (tnext > stoptime - eps) tnext = stoptime;
+      step = tnext - time;
+    }
+
     timer->stamp();
-    if (allow_app_update) app_update(dt);
+    if (allow_app_update) app_update(step);
     timer->stamp(TIME_APP);
 
-    time += dt;
+    time = tnext;
     if (time >= stoptime) done = 1;
     if (done || time >= nextoutput) nextoutput = output->compute(time,done);
     timer->stamp(TIME_OUTPUT);

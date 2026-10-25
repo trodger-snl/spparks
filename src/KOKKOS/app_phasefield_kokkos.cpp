@@ -85,6 +85,8 @@ void AppPhaseFieldKokkos::app_update(double step)
   // the update-only loop never syncs: upload at the first step of a run,
   // download when this step ends at an output (or the end of the run)
   if (need_upload) {
+    // the ghosts' phases (i1) are uploaded once: they must be current
+    if (nprocs > 1) comm->all();
     sync_app_data_to_device();
     need_upload = false;
   }

@@ -91,6 +91,7 @@ class AppPhaseField : public AppLattice {
   void set_dt(double);
   void check_flags(int);
   void add_phase(const char *);
+  void check_ch_heat();
 };
 
 }

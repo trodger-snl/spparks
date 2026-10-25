@@ -49,7 +49,6 @@ void FDStencil::setup(SPPARKS *spk, AppLattice *app, int print)
   dim = domain->dimension;
   h = lattice->latconst;
   inv_h2 = 1.0 / (h * h);
-  inv_2h = 0.5 / h;
 
   static const int maps[][6] = {
     {0,1,0,0,0,0},      // LINE_2N

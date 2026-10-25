@@ -228,10 +228,12 @@ int DumpText::count()
   }
 
   // as DiagEnergy: before the first step, nothing has filled the ghosts
+  // (comm is created by the first run's init; dump_one may come before)
 
   if (energyflag) {
-    if (latticeflag) applattice->comm->all();
-    else appoff->comm->all();
+    if (latticeflag) {
+      if (applattice->comm) applattice->comm->all();
+    } else if (appoff->comm) appoff->comm->all();
   }
 
   // choose all local sites for output

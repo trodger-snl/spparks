@@ -49,7 +49,9 @@ app_style phasefield 0.0009765625 ch_heat 0.5 4 1 0.1 1 fcc dia liquid
 no Monte Carlo events. Each step of length dt advances the fields of one
 model by an explicit (forward Euler) step, with second-order central
 differences on the lattice's axis neighbours. No <A HREF = "sweep.html">sweep</A>
-command is needed.
+command is needed. Steps fall on whole multiples of dt from the start of
+each run; when the run length is not a multiple of dt, the last step is
+shortened to end at the run's stop time.
 </P>
 <P><I>allen_cahn</I>: a non-conserved order parameter phi (d1), with
 f = W phi^2 (1-phi)^2:
@@ -74,7 +76,9 @@ without the Potts model; tables, limits and errors are as described
 there.
 </P>
 <P>The energy diagnostic sums each site's bulk free energy and gradient
-energy kappa/2 |grad|^2. A warning is printed when dt exceeds an
+energy kappa/2 |grad|^2, the latter as a sum over lattice bonds,
+kappa/2 sum ((f_j - f_i)/h)^2: the discrete energy that the explicit
+steps decrease. A warning is printed when dt exceeds an
 estimate of the explicit stability limit for the model.
 </P>
 <P>Style <I>phasefield/kk</I> runs the same models on a Kokkos device; with the

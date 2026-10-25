@@ -1,7 +1,7 @@
 # Allen-Cahn check: two flat interfaces in 1d relax to the equilibrium
 # profile; the total energy (diag energy) tends to 2 sigma, with
 # sigma = sqrt(2 kappa W)/6 = 0.6667 for kappa = 16, W = 0.5 (1.3333 total;
-# ~0.5% low from the h = 1 grid at an interface ~16 sites wide)
+# 1.3326, ~0.05% low from the h = 1 grid at an interface ~16 sites wide)
 
 seed             56789
 

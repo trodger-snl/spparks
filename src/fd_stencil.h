@@ -51,7 +51,7 @@ struct FDHostNbr {
 struct FDStencil {
   int dim = 0;
   int cmap[6] = {0, 0, 0, 0, 0, 0};   // neighbour slot of -x,+x,-y,+y,-z,+z
-  double h = 0.0, inv_h2 = 0.0, inv_2h = 0.0;
+  double h = 0.0, inv_h2 = 0.0;
 
   // build cmap for the app's lattice and check it against site coords
   void setup(class SPPARKS *, class AppLattice *, int print);
@@ -79,15 +79,17 @@ struct FDStencil {
     return s * inv_h2;
   }
 
-  // grad f . grad g at site i
-  template <class N, class F, class G>
-  FD_FN double grad_dot(const N &nbr, const F &f, const G &g, int i) const {
+  // site i's half of |grad f|^2 over its bonds: summed over all sites it is
+  // sum_bonds ((f_j - f_i)/h)^2, the discrete energy whose variational
+  // derivative is -2 lap f (so kappa/2 bond_sq <-> -kappa lap f)
+  template <class N, class F>
+  FD_FN double bond_sq(const N &nbr, const F &f, int i) const {
     double s = 0.0;
-    for (int d = 0; d < dim; d++) {
-      const int m = nb(nbr, i, 2 * d), p = nb(nbr, i, 2 * d + 1);
-      s += (f[p] - f[m]) * (g[p] - g[m]);
+    for (int m = 0; m < 2 * dim; m++) {
+      const double d = f[nb(nbr, i, m)] - f[i];
+      s += d * d;
     }
-    return s * inv_2h * inv_2h;
+    return 0.5 * s * inv_h2;
   }
 };
 

@@ -491,6 +491,10 @@ void LatticeKokkos<Base>::iterate_rejection(double stoptime)
 
   // Leave the host current for whatever runs after (next command, dumps).
   ensure_host_data_current();
+
+  // and the strict streams where they stopped: the next init uploads
+  // siteseeds[] again, which would otherwise restart every site's stream
+  if (strict_rng) download_range(siteseeds, d_siteseeds, nlocal);
 }
 
 /* ----------------------------------------------------------------------

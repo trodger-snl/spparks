@@ -54,7 +54,7 @@ the list of on-lattice applications SPPARKS currently includes:
 "potts/quaternion/kk"_app_potts_quaternion.html = Kokkos (GPU) variant of potts/quaternion
 "potts/grad"_app_potts_grad.html = Potts model with temperature gradient
 "potts/pin"_app_potts_pin.html = Potts model with pinning sites
-"potts/rx"_app_potts_rx.html = Potts model of static recrystallization
+"potts/rx"_app_potts_rx.html = Potts model of static or dynamic recrystallization
 "potts/strain"_app_potts_strain.html = Potts model with per-site strain  :ul
 
 Off-lattice applications define a set of mobile sites in space on

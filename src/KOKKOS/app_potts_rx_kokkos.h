@@ -49,7 +49,7 @@ class AppPottsRXKokkos : public LatticeKokkos<AppPottsRX> {
   Kokkos::View<int*> d_spin;
   Kokkos::View<double*> d_h, d_w;
   Kokkos::View<tagint*> d_id;
-  Kokkos::View<char*> d_flag;
+  Kokkos::View<int*> d_flag;   // a seed's new spin, or 0
 };
 
 }

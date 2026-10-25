@@ -68,7 +68,7 @@ void AppPottsRXKokkos::allocate_app_views()
   d_h = Kokkos::View<double*>("stored_energy", nall);
   d_w = Kokkos::View<double*>("boltz_stored", nall);
   d_id = Kokkos::View<tagint*>("id", nall);
-  d_flag = Kokkos::View<char*>("nucleus_seed", nall);
+  d_flag = Kokkos::View<int*>("nucleus_seed", nall);
 }
 
 void AppPottsRXKokkos::sync_app_data_to_device()
@@ -129,12 +129,29 @@ void AppPottsRXKokkos::sweep_color_kokkos(int, int start, int count)
 }
 
 /* ----------------------------------------------------------------------
-   AppPottsRX::app_update on the device: the ghosts made current on the
-   host, then the seeds of every site, then the nuclei of the owned ones
+   AppPottsRX::app_update on the device: hardening; then the ghosts made
+   current on the host, the seeds (sent to the ghosts, with boundary), the
+   nuclei of the owned sites
 ------------------------------------------------------------------------- */
 
 void AppPottsRXKokkos::app_update(double dt)
 {
+  auto nn = d_numneigh;
+  auto nbr = d_neighbor;
+  auto sp = d_spin;
+  auto hh = d_h;
+  auto ww = d_w;
+
+  if (hrate > 0.0) {
+    double d, f;
+    hardening_step(dt, d, f);
+    const double tinv = par.tinv;
+    Kokkos::parallel_for("PottsRXHarden", nlocal, KOKKOS_LAMBDA(const int i) {
+      rx::harden(i, hh, ww, d, f, tinv);
+    });
+    host_data_stale = true;
+  }
+
   if (nrate == 0.0) return;
   if (nprocs > 1) {
     ensure_host_data_current();
@@ -142,25 +159,25 @@ void AppPottsRXKokkos::app_update(double dt)
     sync_ghosts_to_device();
   }
 
-  auto nn = d_numneigh;
-  auto nbr = d_neighbor;
-  auto sp = d_spin;
-  auto hh = d_h;
-  auto ww = d_w;
   auto ids = d_id;
   auto flag = d_flag;
-  const int ns = nspins;
-  const double hm = hmin, prob = nrate * dt;
   const unsigned long long s = salt();
+  rx::Nucleation q = nuc;
+  q.prob = nrate * dt;
 
-  Kokkos::parallel_for("PottsRXSeeds", nlocal + nghost,
+  Kokkos::parallel_for("PottsRXSeeds", nuc.boundary ? nlocal : nlocal + nghost,
     KOKKOS_LAMBDA(const int c) {
-      flag(c) = rx::seeds(ids(c), sp(c), hh(c), ns, hm, prob, s);
+      flag(c) = rx::seed(c, ids(c), nn, nbr, sp, hh, q, s);
     });
+  if (nuc.boundary && nprocs > 1) {
+    download_range(seedspin, flag, nlocal);
+    comm->all();
+    upload_range(flag, seedspin, nlocal, nlocal + nghost);
+  }
   Kokkos::parallel_for("PottsRXNuclei", nlocal, KOKKOS_LAMBDA(const int i) {
-    const tagint g = rx::nucleus(i, nn, nbr, sp, flag, ids, ns);
-    if (g) {
-      sp(i) = ns + (int) g;
+    const int snew = rx::nucleus(i, nn, nbr, sp, flag, ids, q);
+    if (snew) {
+      sp(i) = snew;
       hh(i) = 0.0;
       ww(i) = 1.0;
     }

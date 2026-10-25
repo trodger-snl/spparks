@@ -23,11 +23,15 @@
 
 <LI>zero or more keyword/value pairs may be appended 
 
-<LI>keyword = <I>nucleation</I> 
+<LI>keyword = <I>nucleation</I> or <I>hardening</I> 
 
-<PRE>  <I>nucleation</I> values = rate Hmin
-    rate = nucleation probability per deformed site per unit time (MCS)
-    Hmin = only sites with stored energy >= Hmin nucleate 
+<PRE>  <I>nucleation</I> values = rate Hmin <I>boundary</I>
+    rate = nucleation probability per site per unit time (MCS)
+    Hmin = only sites with stored energy >= Hmin nucleate
+    <I>boundary</I> = optional word: only sites on a grain boundary nucleate
+  <I>hardening</I> values = rate recovery
+    rate, recovery = every site's stored energy grows as
+                     dH/dt = rate - recovery*H 
 </PRE>
 
 </UL>
@@ -35,12 +39,13 @@
 </P>
 <PRE>app_style potts/rx 1000
 app_style potts/rx 1000 nucleation 0.0002 0.5
-app_style potts/rx/kk 1000 nucleation 0.0002 0.5 
+app_style potts/rx/kk 1000 nucleation 0.0002 0.5
+app_style potts/rx 1000 hardening 0.1 0.02 nucleation 0.0005 3.0 boundary 
 </PRE>
 <P><B>Description:</B>
 </P>
 <P>This is an on-lattice application which evolves a Q-state Potts model
-of static recrystallization. Each site has a spin (i1) and a stored
+of static or dynamic recrystallization. Each site has a spin (i1) and a stored
 energy H (d1). Spins 1 to Q are deformed grains; spins above Q are
 recrystallized grains. The energy of site I is
 </P>
@@ -68,8 +73,22 @@ nucleation): after every sweep, each deformed site with H >= Hmin
 seeds a nucleus with probability rate*dt, and the site and its
 deformed neighbors become recrystallized grain Q + its site ID, with
 H = 0. A one-site nucleus shrinks at once, which is why the seed takes
-its neighbors. The draws are keyed to the site ID and the sweep, so
-the nuclei do not depend on the number of processors.
+its neighbors. With the optional word <I>boundary</I>, only sites with a
+neighbor of another spin seed. The draws are keyed to the site ID and
+the sweep, so the nuclei do not depend on the number of processors.
+</P>
+<P>The <I>hardening</I> keyword makes the model one of dynamic
+recrystallization: after every sweep the stored energy of every site,
+recrystallized or not, grows as dH/dt = rate - recovery*H (integrated
+exactly over the sweep), which saturates at rate/recovery, or grows
+without bound if recovery = 0. With hardening, recrystallized grains
+can nucleate again and their sites can join a new nucleus; a nucleus
+seeded in a recrystallized grain takes a hashed spin above Q + the
+number of sites (that two such grains get the same spin is unlikely,
+and matters only if they touch). Without hardening the model is one of
+static recrystallization: only deformed sites (spin <= Q) seed or
+join a nucleus, and the stored energy changes only by the flips and
+nucleation.
 </P>
 <P>A nucleus or front grows when the stored energy it removes outweighs
 the boundary it adds. On sc/26n at T = 0.5 a 3x3x3 nucleus shrinks at
@@ -78,16 +97,18 @@ structure in about 80 MCS at H = 4. When H >= maxneigh - 2 any
 deformed site with one recrystallized neighbor can flip downhill,
 whatever the shape of its boundary: the front then grows without
 curvature, like an Eden cluster, and comes out rough. The app warns if
-the stored energy of a deformed site reaches that bound; keep H well
+the stored energy of a deformed site, or the hardening saturation
+value, reaches that bound; keep H well
 below it (<A HREF = "#Williamson15">Williamson and Delplanque</A> discuss the
 stored-energy limit of Potts models).
 </P>
 <P>Time is in Monte Carlo steps (one sweep = 1). The stats output adds a
-column Xrx, the recrystallized fraction. The <A HREF = "diag_energy.html">diag_style
+column Xrx, the fraction of sites with spin > Q (ever recrystallized). The <A HREF = "diag_energy.html">diag_style
 energy</A> diagnostic sums Ei over the sites.
 </P>
-<P>d2 holds exp(-H/kT), which the app sets at the start of each run;
-do not set it.
+<P>i2 and d2 are the app's own: i2 holds the nucleus seeds of the last
+sweep, d2 exp(-H/kT), which the app sets at the start of each run. Do
+not set them.
 </P>
 <P>This application runs only with rKMC, with any <A HREF = "sweep.html">sweep</A>
 method; it does not have a KMC solver.
@@ -113,8 +134,8 @@ any number of processors.
 
 <P><B>Restrictions:</B>
 </P>
-<P>At most 32 neighbors per site. With <I>nucleation</I>, Q + the largest site
-ID must fit in an int.
+<P>At most 32 neighbors per site. With <I>nucleation</I>, Q + the number of
+sites must fit in an int.
 </P>
 <P>Style <I>potts/rx/kk</I> is part of the KOKKOS package.  It is only enabled
 if SPPARKS was built with that package.  See the <A HREF = "Section_start.html#start_3">Making
@@ -124,7 +145,7 @@ SPPARKS</A> section for more info.
 </P>
 <P><A HREF = "app_potts.html">app_style potts</A>
 </P>
-<P><B>Default:</B> no nucleation
+<P><B>Default:</B> no nucleation, no hardening
 </P>
 <HR>
 

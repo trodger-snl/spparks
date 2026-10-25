@@ -1,0 +1,156 @@
+<HTML>
+<CENTER><A HREF = "https://spparks.github.io">SPPARKS Website</A> - <A HREF = "Manual.html">SPPARKS Documentation</A> - <A HREF = "Section_commands.html#comm">SPPARKS Commands</A> 
+</CENTER>
+
+
+
+
+
+
+<HR>
+
+<H3>app_style potts/anneal command 
+</H3>
+<H3>app_style potts/anneal/kk command 
+</H3>
+<P><B>Syntax:</B>
+</P>
+<PRE>app_style style Q crystal theta_cut keyword values ... 
+</PRE>
+<UL><LI>style = <I>potts/anneal</I> or <I>potts/anneal/kk</I> 
+
+<LI>Q = labels 1 to Q are the grains of the starting (deformed) structure 
+
+<LI>crystal = <I>cubic</I>, <I>hcp</I>, <I>trigonal</I>, <I>tetragonal</I> or <I>orthorhombic</I> 
+
+<LI>theta_cut = Read-Shockley cutoff angle (degrees) 
+
+<LI>zero or more keyword/value pairs may be appended 
+
+<LI>keyword = <I>nucleation</I> or <I>recovery</I> or <I>mobility</I> 
+
+<PRE>  <I>nucleation</I> values = rate Hmin <I>boundary</I> <I>radius</I> r
+    rate = nucleation probability per site per unit time (MCS)
+    Hmin = only sites with stored energy >= Hmin nucleate
+    <I>boundary</I> = optional word: only sites on a grain boundary nucleate
+    <I>radius</I> r = optional: a nucleus is its seed dilated r times (default 1)
+  <I>recovery</I> value = r
+    r = stored energy decays as dH/dt = -r H
+  <I>mobility</I> value = theta_m
+    theta_m = flips across a boundary of disorientation theta are accepted
+              with weight M = 1 - exp(-5 (theta/theta_m)^4) (default: M = 1) 
+</PRE>
+
+</UL>
+<P><B>Examples:</B>
+</P>
+<PRE>app_style potts/anneal 1000000 cubic 15.0 recovery 0.002 nucleation 0.000005 2.0 boundary radius 4
+app_style potts/anneal/kk 1000000 cubic 15.0 mobility 15.0 
+</PRE>
+<P><B>Description:</B>
+</P>
+<P>This is an on-lattice application for heat treatments of a grain
+structure in which every site has its own orientation, such as the
+output of <A HREF = "app_additive_texture.html">app_style additive/texture</A>:
+recovery, recrystallization and grain growth. Its site values use the
+slots of <I>additive/texture</I>, so such a state loads with the
+<A HREF = "set.html">set</A> command (<I>stitch</I> or <I>hdf5</I>) as it is:
+</P>
+<PRE>i1      = grain label
+i2      = site state (5 = void; any other value takes part)
+i3      = nucleus seeds of the last sweep (the app's own)
+d1..d4  = (q0, qx, qy, qz) unit quaternion
+d5      = stored energy H
+d6, d7  = unused
+d8, d9  = G and V at solidification (read by stored_energy) 
+</PRE>
+<P>Sites of one label belong to one grain and feel no boundary, so the
+orientation gradients inside a grain survive. The energy of site I is
+</P>
+<PRE>Ei = Sum_j E(theta_ij) + Hi 
+</PRE>
+<P>summed over the neighbors J of another label, E the Read-Shockley energy
+of their disorientation theta_ij (r (1 - ln r), r = theta/theta_cut,
+and 1 at or above theta_cut). A rKMC event at site I picks a random
+distinct label among its neighbors; site I would take the label,
+orientation and stored energy of a neighbor with that label. The flip
+is accepted with probability M min[1,exp(-dE/kT)], dE the change in
+Ei. Voids never change and lend nothing.
+</P>
+<P>Stored energy enters the same test as the boundary energy, so a
+recrystallized grain (H = 0) grows into deformed material by the
+stored energy it removes against the boundary it adds. With the
+<I>recovery</I> keyword H decays everywhere after each sweep.
+</P>
+<P>With the <I>nucleation</I> keyword, after each sweep every deformed site
+(label <= Q) with H >= Hmin seeds a nucleus with probability rate*dt,
+as in <A HREF = "app_potts_rx.html">app_style potts/rx</A> (with <I>boundary</I>, only
+sites with a neighbor of another label). The nucleus is grown from its
+seed by <I>radius</I> dilation passes over deformed, non-void sites, each
+joining the neighboring nucleus with the lowest seed ID; it takes label
+Q + the seed's site ID, H = 0, and a random orientation drawn from a
+table of 65536 (keyed to that ID). The draws do not depend on the
+number of processors.
+</P>
+<P><B>Stored energy and the Potts temperature:</B> On sc/26n, run at kT
+around 2. At lower temperatures flat boundaries are pinned by the
+lattice: a recrystallized grain facets and stops for H between about
+1.5 and 4 (kT = 0.5). At kT = 2 a front's velocity is close to linear
+in H (within about 10%) for H from about 2 to 8, and boundaries stay
+smooth apart from thermal fluctuations. So physical stored energies
+are scaled into that window (stored_energy's Hmax). Scaling H down
+exaggerates the boundary curvature relative to the stored energy: the
+critical nucleus radius, about 22/H sites at kT = 2, is larger than it
+is physically, which is what <I>radius</I> is for. The app warns when the
+stored energy of a deformed site reaches maxneigh-2, above which fronts
+grow without regard to curvature and come out rough.
+</P>
+<P>The following additional command is defined by this application:
+</P>
+<PRE>stored_energy pdas K rho0 theta_c b rho_ref Hmax 
+</PRE>
+<P>It sets H (d5) of every solidified site (i2 = 3) with G > 0 and V > 0
+from its primary dendrite arm spacing:
+</P>
+<PRE>lambda = K G^(-1/2) V^(-1/4)         (Hunt; microns, G in K/m, V in m/s)
+rho    = rho0 + theta_c/(b lambda)   (m^-2; theta_c in radians, b in m)
+H      = Hmax rho/rho_ref 
+</PRE>
+<P>K = 428.44 is the constant spparks-micro-analysis uses. Other sites
+keep their H; set it with <A HREF = "set.html">set d5</A>.
+</P>
+<P>Time is in Monte Carlo steps (one sweep = 1). The stats output adds a
+column Xrx, the recrystallized fraction of the non-void sites.
+</P>
+<HR>
+
+<P>Style <I>potts/anneal/kk</I> is a Kokkos version of the same model, which
+runs the sweep, recovery and nucleation in parallel on a GPU or with
+OpenMP threads, with <A HREF = "sweep.html">sweep color</A> or <A HREF = "sweep.html">sweep
+color/strict</A>. With <I>color/strict</I>, built without fast math
+(as is <I>potts/anneal</I>), it gives the same answer as <I>potts/anneal</I> bit
+for bit on any number of processors. On a GPU, or in a fast-math build,
+the disorientation and Read-Shockley energies differ from the host's in
+the last bits, so the trajectories differ, with the same statistics;
+the GPU result still does not depend on the number of processors.
+</P>
+<HR>
+
+<P><B>Restrictions:</B>
+</P>
+<P>At most 32 neighbors per site. With <I>nucleation</I>, Q + the number of
+sites must fit in an int. KMC is not supported.
+</P>
+<P>Style <I>potts/anneal/kk</I> is part of the KOKKOS package.  It is only
+enabled if SPPARKS was built with that package.  See the <A HREF = "Section_start.html#start_3">Making
+SPPARKS</A> section for more info.
+</P>
+<P><B>Related commands:</B>
+</P>
+<P><A HREF = "app_potts_quaternion.html">app_style potts/quaternion</A>,
+<A HREF = "app_potts_rx.html">app_style potts/rx</A>,
+<A HREF = "app_additive_texture.html">app_style additive/texture</A>
+</P>
+<P><B>Default:</B> no nucleation, recovery or mobility
+</P>
+</HTML>

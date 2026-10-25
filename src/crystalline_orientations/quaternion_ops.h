@@ -196,6 +196,37 @@ QOPS_FN void rotate_q_towards_u(const double *q, const double *u, double angle,
   normalize(result);
 }
 
+// Disorientation angle (degrees) of unit quaternions q1, q2 under the nsym
+// symmetry quaternions sym[4*k]: d = conj(q2) q1 once, the symmetry with the
+// largest |d . s|, then the angle from that misorientation's vector part
+// (atan2 keeps small angles that acos would lose). Double precision.
+QOPS_FN double disorientation_deg(const double *sym, int nsym, const double *q1,
+                                  const double *q2) {
+  double c[4], d[4];
+  conjugate(q2, c);
+  composition(c, q1, d);
+  double best = -1.0;
+  int ib = 0;
+  for (int k = 0; k < nsym; k++) {
+    const double *s = &sym[4 * k];
+    const double m0 = fabs(d[0] * s[0] + d[1] * s[1] + d[2] * s[2] + d[3] * s[3]);
+    if (m0 > best) { best = m0; ib = k; }
+  }
+  const double *s = &sym[4 * ib];
+  const double vx = s[0] * d[1] - d[0] * s[1] - (s[2] * d[3] - s[3] * d[2]);
+  const double vy = s[0] * d[2] - d[0] * s[2] + (s[1] * d[3] - s[3] * d[1]);
+  const double vz = s[0] * d[3] - d[0] * s[3] - (s[1] * d[2] - s[2] * d[1]);
+  return 2.0 * atan2(sqrt(vx * vx + vy * vy + vz * vz), best) * (180.0 / M_PI);
+}
+
+// Read-Shockley boundary energy, r (1 - ln r) for r = theta/theta_cut < 1,
+// else 1
+QOPS_FN double read_shockley(double theta, double theta_cut) {
+  const double r = theta / theta_cut;
+  if (r <= 0.0) return 0.0;
+  return r < 1.0 ? r * (1.0 - log(r)) : 1.0;
+}
+
 } // namespace quaternion
 } // namespace SPPARKS_NS
 

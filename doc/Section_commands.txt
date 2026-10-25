@@ -345,6 +345,8 @@ full description:
 "potts/am/bezier"_app_potts_am_bezier.html,
 "potts/am/path/gen"_app_potts_am_path_gen.html,
 "potts/am/weld"_app_potts_am_weld.html,
+"potts/anneal"_app_potts_anneal.html,
+"potts/anneal/kk"_app_potts_anneal.html,
 "potts/grad"_app_potts_grad.html,
 "potts/kk"_app_potts.html,
 "potts/neigh"_app_potts.html,

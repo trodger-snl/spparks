@@ -84,7 +84,10 @@ build.
   `src/fd_stencil.h`, a host/device central-difference stencil for site
   fields; `AppPhaseFieldPottsTable : AppPhaseField` is its ch_heat model
   under Potts spins; both kk twins run the field step through
-  `src/KOKKOS/phasefield_device.h`).
+  `src/KOKKOS/phasefield_device.h`; `AppSinterKokkos :
+  LatticeKokkos<AppSinter>` sweeps with the host/device `sinter::event`
+  of `src/app_sinter.h` and overrides the virtual hooks of AppSinter's
+  end-of-sweep annihilation, so the two match bit for bit).
   The CPU
   class owns the state, parameters and argument parsing; the kk class
   replaces `init_app`/`app_update`/`input_app` (its fallback is

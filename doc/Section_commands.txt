@@ -358,6 +358,7 @@ full description:
 "potts/weld/jom"_app_potts_weld_jom.html,
 "relax"_app_relax.html,
 "sinter"_app_sinter.html,
+"sinter/kk"_app_sinter.html,
 "sos"_app_sos.html,
 "test/group"_app_test_group.html
 :tb(c=8,ea=c)

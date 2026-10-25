@@ -64,6 +64,7 @@ function(configure_conditional_sources)
             KOKKOS/app_potts_quaternion_kokkos.cpp
             KOKKOS/app_phasefield_kokkos.cpp
             KOKKOS/app_phasefield_potts_table_kokkos.cpp
+            KOKKOS/app_sinter_kokkos.cpp
         )
         # The Kokkos additive/texture app shares the CPU app's temperature
         # sources, so it has the same MPI-only gate.

@@ -7,16 +7,18 @@
 :line
 
 app_style sinter command :h3
+app_style sinter/kk command :h3
 
 [Syntax:]
 
 app_style style :pre
 
-style = {sinter} 
+style = {sinter} or {sinter/kk} :ul
 
 [Examples:]
 
 app_style sinter
+app_style sinter/kk :pre
 
 [Description:]
 
@@ -87,6 +89,12 @@ Parallel implementation of the Monte Carlo model for sintering in
 SPPARKS code is described in the "2011 Garcia-Cardona paper
 below"_#Garcia-Cardona.
 
+Style {sinter/kk} runs the same model on a Kokkos device: the sweeps
+and the annihilation's passes over the sites run as device kernels,
+the rest of the annihilation on the host. It needs "sweep
+color"_sweep.html or {color/strict}; with {color/strict} it reproduces
+style {sinter} bit for bit, on any device and floating-point options.
+
 Sites on the faces of the simulation box are set to the frame value
 -1, and the two layers of sites inside them to pore sites 0, at the
 start of each run.
@@ -139,6 +147,8 @@ since the previous stats output.
 :line
 
 [Restrictions:]
+
+Style {sinter/kk} is part of the KOKKOS package.
 
 The sites must be created by "create_sites box"_create_sites.html in
 a fully periodic box. In parallel, "sectors"_sector.html are required,

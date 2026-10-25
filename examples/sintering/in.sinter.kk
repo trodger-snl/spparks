@@ -1,0 +1,32 @@
+# sintering of a random powder compact, no data file needed: grains grow
+# from one spin per site, then sintering starts at t = 200 and the pores
+# (i1 = 0, 10% of the sites) leave the compact; the density in the central
+# box rises from ~0.9 towards 1
+
+seed             12345
+
+app_style        sinter/kk
+
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 64 0 64 0 64
+create_box       box
+create_sites     box
+
+set              i1 unique
+set              i1 value 0 fraction 0.1
+
+event_ratios     2.0 1.0 10.0
+event_temperatures 1.0 1.0 15.0
+time_sinter_start 200
+
+# color/strict: per-site random streams, so sinter/kk gives the same result
+sweep            color/strict
+
+diag_style       energy
+diag_style       sinter_density
+diag_style       sinter_free_energy_pore
+
+stats            50.0
+#dump            1 text 200.0 dump.sinter id i1 x y z
+run              600.0

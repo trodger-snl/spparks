@@ -62,6 +62,7 @@ function(configure_conditional_sources)
             KOKKOS/app_potts_neigh_kokkos.cpp
             KOKKOS/app_potts_neighonly_kokkos.cpp
             KOKKOS/app_potts_quaternion_kokkos.cpp
+            KOKKOS/app_phasefield_kokkos.cpp
             KOKKOS/app_phasefield_potts_table_kokkos.cpp
         )
         # The Kokkos additive/texture app shares the CPU app's temperature

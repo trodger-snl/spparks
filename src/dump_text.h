@@ -53,6 +53,7 @@ class DumpText : public Dump {
   char *columns;             // text describing columns of dump output
   char *columns_orig;        // same w/out "site" changed to "type"
 
+  int energyflag;            // 1 if energy is dumped or thresholded
   int nchoose;               // # of selected atoms
   int maxlocal;              // size of atom selection and variable arrays
   int *choose;               // lists of sites chosen for output

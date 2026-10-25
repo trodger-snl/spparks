@@ -23,6 +23,8 @@
 #include "app.h"
 #include "app_lattice.h"
 #include "app_off_lattice.h"
+#include "comm_lattice.h"
+#include "comm_off_lattice.h"
 #include "domain.h"
 #include "region.h"
 #include "memory.h"
@@ -183,6 +185,14 @@ void DumpText::init_style()
   if (flag && !solve)
     error->all(FLERR,"Dump requires propensity but no KMC solve performed");
 
+  // a site's energy reads its neighbours, so ghosts must be current
+
+  energyflag = 0;
+  for (int i = 0; i < size_one; i++)
+    if (pack_choice[i] == &DumpText::pack_energy) energyflag = 1;
+  for (int i = 0; i < nthresh; i++)
+    if (thresh_array[i] == ENERGY) energyflag = 1;
+
   // set index and check validity of region
 
   if (iregion >= 0) {
@@ -215,6 +225,13 @@ int DumpText::count()
     dchoose = (double *) 
       memory->smalloc(maxlocal*sizeof(double),"dump:dchoose");
     clist = (int *) memory->smalloc(maxlocal*sizeof(int),"dump:clist");
+  }
+
+  // as DiagEnergy: before the first step, nothing has filled the ghosts
+
+  if (energyflag) {
+    if (latticeflag) applattice->comm->all();
+    else appoff->comm->all();
   }
 
   // choose all local sites for output

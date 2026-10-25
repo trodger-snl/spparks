@@ -187,7 +187,9 @@ void AppSinter::setup_app()
 }
 
 /* ----------------------------------------------------------------------
-   frame sites on the box faces, then pore sites, around the compact
+   frame sites on the box faces, then (first run) pore sites, around the
+   compact. Later runs keep the border: the compact grows into it as the
+   vacancies leave, and nothing changes the frame.
 ------------------------------------------------------------------------- */
 
 void AppSinter::overimpose_frame()
@@ -200,7 +202,7 @@ void AppSinter::overimpose_frame()
     for (int d = 0; d < dimension; d++)
       depth = MIN(depth,MIN(c[d],n[d]-1-c[d]));
     if (depth < FRAME_DEPTH) spin[i] = FRAME;
-    else if (depth < FRAME_DEPTH + BORDER_DEPTH) spin[i] = VACANT;
+    else if (first_run && depth < FRAME_DEPTH + BORDER_DEPTH) spin[i] = VACANT;
   }
 }
 
@@ -519,60 +521,51 @@ double AppSinter::gb_average()
   update_ghosts();
 
   long long count[2] = {0,0};    // face sites, faces
-  std::vector<unsigned long long> faces, shared, all;
-  std::vector<int> split;
-  gb_faces(count[0],faces,split);
+  std::vector<unsigned long long> faces;
+  gb_faces(count[0],faces);
 
-  // a face of a grain split over ranks is counted once, at rank 0
+  // a face may be on several ranks (a grain spans ranks, or its pieces
+  // do): count each at the rank its key hashes to
 
-  for (unsigned long long f : faces)
-    if (std::binary_search(split.begin(),split.end(),(int) (f >> 32)))
-      shared.push_back(f);
-    else count[1]++;
+  std::vector<int> scount(nprocs,0), rcount(nprocs), sdispl(nprocs,0),
+    rdispl(nprocs,0);
+  for (unsigned long long f : faces) scount[mix(f) % nprocs]++;
+  for (int p = 1; p < nprocs; p++) sdispl[p] = sdispl[p-1] + scount[p-1];
+  std::vector<unsigned long long> send(faces.size()), recv;
+  std::vector<int> next(sdispl);
+  for (unsigned long long f : faces) send[next[mix(f) % nprocs]++] = f;
+  MPI_Alltoall(scount.data(),1,MPI_INT,rcount.data(),1,MPI_INT,world);
+  for (int p = 1; p < nprocs; p++) rdispl[p] = rdispl[p-1] + rcount[p-1];
+  recv.resize(rdispl[nprocs-1] + rcount[nprocs-1]);
+  MPI_Alltoallv(send.data(),scount.data(),sdispl.data(),
+                MPI_UNSIGNED_LONG_LONG,recv.data(),rcount.data(),
+                rdispl.data(),MPI_UNSIGNED_LONG_LONG,world);
+  radix_sort(recv,0);
+  count[1] = std::unique(recv.begin(),recv.end()) - recv.begin();
 
-  int nshared = shared.size();
-  std::vector<int> counts(nprocs), displs(nprocs);
-  MPI_Gather(&nshared,1,MPI_INT,counts.data(),1,MPI_INT,0,world);
-  if (me == 0) {
-    for (int p = 1; p < nprocs; p++) displs[p] = displs[p-1] + counts[p-1];
-    all.resize(displs[nprocs-1] + counts[nprocs-1]);
-  }
-  MPI_Gatherv(shared.data(),nshared,MPI_UNSIGNED_LONG_LONG,all.data(),
-              counts.data(),displs.data(),MPI_UNSIGNED_LONG_LONG,0,world);
-  if (me == 0) {
-    radix_sort(all,0);
-    count[1] += std::unique(all.begin(),all.end()) - all.begin();
-  }
   MPI_Allreduce(MPI_IN_PLACE,count,2,MPI_LONG_LONG,MPI_SUM,world);
   return count[1] ? (double) count[0] / count[1] : 0.0;
 }
 
 /* ----------------------------------------------------------------------
    over the owned grain sites: the # of (site, other grain beside it)
-   pairs, the distinct (grain, other grain beside it) pairs, sorted, and
-   the grains split over ranks (a ghost neighbour of the same grain)
+   pairs, and the distinct (grain, other grain beside it) pairs, sorted
 ------------------------------------------------------------------------- */
 
 void AppSinter::gb_faces(long long &fsites,
-                         std::vector<unsigned long long> &faces,
-                         std::vector<int> &split)
+                         std::vector<unsigned long long> &faces)
 {
   for (int i = 0; i < nlocal; i++) {
     const int s = spin[i];
     if (s <= VACANT) continue;
     int u[MAXNEIGH];
-    bool spans = false;
-    const int nu = other_grains(i,nlocal,numneigh,FDHostNbr{neighbor},spin,
-                                u,spans);
+    const int nu = other_grains(i,numneigh,FDHostNbr{neighbor},spin,u);
     fsites += nu;
     for (int m = 0; m < nu; m++)
       faces.push_back((unsigned long long) s << 32 | (unsigned) u[m]);
-    if (spans) split.push_back(s);
   }
   radix_sort(faces,0);
   faces.erase(std::unique(faces.begin(),faces.end()),faces.end());
-  std::sort(split.begin(),split.end());
-  split.erase(std::unique(split.begin(),split.end()),split.end());
 }
 
 /* ----------------------------------------------------------------------

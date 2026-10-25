@@ -199,17 +199,15 @@ FD_FN int adjacent_grain(int j, unsigned k0, const NN &nn, const N &nbr,
   return best;
 }
 
-// the other grains beside grain site i, distinct, into u; split is set if
-// a ghost neighbour (index >= nlocal) is of i's grain
+// the other grains beside grain site i, distinct, into u
 template <class NN, class N, class S>
-FD_FN int other_grains(int i, int nlocal, const NN &nn, const N &nbr,
-                       const S &spin, int *u, bool &split)
+FD_FN int other_grains(int i, const NN &nn, const N &nbr, const S &spin,
+                       int *u)
 {
   const int s = spin[i];
   int nu = 0;
   for (int k = 0; k < nn[i]; k++) {
-    const int j = nbr((size_t) i, k), v = spin[j];
-    if (v == s && j >= nlocal) split = true;
+    const int v = spin[nbr((size_t) i, k)];
     if (v <= VACANT || v == s) continue;
     int m;
     for (m = 0; m < nu; m++)
@@ -285,8 +283,7 @@ class AppSinter : public AppLattice {
   double gb_ini, delta_t, density, next_gb;
   double gb_average();
   double gb_update(double);
-  virtual void gb_faces(long long &, std::vector<unsigned long long> &,
-                        std::vector<int> &);
+  virtual void gb_faces(long long &, std::vector<unsigned long long> &);
 
   // the end-of-sweep annihilation, the same on any # of ranks; the hooks
   // are where sinter/kk works on its device copy

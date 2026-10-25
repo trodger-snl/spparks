@@ -73,8 +73,18 @@ void AppSinterKokkos::allocate_app_views()
   const int nall = nlocal + nghost;
   d_spin = Kokkos::View<int*>("spin", nall);
   d_id = Kokkos::View<tagint*>("id", nall);
-  d_made = Kokkos::View<int*>("made", nlocal + 1);
   d_nmade = Kokkos::View<int>("nmade");
+}
+
+/* ----------------------------------------------------------------------
+   room for a vacancy per site and pass of a sweep (setup sets nloop)
+------------------------------------------------------------------------- */
+
+void AppSinterKokkos::setup_end_app()
+{
+  const int nloop = set[bothflag ? nsector : 0].nloop;
+  const size_t n = (size_t) nlocal * std::max(1, nloop) + 1;
+  if (d_made.extent(0) < n) d_made = Kokkos::View<int*>("made", n);
 }
 
 /* ----------------------------------------------------------------------
@@ -146,7 +156,7 @@ int AppSinterKokkos::nmade()
   int n;
   Kokkos::deep_copy(n, d_nmade);
   if (n > (int) d_made.extent(0))
-    error->one(FLERR, "sinter/kk: more vacancies made in a sweep than sites");
+    error->one(FLERR, "sinter/kk: vacancy list overflow");
   return n;
 }
 
@@ -256,8 +266,7 @@ void AppSinterKokkos::set_sites(const std::vector<int> &idx,
 ------------------------------------------------------------------------- */
 
 void AppSinterKokkos::gb_faces(long long &fsites,
-                               std::vector<unsigned long long> &faces,
-                               std::vector<int> &split)
+                               std::vector<unsigned long long> &faces)
 {
   using ull = unsigned long long;
   const int nloc = nlocal;
@@ -270,26 +279,21 @@ void AppSinterKokkos::gb_faces(long long &fsites,
   Kokkos::parallel_scan("SinterFaceCount", nloc,
     KOKKOS_LAMBDA(const int i, long long &upd, const bool final) {
       int u[sinter::MAXNEIGH];
-      bool spans = false;
       const int nu = sp(i) > sinter::VACANT ?
-        sinter::other_grains(i, nloc, nn, nbr, sp, u, spans) : 0;
+        sinter::other_grains(i, nn, nbr, sp, u) : 0;
       if (final) off(i) = upd;
       upd += nu;
     }, total);
   fsites += total;
 
   Kokkos::View<ull*> key("faces", total);
-  Kokkos::View<int*> sv("split", nloc + 1);
-  Kokkos::View<int> ns("nsplit");
   Kokkos::parallel_for("SinterFaces", nloc, KOKKOS_LAMBDA(const int i) {
     const int s = sp(i);
     if (s <= sinter::VACANT) return;
     int u[sinter::MAXNEIGH];
-    bool spans = false;
-    const int nu = sinter::other_grains(i, nloc, nn, nbr, sp, u, spans);
+    const int nu = sinter::other_grains(i, nn, nbr, sp, u);
     for (int m = 0; m < nu; m++)
       key(off(i) + m) = (ull) s << 32 | (unsigned) u[m];
-    if (spans) sv(Kokkos::atomic_fetch_add(&ns(), 1)) = s;
   });
 
   long long nuniq = 0;
@@ -306,12 +310,4 @@ void AppSinterKokkos::gb_faces(long long &fsites,
   faces.resize(nuniq);
   Kokkos::deep_copy(HostView<ull>(faces.data(), nuniq),
                     Kokkos::subview(uniq, Kokkos::make_pair(0LL, nuniq)));
-
-  int n;
-  Kokkos::deep_copy(n, ns);
-  split.resize(n);
-  Kokkos::deep_copy(HostView<int>(split.data(), n),
-                    Kokkos::subview(sv, Kokkos::make_pair(0, n)));
-  std::sort(split.begin(), split.end());
-  split.erase(std::unique(split.begin(), split.end()), split.end());
 }

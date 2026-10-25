@@ -37,6 +37,7 @@ class AppSinterKokkos : public LatticeKokkos<AppSinter> {
 
   void grow_app() override;
   void init_app() override;
+  void setup_end_app() override;
 
   void sync_app_data_to_device() override;
   void sync_app_data_to_host() override;
@@ -51,8 +52,7 @@ class AppSinterKokkos : public LatticeKokkos<AppSinter> {
   void grain_sums(const std::vector<int> &, std::vector<long long> &) override;
   void get_sites(const std::vector<int> &, std::vector<int> &) override;
   void set_sites(const std::vector<int> &, const std::vector<int> &) override;
-  void gb_faces(long long &, std::vector<unsigned long long> &,
-                std::vector<int> &) override;
+  void gb_faces(long long &, std::vector<unsigned long long> &) override;
 
   Kokkos::View<int*> d_spin;
   Kokkos::View<tagint*> d_id;

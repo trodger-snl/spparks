@@ -106,6 +106,7 @@ void CommLattice::init(int nsector_request, int delpropensity, int delevent,
   }
   allswap = NULL;
   reverseswap = NULL;
+  rsnap.clear();
   sectorswap = NULL;
   sectorreverseswap = NULL;
 
@@ -140,6 +141,21 @@ void CommLattice::all()
   else if (ndouble == 0) perform_swap_int(allswap);
   else if (ninteger == 0) perform_swap_double(allswap);
   else perform_swap_general(allswap);
+
+  // what every ghost copy of a reverseswap target now holds, laid out as
+  // the reverse messages are; see all_reverse()
+
+  if (delreverse == 0) return;
+  rsnap.clear();
+  for (int i = 0; i < reverseswap->nrecv; i++) {
+    int *index = reverseswap->rindex[i];
+    for (int n = 0; n < ninteger; n++)
+      for (int j = 0; j < reverseswap->rcount[i]; j++)
+        rsnap.push_back(iarray[n][index[j]]);
+    for (int n = 0; n < ndouble; n++)
+      for (int j = 0; j < reverseswap->rcount[i]; j++)
+        rsnap.push_back(darray[n][index[j]]);
+  }
 }
 
 /* ----------------------------------------------------------------------
@@ -217,16 +233,21 @@ void CommLattice::all_selective(const int *iidx, int ni,
 
 /* ----------------------------------------------------------------------
    reverse communicate changed border values for entire proc sub-domain
+   without sectors every rank sweeps next to its neighbours' ghosts, so the
+   owner of a site may have changed it while another rank's ghost copy did
+   not: only values that differ from what the ghosts got at the last all()
+   are applied (colouring lets at most one event change a site)
 ------------------------------------------------------------------------- */
 
 void CommLattice::all_reverse()
 {
   if (delreverse == 0) return;
 
-  if (site_only) perform_swap_site(reverseswap);
-  else if (ndouble == 0) perform_swap_int(reverseswap);
-  else if (ninteger == 0) perform_swap_double(reverseswap);
-  else perform_swap_general(reverseswap);
+  const double *snap = rsnap.empty() ? NULL : rsnap.data();
+  if (site_only) perform_swap_site(reverseswap,snap);
+  else if (ndouble == 0) perform_swap_int(reverseswap,snap);
+  else if (ninteger == 0) perform_swap_double(reverseswap,snap);
+  else perform_swap_general(reverseswap,snap);
 }
 
 /* ----------------------------------------------------------------------
@@ -986,9 +1007,10 @@ void CommLattice::free_swap(Swap *swap)
 /* ----------------------------------------------------------------------
    communicate site values via Swap instructions
    use site array = iarray[0] as source/destination
+   snap = non-NULL: unpack only values that differ from it (all_reverse)
 ------------------------------------------------------------------------- */
 
-void CommLattice::perform_swap_site(Swap *swap)
+void CommLattice::perform_swap_site(Swap *swap, const double *snap)
 {
   int i,j;
   int *index;
@@ -1020,7 +1042,8 @@ void CommLattice::perform_swap_site(Swap *swap)
     index = swap->rindex[i];
     buf = swap->ribuf[i];
     for (j = 0; j < swap->rcount[i]; j++)
-      site[index[j]] = buf[j];
+      if (!snap || buf[j] != snap[j]) site[index[j]] = buf[j];
+    if (snap) snap += swap->rcount[i];
   }
 }
 
@@ -1029,7 +1052,7 @@ void CommLattice::perform_swap_site(Swap *swap)
    use iarray as source/destination, all integer data
 ------------------------------------------------------------------------- */
 
-void CommLattice::perform_swap_int(Swap *swap)
+void CommLattice::perform_swap_int(Swap *swap, const double *snap)
 {
   int i,j,m,n;
   int *index,*buf,*vector;
@@ -1065,8 +1088,10 @@ void CommLattice::perform_swap_int(Swap *swap)
     m = 0;
     for (n = 0; n < ninteger; n++) {
       vector = iarray[n];
-      for (j = 0; j < swap->rcount[i]; j++) vector[index[j]] = buf[m++];
+      for (j = 0; j < swap->rcount[i]; j++, m++)
+        if (!snap || buf[m] != snap[m]) vector[index[j]] = buf[m];
     }
+    if (snap) snap += m;
   }
 }
 
@@ -1075,7 +1100,7 @@ void CommLattice::perform_swap_int(Swap *swap)
    use darray as source/destination, all double data
 ------------------------------------------------------------------------- */
 
-void CommLattice::perform_swap_double(Swap *swap)
+void CommLattice::perform_swap_double(Swap *swap, const double *snap)
 {
   int i,j,m,n;
   int *index;
@@ -1112,8 +1137,10 @@ void CommLattice::perform_swap_double(Swap *swap)
     m = 0;
     for (n = 0; n < ndouble; n++) {
       vector = darray[n];
-      for (j = 0; j < swap->rcount[i]; j++) vector[index[j]] = buf[m++];
+      for (j = 0; j < swap->rcount[i]; j++, m++)
+        if (!snap || buf[m] != snap[m]) vector[index[j]] = buf[m];
     }
+    if (snap) snap += m;
   }
 }
 
@@ -1122,7 +1149,7 @@ void CommLattice::perform_swap_double(Swap *swap)
    use iarray and darray as source/destination, mixed integer/double data
 ------------------------------------------------------------------------- */
 
-void CommLattice::perform_swap_general(Swap *swap)
+void CommLattice::perform_swap_general(Swap *swap, const double *snap)
 {
   int i,j,m,n;
   int *index,*ivector;
@@ -1164,12 +1191,15 @@ void CommLattice::perform_swap_general(Swap *swap)
     m = 0;
     for (n = 0; n < ninteger; n++) {
       ivector = iarray[n];
-      for (j = 0; j < swap->rcount[i]; j++)
-	ivector[index[j]] = static_cast<int> (buf[m++]);
+      for (j = 0; j < swap->rcount[i]; j++, m++)
+	if (!snap || buf[m] != snap[m])
+	  ivector[index[j]] = static_cast<int> (buf[m]);
     }
     for (n = 0; n < ndouble; n++) {
       dvector = darray[n];
-      for (j = 0; j < swap->rcount[i]; j++) dvector[index[j]] = buf[m++];
+      for (j = 0; j < swap->rcount[i]; j++, m++)
+	if (!snap || buf[m] != snap[m]) dvector[index[j]] = buf[m];
     }
+    if (snap) snap += m;
   }
 }

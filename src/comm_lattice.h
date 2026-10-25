@@ -20,6 +20,7 @@
 
 #include "mpi.h"
 #include "pointers.h"
+#include <vector>
 
 namespace SPPARKS_NS {
 
@@ -64,6 +65,7 @@ class CommLattice : protected Pointers {
 
   Swap *allswap;
   Swap *reverseswap;
+  std::vector<double> rsnap;         // reverseswap targets as of the last all()
   Swap **sectorswap;
   Swap **sectorreverseswap;
   int nsector;
@@ -85,10 +87,10 @@ class CommLattice : protected Pointers {
   void create_recv_from_send(int, int, Site *, Swap *);
   void create_recv_from_list(int, Site *, Swap *);
 
-  void perform_swap_site(Swap *);
-  void perform_swap_int(Swap *);
-  void perform_swap_double(Swap *);
-  void perform_swap_general(Swap *);
+  void perform_swap_site(Swap *, const double *snap = NULL);
+  void perform_swap_int(Swap *, const double *snap = NULL);
+  void perform_swap_double(Swap *, const double *snap = NULL);
+  void perform_swap_general(Swap *, const double *snap = NULL);
 };
 
 }

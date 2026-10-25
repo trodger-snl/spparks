@@ -373,6 +373,25 @@ void LatticeKokkos<Base>::iterate_rejection(double stoptime)
 
     for (int iset = 0; iset < nset_loop; iset++) {
 
+      // Reverse comm writes owned host sites, so the device needs them back.
+      // Every Potts app has delevent = 0, which makes it a no-op (skipped).
+      auto reverse = [&]() {
+        if (nprocs == 1 || !comm->reverse_needed()) return;
+        timer->stamp();
+        ensure_host_data_current();
+        timer->stamp(TIME_SOLVE);
+
+        timer->stamp();
+        if (sectorflag) comm->reverse_sector(iset);
+        else comm->all_reverse();
+        timer->stamp(TIME_COMM);
+
+        timer->stamp();
+        sync_app_data_to_device();
+        host_data_stale = true;
+        timer->stamp(TIME_SOLVE);
+      };
+
       // Ghost exchange: owned sites to host, swap, received ghosts (the
       // contiguous range [nlocal,nall)) back to the device.
       if (nprocs > 1) {
@@ -409,9 +428,11 @@ void LatticeKokkos<Base>::iterate_rejection(double stoptime)
         // the ghosts go stale between colors, which silently makes the result
         // decomposition-dependent and defeats `sweep color/strict`. This
         // mirrors AppLattice (nset == ncolors, one comm->all() per set,
-        // app_lattice.cpp:660-667). icolor == 0 is covered by the exchange
+        // app_lattice.cpp:660-667), with the reverse comm of color c-1's
+        // ghost changes first. icolor == 0 is covered by the exchange
         // above; sectoring needs only one exchange per sector.
         if (nprocs > 1 && !sectorflag && icolor > 0) {
+          reverse();
           timer->stamp();
           ensure_host_data_current();
           timer->stamp(TIME_SOLVE);
@@ -444,23 +465,7 @@ void LatticeKokkos<Base>::iterate_rejection(double stoptime)
         }
       }
 
-      // Reverse comm writes owned host sites, so the device needs them back.
-      // Every Potts app has delevent = 0, which makes it a no-op (skipped).
-      if (nprocs > 1 && comm->reverse_needed()) {
-        timer->stamp();
-        ensure_host_data_current();
-        timer->stamp(TIME_SOLVE);
-
-        timer->stamp();
-        if (sectorflag) comm->reverse_sector(iset);
-        else comm->all_reverse();
-        timer->stamp(TIME_COMM);
-
-        timer->stamp();
-        sync_app_data_to_device();
-        host_data_stale = true;
-        timer->stamp(TIME_SOLVE);
-      }
+      reverse();   // the sector's, or the last color's
     }
 
     // Time advancement. app_update runs on the host arrays, unless the app

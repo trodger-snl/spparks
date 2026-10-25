@@ -133,9 +133,11 @@ void AppLattice::input(char *command, int narg, char **arg)
 
 void AppLattice::init()
 {
-  // error checks
+  // error checks; an update-only run without a KMC solver never sweeps,
+  // so it needs no sweep (nor sectors for one)
 
-  if (solve == NULL && sweepflag == NOSWEEP)
+  int update_only = allow_app_update && app_update_only && solve == NULL;
+  if (solve == NULL && sweepflag == NOSWEEP && !update_only)
     error->all(FLERR,"App needs a KMC or rejection KMC solver");
   if (solve && sweepflag != NOSWEEP)
     error->all(FLERR,"App cannot use both a KMC and rejection KMC solver");
@@ -149,9 +151,9 @@ void AppLattice::init()
 
   if (nprocs > 1 && sectorflag == 0 && solve)
     error->all(FLERR,"Cannot use KMC solver in parallel with no sectors");
-  if (nprocs > 1 && sectorflag == 0 && sweepflag == RANDOM)
+  if (nprocs > 1 && sectorflag == 0 && sweepflag == RANDOM && !update_only)
     error->all(FLERR,"Cannot use random rejection KMC in parallel with no sectors");
-  if (nprocs > 1 && sectorflag == 0 && sweepflag == RASTER)
+  if (nprocs > 1 && sectorflag == 0 && sweepflag == RASTER && !update_only)
     error->all(FLERR,"Cannot use raster rejection KMC in parallel with no sectors");
   if (sectorflag && sweepflag == COLOR_STRICT)
     error->all(FLERR,"Cannot use color/strict rejection KMC with sectors");
@@ -350,7 +352,7 @@ void AppLattice::init()
 
   // error checks that cannot be done until after init_app()
 
-  if (sweepflag && dt_sweep == 0.0) 
+  if ((sweepflag || update_only) && dt_sweep == 0.0)
     error->all(FLERR,"App did not set dt_sweep");
 
   // initialize output
@@ -449,7 +451,8 @@ void AppLattice::setup()
     if (dt_rkmc == 0.0)
       error->all(FLERR,"Choice of sector stop led to no rKMC events");
     dt_rkmc = MIN(dt_rkmc,stoptime-time);
-  }
+  } else if (allow_app_update && app_update_only && solve == NULL)
+    dt_rkmc = MIN(dt_sweep,stoptime-time);
 
   // setup sitelist if sweepflag = RANDOM
   // do this every run since sector timestep could have changed

@@ -43,7 +43,6 @@ class ReadTable : protected Pointers {
   void values();
   void open(char *);
   void parse_keyword(int);
-  int count_words(char *);
 };
 
 }

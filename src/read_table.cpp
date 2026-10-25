@@ -23,11 +23,11 @@
 #include "app.h"
 #include "error.h"
 #include "memory.h"
+#include <vector>
 
 using namespace SPPARKS_NS;
 
 #define MAXLINE 2048
-#define CHUNK 1024
 
 #define NSECTIONS 1       // change when add to header::section_keywords
 
@@ -38,7 +38,7 @@ ReadTable::ReadTable(SPPARKS *spk) : Pointers(spk)
   MPI_Comm_rank(world,&me);
   line = new char[MAXLINE];
   keyword = new char[MAXLINE];
-  buffer = new char[CHUNK*MAXLINE];
+  buffer = new char[MAXLINE];
 }
 
 /* ---------------------------------------------------------------------- */
@@ -187,84 +187,58 @@ void ReadTable::values()
 {
   int nRows,nCols;
   table->getTableDims(&nRows,&nCols);
-  double **tableArray = table->getTablePtr();
-  double *rowArray=NULL, *colArray=NULL;
   bool hasRowColVals = table->hasRowColVals();
-  
-  // add one to nRows and nCols if the first row and column in the file 
-  // have the row column data
-  
-  if (hasRowColVals) {
-    nCols++;
-    nRows++;
-    rowArray = table->getRowPtr();
-    colArray = table->getColPtr();
-  }
-  
-  int i,m,nchunk,idone;
-  char *next,*buf;
-  
-  // read and broadcast one CHUNK of lines at a time
-  // save the same table for each process
-  
-  int nread = 0;
-  
-  while (nread < nRows) {
-    if (nRows-nread > CHUNK) nchunk = CHUNK;
-    else nchunk = static_cast<int> (nRows - nread);
-    if (me == 0) {
-      char *eof;
-      m = 0;
-      for (i = 0; i < nchunk; i++) {
-        eof = fgets(&buffer[m],MAXLINE,fp);
-        if (eof == NULL) error->one(FLERR,"Unexpected end of table file");
-        m += strlen(&buffer[m]);
-      }
-      buffer[m++] = '\n';
-    }
-    MPI_Bcast(&m,1,MPI_INT,0,world);
-    MPI_Bcast(buffer,m,MPI_CHAR,0,world);
-    buf = buffer;
-    
-    next = strchr(buf,'\n');
-    *next = '\0';
-    int nwords = count_words(buf);
-    *next = '\n';
-    
-    if (nwords != nCols) error->all(FLERR,"Incorrect value format in table file");
-    
-    for (int i = 0; i < nchunk; i++) {
-      next = strchr(buf,'\n');
-      if (hasRowColVals) {
-        if (nread+i  == 0) {
-          double val = atof(strtok(buf," \t\n\r\f"));
-          if (val != 0)
-            error->all(FLERR,"First value must be zero when table has row "
-                       "and column data");
-          
-          for (m = 0; m < nCols-1; m++) 
-            colArray[m] = atof(strtok(NULL," \t\n\r\f"));
-        } else {
-          rowArray[nread + i-1] = atof(strtok(buf," \t\n\r\f"));
-          for (m = 0; m < nCols-1; m++) 
-            tableArray[nread + i-1][ m] = atof(strtok(NULL," \t\n\r\f"));
-        }
-      }
-      else {
-        tableArray[nread + i][ 0] = atof(strtok(buf," \t\n\r\f"));
-          for (m = 1; m < nCols; m++) 
-            tableArray[nread + i][ m] = atof(strtok(NULL," \t\n\r\f"));
-      }
-      
-      buf = next + 1;
-    }
-    
-    nread += nchunk;
-  }
-  
+
+  // with row/column data the file has one more row and column: row 0 is
+  // 0 then the column values, column 0 holds the row values
+
+  const int nr = nRows + hasRowColVals;
+  const int nc = nCols + hasRowColVals;
+  std::vector<double> v((size_t) nr*nc);
+
+  // proc 0 reads and checks every row (any length), then bcasts the numbers
+
   if (me == 0) {
-    if (screen) fprintf(screen,"  %d values\n",nRows*nCols);
-    if (logfile) fprintf(logfile,"  %d values\n",nRows*nCols);
+    char *row = NULL;
+    size_t cap = 0;
+    for (int i = 0; i < nr; i++) {
+      if (getline(&row,&cap,fp) < 0)
+        error->one(FLERR,"Unexpected end of table file");
+      char *p = row, *end;
+      int m = 0;
+      for (double x = strtod(p,&end); end != p; x = strtod(p,&end)) {
+        if (m < nc) v[(size_t) i*nc + m] = x;
+        m++;
+        p = end;
+      }
+      if (m != nc || strspn(p," \t\n\r\f") != strlen(p))
+        error->one(FLERR,"Incorrect value format in table file");
+    }
+    free(row);
+  }
+  MPI_Bcast(v.data(),nr*nc,MPI_DOUBLE,0,world);
+
+  double **tableArray = table->getTablePtr();
+  if (hasRowColVals) {
+    if (v[0] != 0)
+      error->all(FLERR,"First value must be zero when table has row "
+                 "and column data");
+    double *rowArray = table->getRowPtr();
+    double *colArray = table->getColPtr();
+    for (int m = 0; m < nCols; m++) colArray[m] = v[1+m];
+    for (int i = 0; i < nRows; i++) {
+      rowArray[i] = v[(size_t) (i+1)*nc];
+      for (int m = 0; m < nCols; m++)
+        tableArray[i][m] = v[(size_t) (i+1)*nc + 1+m];
+    }
+  } else
+    for (int i = 0; i < nRows; i++)
+      for (int m = 0; m < nCols; m++)
+        tableArray[i][m] = v[(size_t) i*nc + m];
+
+  if (me == 0) {
+    if (screen) fprintf(screen,"  %d values\n",nr*nc);
+    if (logfile) fprintf(logfile,"  %d values\n",nr*nc);
   }
 }
 
@@ -345,31 +319,4 @@ void ReadTable::parse_keyword(int first)
          || line[stop] == '\n' || line[stop] == '\r') stop--;
   line[stop+1] = '\0';
   strcpy(keyword,&line[start]);
-}
-
-
-/* ----------------------------------------------------------------------
-   count and return words in a single line
-   make copy of line before using strtok so as not to change line
-   trim anything from '#' onward
-------------------------------------------------------------------------- */
-
-int ReadTable::count_words(char *line)
-{
-  int n = strlen(line) + 1;
-  char *copy = (char *) memory->smalloc(n*sizeof(char),"copy");
-  strcpy(copy,line);
-
-  char *ptr;
-  if ((ptr = strchr(copy,'#'))) *ptr = '\0';
-
-  if (strtok(copy," \t\n\r\f") == NULL) {
-    memory->sfree(copy);
-    return 0;
-  }
-  n = 1;
-  while (strtok(NULL," \t\n\r\f")) n++;
-
-  memory->sfree(copy);
-  return n;
 }

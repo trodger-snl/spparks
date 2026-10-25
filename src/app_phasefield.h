@@ -31,6 +31,7 @@ namespace SPPARKS_NS {
 
 // Phase-field-only lattice app: no spins, no sweeps; every step advances
 // the fields of one model (phasefield_models.h) by one explicit step.
+// phasefield/potts/table derives from it (ch_heat + Potts spins).
 class AppPhaseField : public AppLattice {
  public:
   AppPhaseField(class SPPARKS *, int, char **);
@@ -38,6 +39,7 @@ class AppPhaseField : public AppLattice {
 
   void input_app(char *, int, char **);
   void init_app();
+  void setup_end_app();
   void grow_app();
   void *extract_app(char *);
   void app_update(double);
@@ -49,6 +51,9 @@ class AppPhaseField : public AppLattice {
   void site_event(int, class RandomPark *) {}
 
  protected:
+  // for a child that parses its own app_style arguments and sets the model
+  AppPhaseField(class SPPARKS *, int, char **, int parse);
+
   enum Model { ALLEN_CAHN, CAHN_HILLIARD, GRAIN_GROWTH, CH_HEAT } model;
   PFAllenCahn ac;
   PFCahnHilliard ch;
@@ -58,7 +63,8 @@ class AppPhaseField : public AppLattice {
   double dt;
 
   FDStencil stencil;
-  int *phase;                       // i1
+  int print_stencil;
+  int *phase;                       // i1 (i2 in phasefield/potts/table)
   double *aux[PF_MAXA];             // all sites
   double *fnew[PF_MAXF];            // owned sites
   int nmax_app;
@@ -81,9 +87,10 @@ class AppPhaseField : public AppLattice {
     }
   }
   PFCtx<FDHostNbr, double *, int *> host_ctx();
+  int step_fields();
   void set_dt(double);
   void check_flags(int);
-  static char *dupstr(const char *);
+  void add_phase(const char *);
 };
 
 }

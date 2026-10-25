@@ -17,6 +17,7 @@
 
 #include "mpi.h"
 #include "stdlib.h"
+#include "math.h"
 #include "string.h"
 #include "app_phasefield.h"
 #include "comm_lattice.h"
@@ -31,8 +32,21 @@ using namespace SPPARKS_NS;
 /* ---------------------------------------------------------------------- */
 
 AppPhaseField::AppPhaseField(SPPARKS *spk, int narg, char **arg) :
+  AppPhaseField(spk,narg,arg,1) {}
+
+AppPhaseField::AppPhaseField(SPPARKS *spk, int narg, char **arg, int parse) :
   AppLattice(spk,narg,arg)
 {
+  phase = NULL;
+  for (int k = 0; k < PF_MAXA; k++) aux[k] = NULL;
+  for (int k = 0; k < PF_MAXF; k++) fnew[k] = NULL;
+  nmax_app = 0;
+  warned = 0;
+  print_stencil = 0;
+  scale_free = scale_penalty = 1.0;
+  dt = 0.0;
+  if (!parse) return;
+
   if (narg < 3) error->all(FLERR,"Illegal app_style phasefield command");
   dt = atof(arg[1]);
   if (dt <= 0.0) error->all(FLERR,"Illegal app_style phasefield time step");
@@ -55,12 +69,7 @@ AppPhaseField::AppPhaseField(SPPARKS *spk, int narg, char **arg) :
     model = CH_HEAT;
     chh.q = {dt,atof(a[0]),atof(a[1]),atof(a[2]),atof(a[3]),atof(a[4]),
              0.0,0.0,0};
-    for (int i = 5; i < nargs; i++) {
-      for (char *p : phase_names)
-        if (strcmp(p,a[i]) == 0) error->all(FLERR,"Phase already exists");
-      phase_names.push_back(dupstr(a[i]));
-      tables.push_back(new Table(spk,a[i]));
-    }
+    for (int i = 5; i < nargs; i++) add_phase(a[i]);
   } else error->all(FLERR,"Illegal app_style phasefield model or arguments");
 
   with_model([&](auto &m) { nfield = m.nfield(); naux = m.naux; });
@@ -76,13 +85,6 @@ AppPhaseField::AppPhaseField(SPPARKS *spk, int narg, char **arg) :
   app_update_only = 1;
   dt_sweep = dt;
   create_arrays();
-
-  phase = NULL;
-  for (int k = 0; k < PF_MAXA; k++) aux[k] = NULL;
-  for (int k = 0; k < PF_MAXF; k++) fnew[k] = NULL;
-  nmax_app = 0;
-  warned = 0;
-  scale_free = scale_penalty = 1.0;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -95,13 +97,18 @@ AppPhaseField::~AppPhaseField()
   for (char *p : phase_names) delete [] p;
 }
 
-/* ---------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------
+   a ch_heat phase: its name and the table read_table fills
+------------------------------------------------------------------------- */
 
-char *AppPhaseField::dupstr(const char *s)
+void AppPhaseField::add_phase(const char *name)
 {
-  char *p = new char[strlen(s) + 1];
-  strcpy(p,s);
-  return p;
+  for (char *p : phase_names)
+    if (strcmp(p,name) == 0) error->all(FLERR,"Phase already exists");
+  char *p = new char[strlen(name) + 1];
+  strcpy(p,name);
+  phase_names.push_back(p);
+  tables.push_back(new Table(spk,p));
 }
 
 /* ---------------------------------------------------------------------- */
@@ -137,7 +144,7 @@ void AppPhaseField::init_app()
     if (domain->periodicity[d] != 1)
       error->all(FLERR,"app_style phasefield needs periodic boundaries");
 
-  stencil.setup(spk,this,0);
+  stencil.setup(spk,this,print_stencil);
 
   if (model == CH_HEAT) {
     pftable::pack_tables(error,tables.data(),tables.size(),scale_free,ptab,tab);
@@ -148,7 +155,7 @@ void AppPhaseField::init_app()
     int flagall;
     MPI_Allreduce(&flag,&flagall,1,MPI_INT,MPI_MAX,world);
     if (flagall)
-      error->all(FLERR,"phasefield ch_heat: i1 must be a phase index 0..nphases-1");
+      error->all(FLERR,"phasefield ch_heat: a site's phase is not 0..nphases-1");
   }
 
   if (nmax_app < nlocal + nghost) {
@@ -162,7 +169,14 @@ void AppPhaseField::init_app()
       memory->create(fnew[k],nmax_app,"phasefield:fnew");
     }
   }
+}
 
+/* ----------------------------------------------------------------------
+   dt is known here for phasefield/potts/table (a fraction of dt_rkmc)
+------------------------------------------------------------------------- */
+
+void AppPhaseField::setup_end_app()
+{
   double dtmax;
   with_model([&](auto &m) { dtmax = m.dt_max(stencil); });
   if (dt > dtmax && domain->me == 0) {
@@ -200,7 +214,16 @@ PFCtx<FDHostNbr, double *, int *> AppPhaseField::host_ctx()
 void AppPhaseField::app_update(double step)
 {
   set_dt(step);
+  check_flags(step_fields());
+}
 
+/* ----------------------------------------------------------------------
+   exchange ghosts, then one step of the model on the owned sites;
+   returns this rank's flag bits
+------------------------------------------------------------------------- */
+
+int AppPhaseField::step_fields()
+{
   timer->stamp();
   comm->all();
   timer->stamp(TIME_COMM);
@@ -225,8 +248,7 @@ void AppPhaseField::app_update(double step)
   });
   for (int k = 0; k < nfield; k++)
     memcpy(darray[k],fnew[k],nlocal*sizeof(double));
-
-  check_flags(flags);
+  return flags;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -263,4 +285,92 @@ void *AppPhaseField::extract_app(char *name)
     if (strcmp(name,phase_names[i]) == 0) return (void *) tables[i];
   error->all(FLERR,"Cannot find the phase");
   return NULL;
+}
+
+/* ----------------------------------------------------------------------
+   check each table (T rows > 0, c columns 0 to 1, both evenly spaced) and
+   pack every table's G and dG/dc, scaled by scale_free, into tab; spin
+   ranges are left to the caller
+------------------------------------------------------------------------- */
+
+void pftable::pack_tables(Error *error, Table **tables, int n_tables,
+                          double scale_free, std::vector<PFPhaseTable> &ptab,
+                          std::vector<double> &tab)
+{
+  int i,j,k;
+
+  ptab.assign(n_tables,PFPhaseTable());
+  tab.clear();
+
+  for (i=0; i<n_tables; i++) {
+    Table *t = tables[i];
+    if (!t->getTableReady())
+      error->all(FLERR,"Not all tables loaded for phases");
+    if (!t->hasRowColVals())
+      error->all(FLERR,"Phase tables need rowcolvals (T rows, c columns)");
+
+    int nRow,nCol;
+    t->getTableDims(&nRow,&nCol);
+    double **G = t->getTablePtr();
+    double *rowvals = t->getRowPtr();
+    double *colvals = t->getColPtr();
+    if (nRow < 2 || nCol < 3)
+      error->all(FLERR,"Illegal table for phase, need at least 2 rows "
+                 "and 3 columns");
+
+    double dC = colvals[1]-colvals[0];
+    double dT = rowvals[1]-rowvals[0];
+
+    // colvals must be the concentration and increase from 0 to 1
+
+    if (colvals[0] !=0 || colvals[nCol-1] != 1)
+      error->all(FLERR,"Illegal table for phase, concentration must "
+                 "increase from 0 to 1");
+    for (j=1; j<nCol; j++)
+      if (colvals[j] < 0 || colvals[j] > 1 ||
+          colvals[j] <= colvals[j-1] ||
+          fabs(colvals[j]-colvals[j-1] - dC) > 1e-6)
+        error->all(FLERR,"Illegal table for phase, concentration must "
+                   "increase from 0 to 1 and have even intervals");
+
+    // rowvals must be the temperature and increase
+    // error if anything less than or equal zero
+
+    if (rowvals[0] <= 0)
+      error->all(FLERR,"Illegal table for phase, "
+                 "temperature must be greater than zero");
+    for (j=1; j<nRow; j++) {
+      if (rowvals[j] <= 0)
+        error->all(FLERR,"Illegal table for phase, "
+                   "temperature must be greater than zero");
+      if (rowvals[j] <= rowvals[j-1] ||
+          fabs(rowvals[j]-rowvals[j-1] - dT) > 1e-6)
+        error->all(FLERR,"Illegal table for phase, temperature must increase "
+                   " and have even intervals");
+    }
+
+    PFPhaseTable &pt = ptab[i];
+    pt.nrow = nRow;
+    pt.ncol = nCol;
+    pt.t0 = rowvals[0];
+    pt.inv_dt = 1.0/dT;
+    pt.inv_dc = 1.0/dC;
+
+    // G scaled, then its dGdC: one-sided second-order differences at the
+    // ends, central in between
+
+    pt.g = tab.size();
+    pt.dg = pt.g + nRow*nCol;
+    tab.resize(pt.dg + nRow*nCol);
+    double h=dC;
+    int n=nCol - 1;    //index of the last value
+    for (j=0; j<nRow; j++) {
+      double *g = &tab[pt.g + j*nCol];
+      double *dg = &tab[pt.dg + j*nCol];
+      for (k=0; k<nCol; k++) g[k] = G[j][k] * scale_free;
+      dg[0] = (-g[2] + 4*g[1] - 3*g[0])/(2*h);
+      for (k=1; k<n; k++) dg[k] = (g[k+1] - g[k-1])/(2*h);
+      dg[n] = (3*g[n] - 4*g[n-1] + g[n-2])/(2*h);
+    }
+  }
 }

@@ -25,11 +25,12 @@ AppStyle(phasefield/potts/table/kk,AppPhaseFieldPottsTableKokkos)
 
 #include "app_lattice_kokkos.h"
 #include "app_phasefield_potts_table.h"
+#include "phasefield_device.h"
 
 namespace SPPARKS_NS {
 
-// phasefield/potts/table on the device: the colour sweep and the coupled
-// c/T finite-difference steps run as kernels over the same pftable::
+// phasefield/potts/table on the device: the colour sweep (pftable::) and the
+// field steps (PFDevice, as phasefield/kk) run as kernels over the same
 // functions as the CPU app, which owns parsing, tables and the host state.
 class AppPhaseFieldPottsTableKokkos : public LatticeKokkos<AppPhaseFieldPottsTable> {
  public:
@@ -47,13 +48,10 @@ class AppPhaseFieldPottsTableKokkos : public LatticeKokkos<AppPhaseFieldPottsTab
   void sync_ghosts_to_device() override;
   void allocate_app_views() override;
 
-  Kokkos::View<int*> d_spin, d_phase;
-  Kokkos::View<double*> d_c, d_T, d_mu, d_cnew, d_Tnew;
-  Kokkos::View<double*> d_tab;
-  Kokkos::View<PFPhaseTable*> d_ptab;
+  PFDevice pf;                  // c = pf.f[0], T = pf.f[1], phase
+  Kokkos::View<int*> d_spin;
   Kokkos::View<int*> d_reset;
   Kokkos::View<double*> d_resetval;
-  Kokkos::View<int> d_flags;
   int reset_uploaded = -1;      // pf_resetversion on the device
 
  private:

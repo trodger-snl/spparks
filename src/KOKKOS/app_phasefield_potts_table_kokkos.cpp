@@ -44,7 +44,6 @@ AppPhaseFieldPottsTableKokkos(SPPARKS *spk, int narg, char **arg) :
   LatticeKokkos<AppPhaseFieldPottsTable>(spk, narg, arg)
 {
   device_app_update = true;
-  d_flags = Kokkos::View<int>("pf_flags");
 }
 
 /* ---------------------------------------------------------------------- */
@@ -65,10 +64,7 @@ void AppPhaseFieldPottsTableKokkos::init_app()
   AppPhaseFieldPottsTable::init_app();
   LatticeKokkos<AppPhaseFieldPottsTable>::init_app();
 
-  d_tab = Kokkos::View<double*>("pf_tab", tab.size());
-  Kokkos::deep_copy(d_tab, HostView<double>(tab.data(), tab.size()));
-  d_ptab = Kokkos::View<PFPhaseTable*>("pf_ptab", ptab.size());
-  Kokkos::deep_copy(d_ptab, HostView<PFPhaseTable>(ptab.data(), ptab.size()));
+  pf.upload_tables(ptab, tab);
   upload_reset_list();
 
   sync_app_data_to_device();
@@ -91,14 +87,8 @@ void AppPhaseFieldPottsTableKokkos::upload_reset_list()
 
 void AppPhaseFieldPottsTableKokkos::allocate_app_views()
 {
-  const int nall = nlocal + nghost;
-  d_spin = Kokkos::View<int*>("spin", nall);
-  d_phase = Kokkos::View<int*>("phase", nall);
-  d_c = Kokkos::View<double*>("c", nall);
-  d_T = Kokkos::View<double*>("T", nall);
-  d_mu = Kokkos::View<double*>("mu", nall);
-  d_cnew = Kokkos::View<double*>("cnew", nlocal);
-  d_Tnew = Kokkos::View<double*>("Tnew", nlocal);
+  pf.allocate(nlocal + nghost, 2, 1);
+  d_spin = Kokkos::View<int*>("spin", nlocal + nghost);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -107,26 +97,26 @@ void AppPhaseFieldPottsTableKokkos::sync_app_data_to_device()
 {
   const int nall = nlocal + nghost;
   upload_range(d_spin, spin, 0, nall);
-  upload_range(d_phase, phase, 0, nall);
-  upload_range(d_c, c, 0, nall);
-  upload_range(d_T, T, 0, nall);
+  upload_range(pf.phase, phase, 0, nall);
+  upload_range(pf.f[0], c, 0, nall);
+  upload_range(pf.f[1], T, 0, nall);
 }
 
 void AppPhaseFieldPottsTableKokkos::sync_app_data_to_host()
 {
   download_range(spin, d_spin, nlocal);
-  download_range(phase, d_phase, nlocal);
-  download_range(c, d_c, nlocal);
-  download_range(T, d_T, nlocal);
+  download_range(phase, pf.phase, nlocal);
+  download_range(c, pf.f[0], nlocal);
+  download_range(T, pf.f[1], nlocal);
 }
 
 void AppPhaseFieldPottsTableKokkos::sync_ghosts_to_device()
 {
   const int nall = nlocal + nghost;
   upload_range(d_spin, spin, nlocal, nall);
-  upload_range(d_phase, phase, nlocal, nall);
-  upload_range(d_c, c, nlocal, nall);
-  upload_range(d_T, T, nlocal, nall);
+  upload_range(pf.phase, phase, nlocal, nall);
+  upload_range(pf.f[0], c, nlocal, nall);
+  upload_range(pf.f[1], T, nlocal, nall);
 }
 
 /* ----------------------------------------------------------------------
@@ -140,14 +130,14 @@ void AppPhaseFieldPottsTableKokkos::sweep_color_kokkos(int, int start, int count
   auto sites = d_color_sites;
   auto nn = d_numneigh;
   auto nbr = d_neighbor;
-  auto sp = d_spin, ph = d_phase;
-  auto cc = d_c, TT = d_T;
+  auto sp = d_spin, ph = pf.phase;
+  auto cc = pf.f[0], TT = pf.f[1];
   auto seeds = d_siteseeds;
   auto pool = *rand_pool;
-  const PFPhaseTable *pt = d_ptab.data();
-  const double *tb = d_tab.data();
-  const PFParams q = params;
-  const int np = nphases, strict = strict_rng;
+  const PFPhaseTable *pt = pf.ptab.data();
+  const double *tb = pf.tab.data();
+  const PFParams q = chh.q;
+  const int np = ptab.size(), strict = strict_rng;
   const double temp = temperature, tinv = t_inverse;
 
   int accepted = 0;
@@ -192,42 +182,18 @@ void AppPhaseFieldPottsTableKokkos::app_update(double stoptime)
     sync_ghosts_to_device();
   }
 
-  const int nloc = nlocal, nall = nlocal + nghost, mn = maxneigh;
-  const FDStencil st = stencil;
-  const PFParams q = params;
-  auto nn = d_numneigh;
-  auto nbr = d_neighbor;
-  auto ph = d_phase;
-  auto cc = d_c, TT = d_T, mu = d_mu, cn = d_cnew, Tn = d_Tnew;
+  const int nall = nlocal + nghost;
   auto rs = d_reset;
   auto rv = d_resetval;
-  auto flags = d_flags;
   const int nreset = rs.extent(0);
-  const PFPhaseTable *pt = d_ptab.data();
-  const double *tb = d_tab.data();
   const int dsel[2] = {0, 1};
-  Kokkos::deep_copy(flags, 0);
 
   double localtime = 0.0;
   int done = 0;
   while (!done) {
     timer->stamp();
-    Kokkos::parallel_for("PFMu", nall, KOKKOS_LAMBDA(const int i) {
-      if (i < nloc || nn(i) == mn)
-        mu(i) = pftable::chem_potential(st, nbr, ph, cc, TT, i, pt, tb, q);
-    });
-    Kokkos::parallel_for("PFStep", nloc, KOKKOS_LAMBDA(const int i) {
-      double a, b;
-      const int f = pftable::step(st, nbr, cc, TT, mu, i, q, a, b);
-      cn(i) = a;
-      Tn(i) = b;
-      if (f) Kokkos::atomic_or(&flags(), f);
-    });
-    // ponytail: copy back, not a view swap; fuse if the PF step is bandwidth-bound
-    Kokkos::parallel_for("PFCopy", nloc, KOKKOS_LAMBDA(const int i) {
-      cc(i) = cn(i);
-      TT(i) = Tn(i);
-    });
+    pf.step(chh, stencil, d_neighbor, d_numneigh, nlocal, nall, maxneigh, 2);
+    auto cc = pf.f[0];
     if (nreset)
       Kokkos::parallel_for("PFReset", nreset, KOKKOS_LAMBDA(const int m) {
         cc(rs(m)) = rv(m);
@@ -236,17 +202,17 @@ void AppPhaseFieldPottsTableKokkos::app_update(double stoptime)
     // ponytail: ghost c,T through the host every PF step; pack on the device
     // if np > 1 runs are comm-bound
     if (nprocs > 1) {
-      download_range(c, d_c, nlocal);
-      download_range(T, d_T, nlocal);
+      download_range(c, pf.f[0], nlocal);
+      download_range(T, pf.f[1], nlocal);
       timer->stamp(TIME_SOLVE);
       comm->all_selective(nullptr, 0, dsel, 2);
       timer->stamp(TIME_COMM);
-      upload_range(d_c, c, nlocal, nall);
-      upload_range(d_T, T, nlocal, nall);
+      upload_range(pf.f[0], c, nlocal, nall);
+      upload_range(pf.f[1], T, nlocal, nall);
     }
     timer->stamp(TIME_SOLVE);
 
-    localtime += dt_phasefield;
+    localtime += dt;
     if (localtime >= (stoptime - 1e-6)) done = 1;
     if (localtime > (stoptime + 1e-6)) {
       char errorstr[128];
@@ -258,10 +224,9 @@ void AppPhaseFieldPottsTableKokkos::app_update(double stoptime)
   }
 
   // the kernels finish here (the copy fences): charge them to Solve
-  int f;
-  Kokkos::deep_copy(f, flags);
+  const int f = pf.take_flags();
   timer->stamp(TIME_SOLVE);
-  check_step_flags(f);
+  check_flags(f);
 
   if (app_update_only) sync_app_data_to_host();
   else host_data_stale = true;

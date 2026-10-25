@@ -79,11 +79,12 @@ build.
   `QuaternionKokkos<Base>` (device spin/quaternions), so
   `AppAdditiveTextureKokkos : QuaternionKokkos<AppAdditiveTexture>` and
   `AppPottsQuaternionKokkos : QuaternionKokkos<AppPottsQuaternion>`
-  (`AppPhaseFieldPottsTableKokkos : LatticeKokkos<AppPhaseFieldPottsTable>`
-  shares its per-site physics with the CPU app through `pftable::` inline
-  functions and `src/fd_stencil.h`, a host/device central-difference
-  stencil for site fields; the phase-field-only `phasefield`/`phasefield/kk`
-  runs one model struct from `src/phasefield_models.h` -- add a PDE there).
+  (the phase-field-only `phasefield` app, `AppPhaseField`, runs one model
+  struct from `src/phasefield_models.h` -- add a PDE there -- over
+  `src/fd_stencil.h`, a host/device central-difference stencil for site
+  fields; `AppPhaseFieldPottsTable : AppPhaseField` is its ch_heat model
+  under Potts spins; both kk twins run the field step through
+  `src/KOKKOS/phasefield_device.h`).
   The CPU
   class owns the state, parameters and argument parsing; the kk class
   replaces `init_app`/`app_update`/`input_app` (its fallback is

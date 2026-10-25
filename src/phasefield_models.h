@@ -25,17 +25,121 @@
 // Both are header-only and callable on host and device: x.f[k] / x.a[k] are
 // double* on the host and 1d Kokkos Views on the device, x.nbr is the
 // neighbour accessor of fd_stencil.h, so the CPU and Kokkos apps run the same
-// arithmetic. To add a model: write its struct here, give it a parse() line
-// in AppPhaseField's constructor and a case in both apps' dispatch switches.
+// arithmetic. To add a model: write its struct here, parse it in
+// AppPhaseField's constructor and add a case to AppPhaseField::with_model.
 
 #ifndef SPK_PHASEFIELD_MODELS_H
 #define SPK_PHASEFIELD_MODELS_H
 
 #include "fd_stencil.h"
-#include "app_phasefield_potts_table.h"   // pftable:: lookup, mu, c/T step
 #include <math.h>
+#include <vector>
 
 namespace SPPARKS_NS {
+
+class Error;
+class Table;
+
+/* ----------------------------------------------------------------------
+   Tabulated free energy G(c,T) per phase and the coupled c/T equations
+   (ch_heat, phasefield/potts/table), host and device. Arrays are anything
+   indexable with [] (host pointers or 1d Kokkos Views); nbr as in
+   fd_stencil.h.
+------------------------------------------------------------------------- */
+
+// one phase's free energy table, stored in a flat array: G at tab[g],
+// dG/dc at tab[dg], row-major nrow (T) x ncol (c from 0 to 1), even spacing
+struct PFPhaseTable {
+  int g, dg, nrow, ncol;
+  int spin_lo, spin_hi;
+  double t0, inv_dt, inv_dc;
+};
+
+struct PFParams {
+  double dt, mobility, ch_energy, conductivity, heat_of_transport, specific_heat;
+  double penalty;          // out-of-range c: G(edge) + penalty*excess^2
+  double scale_potts;
+  int enforce;             // clamp c to [0,1]
+};
+
+namespace pftable {
+
+// bilinear interpolation in (T,c); dflag = 1 -> dG/dc. T outside the table
+// extrapolates linearly from the edge cells.
+FD_FN double lookup(const PFPhaseTable &p, const double *tab,
+                    double c, double T, int dflag, double penalty)
+{
+  double excess = c < 0.0 ? c : (c > 1.0 ? c - 1.0 : 0.0);
+  if (excess != 0.0 && dflag) return 2.0 * penalty * excess;
+
+  double x = (T - p.t0) * p.inv_dt;
+  int iT = (int) x;
+  if (iT < 0) iT = 0;
+  if (iT > p.nrow - 2) iT = p.nrow - 2;
+  double fT = x - iT;
+
+  const double *m = tab + (dflag ? p.dg : p.g) + iT * p.ncol;
+  if (excess != 0.0) {
+    int iC = c < 0.0 ? 0 : p.ncol - 1;
+    return m[iC] + fT * (m[iC + p.ncol] - m[iC]) + penalty * excess * excess;
+  }
+
+  double y = c * p.inv_dc;
+  int iC = (int) y;
+  if (iC > p.ncol - 2) iC = p.ncol - 2;
+  double fC = y - iC;
+  const double *n = m + p.ncol;
+  return m[iC] + fT * (n[iC] - m[iC]) + fC * (m[iC + 1] - m[iC]) +
+         fC * fT * (m[iC] - n[iC] - m[iC + 1] + n[iC + 1]);
+}
+
+// chemical potential mu = dG/dc - kappa lap(c); valid where the axis
+// neighbours exist (owned sites, ghosts with full neighbour lists)
+template <class N, class P, class D>
+FD_FN double chem_potential(const FDStencil &st, const N &nbr, const P &phase,
+                            const D &c, const D &T, int i,
+                            const PFPhaseTable *pt, const double *tab,
+                            const PFParams &q)
+{
+  return lookup(pt[phase[i]], tab, c[i], T[i], 1, q.penalty) -
+         q.ch_energy * st.lap(nbr, c, i);
+}
+
+// one explicit step of the coupled composition / heat equations at site i:
+//   dc/dt    = M (2 lap(mu) + Q* div(grad T / T))
+//   Cp dT/dt = 2 M Q* lap(mu) + k lap(T)
+// div(grad T / T) in flux form (1/T averaged onto faces), so composition is
+// conserved exactly. Returns flag bits: 1 = c left [0,1], 2 = T reached 0.
+template <class D> struct Inverse {
+  D f;
+  FD_FN double operator[](int s) const { return 1.0 / f[s]; }
+};
+
+template <class N, class D>
+FD_FN int step(const FDStencil &st, const N &nbr, const D &c, const D &T,
+               const D &mu, int i, const PFParams &q, double &cnew, double &Tnew)
+{
+  double lapmu = st.lap(nbr, mu, i);
+  double lapT = st.lap(nbr, T, i);
+  double Ti = T[i];
+  double soret = st.div_k_grad(nbr, T, Inverse<D>{T}, i);
+
+  cnew = c[i] + q.dt * q.mobility * (2.0 * lapmu + q.heat_of_transport * soret);
+  Tnew = Ti + (q.dt / q.specific_heat) *
+              (2.0 * q.mobility * q.heat_of_transport * lapmu + q.conductivity * lapT);
+
+  int flag = 0;
+  if (q.enforce) cnew = cnew > 1.0 ? 1.0 : (cnew < 0.0 ? 0.0 : cnew);
+  else if (cnew > 1.0 || cnew < 0.0) flag |= 1;
+  if (!(Tnew > 0.0)) flag |= 2;
+  return flag;
+}
+
+// host: check and pack tables (app_phasefield.cpp)
+void pack_tables(SPPARKS_NS::Error *, SPPARKS_NS::Table **, int n, double scale_free,
+                 std::vector<PFPhaseTable> &ptab, std::vector<double> &tab);
+
+}
 
 // ponytail: fixed field cap; sparse order parameters if grain growth needs more
 #define PF_MAXF 32

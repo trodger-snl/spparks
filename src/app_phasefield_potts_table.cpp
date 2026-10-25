@@ -22,15 +22,12 @@
 #include "string.h"
 #include "math.h"
 #include "app_phasefield_potts_table.h"
-#include "solve.h"
 #include "random_park.h"
 #include "error.h"
-#include "memory.h"
 #include "domain.h"
 #include "region.h"
 #include "comm_lattice.h"
 #include "timer.h"
-#include "table.h"
 
 using namespace SPPARKS_NS;
 
@@ -38,20 +35,9 @@ using namespace SPPARKS_NS;
 
 AppPhaseFieldPottsTable::
 AppPhaseFieldPottsTable(SPPARKS *spk, int narg, char **arg) :
-  AppPottsNeighOnly(spk,narg,arg)
+  AppPhaseField(spk,narg,arg,0)
 {
-  ninteger = 2;
-  ndouble = 2;
-  allow_kmc = 0;
-  allow_rejection = 1;
-  allow_masking = 0;
-  allow_app_update = 1;
-  numrandom = 3;
-  delpropensity = 2;//need full neighbor lists of the 1st layer ghost sites
-
-  // add the double array
-
-  recreate_arrays();
+  if (narg < 9) error->all(FLERR,"Illegal app_style command");
 
   nspins = atoi(arg[1]);
   if (nspins <= 0) error->all(FLERR,"Illegal app_style command");
@@ -62,79 +48,41 @@ AppPhaseFieldPottsTable(SPPARKS *spk, int narg, char **arg) :
   if ((9+2*nphasestemp) != narg)
     error->all(FLERR,"Illegal app_style command for phasefield/potts/table");
 
-  // dt_phasefield is set as a multiple of dt_rkmc in setup_end_app();
-  // set the multiple here. ( dt_phasefield = dt_rkmc / dt_phasefield_mult )
+  // dt (the phase-field step) is set as a fraction of dt_rkmc in
+  // setup_end_app(): dt = dt_rkmc / dt_phasefield_mult
 
   dt_phasefield_mult = atof(arg[3]);
 
-  // set the variables for the energetics and evolution
+  // the ch_heat model of AppPhaseField, plus the Potts interface energy
 
-  params.dt = 0.0;
-  params.mobility = atof(arg[4]);
-  params.ch_energy = atof(arg[5]);
-  params.conductivity = atof(arg[6]);
-  params.heat_of_transport = atof(arg[7]);
-  params.specific_heat = atof(arg[8]);
-  params.scale_potts = 1.0;
-  params.enforce = 0;
+  model = CH_HEAT;
+  chh.q = {0.0,atof(arg[4]),atof(arg[5]),atof(arg[6]),atof(arg[7]),atof(arg[8]),
+           0.0,1.0,0};
+  nfield = 2;
+  naux = 1;
 
-  phases = (Phase **)
-    memory->smalloc(nphasestemp*sizeof(Phase *),"phasefield/potts/table:phases");
-
-  int iarg=9;
   int currentspin=0;
-  nphases = 0;
-
-  for (int i=0; i<nphasestemp; i++) {
-    int phaseID = find_phase(arg[iarg]);
-    if (phaseID >= 0 ) error->all(FLERR,"Phase already exists");
-
-    //create the new phase
-
-    phases[nphases] = new Phase;
-    int n = strlen(arg[iarg]) + 1;
-    phases[nphases]->id = new char[n];
-    strcpy(phases[nphases]->id,arg[iarg]);
-    int spin_range = atoi(arg[iarg+1]);
-    phases[nphases]->spin_start = currentspin+1;
-    currentspin += spin_range;
-    phases[nphases]->spin_end = currentspin;
-    phases[nphases]->table = new Table(spk,phases[nphases]->id);
-
-    iarg += 2;
-    nphases++;
+  for (int iarg=9; iarg<narg; iarg+=2) {
+    add_phase(arg[iarg]);
+    spin_lo.push_back(currentspin+1);
+    currentspin += atoi(arg[iarg+1]);
+    spin_hi.push_back(currentspin);
   }
-
-  if (nphases != nphasestemp) error->all(FLERR,"Illegal app_style command");
   if (currentspin != nspins) error->all(FLERR,"Illegal app_style command -- "
                                         "phase spins don't add to nspins");
 
-  //set other default values
+  ninteger = 2;
+  ndouble = 2;
+  delpropensity = 2;//need full neighbor lists of the 1st layer ghost sites
+  delevent = 0;
+  allow_kmc = 0;
+  allow_rejection = 1;
+  allow_masking = 0;
+  allow_app_update = 1;
+  numrandom = 3;
+  create_arrays();
 
-  mu=cnew=Tnew=NULL;
-  nmax_app=0;
-  warn_concentration_deviation_all=0;
-  print_cmap=false;
   init_site_phase=false;
-
-  scale_free_energy = 1.0;
-  scale_comp_energy_penalty = 1.0;
-}
-
-/* ---------------------------------------------------------------------- */
-
-AppPhaseFieldPottsTable::~AppPhaseFieldPottsTable()
-{
-  memory->destroy(mu);
-  memory->destroy(cnew);
-  memory->destroy(Tnew);
-
-  for (int i = 0; i < nphases; i++) {
-    delete [] phases[i]->id;
-    delete phases[i]->table;
-    delete phases[i];
-  }
-  memory->sfree(phases);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -148,10 +96,8 @@ void AppPhaseFieldPottsTable::input_app(char *command, int narg, char **arg)
     if (strcmp(arg[0],"reset_phasefield") == 0)
       set_pf_resetlist(narg,arg);
 
-    else if (strcmp(arg[0],"print_connectivity") == 0) {
-      if (strcmp(arg[1],"yes") == 0) print_cmap=true;
-      else print_cmap=false;
-    }
+    else if (strcmp(arg[0],"print_connectivity") == 0)
+      print_stencil = strcmp(arg[1],"yes") == 0;
 
     else if (strcmp(arg[0],"set_site_phase") == 0) {
       if (strcmp(arg[1],"yes") == 0) init_site_phase=true;
@@ -159,15 +105,15 @@ void AppPhaseFieldPottsTable::input_app(char *command, int narg, char **arg)
     }
 
     else if (strcmp(arg[0],"enforce_concentration_limits") == 0) {
-      params.enforce = strcmp(arg[1],"yes") == 0;
+      chh.q.enforce = strcmp(arg[1],"yes") == 0;
 
       // forcing the limits means there is nothing to warn about;
       // turning it off checks for deviations again
 
-      warn_concentration_deviation_all = params.enforce;
+      warned = chh.q.enforce;
 
       if (domain->me == 0) {
-        const char *msg = params.enforce ?
+        const char *msg = chh.q.enforce ?
           "Concentration limits will be enforced\n" :
           "Concentration limits will not be enforced\n";
         if (screen) fprintf(screen,"%s",msg);
@@ -185,13 +131,13 @@ void AppPhaseFieldPottsTable::input_app(char *command, int narg, char **arg)
         double *target;
         const char *what;
         if (strcmp(arg[i],"potts")==0) {
-          target = &params.scale_potts;
+          target = &chh.q.scale_potts;
           what = "Potts interface energy";
         } else if (strcmp(arg[i],"free")==0) {
-          target = &scale_free_energy;
+          target = &scale_free;
           what = "Free energy";
         } else if (strcmp(arg[i],"penalty")==0) {
-          target = &scale_comp_energy_penalty;
+          target = &scale_penalty;
           what = "Composition energy penalty";
         } else
           error->all(FLERR,"Illegal scale_energy command");
@@ -212,146 +158,29 @@ void AppPhaseFieldPottsTable::input_app(char *command, int narg, char **arg)
 
 void AppPhaseFieldPottsTable::init_app()
 {
-  int i;
-
-  // check to make sure that simulation is fully periodic
-
-  for (i=0; i<domain->dimension; i++)
-    if (domain->periodicity[i] != 1)
-      error->all(FLERR,"app_style does not support non-periodic boundaries");
-
-  // init the parent class first
-
-  AppPottsNeighOnly::init_app();
   if (maxneigh > 32)
     error->all(FLERR,"phasefield/potts/table supports at most 32 neighbors");
 
-  // axis neighbours for the finite differences
+  // as AppPottsNeighOnly: valid spins, a sweep visits every neighbor once
 
-  stencil.setup(spk,this,print_cmap);
-
-  // process phases
-
-  process_phases();
+  int flag = 0;
+  for (int i = 0; i < nlocal; i++)
+    if (spin[i] < 1 || spin[i] > nspins) flag = 1;
+  int flagall;
+  MPI_Allreduce(&flag,&flagall,1,MPI_INT,MPI_SUM,world);
+  if (flagall) error->all(FLERR,"One or more sites have invalid values");
+  dt_sweep = 1.0/maxneigh;
 
   if (init_site_phase)
-    for (i=0; i<nlocal+nghost; i++)
+    for (int i=0; i<nlocal+nghost; i++)
       set_site_phase(i);
 
-  // scratch arrays: mu on all sites, the updated fields on owned sites
+  // periodicity, stencil, tables, scratch; then each phase's spin range
 
-  if (nmax_app < nlocal+nghost) {
-    nmax_app = nlocal+nghost;
-    memory->destroy(mu);
-    memory->destroy(cnew);
-    memory->destroy(Tnew);
-    memory->create(mu,nmax_app,"app_potts_pf:mu");
-    memory->create(cnew,nmax_app,"app_potts_pf:cnew");
-    memory->create(Tnew,nmax_app,"app_potts_pf:Tnew");
-  }
-}
-
-/* ----------------------------------------------------------------------
-   check each table (T rows > 0, c columns 0 to 1, both evenly spaced) and
-   pack every table's G and dG/dc, scaled by scale_free, into tab; spin
-   ranges are left to the caller
-------------------------------------------------------------------------- */
-
-void pftable::pack_tables(Error *error, Table **tables, int n_tables,
-                          double scale_free, std::vector<PFPhaseTable> &ptab,
-                          std::vector<double> &tab)
-{
-  int i,j,k;
-
-  ptab.assign(n_tables,PFPhaseTable());
-  tab.clear();
-
-  for (i=0; i<n_tables; i++) {
-    Table *t = tables[i];
-    if (!t->getTableReady())
-      error->all(FLERR,"Not all tables loaded for phases");
-    if (!t->hasRowColVals())
-      error->all(FLERR,"Phase tables need rowcolvals (T rows, c columns)");
-
-    int nRow,nCol;
-    t->getTableDims(&nRow,&nCol);
-    double **G = t->getTablePtr();
-    double *rowvals = t->getRowPtr();
-    double *colvals = t->getColPtr();
-    if (nRow < 2 || nCol < 3)
-      error->all(FLERR,"Illegal table for phase, need at least 2 rows "
-                 "and 3 columns");
-
-    double dC = colvals[1]-colvals[0];
-    double dT = rowvals[1]-rowvals[0];
-
-    // colvals must be the concentration and increase from 0 to 1
-
-    if (colvals[0] !=0 || colvals[nCol-1] != 1)
-      error->all(FLERR,"Illegal table for phase, concentration must "
-                 "increase from 0 to 1");
-    for (j=1; j<nCol; j++)
-      if (colvals[j] < 0 || colvals[j] > 1 ||
-          colvals[j] <= colvals[j-1] ||
-          fabs(colvals[j]-colvals[j-1] - dC) > 1e-6)
-        error->all(FLERR,"Illegal table for phase, concentration must "
-                   "increase from 0 to 1 and have even intervals");
-
-    // rowvals must be the temperature and increase
-    // error if anything less than or equal zero
-
-    if (rowvals[0] <= 0)
-      error->all(FLERR,"Illegal table for phase, "
-                 "temperature must be greater than zero");
-    for (j=1; j<nRow; j++) {
-      if (rowvals[j] <= 0)
-        error->all(FLERR,"Illegal table for phase, "
-                   "temperature must be greater than zero");
-      if (rowvals[j] <= rowvals[j-1] ||
-          fabs(rowvals[j]-rowvals[j-1] - dT) > 1e-6)
-        error->all(FLERR,"Illegal table for phase, temperature must increase "
-                   " and have even intervals");
-    }
-
-    PFPhaseTable &pt = ptab[i];
-    pt.nrow = nRow;
-    pt.ncol = nCol;
-    pt.t0 = rowvals[0];
-    pt.inv_dt = 1.0/dT;
-    pt.inv_dc = 1.0/dC;
-
-    // G scaled, then its dGdC: one-sided second-order differences at the
-    // ends, central in between
-    
-    pt.g = tab.size();
-    pt.dg = pt.g + nRow*nCol;
-    tab.resize(pt.dg + nRow*nCol);
-    double h=dC;
-    int n=nCol - 1;    //index of the last value
-    for (j=0; j<nRow; j++) {
-      double *g = &tab[pt.g + j*nCol];
-      double *dg = &tab[pt.dg + j*nCol];
-      for (k=0; k<nCol; k++) g[k] = G[j][k] * scale_free;
-      dg[0] = (-g[2] + 4*g[1] - 3*g[0])/(2*h);
-      for (k=1; k<n; k++) dg[k] = (g[k+1] - g[k-1])/(2*h);
-      dg[n] = (3*g[n] - 4*g[n-1] + g[n-2])/(2*h);
-    }
-  }
-}
-
-/* ----------------------------------------------------------------------
-   pack the phases' tables, then add each phase's spin range
-------------------------------------------------------------------------- */
-
-void AppPhaseFieldPottsTable::process_phases()
-{
-  std::vector<Table *> tables(nphases);
-  for (int i=0; i<nphases; i++) tables[i] = phases[i]->table;
-  pftable::pack_tables(error,tables.data(),nphases,scale_free_energy,ptab,tab);
-  params.penalty = scale_comp_energy_penalty * scale_free_energy;
-  for (int i=0; i<nphases; i++) {
-    ptab[i].spin_lo = phases[i]->spin_start;
-    ptab[i].spin_hi = phases[i]->spin_end;
+  AppPhaseField::init_app();
+  for (size_t p=0; p<ptab.size(); p++) {
+    ptab[p].spin_lo = spin_lo[p];
+    ptab[p].spin_hi = spin_hi[p];
   }
 }
 
@@ -359,10 +188,9 @@ void AppPhaseFieldPottsTable::process_phases()
 
 void AppPhaseFieldPottsTable::setup_end_app()
 {
-  // set the time step for phase field
-
-  dt_phasefield = dt_rkmc / dt_phasefield_mult;
-  params.dt = dt_phasefield;
+  dt = dt_rkmc / dt_phasefield_mult;
+  set_dt(dt);
+  AppPhaseField::setup_end_app();
 }
 
 /* ----------------------------------------------------------------------
@@ -385,8 +213,8 @@ double AppPhaseFieldPottsTable::site_energy(int i)
 {
   FDHostNbr nbr{neighbor};
   return pftable::site_energy(numneigh,nbr,spin,c,T,i,spin[i],phase[i],
-                              ptab.data(),tab.data(),params) +
-         0.5 * params.ch_energy * stencil.grad_dot(nbr,c,c,i);
+                              ptab.data(),tab.data(),chh.q) +
+         0.5 * chh.q.ch_energy * stencil.grad_dot(nbr,c,c,i);
 }
 
 /* ----------------------------------------------------------------------
@@ -401,48 +229,22 @@ void AppPhaseFieldPottsTable::site_event_rejection(int i, RandomPark *random)
 {
   FDHostNbr nbr{neighbor};
   if (pftable::rejection_event(i,*random,numneigh,nbr,spin,phase,c,T,
-                               ptab.data(),nphases,tab.data(),params,
+                               ptab.data(),ptab.size(),tab.data(),chh.q,
                                temperature,t_inverse))
     naccept++;
 }
 
 /* ----------------------------------------------------------------------
-   iterate through the phase field solution
+   the phase-field steps of one Potts step, each followed by the reset list
 ------------------------------------------------------------------------- */
 
 void AppPhaseFieldPottsTable::app_update(double stoptime)
 {
   double localtime=0.0;
-  FDHostNbr nbr{neighbor};
-  const PFPhaseTable *pt = ptab.data();
-  const double *tb = tab.data();
   int flags = 0;
-
-  // communicate all sites to make sure it's up-to-date when it starts
-
-  timer->stamp();
-  comm->all();
-  timer->stamp(TIME_COMM);
-
   int done = 0;
   while (!done) {
-
-    // mu on owned sites and on ghosts with full neighbor lists (the first
-    // ghost layer), so lap(mu) needs no extra exchange
-
-    for (int i=0; i<nlocal+nghost; i++)
-      if (i < nlocal || numneigh[i] == maxneigh)
-        mu[i] = pftable::chem_potential(stencil,nbr,phase,c,T,i,pt,tb,params);
-
-    for (int i=0; i<nlocal; i++)
-      flags |= pftable::step(stencil,nbr,c,T,mu,i,params,cnew[i],Tnew[i]);
-
-    // copy updated phase field into old concentration field
-
-    for (int i=0; i<nlocal; i++) {
-      c[i]=cnew[i];
-      T[i]=Tnew[i];
-    }
+    flags |= step_fields();
 
     // reset the certain values if appropriate
 
@@ -450,14 +252,9 @@ void AppPhaseFieldPottsTable::app_update(double stoptime)
       c[pf_resetlist[m]]=pf_resetlistvals[m];
     timer->stamp(TIME_SOLVE);
 
-    // re-sync all the data
-
-    comm->all();
-    timer->stamp(TIME_COMM);
-
     // increment time and determine when to finish
 
-    localtime += dt_phasefield;
+    localtime += dt;
     if (localtime >= (stoptime- 1e-6)) done = 1;
 
     // throw exception when PF has iterated too far
@@ -471,50 +268,21 @@ void AppPhaseFieldPottsTable::app_update(double stoptime)
     }
   }
 
-  check_step_flags(flags);
+  // ghosts current for the sweeps and output that follow
+
+  timer->stamp();
+  comm->all();
+  timer->stamp(TIME_COMM);
+
+  check_flags(flags);
 }
 
-/* ----------------------------------------------------------------------
-   flags from pftable::step over this app_update, all ranks
-------------------------------------------------------------------------- */
-
-void AppPhaseFieldPottsTable::check_step_flags(int flags)
-{
-  int all;
-  MPI_Allreduce(&flags,&all,1,MPI_INT,MPI_BOR,world);
-
-  // 1/T in the next step would turn the field into NaN
-
-  if (all & 2)
-    error->all(FLERR,"Temperature reached zero: reduce the phase-field "
-               "time step (raise the PF/Potts steps argument)");
-
-  if ((all & 1) && !warn_concentration_deviation_all) {
-    warn_concentration_deviation_all = 1;
-    if (me == 0) {
-      if (screen) fprintf(screen,
-          "Warning: Concentration has deviated outside [0,1] range\n");
-      if (logfile) fprintf(logfile,
-          "Warning: Concentration has deviated outside [0,1] range\n");
-    }
-  }
-}
-
-/* ---------------------------------------------------------------------- */
-
-int AppPhaseFieldPottsTable::find_phase(char *name)
-{
-  for (int iphase = 0; iphase < nphases; iphase++)
-    if (strcmp(name,phases[iphase]->id) == 0) return iphase;
-  return -1;
-}
 /* ---------------------------------------------------------------------- */
 
 void AppPhaseFieldPottsTable::set_site_phase(int i)
 {
-  for (int j=0; j<nphases; j++)
-    if (spin[i] >= phases[j]->spin_start &&
-        spin[i] <= phases[j]->spin_end)
+  for (size_t j=0; j<spin_lo.size(); j++)
+    if (spin[i] >= spin_lo[j] && spin[i] <= spin_hi[j])
       phase[i]=j;
 }
 
@@ -589,19 +357,4 @@ void AppPhaseFieldPottsTable::set_pf_resetlist(int narg, char **arg)
                          "  " TAGINT_FORMAT " sites identified to reset\n",
                          allcount);
   }
-}
-
-/* ----------------------------------------------------------------------
-   get app properties or in this case the pointer to the table
-------------------------------------------------------------------------- */
-
-void *AppPhaseFieldPottsTable::extract_app(char * name) {
-
-  int i=find_phase(name);
-  if (i < 0)
-    error->all(FLERR,"Cannot find the phase");
-  else
-    return (void *) phases[i]->table;
-
-  return (void *) NULL;
 }

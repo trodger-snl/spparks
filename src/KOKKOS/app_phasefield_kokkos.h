@@ -25,6 +25,7 @@ AppStyle(phasefield/kk,AppPhaseFieldKokkos)
 
 #include "app_lattice_kokkos.h"
 #include "app_phasefield.h"
+#include "phasefield_device.h"
 #include "error.h"
 
 namespace SPPARKS_NS {
@@ -40,9 +41,6 @@ class AppPhaseFieldKokkos : public LatticeKokkos<AppPhaseField> {
   void setup_app() override { need_upload = true; }
   void app_update(double) override;
 
-  // define device lambdas, so public (nvcc)
-  template <class M> void step_kernels(const M &);
-
   void sync_app_data_to_device() override;
   void sync_app_data_to_host() override;
   void sync_ghosts_to_device() override;
@@ -51,12 +49,7 @@ class AppPhaseFieldKokkos : public LatticeKokkos<AppPhaseField> {
     error->all(FLERR, "phasefield/kk has no sweeps");
   }
 
-  using DevCtx = PFCtx<Kokkos::View<int**>, Kokkos::View<double*>, Kokkos::View<int*>>;
-  Kokkos::View<double*> d_f[PF_MAXF], d_fnew[PF_MAXF], d_aux[PF_MAXA];
-  Kokkos::View<int*> d_phase;
-  Kokkos::View<double*> d_tab;
-  Kokkos::View<PFPhaseTable*> d_ptab;
-  Kokkos::View<int> d_flags;
+  PFDevice pf;
   bool need_upload = true;
 };
 

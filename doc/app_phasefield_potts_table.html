@@ -73,7 +73,9 @@ mu       = dG/dc - kappa lap(c)
 <P>The tables need even spacing in T (rows, all > 0) and in c (columns,
 0 to 1). Outside <B>0,1</B>, c sees G at the edge plus a quadratic penalty;
 outside the table's T range, G extrapolates linearly. The run stops with
-an error if T reaches 0: reduce the step (raise PFsteps).
+an error if T reaches 0: reduce the step (raise PFsteps). These are
+the <I>ch_heat</I> equations of <A HREF = "app_phasefield.html">app_style phasefield</A>,
+which also warns when the step exceeds an explicit stability estimate.
 </P>
 <P>Style <I>phasefield/potts/table/kk</I> runs the sweeps and the field steps on
 a Kokkos device. It needs <A HREF = "sweep.html">sweep color</A> or <I>sweep

@@ -173,6 +173,8 @@ class AppPottsAnneal : public AppPottsQuaternion {
   int nradius;                   // nucleus = seed dilated nradius times
   double rrecover;               // recovery: dH/dt = -rrecover*H
   double theta_m;                // mobility cutoff (degrees), 0 = M = 1
+  double merge_theta;            // merge labels below this disorientation, 0 = off
+  int merge_every;               // ... at each run's start and every N MCS (0 = start only)
   rx::Nucleation nuc;
   unsigned long long key;        // deck seed, for nucleation draws
   anneal::Params par;
@@ -188,6 +190,8 @@ class AppPottsAnneal : public AppPottsQuaternion {
   }
   void stored_energy(int, char **);
   void keywords(int, char **, const char *);
+ public:
+  void merge_labels(int);        // called from the kk app_update
 };
 
 }

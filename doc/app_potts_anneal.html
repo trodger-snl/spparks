@@ -27,7 +27,7 @@
 
 <LI>zero or more keyword/value pairs may be appended 
 
-<LI>keyword = <I>nucleation</I> or <I>recovery</I> or <I>mobility</I> 
+<LI>keyword = <I>nucleation</I> or <I>recovery</I> or <I>mobility</I> or <I>merge</I> 
 
 <PRE>  <I>nucleation</I> values = rate Hmin <I>boundary</I> <I>radius</I> r
     rate = nucleation probability per site per unit time (MCS)
@@ -38,14 +38,18 @@
     r = stored energy decays as dH/dt = -r H
   <I>mobility</I> value = theta_m
     theta_m = flips across a boundary of disorientation theta are accepted
-              with weight M = 1 - exp(-5 (theta/theta_m)^4) (default: M = 1) 
+              with weight M = 1 - exp(-5 (theta/theta_m)^4) (default: M = 1)
+  <I>merge</I> values = theta_merge N
+    theta_merge = neighboring labels most of whose boundary is below
+                  theta_merge (degrees) become one label (0 = off)
+    N = merge at the start of each run and every N MCS (0 = start only) 
 </PRE>
 
 </UL>
 <P><B>Examples:</B>
 </P>
 <PRE>app_style potts/anneal 1000000 cubic 15.0 recovery 0.002 nucleation 0.000005 2.0 boundary radius 4
-app_style potts/anneal/kk 1000000 cubic 15.0 mobility 15.0 
+app_style potts/anneal/kk 1000000 cubic 15.0 mobility 15.0 merge 2.0 10 
 </PRE>
 <P><B>Description:</B>
 </P>
@@ -92,6 +96,19 @@ Q + the seed's site ID, H = 0, and a random orientation drawn from a
 table of 65536 (keyed to that ID). The draws do not depend on the
 number of processors.
 </P>
+<P>With the <I>merge</I> keyword, two neighboring labels become one (the lower
+label) when more than half of the bonds between them are below
+theta_merge of disorientation, and so on transitively. Labels Q and
+below merge only with each other, as do the recrystallized labels. A
+grain of the starting structure split into two labels of nearly one
+orientation has almost no boundary energy inside it: at kT = 2 the two
+labels intermix, and the interface between them grows without bound,
+which inflates the boundary count and slows the run. Such labels meet
+during the run, as the grains between them shrink, so the merge
+repeats every N MCS. 2 degrees, the usual EBSD grain threshold, is a
+reasonable value. The count of merged labels is printed at the start of
+each run. The merge does not depend on the number of processors.
+</P>
 <P><B>Stored energy and the Potts temperature:</B> On sc/26n, run at kT
 around 2. At lower temperatures flat boundaries are pinned by the
 lattice: a recrystallized grain facets and stops for H between about
@@ -110,8 +127,8 @@ grow without regard to curvature and come out rough.
 <PRE>stored_energy pdas K rho0 theta_c b rho_ref Hmax
 anneal_modify keyword values ... 
 </PRE>
-<P><I>anneal_modify</I> takes the <I>nucleation</I>, <I>recovery</I> and <I>mobility</I>
-keywords of app_style and changes them for the following runs, so one
+<P><I>anneal_modify</I> takes the <I>nucleation</I>, <I>recovery</I>, <I>mobility</I> and
+<I>merge</I> keywords of app_style and changes them for the following runs, so one
 input can run the stages of a heat treatment (a stress relief, then a
 recrystallization anneal). <I>nucleation</I> given again replaces all its
 settings (<I>boundary</I> off and <I>radius</I> 1 unless named); <I>nucleation</I> 0
@@ -159,6 +176,6 @@ SPPARKS</A> section for more info.
 <A HREF = "app_potts_rx.html">app_style potts/rx</A>,
 <A HREF = "app_additive_texture.html">app_style additive/texture</A>
 </P>
-<P><B>Default:</B> no nucleation, recovery or mobility
+<P><B>Default:</B> no nucleation, recovery, mobility or merging
 </P>
 </HTML>

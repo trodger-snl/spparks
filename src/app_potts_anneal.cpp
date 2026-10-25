@@ -20,6 +20,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <algorithm>
+#include <map>
+#include <unordered_map>
 #include "app_potts_anneal.h"
 #include "comm_lattice.h"
 #include "random_mars.h"
@@ -55,8 +57,9 @@ AppPottsAnneal::AppPottsAnneal(SPPARKS *spk, int narg, char **arg) :
     error->all(FLERR,"Illegal app_style command");
   dt_sweep = 1.0;   // time is in MCS
 
-  nrate = rrecover = theta_m = 0.0;
+  nrate = rrecover = theta_m = merge_theta = 0.0;
   nradius = 1;
+  merge_every = 0;
   nuc = rx::Nucleation{nspins, 0.0, 0.0, 0, 0, 0};
   keywords(narg-4,&arg[4],"app_style");
 
@@ -106,6 +109,12 @@ void AppPottsAnneal::keywords(int narg, char **arg, const char *cmd)
       rrecover = atof(arg[iarg+1]);
       if (rrecover < 0.0) error->all(FLERR,msg);
       iarg += 2;
+    } else if (strcmp(arg[iarg],"merge") == 0) {
+      if (iarg+3 > narg) error->all(FLERR,msg);
+      merge_theta = atof(arg[iarg+1]);
+      merge_every = atoi(arg[iarg+2]);
+      if (merge_theta < 0.0 || merge_every < 0) error->all(FLERR,msg);
+      iarg += 3;
     } else if (strcmp(arg[iarg],"mobility") == 0) {
       if (iarg+2 > narg) error->all(FLERR,msg);
       theta_m = atof(arg[iarg+1]);
@@ -164,6 +173,8 @@ void AppPottsAnneal::init_app()
 
 void AppPottsAnneal::setup_end_app()
 {
+  if (merge_theta > 0.0) merge_labels(1);
+
   // fronts roughen when H outgrows the boundary energy (see potts/rx);
   // checked every run, since stored_energy and set change H between runs
 
@@ -224,6 +235,115 @@ void AppPottsAnneal::stored_energy(int narg, char **arg)
 }
 
 /* ----------------------------------------------------------------------
+   merge keyword: neighbouring labels most of whose boundary bonds are
+   below merge_theta degrees of disorientation become one label (the
+   lowest). Two labels of nearly one orientation have almost no boundary
+   energy, so at kT ~ 2 they intermix and their interface grows without
+   bound; they come into contact during the run, so this repeats. Labels
+   of the deformed structure (<= nspins) merge only with each other, as
+   do recrystallized ones. Bond counts are integers, so the result does
+   not depend on the number of processors. report = print the count.
+------------------------------------------------------------------------- */
+
+void AppPottsAnneal::merge_labels(int report)
+{
+  if (nprocs > 1) comm->all();
+  const double *sym = symmetries.data();
+  const int nsym = symmetries.size()/4;
+
+  // per label pair (a < b): bonds below theta, all bonds; each bond is
+  // counted from both sides, which leaves the fraction unchanged
+  std::map<std::pair<int,int>,std::pair<int,int>> local;
+  for (int i = 0; i < nlocal; i++) {
+    if (phase[i] == anneal::VOID) continue;
+    const double qi[4] = {q0[i],qx[i],qy[i],qz[i]};
+    for (int m = 0; m < numneigh[i]; m++) {
+      const int j = neighbor[i][m];
+      if (phase[j] == anneal::VOID || spin[j] == spin[i]) continue;
+      if ((spin[i] <= nspins) != (spin[j] <= nspins)) continue;
+      const double qj[4] = {q0[j],qx[j],qy[j],qz[j]};
+      auto &c = local[std::make_pair(MIN(spin[i],spin[j]),MAX(spin[i],spin[j]))];
+      if (quaternion::disorientation_deg(sym,nsym,qi,qj) < merge_theta) c.first++;
+      c.second++;
+    }
+  }
+
+  // ponytail: all pairs go to rank 0 (one int quad each), fine for a
+  // one-off command; reduce by pair across ranks if that ever runs out
+  std::vector<int> buf;
+  buf.reserve(4*local.size());
+  for (auto &e : local) {
+    buf.push_back(e.first.first);
+    buf.push_back(e.first.second);
+    buf.push_back(e.second.first);
+    buf.push_back(e.second.second);
+  }
+  int n = buf.size();
+  std::vector<int> counts(nprocs), displs(nprocs);
+  MPI_Gather(&n,1,MPI_INT,counts.data(),1,MPI_INT,0,world);
+  std::vector<int> all;
+  if (me == 0) {
+    for (int p = 1; p < nprocs; p++) displs[p] = displs[p-1] + counts[p-1];
+    all.resize(displs[nprocs-1] + counts[nprocs-1]);
+  }
+  MPI_Gatherv(buf.data(),n,MPI_INT,all.data(),counts.data(),displs.data(),
+              MPI_INT,0,world);
+
+  // rank 0: union-find with the lowest label as root, sent as (label, root)
+  std::vector<int> map;
+  int nroot = 0;
+  if (me == 0) {
+    std::map<std::pair<int,int>,std::pair<bigint,bigint>> pairs;
+    for (size_t k = 0; k < all.size(); k += 4) {
+      auto &c = pairs[std::make_pair(all[k],all[k+1])];
+      c.first += all[k+2];
+      c.second += all[k+3];
+    }
+    std::map<int,int> parent;
+    auto find = [&](int a) {
+      while (parent.count(a) && parent[a] != a) a = parent[a];
+      return a;
+    };
+    for (auto &e : pairs) {
+      if (2*e.second.first <= e.second.second) continue;
+      const int ra = find(e.first.first), rb = find(e.first.second);
+      if (ra == rb) continue;
+      parent[MAX(ra,rb)] = MIN(ra,rb);
+      parent[MIN(ra,rb)] = MIN(ra,rb);
+    }
+    std::map<int,int> roots;
+    for (auto &e : parent) {
+      const int r = find(e.first);
+      if (r != e.first) {
+        map.push_back(e.first);
+        map.push_back(r);
+      }
+      roots[r] = 1;
+    }
+    nroot = roots.size();
+  }
+  int nmap = map.size();
+  MPI_Bcast(&nmap,1,MPI_INT,0,world);
+  map.resize(nmap);
+  MPI_Bcast(map.data(),nmap,MPI_INT,0,world);
+
+  std::unordered_map<int,int> root;
+  for (int k = 0; k < nmap; k += 2) root[map[k]] = map[k+1];
+  for (int i = 0; i < nlocal + nghost; i++) {
+    auto it = root.find(spin[i]);
+    if (it != root.end()) spin[i] = it->second;
+  }
+
+  if (report && me == 0) {
+    char str[128];
+    snprintf(str,128,"  %d labels merged into %d (disorientation < %g)\n",
+             nmap/2 + nroot,nroot,merge_theta);
+    if (screen) fputs(str,screen);
+    if (logfile) fputs(str,logfile);
+  }
+}
+
+/* ----------------------------------------------------------------------
    boundary + stored energy
 ------------------------------------------------------------------------- */
 
@@ -267,6 +387,9 @@ bigint AppPottsAnneal::nseeds() const
 
 void AppPottsAnneal::app_update(double dt)
 {
+  if (merge_theta > 0.0 && merge_every > 0 && nsweeps % merge_every == 0)
+    merge_labels(0);
+
   if (rrecover > 0.0) {
     const double f = exp(-rrecover * dt);
     for (int i = 0; i < nlocal; i++) anneal::recover(i,h,f);

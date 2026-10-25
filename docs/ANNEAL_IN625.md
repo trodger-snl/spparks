@@ -58,6 +58,19 @@ So: kT ~ 2, H scaled into ~2-8. Consequences:
   between deformed grains (each flip copies H) faster than nuclei grow. AM
   grains are tens of voxels, but check H-field homogenisation on real states.
 
+## Label merging (`merge theta N`)
+
+On the ct15 crop, stress relief then anneal (2026-10-25), the accepted-flip rate
+doubled over the last 100 MCS. Five label pairs of nearly one orientation (0.35-1.9
+deg, Read-Shockley ~0.1-0.4 per bond against kT 2) intermixed; their interface grew
+from 0.1% to 51% of all boundary bonds by t 250. Most of these pairs were not in
+contact at load (they meet as the grains between them shrink, and copying
+orientations on flips lowers their disorientation), so a one-off merge at load
+caught 2 of 5. `merge 2.0 10` (majority of the pair's bonds below theta, union-find
+on rank 0, every 10 MCS): no boundaries below 5 deg remain, the boundary area falls
+monotonically, flips end at 306k/10 MCS vs 1.75M, run 40 s vs 32 s on HIP.
+Analysis: /home/tron/anneal_runs/ct15_keyed_voids/diag/{bonds,pairs}.py.
+
 ## Reproducibility
 
 `sweep color/strict`: CPU strict == kk OpenMP, bit for bit, any np. HIP (and

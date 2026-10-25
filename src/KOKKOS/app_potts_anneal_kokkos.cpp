@@ -160,6 +160,14 @@ void AppPottsAnnealKokkos::sweep_color_kokkos(int, int start, int count)
 
 void AppPottsAnnealKokkos::app_update(double dt)
 {
+  // ponytail: merge on the host (union-find), a full download each time;
+  // only every merge_every MCS
+  if (merge_theta > 0.0 && merge_every > 0 && nsweeps % merge_every == 0) {
+    ensure_host_data_current();
+    merge_labels(0);
+    upload_range(d_spin, spin, 0, nlocal + nghost);
+  }
+
   auto hh = d_h;
   if (rrecover > 0.0) {
     const double f = exp(-rrecover * dt);

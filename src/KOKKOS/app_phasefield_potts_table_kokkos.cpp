@@ -87,7 +87,7 @@ void AppPhaseFieldPottsTableKokkos::upload_reset_list()
 
 void AppPhaseFieldPottsTableKokkos::allocate_app_views()
 {
-  pf.allocate(nlocal + nghost, 2, 1);
+  pf.allocate(nlocal + nghost, nfield, naux);
   d_spin = Kokkos::View<int*>("spin", nlocal + nghost);
 }
 
@@ -98,16 +98,14 @@ void AppPhaseFieldPottsTableKokkos::sync_app_data_to_device()
   const int nall = nlocal + nghost;
   upload_range(d_spin, spin, 0, nall);
   upload_range(pf.phase, phase, 0, nall);
-  upload_range(pf.f[0], c, 0, nall);
-  upload_range(pf.f[1], T, 0, nall);
+  for (int k = 0; k < nfield; k++) upload_range(pf.f[k], darray[k], 0, nall);
 }
 
 void AppPhaseFieldPottsTableKokkos::sync_app_data_to_host()
 {
   download_range(spin, d_spin, nlocal);
   download_range(phase, pf.phase, nlocal);
-  download_range(c, pf.f[0], nlocal);
-  download_range(T, pf.f[1], nlocal);
+  for (int k = 0; k < nfield; k++) download_range(darray[k], pf.f[k], nlocal);
 }
 
 void AppPhaseFieldPottsTableKokkos::sync_ghosts_to_device()
@@ -115,8 +113,7 @@ void AppPhaseFieldPottsTableKokkos::sync_ghosts_to_device()
   const int nall = nlocal + nghost;
   upload_range(d_spin, spin, nlocal, nall);
   upload_range(pf.phase, phase, nlocal, nall);
-  upload_range(pf.f[0], c, nlocal, nall);
-  upload_range(pf.f[1], T, nlocal, nall);
+  for (int k = 0; k < nfield; k++) upload_range(pf.f[k], darray[k], nlocal, nall);
 }
 
 /* ----------------------------------------------------------------------
@@ -127,16 +124,21 @@ void AppPhaseFieldPottsTableKokkos::sync_ghosts_to_device()
 
 void AppPhaseFieldPottsTableKokkos::sweep_color_kokkos(int, int start, int count)
 {
+  with_potts_model([&](auto &m) { sweep_model(m, start, count); });
+}
+
+template <class M>
+void AppPhaseFieldPottsTableKokkos::sweep_model(const M &m, int start, int count)
+{
   auto sites = d_color_sites;
   auto nn = d_numneigh;
   auto nbr = d_neighbor;
   auto sp = d_spin, ph = pf.phase;
-  auto cc = pf.f[0], TT = pf.f[1];
+  const PFBulk<M, PFDevice::Ctx> bulk{m, pf.ctx(stencil, d_neighbor)};
   auto seeds = d_siteseeds;
   auto pool = *rand_pool;
   const PFPhaseTable *pt = pf.ptab.data();
-  const double *tb = pf.tab.data();
-  const PFParams q = chh.q;
+  const double scale = chh.q.scale_potts;
   const int np = ptab.size(), strict = strict_rng;
   const double temp = temperature, tinv = t_inverse;
 
@@ -146,14 +148,14 @@ void AppPhaseFieldPottsTableKokkos::sweep_color_kokkos(int, int start, int count
       const int i = sites(start + idx);
       if (strict) {
         RandomParkDevice rp(seeds(i));
-        acc += pftable::rejection_event(i, rp, nn, nbr, sp, ph, cc, TT, pt, np,
-                                        tb, q, temp, tinv);
+        acc += pftable::rejection_event(i, rp, nn, nbr, sp, ph, bulk, pt, np,
+                                        scale, temp, tinv);
         seeds(i) = rp.seed;
       } else {
         auto g = pool.get_state();
         PoolUniform<decltype(g)> u{g};
-        acc += pftable::rejection_event(i, u, nn, nbr, sp, ph, cc, TT, pt, np,
-                                        tb, q, temp, tinv);
+        acc += pftable::rejection_event(i, u, nn, nbr, sp, ph, bulk, pt, np,
+                                        scale, temp, tinv);
         pool.free_state(g);
       }
     }, accepted);
@@ -162,7 +164,7 @@ void AppPhaseFieldPottsTableKokkos::sweep_color_kokkos(int, int start, int count
 
 /* ----------------------------------------------------------------------
    phase-field steps over one Potts step, as AppPhaseFieldPottsTable::
-   app_update: mu, then the coupled c/T step, then the reset list; ghosts
+   app_update: mu, then the model's field step, then the reset list; ghosts
    exchanged through the host after each step (np > 1)
 ------------------------------------------------------------------------- */
 
@@ -190,7 +192,9 @@ void AppPhaseFieldPottsTableKokkos::app_update(double /*dt_rkmc*/)
 
   for (int n = 0; n < pf_nsteps; n++) {
     timer->stamp();
-    pf.step(chh, stencil, d_neighbor, d_numneigh, nlocal, nall, maxneigh, 2);
+    with_potts_model([&](auto &m) {
+      pf.step(m, stencil, d_neighbor, d_numneigh, nlocal, nall, maxneigh, nfield);
+    });
     auto cc = pf.f[0];
     if (nreset)
       Kokkos::parallel_for("PFReset", nreset, KOKKOS_LAMBDA(const int m) {
@@ -200,13 +204,11 @@ void AppPhaseFieldPottsTableKokkos::app_update(double /*dt_rkmc*/)
     // ponytail: ghost c,T through the host every PF step; pack on the device
     // if np > 1 runs are comm-bound
     if (nprocs > 1) {
-      download_range(c, pf.f[0], nlocal);
-      download_range(T, pf.f[1], nlocal);
+      for (int k = 0; k < nfield; k++) download_range(darray[k], pf.f[k], nlocal);
       timer->stamp(TIME_SOLVE);
-      comm->all_selective(nullptr, 0, dsel, 2);
+      comm->all_selective(nullptr, 0, dsel, nfield);
       timer->stamp(TIME_COMM);
-      upload_range(pf.f[0], c, nlocal, nall);
-      upload_range(pf.f[1], T, nlocal, nall);
+      for (int k = 0; k < nfield; k++) upload_range(pf.f[k], darray[k], nlocal, nall);
     }
     timer->stamp(TIME_SOLVE);
   }

@@ -26,7 +26,7 @@
 namespace SPPARKS_NS {
 
 // The fields of an AppPhaseField on the device and one model step over them
-// (AppPhaseField::step_fields), for phasefield/kk and phasefield/potts/table/kk.
+// (AppPhaseField::step_fields), for phasefield/kk and phasefield/potts(/table)/kk.
 struct PFDevice {
   using Ctx = PFCtx<Kokkos::View<int**>, Kokkos::View<double*>, Kokkos::View<int*>>;
   Kokkos::View<double*> f[PF_MAXF], fnew[PF_MAXF], aux[PF_MAXA];
@@ -62,12 +62,8 @@ struct PFDevice {
     return v;
   }
 
-  // aux on owned sites + full-list ghosts, then the update of the owned
-  // sites; f and fnew swap, so f holds the new fields (their ghosts are
-  // refreshed by the caller's next exchange)
-  template <class M>
-  void step(const M &m, const FDStencil &st, const Kokkos::View<int**> &nbr,
-            const Kokkos::View<int*> &nn, int nloc, int nall, int mn, int nf) {
+  // what a model sees, over the current fields
+  Ctx ctx(const FDStencil &st, const Kokkos::View<int**> &nbr) const {
     Ctx x;
     x.st = st;
     x.nbr = nbr;
@@ -76,6 +72,16 @@ struct PFDevice {
     x.phase = phase;
     x.pt = ptab.data();
     x.tab = tab.data();
+    return x;
+  }
+
+  // aux on owned sites + full-list ghosts, then the update of the owned
+  // sites; f and fnew swap, so f holds the new fields (their ghosts are
+  // refreshed by the caller's next exchange)
+  template <class M>
+  void step(const M &m, const FDStencil &st, const Kokkos::View<int**> &nbr,
+            const Kokkos::View<int*> &nn, int nloc, int nall, int mn, int nf) {
+    const Ctx x = ctx(st, nbr);
 
     Kokkos::Array<Kokkos::View<double*>, PF_MAXF> fn;
     for (int k = 0; k < PF_MAXF; k++) fn[k] = fnew[k];

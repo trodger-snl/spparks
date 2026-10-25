@@ -82,8 +82,9 @@ build.
   (the phase-field-only `phasefield` app, `AppPhaseField`, runs one model
   struct from `src/phasefield_models.h` -- add a PDE there -- over
   `src/fd_stencil.h`, a host/device central-difference stencil for site
-  fields; `AppPhaseFieldPottsTable : AppPhaseField` is its ch_heat model
-  under Potts spins; both kk twins run the field step through
+  fields; `AppPhaseFieldPottsTable : AppPhaseField` runs its ch_heat
+  (phasefield/potts/table) or two_phase (phasefield/potts) model under
+  Potts spins; both kk twins run the field step through
   `src/KOKKOS/phasefield_device.h`; `AppSinterKokkos :
   LatticeKokkos<AppSinter>` sweeps with the host/device `sinter::event`
   of `src/app_sinter.h` and overrides the virtual hooks of AppSinter's

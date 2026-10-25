@@ -286,9 +286,15 @@ struct PFCHHeat {
     return pftable::step(x.st, x.nbr, x.f[0], x.f[1], x.a[0], i, q, out[0], out[1]);
   }
 
+  // bulk free energy of site i in phase p (Potts events try other phases)
+  template <class C> FD_FN double bulk(const C &x, int i, int p) const {
+    return pftable::lookup(x.pt[p], x.tab, x.f[0][i], x.f[1][i], 0, q.penalty);
+  }
+  template <class C> FD_FN double gradient(const C &x, int i) const {
+    return 0.5 * q.ch_energy * x.st.bond_sq(x.nbr, x.f[0], i);
+  }
   template <class C> FD_FN double energy(const C &x, int i) const {
-    return pftable::lookup(x.pt[x.phase[i]], x.tab, x.f[0][i], x.f[1][i], 0, q.penalty) +
-           0.5 * q.ch_energy * x.st.bond_sq(x.nbr, x.f[0], i);
+    return bulk(x, i, x.phase[i]) + gradient(x, i);
   }
 
   // composition (curvature of G unknown: kappa term only) and heat bounds
@@ -298,6 +304,65 @@ struct PFCHHeat {
     const double dT = 2.0 * q.specific_heat / (q.conductivity * lam);
     return dc < dT ? dc : dT;
   }
+};
+
+/* ----------------------------------------------------------------------
+   Cahn-Hilliard with a parabolic free energy per phase (phasefield/potts,
+   Homer et al. 2013), composition c (d1), phase p (0 = alpha, 1 = beta):
+   f = gamma ((c-c1)^2 + (c2-c)^2) + a (c-c3)^2 (alpha) or a (c4-c)^2 (beta)
+   mu = f'(c) - kappa lap c,  dc/dt = M lap mu
+------------------------------------------------------------------------- */
+
+struct PFTwoPhase {
+  double M, kappa, gamma, a, c1, c2, c3, c4, dt;
+  int enforce;                  // clamp c to [0,1]
+  static const int naux = 1;
+  int nfield() const { return 1; }
+
+  FD_FN double f(double c, int p) const {
+    const double d = p == 0 ? c - c3 : c4 - c;
+    return gamma * ((c - c1) * (c - c1) + (c2 - c) * (c2 - c)) + a * d * d;
+  }
+  FD_FN double df(double c, int p) const {
+    return 2.0 * gamma * (2.0 * c - c1 - c2) + 2.0 * a * (p == 0 ? c - c3 : c - c4);
+  }
+
+  template <class C> FD_FN void aux(const C &x, int i, double *out) const {
+    out[0] = df(x.f[0][i], x.phase[i]) - kappa * x.st.lap(x.nbr, x.f[0], i);
+  }
+
+  template <class C> FD_FN int update(const C &x, int i, double *out) const {
+    double c = x.f[0][i] + dt * M * x.st.lap(x.nbr, x.a[0], i);
+    int flag = 0;
+    if (enforce) c = c > 1.0 ? 1.0 : (c < 0.0 ? 0.0 : c);
+    else if (c > 1.0 || c < 0.0) flag = 1;
+    out[0] = c;
+    return flag;
+  }
+
+  template <class C> FD_FN double bulk(const C &x, int i, int p) const {
+    return f(x.f[0][i], p);
+  }
+  template <class C> FD_FN double gradient(const C &x, int i) const {
+    return 0.5 * kappa * x.st.bond_sq(x.nbr, x.f[0], i);
+  }
+  template <class C> FD_FN double energy(const C &x, int i) const {
+    return bulk(x, i, x.phase[i]) + gradient(x, i);
+  }
+
+  // f'' = 4 gamma + 2 a
+  double dt_max(const FDStencil &st) const {
+    const double lam = 4.0 * st.dim * st.inv_h2;
+    return 2.0 / (M * lam * (4.0 * gamma + 2.0 * a + kappa * lam));
+  }
+};
+
+// a model's bulk energy of site i in phase p, for the Potts events
+template <class M, class C>
+struct PFBulk {
+  M m;
+  C x;
+  FD_FN double operator()(int i, int p) const { return m.bulk(x, i, p); }
 };
 
 }

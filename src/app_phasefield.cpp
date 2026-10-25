@@ -185,7 +185,7 @@ void AppPhaseField::init_app()
 }
 
 /* ----------------------------------------------------------------------
-   dt is known here for phasefield/potts/table (a fraction of dt_rkmc)
+   dt is known here for phasefield/potts(/table) (a fraction of dt_rkmc)
 ------------------------------------------------------------------------- */
 
 void AppPhaseField::setup_end_app()
@@ -204,7 +204,7 @@ void AppPhaseField::setup_end_app()
 
 void AppPhaseField::set_dt(double step)
 {
-  ac.dt = ch.dt = gg.dt = chh.q.dt = step;
+  ac.dt = ch.dt = gg.dt = chh.q.dt = tp.dt = step;
 }
 
 PFCtx<FDHostNbr, double *, int *> AppPhaseField::host_ctx()

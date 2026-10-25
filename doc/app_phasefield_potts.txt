@@ -7,14 +7,15 @@
 :line
 
 app_style phasefield/potts command :h3
+app_style phasefield/potts/kk command :h3
 
 [Syntax:]
 
-app_style phasefield/potts Q PFsteps lambda M_C KappaC a C1 C2 C3 C4 keyword value ... :pre
+app_style style Q PFsteps lambda M_C KappaC a C1 C2 C3 C4 keyword value ... :pre
 
-phasefield/potts = application style name :ulb,l
+style = {phasefield/potts} or {phasefield/potts/kk} :ulb,l
 Q = number of spin states :l
-PFsteps = number of phase field iterations per KMC/rMC iteration :l
+PFsteps = number of phase field iterations per KMC/rMC iteration (an integer) :l
 lambda = concetration free energy parameter :l
 M_C = Cahn-Hilliard mobility parameter :l
 KappaC = Cahn-Hilliard interfacial energy parameter :l
@@ -53,8 +54,46 @@ to efficiently simulate grain growth in a two-phase system controlled
 by diffusion. For a full description of the model, see the paper by
 "Homer et al."_#Homer.
 
-See the examples/phasefield_potts directory for an example script using this
-command.  See the "Pictures web
+Each site has a spin (i1), a phase (i2: 0 = alpha, 1 = beta) and a
+concentration c (d1). Spins Q/2+1 to Q are alpha grains, 1 to Q/2 beta
+grains; a site's phase follows its spin whenever the spin flips, and is
+otherwise set by the input script (or by {initialize_values}). The bulk
+free energy of a site is
+
+f = lambda ((c-C1)^2 + (C2-c)^2) + a (c-C3)^2   (alpha)
+f = lambda ((c-C1)^2 + (C2-c)^2) + a (C4-c)^2   (beta) :pre
+
+and its energy is f plus the Potts energy (unlike neighbours). The
+energy diagnostic also adds the gradient energy KappaC/2 |grad c|^2,
+summed over lattice bonds as for "app_style phasefield"_app_phasefield.html.
+Spins evolve by rejection KMC (flip to a random unlike neighbour spin,
+Metropolis at the "temperature"_temperature.html command's value).
+After each rKMC step, PFsteps explicit steps, each 1/PFsteps of its
+time, advance c by Cahn-Hilliard with central differences on the
+lattice's axis neighbours:
+
+dc/dt = M_C lap(mu)
+mu    = df/dc - KappaC lap(c) :pre
+
+mu is evaluated first and its Laplacian taken, so the full biharmonic
+(with its cross terms in 2d and 3d) is used and the total of c is
+conserved to round-off. Versions before October 2026 expanded lap(mu) by the
+product rule with axis-only fourth differences, which did neither;
+results differ from those versions. These are the {two_phase} model's
+equations in "phasefield_models.h"; the app shares its code with
+"app_style phasefield/potts/table"_app_phasefield_potts_table.html.
+
+Style {phasefield/potts/kk} runs the sweeps and the field steps on a
+Kokkos device. It needs "sweep color"_sweep.html or {sweep
+color/strict} (sq/8n: a box a multiple of 3 sites along each
+dimension). Under {sweep color/strict} it reproduces the CPU style with
+the same sweep, bit for bit, at any processor count.
+
+The lattice must be line/2n, sq/4n, sq/8n, sc/6n or sc/26n, and all
+boundaries periodic.
+
+See the examples/phasefield_potts directory for example scripts using
+these commands.  See the "Pictures web
 page"_https://spparks.github.io/pictures.html for images of
 simulations performed with this command.
 
@@ -62,15 +101,22 @@ simulations performed with this command.
 
 The following additional commands are defined by this application:
 
+pottspf/command reset_phasefield region value ... : hold c at value in each region
+pottspf/command set_site_phase yes/no : set each site's phase (i2) from its spin at setup
+pottspf/command enforce_concentration_limits yes/no : clamp c to \[0,1\] (else warn once)
+pottspf/command scale_energy potts value : scale the Potts energy
 "temperature"_temperature.html : set Monte Carlo temperature :tb(s=:)
 
 :line
 
-[Restrictions:] none
+[Restrictions:]
+
+{phasefield/potts/kk} is part of the KOKKOS package.
 
 [Related commands:]
 
-"app_style potts"_app_potts.html
+"app_style potts"_app_potts.html, "app_style
+phasefield/potts/table"_app_phasefield_potts_table.html
 
 [Default:] 
 

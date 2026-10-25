@@ -11,15 +11,17 @@
 
 <H3>app_style phasefield/potts command 
 </H3>
+<H3>app_style phasefield/potts/kk command 
+</H3>
 <P><B>Syntax:</B>
 </P>
-<PRE>app_style phasefield/potts Q PFsteps lambda M_C KappaC a C1 C2 C3 C4 keyword value ... 
+<PRE>app_style style Q PFsteps lambda M_C KappaC a C1 C2 C3 C4 keyword value ... 
 </PRE>
-<UL><LI>phasefield/potts = application style name 
+<UL><LI>style = <I>phasefield/potts</I> or <I>phasefield/potts/kk</I> 
 
 <LI>Q = number of spin states 
 
-<LI>PFsteps = number of phase field iterations per KMC/rMC iteration 
+<LI>PFsteps = number of phase field iterations per KMC/rMC iteration (an integer) 
 
 <LI>lambda = concetration free energy parameter 
 
@@ -69,8 +71,46 @@ to efficiently simulate grain growth in a two-phase system controlled
 by diffusion. For a full description of the model, see the paper by
 <A HREF = "#Homer">Homer et al.</A>.
 </P>
-<P>See the examples/phasefield_potts directory for an example script using this
-command.  See the <A HREF = "https://spparks.github.io/pictures.html">Pictures web
+<P>Each site has a spin (i1), a phase (i2: 0 = alpha, 1 = beta) and a
+concentration c (d1). Spins Q/2+1 to Q are alpha grains, 1 to Q/2 beta
+grains; a site's phase follows its spin whenever the spin flips, and is
+otherwise set by the input script (or by <I>initialize_values</I>). The bulk
+free energy of a site is
+</P>
+<PRE>f = lambda ((c-C1)^2 + (C2-c)^2) + a (c-C3)^2   (alpha)
+f = lambda ((c-C1)^2 + (C2-c)^2) + a (C4-c)^2   (beta) 
+</PRE>
+<P>and its energy is f plus the Potts energy (unlike neighbours). The
+energy diagnostic also adds the gradient energy KappaC/2 |grad c|^2,
+summed over lattice bonds as for <A HREF = "app_phasefield.html">app_style phasefield</A>.
+Spins evolve by rejection KMC (flip to a random unlike neighbour spin,
+Metropolis at the <A HREF = "temperature.html">temperature</A> command's value).
+After each rKMC step, PFsteps explicit steps, each 1/PFsteps of its
+time, advance c by Cahn-Hilliard with central differences on the
+lattice's axis neighbours:
+</P>
+<PRE>dc/dt = M_C lap(mu)
+mu    = df/dc - KappaC lap(c) 
+</PRE>
+<P>mu is evaluated first and its Laplacian taken, so the full biharmonic
+(with its cross terms in 2d and 3d) is used and the total of c is
+conserved to round-off. Versions before October 2026 expanded lap(mu) by the
+product rule with axis-only fourth differences, which did neither;
+results differ from those versions. These are the <I>two_phase</I> model's
+equations in "phasefield_models.h"; the app shares its code with
+<A HREF = "app_phasefield_potts_table.html">app_style phasefield/potts/table</A>.
+</P>
+<P>Style <I>phasefield/potts/kk</I> runs the sweeps and the field steps on a
+Kokkos device. It needs <A HREF = "sweep.html">sweep color</A> or <I>sweep
+color/strict</I> (sq/8n: a box a multiple of 3 sites along each
+dimension). Under <I>sweep color/strict</I> it reproduces the CPU style with
+the same sweep, bit for bit, at any processor count.
+</P>
+<P>The lattice must be line/2n, sq/4n, sq/8n, sc/6n or sc/26n, and all
+boundaries periodic.
+</P>
+<P>See the examples/phasefield_potts directory for example scripts using
+these commands.  See the <A HREF = "https://spparks.github.io/pictures.html">Pictures web
 page</A> for images of
 simulations performed with this command.
 </P>
@@ -79,16 +119,23 @@ simulations performed with this command.
 <P>The following additional commands are defined by this application:
 </P>
 <DIV ALIGN=center><TABLE  BORDER=1 >
+<TR><TD >pottspf/command reset_phasefield region value ... </TD><TD > hold c at value in each region</TD></TR>
+<TR><TD >pottspf/command set_site_phase yes/no </TD><TD > set each site's phase (i2) from its spin at setup</TD></TR>
+<TR><TD >pottspf/command enforce_concentration_limits yes/no </TD><TD > clamp c to [0,1] (else warn once)</TD></TR>
+<TR><TD >pottspf/command scale_energy potts value </TD><TD > scale the Potts energy</TD></TR>
 <TR><TD ><A HREF = "temperature.html">temperature</A> </TD><TD > set Monte Carlo temperature 
 </TD></TR></TABLE></DIV>
 
 <HR>
 
-<P><B>Restrictions:</B> none
+<P><B>Restrictions:</B>
+</P>
+<P><I>phasefield/potts/kk</I> is part of the KOKKOS package.
 </P>
 <P><B>Related commands:</B>
 </P>
-<P><A HREF = "app_potts.html">app_style potts</A>
+<P><A HREF = "app_potts.html">app_style potts</A>, <A HREF = "app_phasefield_potts_table.html">app_style
+phasefield/potts/table</A>
 </P>
 <P><B>Default:</B> 
 </P>

@@ -28,6 +28,7 @@
 #include "region.h"
 #include "comm_lattice.h"
 #include "timer.h"
+#include <type_traits>
 
 using namespace SPPARKS_NS;
 
@@ -37,6 +38,13 @@ AppPhaseFieldPottsTable::
 AppPhaseFieldPottsTable(SPPARKS *spk, int narg, char **arg) :
   AppPhaseField(spk,narg,arg,0)
 {
+  init_site_phase=false;
+  if (strcmp(style,"phasefield/potts") == 0 ||
+      strcmp(style,"phasefield/potts/kk") == 0) {
+    parse_two_phase(narg,arg);
+    return;
+  }
+
   if (narg < 9) error->all(FLERR,"Illegal app_style command");
 
   nspins = atoi(arg[1]);
@@ -88,8 +96,61 @@ AppPhaseFieldPottsTable(SPPARKS *spk, int narg, char **arg) :
   allow_app_update = 1;
   numrandom = 3;
   create_arrays();
+}
 
-  init_site_phase=false;
+/* ----------------------------------------------------------------------
+   app_style phasefield/potts Q PFsteps gamma M kappa a c1 c2 c3 c4 keywords:
+   the two_phase model, alpha (phase 0) = spins Q/2+1..Q, beta (1) = 1..Q/2
+------------------------------------------------------------------------- */
+
+void AppPhaseFieldPottsTable::parse_two_phase(int narg, char **arg)
+{
+  if (narg < 11) error->all(FLERR,"Illegal app_style command");
+
+  nspins = atoi(arg[1]);
+  if (nspins <= 0 || nspins % 2)
+    error->all(FLERR,"App phasefield/potts must have even # of spins");
+
+  pf_nsteps = atoi(arg[2]);
+  if (pf_nsteps < 1 || atof(arg[2]) != pf_nsteps)
+    error->all(FLERR,"Illegal app_style command -- PF steps must be an "
+               "integer >= 1");
+
+  model = TWO_PHASE;
+  tp = {atof(arg[4]),atof(arg[5]),atof(arg[3]),atof(arg[6]),
+        atof(arg[7]),atof(arg[8]),atof(arg[9]),atof(arg[10]),0.0,0};
+  if (tp.M < 0.0 || tp.kappa < 0.0)
+    error->all(FLERR,"Illegal app_style command -- M and kappa must be >= 0");
+  chh.q = PFParams();
+  chh.q.scale_potts = 1.0;
+  nfield = 1;
+  naux = 1;
+  spin_lo = {nspins/2+1, 1};
+  spin_hi = {nspins, nspins/2};
+
+  for (int iarg = 11; iarg < narg; iarg += 2) {
+    if (iarg+1 >= narg) error->all(FLERR,"Illegal app_style phasefield/potts command");
+    int yes;
+    if (strcmp(arg[iarg+1],"yes") == 0) yes = 1;
+    else if (strcmp(arg[iarg+1],"no") == 0) yes = 0;
+    else error->all(FLERR,"Illegal app_style phasefield/potts command");
+    if (strcmp(arg[iarg],"reset_phasefield") == 0) reset_xbounds = yes;
+    else if (strcmp(arg[iarg],"print_connectivity") == 0) print_stencil = yes;
+    else if (strcmp(arg[iarg],"initialize_values") == 0) init_values = yes;
+    else if (strcmp(arg[iarg],"enforce_concentration_limits") == 0)
+      tp.enforce = warned = yes;
+    else error->all(FLERR,"Illegal app_style phasefield/potts command");
+  }
+
+  ninteger = 2;
+  ndouble = 1;
+  delpropensity = 2;
+  delevent = 0;
+  allow_kmc = 0;
+  allow_rejection = 1;
+  allow_masking = 0;
+  allow_app_update = 1;
+  create_arrays();
 }
 
 /* ---------------------------------------------------------------------- */
@@ -112,7 +173,7 @@ void AppPhaseFieldPottsTable::input_app(char *command, int narg, char **arg)
     }
 
     else if (strcmp(arg[0],"enforce_concentration_limits") == 0) {
-      chh.q.enforce = strcmp(arg[1],"yes") == 0;
+      chh.q.enforce = tp.enforce = strcmp(arg[1],"yes") == 0;
 
       // forcing the limits means there is nothing to warn about;
       // turning it off checks for deviations again
@@ -185,9 +246,38 @@ void AppPhaseFieldPottsTable::init_app()
   // periodicity, stencil, tables, scratch; then each phase's spin range
 
   AppPhaseField::init_app();
+  if (model != CH_HEAT) ptab.assign(spin_lo.size(),PFPhaseTable());
   for (size_t p=0; p<ptab.size(); p++) {
     ptab[p].spin_lo = spin_lo[p];
     ptab[p].spin_hi = spin_hi[p];
+  }
+
+  // phasefield/potts initialize_values: each phase at its equilibrium
+  // composition, df/dc = 0
+
+  if (init_values) {
+    const double g = tp.gamma*(tp.c1+tp.c2), d = 2.0*tp.gamma + tp.a;
+    const double ceq[2] = {(g + tp.a*tp.c3)/d, (g + tp.a*tp.c4)/d};
+    for (int i=0; i<nlocal; i++) {
+      set_site_phase(i);
+      c[i] = ceq[phase[i]];
+    }
+    init_values = false;
+  }
+
+  // phasefield/potts reset_phasefield: c = 0 at xlo, 1 at xhi
+
+  if (reset_xbounds) {
+    for (int i=0; i<nlocal; i++)
+      if (xyz[i][0] <= domain->boxxlo) {
+        pf_resetlist.push_back(i);
+        pf_resetlistvals.push_back(0.0);
+      } else if (xyz[i][0] >= domain->boxxhi - 1) {
+        pf_resetlist.push_back(i);
+        pf_resetlistvals.push_back(1.0);
+      }
+    pf_resetversion++;
+    reset_xbounds = false;
   }
 }
 
@@ -209,7 +299,7 @@ void AppPhaseFieldPottsTable::grow_app()
   spin = iarray[0];
   phase = iarray[1];
   c = darray[0];
-  T = darray[1];
+  T = ndouble > 1 ? darray[1] : NULL;
 }
 
 /* ----------------------------------------------------------------------
@@ -218,10 +308,14 @@ void AppPhaseFieldPottsTable::grow_app()
 
 double AppPhaseFieldPottsTable::site_energy(int i)
 {
-  FDHostNbr nbr{neighbor};
-  return pftable::site_energy(numneigh,nbr,spin,c,T,i,spin[i],phase[i],
-                              ptab.data(),tab.data(),chh.q) +
-         0.5 * chh.q.ch_energy * stencil.bond_sq(nbr,c,i);
+  auto x = host_ctx();
+  double e = 0.0;
+  with_potts_model([&](auto &m) {
+    PFBulk<std::decay_t<decltype(m)>,decltype(x)> bulk{m,x};
+    e = pftable::site_energy(numneigh,x.nbr,spin,bulk,i,spin[i],phase[i],
+                             chh.q.scale_potts) + m.gradient(x,i);
+  });
+  return e;
 }
 
 /* ----------------------------------------------------------------------
@@ -234,11 +328,15 @@ double AppPhaseFieldPottsTable::site_energy(int i)
 
 void AppPhaseFieldPottsTable::site_event_rejection(int i, RandomPark *random)
 {
-  FDHostNbr nbr{neighbor};
-  if (pftable::rejection_event(i,*random,numneigh,nbr,spin,phase,c,T,
-                               ptab.data(),ptab.size(),tab.data(),chh.q,
-                               temperature,t_inverse))
-    naccept++;
+  auto x = host_ctx();
+  int flip = 0;
+  with_potts_model([&](auto &m) {
+    PFBulk<std::decay_t<decltype(m)>,decltype(x)> bulk{m,x};
+    flip = pftable::rejection_event(i,*random,numneigh,x.nbr,spin,phase,bulk,
+                                    ptab.data(),ptab.size(),chh.q.scale_potts,
+                                    temperature,t_inverse);
+  });
+  naccept += flip;
 }
 
 /* ----------------------------------------------------------------------

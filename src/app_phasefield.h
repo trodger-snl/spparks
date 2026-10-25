@@ -31,7 +31,8 @@ namespace SPPARKS_NS {
 
 // Phase-field-only lattice app: no spins, no sweeps; every step advances
 // the fields of one model (phasefield_models.h) by one explicit step.
-// phasefield/potts/table derives from it (ch_heat + Potts spins).
+// phasefield/potts(/table) derives from it (Potts spins over the
+// two_phase or ch_heat model).
 class AppPhaseField : public AppLattice {
  public:
   AppPhaseField(class SPPARKS *, int, char **);
@@ -54,17 +55,18 @@ class AppPhaseField : public AppLattice {
   // for a child that parses its own app_style arguments and sets the model
   AppPhaseField(class SPPARKS *, int, char **, int parse);
 
-  enum Model { ALLEN_CAHN, CAHN_HILLIARD, GRAIN_GROWTH, CH_HEAT } model;
+  enum Model { ALLEN_CAHN, CAHN_HILLIARD, GRAIN_GROWTH, CH_HEAT, TWO_PHASE } model;
   PFAllenCahn ac;
   PFCahnHilliard ch;
   PFGrainGrowth gg;
   PFCHHeat chh;
+  PFTwoPhase tp;                    // phasefield/potts only
   int nfield, naux;
   double dt;
 
   FDStencil stencil;
   int print_stencil;
-  int *phase;                       // i1 (i2 in phasefield/potts/table)
+  int *phase;                       // i1 (i2 in phasefield/potts(/table))
   double *aux[PF_MAXA];             // all sites
   double *fnew[PF_MAXF];            // owned sites
   int nmax_app;
@@ -84,6 +86,7 @@ class AppPhaseField : public AppLattice {
     case CAHN_HILLIARD: fn(ch); break;
     case GRAIN_GROWTH: fn(gg); break;
     case CH_HEAT: fn(chh); break;
+    case TWO_PHASE: fn(tp); break;
     }
   }
   PFCtx<FDHostNbr, double *, int *> host_ctx();

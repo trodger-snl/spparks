@@ -54,26 +54,42 @@ programmed: grain growth, pore migration and vacancy creation and
 annihilation.  If the site selected is a grain site, a grain growth
 event is attempted: a new spin is chosen randomly from the values held
 by neighbor grain sites. If the site selected is a pore site, a pore
-migration or a vacancy creation and annihilation event is
-attempted. For the pore migration event, a new spin is chosen from the
-values held by neighboring grain sites such that the flip results in
-the minimum possible energy. For a vacancy creation and annihilation
-event, a pore site is moved to a neighboring grain site such that the
-resulting pore site is completely surrounded by grain sites (vacancy
-creation at grain boundary) with the subsequent movement of the
-vacancy to the surface of the sintering compact. In all the events, dE
-= Efinal - Einitial is calculated, as is a uniform random number R
-between 0 and 1.  The new state is accepted if R <
-min\[1,exp(-dE/kT)\], else it is rejected. T is the temperature for
-simulating the event, so there is one temperature for grain growth,
-another for pore migration and a third temperature for vacancy
-creation and annihilation. These temperatures are defined by
-"event_temperatures"_event_temperatures.html command (which includes
-the Boltzmann constant k implicitly).
+migration or a vacancy creation event is attempted. For the pore
+migration event, the pore swaps with a random neighbor grain site,
+which then takes the spin of a neighboring grain that results in the
+minimum possible energy. Vacancy creation is the same swap, allowed
+only if the resulting pore site is completely surrounded by grain
+sites (vacancy creation at grain boundary). In all the events, dE =
+Efinal - Einitial is calculated, as is a uniform random number R
+between 0 and 1.  The new state is accepted if R < min\[1,exp(-dE/kT)\],
+else it is rejected. T is the temperature for simulating the event, so
+there is one temperature for grain growth, another for pore migration
+and a third temperature for vacancy creation and annihilation. These
+temperatures are defined by "event_temperatures"_event_temperatures.html
+command (which includes the Boltzmann constant k implicitly).
+
+At the end of each sweep the vacancies it created are annihilated, in
+site ID order. A vacancy that is still a vacancy (a pore site whose
+neighbors are all grain sites) moves to the surface of the compact
+along the line from it through the center of mass of its adjacent
+grain (the grain that holds most of its neighbors, ties broken at
+random) to the box face beyond: each site on the line takes the spin
+of the next one, up to the frame, where the vacancy ends up. This
+shrinks the compact. The result does not depend on the number of
+processors.
+
+How often vacancy creation is attempted is scaled by (A0/A)^2, with A
+the mean grain boundary area per grain face and A0 its value when
+sintering starts. A is updated at intervals that shorten when the
+density changes fast.
 
 Parallel implementation of the Monte Carlo model for sintering in
 SPPARKS code is described in the "2011 Garcia-Cardona paper
 below"_#Garcia-Cardona.
+
+Sites on the faces of the simulation box are set to the frame value
+-1, and the two layers of sites inside them to pore sites 0, at the
+start of each run.
 
 [Initialization:]
 
@@ -117,9 +133,19 @@ The following diagnostic styles are also useful with this application:
 Use of the pore curvature to determine the sintering stress is
 described in the "2012 Garcia-Cardona paper below"_#Garcia-Cardona2.
 
+The stats output column Vmade is the number of vacancies annihilated
+since the previous stats output.
+
 :line
 
-[Restrictions:] none
+[Restrictions:]
+
+The sites must be created by "create_sites box"_create_sites.html in
+a fully periodic box. In parallel, "sectors"_sector.html are required,
+because an event changes a neighbor site. Since an event reads sites
+two neighbors away and changes sites one neighbor away, "sweep color"
+needs a lattice that can be colored with that spacing: sq/8n or
+sc/26n, with a box a multiple of 4 sites along each dimension.
 
 [Related commands:]
 

@@ -16,76 +16,55 @@
 ------------------------------------------------------------------------- */
 
 #include "mpi.h"
-#include "stdlib.h"
-#include "string.h"
-#include "output.h"
-#include "memory.h"
-#include "app.h"
-#include "error.h"
-#include "timer.h"
+#include "stdio.h"
 #include "diag_sinter_free_energy.h"
-#include "app_lattice.h"
 #include "app_sinter.h"
-#include "comm_lattice.h"
+#include "error.h"
 
 using namespace SPPARKS_NS;
 
 /* ---------------------------------------------------------------------- */
 
-DiagSinterFreeEnergy::DiagSinterFreeEnergy(SPPARKS *spk, int narg, char **arg) : 
-  Diag(spk,narg,arg)
-{
-  if (app->appclass != App::LATTICE)
-    error->all(FLERR,"Diag style incompatible with app style");
-}
+DiagSinterFreeEnergy::DiagSinterFreeEnergy(SPPARKS *spk, int narg, char **arg) :
+  Diag(spk,narg,arg) {}
 
 /* ---------------------------------------------------------------------- */
 
 void DiagSinterFreeEnergy::init()
 {
-  appsinter = (AppSinter *) app;
-  nlocal = appsinter->nlocal;
-//  density = 0.0;
+  appsinter = dynamic_cast<AppSinter *>(app);
+  if (!appsinter) error->all(FLERR,"Diag style incompatible with app style");
   interfacialFE = 0.0;
 }
 
 /* ---------------------------------------------------------------------- */
 
+// pore surface: the # of (grain site, pore neighbour) pairs
+
 void DiagSinterFreeEnergy::compute()
 {
-//  appsinter->comm->all();
+  appsinter->update_ghosts();
   int *spin = appsinter->spin;
   int *numneigh = appsinter->numneigh;
   int **neighbor = appsinter->neighbor;
-  
-  const int VACANT ( AppSinter::VACANT );
-
-  double interfacialFEtmp = 0.0;
-  for (int i = 0; i < nlocal; i++) {
-	int ispin = spin[i];
-	double surface = 0;
-	if ( ispin > VACANT ) { // If I am a grain site add the number of neighbors that are pore sites
-		for (int j = 0; j < numneigh[i]; j++)
-			if (spin[neighbor[i][j]] == VACANT) surface++;
-	}		
-	interfacialFEtmp += surface;
-	//interfacialFEtmp += appsinter->site_surface(i);
-  }
-  MPI_Allreduce(&interfacialFEtmp,&interfacialFE,1,MPI_DOUBLE,MPI_SUM,world);
-//  density = appsinter->calculate_density();	
+  double surface = 0.0;
+  for (int i = 0; i < appsinter->nlocal; i++)
+    if (spin[i] > sinter::VACANT)
+      for (int k = 0; k < numneigh[i]; k++)
+        if (spin[neighbor[i][k]] == sinter::VACANT) surface++;
+  MPI_Allreduce(&surface,&interfacialFE,1,MPI_DOUBLE,MPI_SUM,world);
 }
 
 /* ---------------------------------------------------------------------- */
 
 void DiagSinterFreeEnergy::stats(char *strtmp)
 {
-  snprintf(strtmp, 256, " %g", interfacialFE);
+  snprintf(strtmp,256," %g",interfacialFE);
 }
 
 /* ---------------------------------------------------------------------- */
 
 void DiagSinterFreeEnergy::stats_header(char *strtmp)
 {
-//  snprintf(strtmp, 256, " %10s %10s","Density", "InterfFE");
-  snprintf(strtmp, 256, " %10s", "InterfFE");
+  snprintf(strtmp,256," %10s","InterfFE");
 }

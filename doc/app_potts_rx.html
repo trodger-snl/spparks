@@ -1,0 +1,137 @@
+<HTML>
+<CENTER><A HREF = "https://spparks.github.io">SPPARKS Website</A> - <A HREF = "Manual.html">SPPARKS Documentation</A> - <A HREF = "Section_commands.html#comm">SPPARKS Commands</A> 
+</CENTER>
+
+
+
+
+
+
+<HR>
+
+<H3>app_style potts/rx command 
+</H3>
+<H3>app_style potts/rx/kk command 
+</H3>
+<P><B>Syntax:</B>
+</P>
+<PRE>app_style style Q keyword values ... 
+</PRE>
+<UL><LI>style = <I>potts/rx</I> or <I>potts/rx/kk</I> 
+
+<LI>Q = number of spin states of the deformed grains 
+
+<LI>zero or more keyword/value pairs may be appended 
+
+<LI>keyword = <I>nucleation</I> 
+
+<PRE>  <I>nucleation</I> values = rate Hmin
+    rate = nucleation probability per deformed site per unit time (MCS)
+    Hmin = only sites with stored energy >= Hmin nucleate 
+</PRE>
+
+</UL>
+<P><B>Examples:</B>
+</P>
+<PRE>app_style potts/rx 1000
+app_style potts/rx 1000 nucleation 0.0002 0.5
+app_style potts/rx/kk 1000 nucleation 0.0002 0.5 
+</PRE>
+<P><B>Description:</B>
+</P>
+<P>This is an on-lattice application which evolves a Q-state Potts model
+of static recrystallization. Each site has a spin (i1) and a stored
+energy H (d1). Spins 1 to Q are deformed grains; spins above Q are
+recrystallized grains. The energy of site I is
+</P>
+<PRE>Ei = Sum_j delta_ij + Hi 
+</PRE>
+<P>where Sum_j is a sum over the neighbors of site I, delta_ij is 0 if the
+spins of sites I and J are the same and 1 if they differ, and the
+boundary energy J = 1 sets the unit of H and of the
+<A HREF = "temperature.html">temperature</A>.
+</P>
+<P>A rKMC event at site I picks a random neighbor J. If J has another spin,
+site I would take J's spin and stored energy. The change in energy dE
+is the change in the number of unlike neighbors of I plus HJ - HI, and
+the flip is accepted with probability min[1,exp(-dE/kT)]. Boundary
+energy and stored energy enter the same test, so a recrystallization
+front moves by the stored-energy difference across it and by its
+curvature, and grain growth runs everywhere, in the deformed grains,
+the recrystallized grains and across the front, under one
+Hamiltonian.
+</P>
+<P>Nuclei are sites with spin > Q and H = 0. Set them before a run
+(site-saturated nucleation) with the <A HREF = "set.html">set</A> command, or let
+the app make them with the <I>nucleation</I> keyword (continuous
+nucleation): after every sweep, each deformed site with H >= Hmin
+seeds a nucleus with probability rate*dt, and the site and its
+deformed neighbors become recrystallized grain Q + its site ID, with
+H = 0. A one-site nucleus shrinks at once, which is why the seed takes
+its neighbors. The draws are keyed to the site ID and the sweep, so
+the nuclei do not depend on the number of processors.
+</P>
+<P>A nucleus or front grows when the stored energy it removes outweighs
+the boundary it adds. On sc/26n at T = 0.5 a 3x3x3 nucleus shrinks at
+H = 1, grows slowly at H = 2, and recrystallizes a deformed grain
+structure in about 80 MCS at H = 4. When H >= maxneigh - 2 any
+deformed site with one recrystallized neighbor can flip downhill,
+whatever the shape of its boundary: the front then grows without
+curvature, like an Eden cluster, and comes out rough. The app warns if
+the stored energy of a deformed site reaches that bound; keep H well
+below it (<A HREF = "#Williamson15">Williamson and Delplanque</A> discuss the
+stored-energy limit of Potts models).
+</P>
+<P>Time is in Monte Carlo steps (one sweep = 1). The stats output adds a
+column Xrx, the recrystallized fraction. The <A HREF = "diag_energy.html">diag_style
+energy</A> diagnostic sums Ei over the sites.
+</P>
+<P>d2 holds exp(-H/kT), which the app sets at the start of each run;
+do not set it.
+</P>
+<P>This application runs only with rKMC, with any <A HREF = "sweep.html">sweep</A>
+method; it does not have a KMC solver.
+</P>
+<HR>
+
+<P>Style <I>potts/rx/kk</I> is a Kokkos version of the same model, which runs
+the sweep and the nucleation in parallel on a GPU or with OpenMP
+threads. It takes the same arguments and sweeps with <A HREF = "sweep.html">sweep
+color</A> or <A HREF = "sweep.html">sweep color/strict</A>; with
+<I>color/strict</I> it gives the same answer as <I>potts/rx</I>, bit for bit, on
+any number of processors.
+</P>
+<HR>
+
+<P>The following additional commands are defined by this application:
+</P>
+<DIV ALIGN=center><TABLE  BORDER=1 >
+<TR><TD ><A HREF = "temperature.html">temperature</A> </TD><TD > set Monte Carlo temperature 
+</TD></TR></TABLE></DIV>
+
+<HR>
+
+<P><B>Restrictions:</B>
+</P>
+<P>At most 32 neighbors per site. With <I>nucleation</I>, Q + the largest site
+ID must fit in an int.
+</P>
+<P>Style <I>potts/rx/kk</I> is part of the KOKKOS package.  It is only enabled
+if SPPARKS was built with that package.  See the <A HREF = "Section_start.html#start_3">Making
+SPPARKS</A> section for more info.
+</P>
+<P><B>Related commands:</B>
+</P>
+<P><A HREF = "app_potts.html">app_style potts</A>
+</P>
+<P><B>Default:</B> no nucleation
+</P>
+<HR>
+
+<A NAME = "Williamson15"></A>
+
+<P><B>(Williamson and Delplanque)</B> A. Williamson and J.-P. Delplanque,
+"Strain energy limitations in Monte Carlo Potts modeling of grain
+growth", Comput. Mater. Sci. 108, 2015.
+</P>
+</HTML>

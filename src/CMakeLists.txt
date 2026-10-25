@@ -531,6 +531,7 @@ set(SPPARKS_SOURCES
     app_potts_neigh.cpp
     app_potts_neighonly.cpp
     app_potts_pin.cpp
+    app_potts_rx.cpp
     app_potts_quaternion.cpp
     app_potts_strain.cpp
     app_potts_strain_pin.cpp

@@ -131,6 +131,8 @@ public:
             host + first, last - first));
   }
   bool host_data_stale = false;
+  // set by an app whose app_update reads and writes the device views
+  bool device_app_update = false;
 
   // Allocate app-specific Kokkos views
   virtual void allocate_app_views() = 0;

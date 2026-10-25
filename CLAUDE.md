@@ -78,7 +78,11 @@ build.
   `AppLatticeKokkos` = `LatticeKokkos<AppLattice>`) and
   `QuaternionKokkos<Base>` (device spin/quaternions), so
   `AppAdditiveTextureKokkos : QuaternionKokkos<AppAdditiveTexture>` and
-  `AppPottsQuaternionKokkos : QuaternionKokkos<AppPottsQuaternion>`. The CPU
+  `AppPottsQuaternionKokkos : QuaternionKokkos<AppPottsQuaternion>`
+  (`AppPhaseFieldPottsTableKokkos : LatticeKokkos<AppPhaseFieldPottsTable>`
+  shares its per-site physics with the CPU app through `pftable::` inline
+  functions and `src/fd_stencil.h`, a host/device central-difference
+  stencil for site fields). The CPU
   class owns the state, parameters and argument parsing; the kk class
   replaces `init_app`/`app_update`/`input_app` (its fallback is
   `AppLattice::input_app`, so CPU-only commands stay errors) and never calls
@@ -154,7 +158,8 @@ differ from each other and change with the rank count. Only the
 **temperature field is deterministic across apps** — validate by comparing the CPU app
 (`additive/texture`) against the Kokkos app (`additive/texture/kk`) on the
 temperature diagnostic columns (`diag_style array d6 sum d6 max`), expecting a
-bit-for-bit match. The Kokkos app requires `sweep color`. Base test inputs are in
+bit-for-bit match. A kk app that sweeps needs `sweep color` (or
+`color/strict`); update-only apps (`app_update_only yes`) take any sweep. Base test inputs are in
 `examples/hdf5/`, `examples/{rosenthal,moser}_am/` and `examples/am_validation/`.
 
 ## Commits

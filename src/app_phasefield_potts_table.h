@@ -232,6 +232,7 @@ class AppPhaseFieldPottsTable : public AppPottsNeighOnly {
   //variables for reseting the concentration (constant sink and source)
   std::vector<int> pf_resetlist;
   std::vector<double> pf_resetlistvals;
+  int pf_resetversion = 0;          // bumped on each change of the list
 
   //warn once when concentration has deviated outside [0,1]
   int warn_concentration_deviation_all;

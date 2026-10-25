@@ -147,7 +147,7 @@ void ReadTable::header()
     // trim anything from '#' onward
     // if line is blank, continue
     
-    if (ptr = strchr(line,'#')) *ptr = '\0';
+    if ((ptr = strchr(line,'#'))) *ptr = '\0';
     if (strspn(line," \t\n\r") == strlen(line)) continue;
     
     // search line for header keyword and set corresponding variable
@@ -361,7 +361,7 @@ int ReadTable::count_words(char *line)
   strcpy(copy,line);
 
   char *ptr;
-  if (ptr = strchr(copy,'#')) *ptr = '\0';
+  if ((ptr = strchr(copy,'#'))) *ptr = '\0';
 
   if (strtok(copy," \t\n\r\f") == NULL) {
     memory->sfree(copy);

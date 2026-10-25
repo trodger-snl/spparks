@@ -558,6 +558,7 @@ void AppPhaseFieldPottsTable::set_pf_resetlist(int narg, char **arg)
       pf_resetlist.push_back(i);
       pf_resetlistvals.push_back(val[i]);
     }
+  pf_resetversion++;
 
   // print statistics
 

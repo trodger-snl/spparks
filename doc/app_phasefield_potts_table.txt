@@ -1,0 +1,100 @@
+"SPPARKS Website"_sws - "SPPARKS Documentation"_sd - "SPPARKS Commands"_sc :c
+
+:link(sws,https://spparks.github.io)
+:link(sd,Manual.html)
+:link(sc,Section_commands.html#comm)
+
+:line
+
+app_style phasefield/potts/table command :h3
+app_style phasefield/potts/table/kk command :h3
+
+[Syntax:]
+
+app_style style Q Nphases PFsteps M kappa k Qstar Cp phase1 n1 phase2 n2 ... :pre
+
+style = {phasefield/potts/table} or {phasefield/potts/table/kk} :ulb,l
+Q = number of spin states :l
+Nphases = number of phases :l
+PFsteps = number of phase field steps per rKMC sweep :l
+M = mobility of the composition :l
+kappa = Cahn-Hilliard gradient energy coefficient :l
+k = thermal conductivity :l
+Qstar = heat of transport (couples composition and heat flow) :l
+Cp = specific heat :l
+phaseN = name of a phase, used by read_table :l
+nN = number of spins in phase N; spins 1..n1 are phase 1, the next n2 phase 2, ... :l
+:ule
+
+[Examples:]
+
+app_style phasefield/potts/table 21 3 100 0.5 4 1 0.1 1 fcc 10 dia 10 liquid 1
+read_table G_fcc.txt fcc
+pottspf/command set_site_phase yes
+pottspf/command scale_energy potts 1.0 free 10.0 penalty 1.0 :pre
+
+[Description:]
+
+An on-lattice application coupling a Q-state Potts model of grains to
+a composition field c (d1) and a temperature field T (d2). Each site's
+phase (i2) follows from its spin. Each phase has a free energy G(c,T),
+read as a table with read_table.
+
+A site's energy is its bulk free energy G(c,T) for its phase, plus the
+Potts energy (unlike neighbours, scaled by {scale_energy potts}). The
+energy diagnostic also adds the gradient energy kappa/2 |grad c|^2.
+Spins evolve by rejection KMC (flip to a random unlike neighbour spin,
+Metropolis at the "temperature"_temperature.html command's value, which
+is separate from the field T).
+
+After each sweep, PFsteps explicit steps, each 1/PFsteps of the sweep's
+time, advance c and T together, with second-order central differences
+on the lattice's axis neighbours:
+
+dc/dt    = M (2 lap(mu) + Qstar div(grad T / T))
+Cp dT/dt = 2 M Qstar lap(mu) + k lap(T)
+mu       = dG/dc - kappa lap(c) :pre
+
+The tables need even spacing in T (rows, all > 0) and in c (columns,
+0 to 1). Outside [0,1], c sees G at the edge plus a quadratic penalty;
+outside the table's T range, G extrapolates linearly. The run stops with
+an error if T reaches 0: reduce the step (raise PFsteps).
+
+Style {phasefield/potts/table/kk} runs the sweeps and the field steps on
+a Kokkos device. It needs "sweep color"_sweep.html or {sweep
+color/strict}. Under {sweep color/strict} it reproduces the CPU style
+with the same sweep, bit for bit, at any processor count.
+
+The lattice must be line/2n, sq/4n, sq/8n, sc/6n or sc/26n, and all
+boundaries periodic.
+
+:line
+
+The following additional commands are defined by this application:
+
+pottspf/command reset_phasefield region value ... : hold c at value in each region
+pottspf/command print_connectivity yes/no : print the finite-difference neighbour slots
+pottspf/command set_site_phase yes/no : set each site's phase (i2) from its spin at setup
+pottspf/command enforce_concentration_limits yes/no : clamp c to \[0,1\] (else warn once)
+pottspf/command scale_energy potts/free/penalty value ... : scale the Potts energy, the tables' G, the out-of-range penalty
+read_table file phase : read a phase's G(c,T) table
+"temperature"_temperature.html : set Monte Carlo temperature :tb(s=:)
+
+A table file: a comment line, then "nT nc size", "rowcolvals", a
+"Values" line, then a row of the nc compositions (after a leading 0),
+and nT rows of a temperature followed by its nc values of G.
+
+:line
+
+[Restrictions:]
+
+{phasefield/potts/table/kk} is part of the KOKKOS package.
+
+[Related commands:]
+
+"app_style phasefield/potts"_app_phasefield_potts.html
+
+[Default:]
+
+reset_phasefield none, print_connectivity no, set_site_phase no,
+enforce_concentration_limits no, scale_energy 1.0 for each.

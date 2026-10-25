@@ -37,7 +37,7 @@ Table::Table(SPPARKS *spk,char *table) : Pointers(spk)
   
   tableReady=false;
   rowcolvals=false;
-  table=NULL;
+  this->table=NULL;   // the argument shadows the member
   rowvals=colvals=NULL;
 }
 

@@ -185,9 +185,11 @@ void LatticeKokkos<Base>::init_app()
   if (host_layout_sites && integrated_gpu && !pinned_sites) pin_site_arrays();
   allocate_device_views();
 
-  // Kokkos apps require coloring for correct parallel GPU execution
+  // Kokkos apps require coloring for correct parallel GPU execution, unless
+  // no sweep ever runs (app_update_only)
   using namespace LatticeKokkosSweep;
-  if (sweepflag != NOSWEEP && sweepflag != COLOR && sweepflag != COLOR_STRICT)
+  if (!(allow_app_update && app_update_only) &&
+      sweepflag != NOSWEEP && sweepflag != COLOR && sweepflag != COLOR_STRICT)
     error->all(FLERR,"Kokkos app requires 'sweep color' or 'sweep color/strict' "
                "for correct GPU execution");
 
@@ -461,8 +463,12 @@ void LatticeKokkos<Base>::iterate_rejection(double stoptime)
       }
     }
 
-    // Time advancement. app_update runs on the host arrays.
-    if (allow_app_update) {
+    // Time advancement. app_update runs on the host arrays, unless the app
+    // runs it on the device (device_app_update), which keeps them there.
+    if (allow_app_update && device_app_update) {
+      app_update(dt_rkmc);
+      host_data_stale = true;
+    } else if (allow_app_update) {
       ensure_host_data_current();
       app_update(dt_rkmc);
       sync_app_data_to_device();

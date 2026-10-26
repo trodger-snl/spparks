@@ -167,19 +167,21 @@ void Domain::set_boundary(int narg, char **arg)
     error->all(FLERR,"Boundary command currently only supported by on-lattice apps");
 }
 
+// a factor fits a user grid dimension when that dimension is * (0) or equal
+
+static bool fits(int ip, int user) { return user == 0 || ip == user; }
+
 /* ----------------------------------------------------------------------
    assign nprocs to 1d box as equal partitions
 ------------------------------------------------------------------------- */
 
 void Domain::procs2domain_1d()
 {
-  if (user_procgrid[0] || user_procgrid[1] || user_procgrid[2]) {
-    if (user_procgrid[1] != 1 || user_procgrid[2] != 1)
-      error->all(FLERR,"App style proc count is not valid for 1d simulation");
-    procgrid[0] = user_procgrid[0];
-  } else {
-    procgrid[0] = nprocs;
-  }
+  if (user_procgrid[1] > 1 || user_procgrid[2] > 1)
+    error->all(FLERR,"App style proc count is not valid for 1d simulation");
+  if (user_procgrid[0] && user_procgrid[0] != nprocs)
+    error->all(FLERR,"Processors grid does not match the number of processors");
+  procgrid[0] = nprocs;
 
   procgrid[1] = procgrid[2] = 1;
 
@@ -206,35 +208,34 @@ void Domain::procs2domain_2d()
   int ipx,ipy;
   double boxx,boxy,surf;
 
-  if (user_procgrid[0] || user_procgrid[1] || user_procgrid[2]) {
-    if (user_procgrid[2] != 1)
-      error->all(FLERR,"App style proc count is not valid for 2d simulation");
-    procgrid[0] = user_procgrid[0];
-    procgrid[1] = user_procgrid[1];
+  if (user_procgrid[2] > 1)
+    error->all(FLERR,"App style proc count is not valid for 2d simulation");
 
-  } else {
+  // loop thru all possible factorizations of nprocs
+  // that match the user's fixed (non-*) dimensions
+  // surf = perimeter of a proc sub-domain
 
-    // loop thru all possible factorizations of nprocs
-    // surf = perimeter of a proc sub-domain
+  double bestsurf = 2.0 * (xprd+yprd);
+  procgrid[0] = 0;
 
-    double bestsurf = 2.0 * (xprd+yprd);
- 
-    ipx = 1;
-    while (ipx <= nprocs) {
-      if (nprocs % ipx == 0) {
-	ipy = nprocs/ipx;
-	boxx = xprd/ipx;
-	boxy = yprd/ipy;
-	surf = boxx + boxy;
-	if (surf < bestsurf) {
-	  bestsurf = surf;
-	  procgrid[0] = ipx;
-	  procgrid[1] = ipy;
-	}
+  ipx = 1;
+  while (ipx <= nprocs) {
+    if (nprocs % ipx == 0) {
+      ipy = nprocs/ipx;
+      boxx = xprd/ipx;
+      boxy = yprd/ipy;
+      surf = boxx + boxy;
+      if (surf < bestsurf && fits(ipx,user_procgrid[0]) &&
+          fits(ipy,user_procgrid[1])) {
+        bestsurf = surf;
+        procgrid[0] = ipx;
+        procgrid[1] = ipy;
       }
-      ipx++;
     }
+    ipx++;
   }
+  if (procgrid[0] == 0)
+    error->all(FLERR,"Processors grid does not match the number of processors");
 
   procgrid[2] = 1;
 
@@ -265,43 +266,40 @@ void Domain::procs2domain_3d()
   int ipx,ipy,ipz,nremain;
   double boxx,boxy,boxz,surf;
 
-  if (user_procgrid[0] || user_procgrid[1] || user_procgrid[2]) {
-    procgrid[0] = user_procgrid[0];
-    procgrid[1] = user_procgrid[1];
-    procgrid[2] = user_procgrid[2];
+  double bestsurf = 2.0 * (xprd*yprd + yprd*zprd + zprd*xprd);
+  procgrid[0] = 0;
 
-  } else {
+  // loop thru all possible factorizations of nprocs
+  // that match the user's fixed (non-*) dimensions
+  // surf = surface area of a proc sub-domain
 
-    double bestsurf = 2.0 * (xprd*yprd + yprd*zprd + zprd*xprd);
-  
-    // loop thru all possible factorizations of nprocs
-    // surf = surface area of a proc sub-domain
-
-    ipx = 1;
-    while (ipx <= nprocs) {
-      if (nprocs % ipx == 0) {
-	nremain = nprocs/ipx;
-	ipy = 1;
-	while (ipy <= nremain) {
-	  if (nremain % ipy == 0) {
-	    ipz = nremain/ipy;
-	    boxx = xprd/ipx;
-	    boxy = yprd/ipy;
-	    boxz = zprd/ipz;
-	    surf = boxx*boxy + boxy*boxz + boxz*boxx;
-	    if (surf < bestsurf) {
-	      bestsurf = surf;
-	      procgrid[0] = ipx;
-	      procgrid[1] = ipy;
-	      procgrid[2] = ipz;
-	    }
-	  }
-	  ipy++;
-	}
+  ipx = 1;
+  while (ipx <= nprocs) {
+    if (nprocs % ipx == 0) {
+      nremain = nprocs/ipx;
+      ipy = 1;
+      while (ipy <= nremain) {
+        if (nremain % ipy == 0) {
+          ipz = nremain/ipy;
+          boxx = xprd/ipx;
+          boxy = yprd/ipy;
+          boxz = zprd/ipz;
+          surf = boxx*boxy + boxy*boxz + boxz*boxx;
+          if (surf < bestsurf && fits(ipx,user_procgrid[0]) &&
+              fits(ipy,user_procgrid[1]) && fits(ipz,user_procgrid[2])) {
+            bestsurf = surf;
+            procgrid[0] = ipx;
+            procgrid[1] = ipy;
+            procgrid[2] = ipz;
+          }
+        }
+        ipy++;
       }
-      ipx++;
     }
+    ipx++;
   }
+  if (procgrid[0] == 0)
+    error->all(FLERR,"Processors grid does not match the number of processors");
 
   myloc[0] = me % procgrid[0];
   myloc[1] = (me/procgrid[0]) % procgrid[1];

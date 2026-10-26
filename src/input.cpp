@@ -780,9 +780,12 @@ void Input::processors()
     error->all(FLERR,"Processors command after simulation box is defined");
   if (narg != 3) error->all(FLERR,"Illegal processors command");
 
-  domain->user_procgrid[0] = atoi(arg[0]);
-  domain->user_procgrid[1] = atoi(arg[1]);
-  domain->user_procgrid[2] = atoi(arg[2]);
+  // * = let SPPARKS choose that dimension (stored as 0)
+  for (int d = 0; d < 3; d++) {
+    if (strcmp(arg[d],"*") == 0) domain->user_procgrid[d] = 0;
+    else if ((domain->user_procgrid[d] = atoi(arg[d])) <= 0)
+      error->all(FLERR,"Illegal processors command");
+  }
 }
 
 /* ---------------------------------------------------------------------- */

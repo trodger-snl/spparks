@@ -15,11 +15,12 @@
 </P>
 <PRE>processors Px Py Pz 
 </PRE>
-<UL><LI>Px,Py,Pz = # of processors in each dimension of a 3d grid 
+<UL><LI>Px,Py,Pz = # of processors in each dimension of a 3d grid, or * to let SPPARKS choose 
 </UL>
 <P><B>Examples:</B>
 </P>
-<PRE>processors 2 4 4 
+<PRE>processors 2 4 4
+processors * * 1 
 </PRE>
 <P><B>Description:</B>
 </P>
@@ -29,13 +30,17 @@ simulation box for spatial on-lattice or off-lattice models.
 <P>When this command has not been specified, SPPARKS will choose Px, Py,
 Pz based on the dimensions of the global simulation box so as to
 minimize the surface/volume ratio of each processor's sub-domain.
+A * for any of Px, Py, Pz lets SPPARKS choose that dimension the same
+way, with the others held at the given values; e.g. processors * * 1
+keeps z on one processor.
 </P>
 <P>Since SPPARKS does not load-balance by changing the grid of 3d
 processors on-the-fly, this command should be used to override the
 SPPARKS default if it is known to be sub-optimal for a particular
 problem.
 </P>
-<P>The product of Px, Py, Pz must equal P, the total # of processors
+<P>The product of Px, Py, Pz must equal P (an error otherwise; with * the
+fixed values must divide P), the total # of processors
 SPPARKS is running on.  If multiple partitions are being used then P
 is the number of processors in this partition; see <A HREF = "Section_start.html#start_6">this
 section</A> for an explanation of the -partition
@@ -53,6 +58,6 @@ which may incur extra communication costs.
 </P>
 <P><B>Default:</B>
 </P>
-<P>SPPARKS chooses Px, Py, Pz
+<P>SPPARKS chooses Px, Py, Pz (processors * * *)
 </P>
 </HTML>

@@ -266,17 +266,13 @@ void AppPottsAnneal::merge_labels(int report)
     const double qi[4] = {q0[i],qx[i],qy[i],qz[i]};
     for (int m = 0; m < numneigh[i]; m++) {
       const int j = neighbor[i][m];
-      if (phase[j] == anneal::VOID || spin[j] == spin[i]) continue;
-      if ((spin[i] <= nspins) != (spin[j] <= nspins)) continue;
+      if (!anneal::merge_counted(i,j,spin,phase,nspins)) continue;
       const double qj[4] = {q0[j],qx[j],qy[j],qz[j]};
       auto &c = local[std::make_pair(MIN(spin[i],spin[j]),MAX(spin[i],spin[j]))];
       if (quaternion::disorientation_deg(sym,nsym,qi,qj) < merge_theta) c.first++;
       c.second++;
     }
   }
-
-  // ponytail: all pairs go to rank 0 (one int quad each), fine for a
-  // one-off command; reduce by pair across ranks if that ever runs out
   std::vector<int> buf;
   buf.reserve(4*local.size());
   for (auto &e : local) {
@@ -285,6 +281,26 @@ void AppPottsAnneal::merge_labels(int report)
     buf.push_back(e.second.first);
     buf.push_back(e.second.second);
   }
+
+  std::unordered_map<int,int> root;
+  const std::vector<int> map = merge_resolve(buf,report);
+  for (size_t k = 0; k < map.size(); k += 2) root[map[k]] = map[k+1];
+  for (int i = 0; i < nlocal + nghost; i++) {
+    auto it = root.find(spin[i]);
+    if (it != root.end()) spin[i] = it->second;
+  }
+}
+
+/* ----------------------------------------------------------------------
+   the merges from this rank's label pairs (a, b, bonds below theta, all
+   bonds; a pair may repeat): gathered, union-find on rank 0, returned on
+   every rank as (label, root) pairs sorted by label
+------------------------------------------------------------------------- */
+
+std::vector<int> AppPottsAnneal::merge_resolve(const std::vector<int> &buf, int report)
+{
+  // ponytail: all pairs go to rank 0 (one int quad each), fine every N
+  // MCS; reduce by pair across ranks if that ever runs out
   int n = buf.size();
   std::vector<int> counts(nprocs), displs(nprocs);
   MPI_Gather(&n,1,MPI_INT,counts.data(),1,MPI_INT,0,world);
@@ -334,13 +350,6 @@ void AppPottsAnneal::merge_labels(int report)
   map.resize(nmap);
   MPI_Bcast(map.data(),nmap,MPI_INT,0,world);
 
-  std::unordered_map<int,int> root;
-  for (int k = 0; k < nmap; k += 2) root[map[k]] = map[k+1];
-  for (int i = 0; i < nlocal + nghost; i++) {
-    auto it = root.find(spin[i]);
-    if (it != root.end()) spin[i] = it->second;
-  }
-
   if (report && me == 0) {
     char str[128];
     snprintf(str,128,"  %d labels merged into %d (disorientation < %g)\n",
@@ -348,6 +357,7 @@ void AppPottsAnneal::merge_labels(int report)
     if (screen) fputs(str,screen);
     if (logfile) fputs(str,logfile);
   }
+  return map;
 }
 
 /* ----------------------------------------------------------------------

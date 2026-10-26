@@ -146,6 +146,9 @@ typedef int bigint;
 //     (QuaternionOps::compute_disorientation / read_shockley), device and
 //     host, in KK_FLOAT; the per-site energy sums in KK_ACC_FLOAT. Stored
 //     quaternions, symmetry table and global energy totals stay double.
+//   - potts/anneal/kk sweep: disorientation + Read-Shockley in KK_FLOAT,
+//     the energy change in KK_ACC_FLOAT (anneal::ParamsT); stored
+//     orientations, H and the label-merge disorientations stay double.
 
 #if !defined(SPPARKS_KOKKOS_SINGLE_SINGLE) && !defined(SPPARKS_KOKKOS_DOUBLE_DOUBLE) \
   && !defined(SPPARKS_KOKKOS_SINGLE_DOUBLE)

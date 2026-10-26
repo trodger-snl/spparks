@@ -45,12 +45,14 @@ class AppPottsAnnealKokkos : public LatticeKokkos<AppPottsAnneal> {
   // define device lambdas, so public (nvcc)
   void sweep_color_kokkos(int, int, int) override;
   void app_update(double) override;
+  void merge_labels_device();
 
   using IView = Kokkos::View<int*>;
   using DView = Kokkos::View<double*>;
   IView d_spin, d_phase, d_seed, d_next;
   DView d_q0, d_qx, d_qy, d_qz, d_h;
   DView d_sym, d_orient;
+  Kokkos::View<KK_FLOAT*> d_symk;   // d_sym in the sweep's precision
   Kokkos::View<tagint*> d_id;
 
   anneal::Sites<IView, DView> device_sites() const

@@ -199,32 +199,37 @@ QOPS_FN void rotate_q_towards_u(const double *q, const double *u, double angle,
 // Disorientation angle (degrees) of unit quaternions q1, q2 under the nsym
 // symmetry quaternions sym[4*k]: d = conj(q2) q1 once, the symmetry with the
 // largest |d . s|, then the angle from that misorientation's vector part
-// (atan2 keeps small angles that acos would lose). Double precision.
-QOPS_FN double disorientation_deg(const double *sym, int nsym, const double *q1,
-                                  const double *q2) {
-  double c[4], d[4];
-  conjugate(q2, c);
-  composition(c, q1, d);
-  double best = -1.0;
+// (atan2 keeps small angles that acos would lose). In the precision T of
+// the arguments (KK_FLOAT in kk kernels); for double, the arithmetic of
+// conjugate + composition exactly.
+template <class T>
+QOPS_FN T disorientation_deg(const T *sym, int nsym, const T *q1, const T *q2) {
+  const T c[4] = {q2[0], -q2[1], -q2[2], -q2[3]};
+  const T d[4] = {c[0] * q1[0] - (c[1] * q1[1] + c[2] * q1[2] + c[3] * q1[3]),
+                  c[0] * q1[1] + q1[0] * c[1] + (c[2] * q1[3] - c[3] * q1[2]),
+                  c[0] * q1[2] + q1[0] * c[2] - (c[1] * q1[3] - c[3] * q1[1]),
+                  c[0] * q1[3] + q1[0] * c[3] + (c[1] * q1[2] - c[2] * q1[1])};
+  T best = T(-1);
   int ib = 0;
   for (int k = 0; k < nsym; k++) {
-    const double *s = &sym[4 * k];
-    const double m0 = fabs(d[0] * s[0] + d[1] * s[1] + d[2] * s[2] + d[3] * s[3]);
+    const T *s = &sym[4 * k];
+    const T m0 = fabs(d[0] * s[0] + d[1] * s[1] + d[2] * s[2] + d[3] * s[3]);
     if (m0 > best) { best = m0; ib = k; }
   }
-  const double *s = &sym[4 * ib];
-  const double vx = s[0] * d[1] - d[0] * s[1] - (s[2] * d[3] - s[3] * d[2]);
-  const double vy = s[0] * d[2] - d[0] * s[2] + (s[1] * d[3] - s[3] * d[1]);
-  const double vz = s[0] * d[3] - d[0] * s[3] - (s[1] * d[2] - s[2] * d[1]);
-  return 2.0 * atan2(sqrt(vx * vx + vy * vy + vz * vz), best) * (180.0 / M_PI);
+  const T *s = &sym[4 * ib];
+  const T vx = s[0] * d[1] - d[0] * s[1] - (s[2] * d[3] - s[3] * d[2]);
+  const T vy = s[0] * d[2] - d[0] * s[2] + (s[1] * d[3] - s[3] * d[1]);
+  const T vz = s[0] * d[3] - d[0] * s[3] - (s[1] * d[2] - s[2] * d[1]);
+  return T(2) * atan2(sqrt(vx * vx + vy * vy + vz * vz), best) * T(180.0 / M_PI);
 }
 
 // Read-Shockley boundary energy, r (1 - ln r) for r = theta/theta_cut < 1,
 // else 1
-QOPS_FN double read_shockley(double theta, double theta_cut) {
-  const double r = theta / theta_cut;
-  if (r <= 0.0) return 0.0;
-  return r < 1.0 ? r * (1.0 - log(r)) : 1.0;
+template <class T>
+QOPS_FN T read_shockley(T theta, T theta_cut) {
+  const T r = theta / theta_cut;
+  if (r <= T(0)) return T(0);
+  return r < T(1) ? r * (T(1) - log(r)) : T(1);
 }
 
 } // namespace quaternion

@@ -145,6 +145,11 @@ falls back to the host path.
   (`d_active_flag`/`d_xyz`), not host loops. Cached `d_xyz` must be built
   layout-correctly (host `xyz` is row-major `[nall][3]`; a LayoutLeft device View
   misreads it — use `ensure_device_xyz()`).
+- **Precision:** every new or ported kk app should consider `KOKKOS_PREC`
+  (`KK_FLOAT` math / `KK_ACC_FLOAT` sums, `src/spktype.h`) for its hot
+  kernel; gfx1151 runs FP64 at a small fraction of FP32 (potts/anneal/kk:
+  ~4.5x from mixed). Keep stored state double, keep double bit-identical to
+  the CPU, list the app in spktype.h's "Current users".
 - **CUDA portability:** a member function that defines a `KOKKOS_LAMBDA` /
   `KOKKOS_CLASS_LAMBDA` must be **public**. nvcc rejects device lambdas in
   private or protected members; HIP and OpenMP accept them, so local builds never

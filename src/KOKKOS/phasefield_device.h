@@ -20,6 +20,7 @@
 
 #include <Kokkos_Core.hpp>
 #include "phasefield_models.h"
+#include "spktype.h"
 #include <utility>
 #include <vector>
 
@@ -28,7 +29,9 @@ namespace SPPARKS_NS {
 // The fields of an AppPhaseField on the device and one model step over them
 // (AppPhaseField::step_fields), for phasefield/kk and phasefield/potts(/table)/kk.
 struct PFDevice {
-  using Ctx = PFCtx<Kokkos::View<int**>, Kokkos::View<double*>, Kokkos::View<int*>>;
+  // aux() and update() in KOKKOS_PREC; the fields stay double
+  using Ctx = PFCtx<Kokkos::View<int**>, Kokkos::View<double*>, Kokkos::View<int*>,
+                    KK_FLOAT, KK_ACC_FLOAT>;
   Kokkos::View<double*> f[PF_MAXF], fnew[PF_MAXF], aux[PF_MAXA];
   Kokkos::View<int*> phase;
   Kokkos::View<double*> tab;

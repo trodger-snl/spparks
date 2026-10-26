@@ -85,6 +85,14 @@ estimate of the explicit stability limit for the model.
 same dt it reproduces style <I>phasefield</I> bit for bit when the host and
 device floating-point arithmetic agree (e.g. strict builds).
 </P>
+<P>Built with KOKKOS_PREC=mixed or single, the kk style computes the field
+step (the model's rates, stencils and table lookups) in single
+precision, with sums in double for mixed; the fields and their
+increments stay double.
+The field step is limited by memory bandwidth, not arithmetic, so this
+is not faster: on an AMD gfx1151 GPU at 256^3 mixed and single run at
+0.8x to 1.1x the double speed.
+</P>
 <P>The lattice must be line/2n, sq/4n, sq/8n, sc/6n or sc/26n, and all
 boundaries periodic.
 </P>

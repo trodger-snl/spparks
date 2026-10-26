@@ -31,6 +31,7 @@
 #define SPK_FD_STENCIL_H
 
 #include <stddef.h>
+#include <type_traits>
 
 #if defined(SPK_KOKKOS) && __has_include(<Kokkos_Macros.hpp>)
 #include <Kokkos_Macros.hpp>
@@ -59,24 +60,33 @@ struct FDStencil {
   template <class N>
   FD_FN int nb(const N &nbr, int i, int k) const { return nbr((size_t) i, cmap[k]); }
 
-  // Laplacian of f at site i
-  template <class N, class F>
-  FD_FN double lap(const N &nbr, const F &f, int i) const {
-    double s = 0.0;
-    for (int k = 0; k < 2 * dim; k++) s += f[nb(nbr, i, k)];
-    return (s - 2.0 * dim * f[i]) * inv_h2;
+  // Laplacian of f at site i, in R with the sum in A (KOKKOS_PREC). Below
+  // double, the neighbour differences are taken from the stored doubles
+  // first, as sum f_j - 2d f_i would cancel in float (T ~ 1e3: ~1e-4 K)
+  template <class R = double, class A = R, class N, class F>
+  FD_FN R lap(const N &nbr, const F &f, int i) const {
+    if constexpr (std::is_same<R, double>::value) {
+      double s = 0.0;
+      for (int k = 0; k < 2 * dim; k++) s += f[nb(nbr, i, k)];
+      return (s - 2.0 * dim * f[i]) * inv_h2;
+    } else {
+      const double fi = f[i];
+      A s = 0;
+      for (int k = 0; k < 2 * dim; k++) s += R(f[nb(nbr, i, k)] - fi);
+      return R(s * A(inv_h2));
+    }
   }
 
   // div(k grad f) at site i, k at each face the mean of its two sites:
   // conservative (each face's flux leaves one site and enters the other)
-  template <class N, class F, class K>
-  FD_FN double div_k_grad(const N &nbr, const F &f, const K &k, int i) const {
-    double s = 0.0;
+  template <class R = double, class A = R, class N, class F, class K>
+  FD_FN R div_k_grad(const N &nbr, const F &f, const K &k, int i) const {
+    A s = 0;
     for (int m = 0; m < 2 * dim; m++) {
       const int j = nb(nbr, i, m);
-      s += 0.5 * (k[i] + k[j]) * (f[j] - f[i]);
+      s += R(0.5) * (k[i] + k[j]) * R(f[j] - f[i]);
     }
-    return s * inv_h2;
+    return R(s * A(inv_h2));
   }
 
   // site i's half of |grad f|^2 over its bonds: summed over all sites it is

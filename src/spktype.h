@@ -149,6 +149,12 @@ typedef int bigint;
 //   - potts/anneal/kk sweep: disorientation + Read-Shockley in KK_FLOAT,
 //     the energy change in KK_ACC_FLOAT (anneal::ParamsT); stored
 //     orientations, H and the label-merge disorientations stay double.
+//   - phasefield/kk, phasefield/potts(/table)/kk field step: the models'
+//     aux() and update() (phasefield_models.h, fd_stencil.h) in KK_FLOAT,
+//     stencil and order-parameter sums in KK_ACC_FLOAT. Fields, aux fields
+//     and the step's increments to them stay double; below double the
+//     stencil takes neighbour differences from the doubles first (sum f_j -
+//     2d f_i cancels in float). The Potts events and energies stay double.
 
 #if !defined(SPPARKS_KOKKOS_SINGLE_SINGLE) && !defined(SPPARKS_KOKKOS_DOUBLE_DOUBLE) \
   && !defined(SPPARKS_KOKKOS_SINGLE_DOUBLE)

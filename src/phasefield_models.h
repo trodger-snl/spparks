@@ -65,45 +65,47 @@ struct PFParams {
 namespace pftable {
 
 // bilinear interpolation in (T,c); dflag = 1 -> dG/dc. T outside the table
-// extrapolates linearly from the edge cells.
-FD_FN double lookup(const PFPhaseTable &p, const double *tab,
-                    double c, double T, int dflag, double penalty)
+// extrapolates linearly from the edge cells. Weights in R, the table value
+// plus its increments in A (KOKKOS_PREC; the field step's precision)
+template <class R = double, class A = R>
+FD_FN A lookup(const PFPhaseTable &p, const double *tab,
+               double c, double T, int dflag, double penalty)
 {
-  double excess = c < 0.0 ? c : (c > 1.0 ? c - 1.0 : 0.0);
-  if (excess != 0.0 && dflag) return 2.0 * penalty * excess;
+  const R excess = R(c < 0.0 ? c : (c > 1.0 ? c - 1.0 : 0.0));
+  if (excess != R(0) && dflag) return R(2.0 * penalty) * excess;
 
-  double x = (T - p.t0) * p.inv_dt;
+  const R x = R(T - p.t0) * R(p.inv_dt);
   int iT = (int) x;
   if (iT < 0) iT = 0;
   if (iT > p.nrow - 2) iT = p.nrow - 2;
-  double fT = x - iT;
+  const R fT = x - R(iT);
 
   const double *m = tab + (dflag ? p.dg : p.g) + iT * p.ncol;
-  if (excess != 0.0) {
+  if (excess != R(0)) {
     int iC = c < 0.0 ? 0 : p.ncol - 1;
-    return m[iC] + fT * (m[iC + p.ncol] - m[iC]) + penalty * excess * excess;
+    return A(m[iC]) + fT * R(m[iC + p.ncol] - m[iC]) + R(penalty) * excess * excess;
   }
 
-  double y = c * p.inv_dc;
+  const R y = R(c) * R(p.inv_dc);
   int iC = (int) y;
   if (iC < 0) iC = 0;            // c = NaN passes both range tests
   if (iC > p.ncol - 2) iC = p.ncol - 2;
-  double fC = y - iC;
+  const R fC = y - R(iC);
   const double *n = m + p.ncol;
-  return m[iC] + fT * (n[iC] - m[iC]) + fC * (m[iC + 1] - m[iC]) +
-         fC * fT * (m[iC] - n[iC] - m[iC + 1] + n[iC + 1]);
+  return A(m[iC]) + fT * R(n[iC] - m[iC]) + fC * R(m[iC + 1] - m[iC]) +
+         fC * fT * R(m[iC] - n[iC] - m[iC + 1] + n[iC + 1]);
 }
 
 // chemical potential mu = dG/dc - kappa lap(c); valid where the axis
 // neighbours exist (owned sites, ghosts with full neighbour lists)
-template <class N, class P, class D>
-FD_FN double chem_potential(const FDStencil &st, const N &nbr, const P &phase,
-                            const D &c, const D &T, int i,
-                            const PFPhaseTable *pt, const double *tab,
-                            const PFParams &q)
+template <class R = double, class A = R, class N, class P, class D>
+FD_FN A chem_potential(const FDStencil &st, const N &nbr, const P &phase,
+                       const D &c, const D &T, int i,
+                       const PFPhaseTable *pt, const double *tab,
+                       const PFParams &q)
 {
-  return lookup(pt[phase[i]], tab, c[i], T[i], 1, q.penalty) -
-         q.ch_energy * st.lap(nbr, c, i);
+  return lookup<R, A>(pt[phase[i]], tab, c[i], T[i], 1, q.penalty) -
+         R(q.ch_energy) * st.template lap<R, A>(nbr, c, i);
 }
 
 // one explicit step of the coupled composition / heat equations at site i:
@@ -111,23 +113,24 @@ FD_FN double chem_potential(const FDStencil &st, const N &nbr, const P &phase,
 //   Cp dT/dt = 2 M Q* lap(mu) + k lap(T)
 // div(grad T / T) in flux form (1/T averaged onto faces), so composition is
 // conserved exactly. Returns flag bits: 1 = c left [0,1], 2 = T reached 0.
-template <class D> struct Inverse {
+template <class D, class R = double> struct Inverse {
   D f;
-  FD_FN double operator[](int s) const { return 1.0 / f[s]; }
+  FD_FN R operator[](int s) const { return R(1.0) / R(f[s]); }
 };
 
-template <class N, class D>
+// the rates in R (sums in A), added to the stored double c and T
+template <class R = double, class A = R, class N, class D>
 FD_FN int step(const FDStencil &st, const N &nbr, const D &c, const D &T,
                const D &mu, int i, const PFParams &q, double &cnew, double &Tnew)
 {
-  double lapmu = st.lap(nbr, mu, i);
-  double lapT = st.lap(nbr, T, i);
-  double Ti = T[i];
-  double soret = st.div_k_grad(nbr, T, Inverse<D>{T}, i);
+  const R lapmu = st.template lap<R, A>(nbr, mu, i);
+  const R lapT = st.template lap<R, A>(nbr, T, i);
+  const double Ti = T[i];
+  const R soret = st.template div_k_grad<R, A>(nbr, T, Inverse<D, R>{T}, i);
 
-  cnew = c[i] + q.dt * q.mobility * (2.0 * lapmu + q.heat_of_transport * soret);
+  cnew = c[i] + q.dt * q.mobility * double(R(2.0) * lapmu + R(q.heat_of_transport) * soret);
   Tnew = Ti + (q.dt / q.specific_heat) *
-              (2.0 * q.mobility * q.heat_of_transport * lapmu + q.conductivity * lapT);
+              double(R(2.0 * q.mobility * q.heat_of_transport) * lapmu + R(q.conductivity) * lapT);
 
   int flag = 0;
   if (q.enforce) cnew = cnew > 1.0 ? 1.0 : (cnew < 0.0 ? 0.0 : cnew);
@@ -146,9 +149,13 @@ void pack_tables(SPPARKS_NS::Error *, SPPARKS_NS::Table **, int n, double scale_
 #define PF_MAXF 32
 #define PF_MAXA 1
 
-// what a model sees at a site
-template <class N, class D, class I>
+// what a model sees at a site; aux() and update() compute in real with sums
+// in acc (KK_FLOAT / KK_ACC_FLOAT on the device), the stored fields and
+// their increments stay double
+template <class N, class D, class I, class R = double, class A = R>
 struct PFCtx {
+  using real = R;
+  using acc = A;
   FDStencil st;
   N nbr;
   D f[PF_MAXF];                 // fields d1..dN
@@ -171,9 +178,11 @@ struct PFAllenCahn {
   template <class C> FD_FN void aux(const C &, int, double *) const {}
 
   template <class C> FD_FN int update(const C &x, int i, double *out) const {
-    const double p = x.f[0][i];
-    const double fp = 2.0 * W * p * (1.0 - p) * (1.0 - 2.0 * p);
-    out[0] = p - dt * L * (fp - kappa * x.st.lap(x.nbr, x.f[0], i));
+    using R = typename C::real;
+    const R p = x.f[0][i];
+    const R fp = R(2.0 * W) * p * (R(1.0) - p) * (R(1.0) - R(2.0) * p);
+    out[0] = x.f[0][i] -
+             dt * L * double(fp - R(kappa) * x.st.template lap<R, typename C::acc>(x.nbr, x.f[0], i));
     return 0;
   }
 
@@ -200,13 +209,15 @@ struct PFCahnHilliard {
   int nfield() const { return 1; }
 
   template <class C> FD_FN void aux(const C &x, int i, double *a) const {
-    const double c = x.f[0][i];
-    a[0] = 2.0 * W * c * (1.0 - c) * (1.0 - 2.0 * c) -
-           kappa * x.st.lap(x.nbr, x.f[0], i);
+    using R = typename C::real;
+    const R c = x.f[0][i];
+    a[0] = R(2.0 * W) * c * (R(1.0) - c) * (R(1.0) - R(2.0) * c) -
+           R(kappa) * x.st.template lap<R, typename C::acc>(x.nbr, x.f[0], i);
   }
 
   template <class C> FD_FN int update(const C &x, int i, double *out) const {
-    out[0] = x.f[0][i] + dt * M * x.st.lap(x.nbr, x.a[0], i);
+    using R = typename C::real;
+    out[0] = x.f[0][i] + dt * M * double(x.st.template lap<R, typename C::acc>(x.nbr, x.a[0], i));
     return 0;
   }
 
@@ -238,12 +249,18 @@ struct PFGrainGrowth {
   template <class C> FD_FN void aux(const C &, int, double *) const {}
 
   template <class C> FD_FN int update(const C &x, int i, double *out) const {
-    double sum2 = 0.0;
-    for (int k = 0; k < n; k++) sum2 += x.f[k][i] * x.f[k][i];
+    using R = typename C::real;
+    using A = typename C::acc;
+    A sum2 = 0;
     for (int k = 0; k < n; k++) {
-      const double e = x.f[k][i];
-      const double fp = -alpha * e + beta * e * e * e + 2.0 * gamma * e * (sum2 - e * e);
-      out[k] = e - dt * L * (fp - kappa * x.st.lap(x.nbr, x.f[k], i));
+      const R e = x.f[k][i];
+      sum2 += e * e;
+    }
+    for (int k = 0; k < n; k++) {
+      const R e = x.f[k][i];
+      const R fp = -R(alpha) * e + R(beta) * e * e * e + R(2.0 * gamma) * e * R(sum2 - e * e);
+      out[k] = x.f[k][i] -
+               dt * L * double(fp - R(kappa) * x.st.template lap<R, A>(x.nbr, x.f[k], i));
     }
     return 0;
   }
@@ -278,12 +295,13 @@ struct PFCHHeat {
   int nfield() const { return 2; }
 
   template <class C> FD_FN void aux(const C &x, int i, double *a) const {
-    a[0] = pftable::chem_potential(x.st, x.nbr, x.phase, x.f[0], x.f[1], i,
-                                   x.pt, x.tab, q);
+    a[0] = pftable::chem_potential<typename C::real, typename C::acc>(
+      x.st, x.nbr, x.phase, x.f[0], x.f[1], i, x.pt, x.tab, q);
   }
 
   template <class C> FD_FN int update(const C &x, int i, double *out) const {
-    return pftable::step(x.st, x.nbr, x.f[0], x.f[1], x.a[0], i, q, out[0], out[1]);
+    return pftable::step<typename C::real, typename C::acc>(
+      x.st, x.nbr, x.f[0], x.f[1], x.a[0], i, q, out[0], out[1]);
   }
 
   // bulk free energy of site i in phase p (Potts events try other phases)
@@ -323,16 +341,20 @@ struct PFTwoPhase {
     const double d = p == 0 ? c - c3 : c4 - c;
     return gamma * ((c - c1) * (c - c1) + (c2 - c) * (c2 - c)) + a * d * d;
   }
-  FD_FN double df(double c, int p) const {
-    return 2.0 * gamma * (2.0 * c - c1 - c2) + 2.0 * a * (p == 0 ? c - c3 : c - c4);
+  // differences of c in double, the rest in R
+  template <class R> FD_FN R df(double c, int p) const {
+    return R(2.0 * gamma) * R(2.0 * c - c1 - c2) + R(2.0 * a) * R(p == 0 ? c - c3 : c - c4);
   }
 
   template <class C> FD_FN void aux(const C &x, int i, double *out) const {
-    out[0] = df(x.f[0][i], x.phase[i]) - kappa * x.st.lap(x.nbr, x.f[0], i);
+    using R = typename C::real;
+    out[0] = df<R>(x.f[0][i], x.phase[i]) -
+             R(kappa) * x.st.template lap<R, typename C::acc>(x.nbr, x.f[0], i);
   }
 
   template <class C> FD_FN int update(const C &x, int i, double *out) const {
-    double c = x.f[0][i] + dt * M * x.st.lap(x.nbr, x.a[0], i);
+    using R = typename C::real;
+    double c = x.f[0][i] + dt * M * double(x.st.template lap<R, typename C::acc>(x.nbr, x.a[0], i));
     int flag = 0;
     if (enforce) c = c > 1.0 ? 1.0 : (c < 0.0 ? 0.0 : c);
     else if (c > 1.0 || c < 0.0) flag = 1;

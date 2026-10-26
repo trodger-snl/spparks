@@ -11,7 +11,8 @@ laser pose; a `MoserTemperatureSource` subclass) and
 Examples in `examples/conduction_am/`: `in.single_track`; `in.thin_wall`
 (four layers, one `laser_path` per layer, ported from am/finitediff's
 ThinWall); `in.large_rectangle` (am/finitediff's LargerRectangle raster path
-through `laser_path file`).
+through `laser_path file`); `in.thin_wall.ded` (`in.thin_wall` as directed
+energy deposition, see *DED*).
 
 ## Syntax
 
@@ -67,6 +68,7 @@ per-move speed).
 | `plate_growth d` | `i2 = 6` may reach `d` above `plate_top` (m) | 0 |
 | `far_bc fixed\|adiabatic` | outer faces of the thermal domain | fixed at `T0` |
 | `sts s` | RKL2 stages per laser-off super-step; 0 = explicit only | 32 |
+| `ded [radius r] [T_birth T] [depth d]` | directed energy deposition (see *DED*) | off; r = 2 sx, T = T0, d = layer step |
 
 Not supported (errors): the CPU app (`additive/texture`), `keyhole`,
 `laser_fluctuations`, `temperature_smooth`, periodic boundaries, splitting z
@@ -105,6 +107,33 @@ in `processors`.
   plate's liquidus and solidifies back to 6; above, to 3. One
   solid_front_vel law for both. Fast-forward and the layer end use the lower
   of the two liquidus/solidus values (`ThermalHost` tl/ts).
+- **DED** (`ded`). No powder bed:
+  - Outside the box, the cells powder would fill (`layer_thickness`,
+    non-`part`) are gas instead. `layer_thickness` and `packing` are errors
+    with `ded`.
+  - Inside the box, i2 = 0/1 cells are `POWDER | UNBORN` (phase bit 16).
+    Until born, a cell is gas: it is not updated, takes no source energy,
+    and its neighbours' faces toward it get convection + radiation.
+  - A cell is born in the explicit step when three things hold: the laser
+    is on, the beam axis is within `radius` of the cell centre, and the
+    centre lies less than `depth` below the source plane. It becomes plain
+    POWDER at `T_birth` (H = H(T_birth)), so from the next sub-step it
+    conducts at `k_powder` and melts to dense at the liquidus. The pool
+    pays the added powder's heat and melt, which is blown powder's
+    thermal sink.
+  - Birth follows the path, sub-step by sub-step. It is not layer-wise:
+    switching on a whole layer would put heat capacity and conduction
+    ahead of the beam, and leave the free surface in the wrong place.
+  - The captured mass rate is set by the bead layout: i2 = 0 inside a box
+    that is otherwise i2 = 5 above the substrate.
+  - Beam shadowing by the powder cloud and in-flight heating fold into
+    `lambda` and `T_birth`.
+  - The grid rebuild re-reads phases from i2, so born powder that never
+    melted is unborn again at the next layer: powder that didn't stick.
+    The default `depth` is the laser plane's rise since the previous build
+    (unlimited on the first), so it is not born a second time.
+  - Not modelled: forced convection from the nozzle jet varying in space
+    (Heigel et al. 2015). A constant `convection h` stands in.
 - **Density.** One ρ (from `k`, `alpha`, `cp`) for every phase: give the
   dense value, and make the model layer the consolidated thickness (the path
   z step). Melting t of powder then takes the same energy as the real t/φ of
@@ -334,6 +363,33 @@ fluxes only gives 7.9 s on the same step.
 Cost: `in.single_track` (0.8 M cells, about 4,000 sub-steps) runs in about 4 s
 on one gfx1151. With RKL2 the remaining cost is mostly the explicit steps
 while the laser is on.
+
+**DED** (2026-10-26, `in.thin_wall.ded`, FP64; i2 = 3 sites above the
+substrate after four layers; median wall width per z slice):
+
+| Deck | Solid above substrate | Remelted substrate | Wall width |
+|---|---|---|---|
+| `in.thin_wall` (powder bed) | 36,474 | 412 | 12 sites (60 µm) |
+| `in.thin_wall.ded` (r = 2 sx, T_birth T0) | 36,364 | 417 | 12 sites |
+| `ded T_birth 1700` | 74,324 | 947 | 20 = the whole bead slab |
+| `ded radius 59.4e-6` (1 sx) | 27,790 | 276 | 8–10 sites |
+
+- **DED vs powder bed: almost no difference.** The bead's powder heat sink is
+  present in both. The LPBF powder at k = 0.3 conducts almost nothing
+  sideways, so swapping it for gas surfaces barely changes the pool. DED's
+  thermal signature comes from the added mass, which LPBF powder also
+  carries. A side-surface difference would need a hotter, taller wall, or
+  real convection from the nozzle jet.
+- **`T_birth` matters.** Powder born at 1700 K melts the whole slab: the
+  bead layout then caps the wall.
+- **The birth radius matters.** Beam energy that falls on unborn cells is
+  lost, so 1 sx (37 % of the Gaussian outside the radius) shrinks the
+  pool. Keep the radius at 2 sx or more.
+- **Determinism.** Per-site d6 is identical (all 5 frames of the last
+  layer) for HIP np 1 vs 2×2×1, OpenMP np 1 vs 2×2×1, and HIP vs OpenMP.
+- **No regression.** The decks without `ded` (`in.single_track`,
+  `in.thin_wall`) give stats and dumps bit-identical to the pre-change
+  binary.
 
 ## Possible next steps
 - Keyhole lobes and fluctuations: sample the second lobe and `fluct_*` per sub-step.

@@ -35,7 +35,7 @@ setup_temperature_source conduction card overrides keyword values ...
 
 <LI>zero or more keyword/value pairs may be appended 
 
-<LI>keyword = <I>k_table</I> or <I>cp_table</I> or <I>latent</I> or <I>k_powder</I> or <I>convection</I> or <I>emissivity</I> or <I>margin</I> or <I>plate</I> or <I>stretch</I> or <I>max_cell</I> or <I>part</I> or <I>layer_thickness</I> or <I>packing</I> or <I>plate_top</I> or <I>plate_material</I> or <I>plate_growth</I> or <I>far_bc</I> or <I>sts</I> 
+<LI>keyword = <I>k_table</I> or <I>cp_table</I> or <I>latent</I> or <I>k_powder</I> or <I>convection</I> or <I>emissivity</I> or <I>margin</I> or <I>plate</I> or <I>stretch</I> or <I>max_cell</I> or <I>part</I> or <I>layer_thickness</I> or <I>packing</I> or <I>plate_top</I> or <I>plate_material</I> or <I>plate_growth</I> or <I>far_bc</I> or <I>sts</I> or <I>ded</I> 
 
 <PRE>  <I>k_table</I> values = n T1 k1 ... Tn kn
     dense conductivity k(T), piecewise linear, held at the end values (K, W/(m K))
@@ -72,7 +72,12 @@ setup_temperature_source conduction card overrides keyword values ...
   <I>far_bc</I> value = <I>fixed</I> or <I>adiabatic</I>
     outer faces of the thermal domain held at T0, or insulated
   <I>sts</I> value = s
-    RKL2 stages per laser-off super-step, 0 = explicit steps only, or >= 2 
+    RKL2 stages per laser-off super-step, 0 = explicit steps only, or >= 2
+  <I>ded</I> values = zero or more sub-keyword/value pairs
+    directed energy deposition: no powder bed, laser-deposited material
+    <I>radius</I> value = r = birth radius around the laser axis (m)
+    <I>T_birth</I> value = T = temperature of newly deposited material (K)
+    <I>depth</I> value = d = births reach d below the laser plane (m) 
 </PRE>
 
 </UL>
@@ -88,6 +93,9 @@ setup_temperature_source conduction card overrides keyword values ...
 <PRE>material ../../materials/316L.toml process single_track_340W
 setup_temperature_source conduction card margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 &
     part part plate_top -0.2e-3 far_bc fixed 
+</PRE>
+<PRE>setup_temperature_source conduction card margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 &
+    part plate far_bc fixed ded T_birth 600 
 </PRE>
 <PRE>material ../../materials/Ti6Al4V.toml
 set i2 value 6 region substrate
@@ -154,6 +162,22 @@ instead gives powder cells f*rho, kept after they melt.  The microstructure
 model does not shrink melted powder, so <I>packing</I> below 1 is for
 single-layer tests only.
 </P>
+<P><B>Directed energy deposition.</B>  With <I>ded</I> there is no powder bed.
+Outside the box, cells that powder would fill are gas instead.  Inside
+it, sites with <I>i2</I> = 0 or 1 are unborn: they are gas, take no laser
+energy and are not updated, and the faces next to them lose heat like
+faces next to gas.  An unborn cell is born, as powder at <I>T_birth</I>, when
+the laser is on, its axis passes within <I>radius</I> of the cell centre, and
+the centre lies less than <I>depth</I> below the laser plane.  From then on it
+is ordinary powder (<I>k_powder</I>, melts to dense at the liquidus), so the
+pool pays to heat and melt the added material.  Lay out the bead as
+<I>i2</I> = 0 in a box that is otherwise <I>i2</I> = 5 above the substrate.  Laser
+energy that falls on unborn or gas cells is lost, so <I>radius</I> should
+cover the beam.  At the next layer the phases are re-read from <I>i2</I>, so
+born material that never melted is unborn again; <I>depth</I> keeps it from
+being born a second time.  Born cells are born along the path, not a
+layer at a time.
+</P>
 <P><B>Losses.</B>  Faces next to gas, and the top face, lose heat by convection
 and radiation to T_inf.  The outer faces of the thermal domain are held
 at T0 or insulated (<I>far_bc</I>).
@@ -199,7 +223,9 @@ z (use processors * * 1).
 k/100, convection h = 0 (T_inf = 300), emissivity = 0, margin = 0, plate
 = 0, stretch = 1.25, max_cell = none, part = whole domain dense,
 layer_thickness = 0, packing = 1, plate_top = box bottom, plate_material
-= none, plate_growth = 0, far_bc = fixed, sts = 32.  With a material card loaded, none of these material
+= none, plate_growth = 0, far_bc = fixed, sts = 32, ded off (when on: radius = 2 sx, T_birth
+= T0, depth = the rise of the laser plane since the previous layer,
+unlimited for the first).  With a material card loaded, none of these material
 defaults (latent, k_powder, convection, emissivity, layer_thickness) is
 used: each must come from the card or the command.
 </P>

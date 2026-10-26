@@ -77,6 +77,12 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
       std::string name;
     } plate_mat;
     double plate_growth = 0.0;          // i2 = 6 reaches plate_top + this (m)
+    // ded: no powder bed. Non-part cells are gas; i2 = 0/1 cells are unborn
+    // (gas) until the laser axis passes within ded_radius, then powder at T_birth.
+    bool   ded = false;
+    double ded_radius = -1.0;           // m; default 2 sx
+    double T_birth = -1.0;              // K; default T0
+    double ded_depth = -1.0;            // m below the source plane; default the layer step
   };
   const Config &config() const { return cfg; }
 

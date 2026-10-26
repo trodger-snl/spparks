@@ -195,6 +195,10 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   // put the upper tail of the Gaussian outside the grid; anchor it at the
   // free surface instead so the absorbed power is all deposited.
   zsrc = std::min(zl, az.hi.back());
+  // ded: birth reaches one layer below the plane (the rise since the last
+  // build; unlimited on the first) unless depth is given
+  if (cfg.ded_depth > 0.0) birth_depth = cfg.ded_depth;
+  else if (built && zl > built_zl) birth_depth = zl - built_zl;
 
   const int *pg = domain->procgrid, *ml = domain->myloc;
   edge[0] = ml[0] == 0;  edge[1] = ml[0] == pg[0] - 1;
@@ -266,10 +270,12 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
           const double xc = 0.5 * (ax.lo[cx] + ax.hi[cx]);
           const double yc = 0.5 * (ay.lo[cy] + ay.hi[cy]);
           const double zc = 0.5 * (az.lo[k] + az.hi[k]);
+          // ded: no powder bed, the part stands in gas
+          const unsigned char bed = cfg.ded ? GAS : POWDER;
           if (zc < plate_top) p = plate_on ? (DENSE | PLATE) : DENSE;
-          else if (zc > zl - cfg.layer_thickness) p = POWDER;
+          else if (zc > zl - cfg.layer_thickness) p = bed;
           else if (!part || part->match(xc / dx, yc / dx, zc / dx)) p = DENSE;
-          else p = POWDER;
+          else p = bed;
         }
         hP(i, j, k) = p;
       }
@@ -289,11 +295,13 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
       // Inside the box i2 alone decides, at every depth: melted (2, 3) is
       // dense, never melted (0, 1) is powder, 5 is gas. So the part's walls
       // are wherever the pools melted, rough as they are. A substrate must be
-      // loaded as i2 = 3, or as i2 = 6 to take the plate material.
+      // loaded as i2 = 3, or as i2 = 6 to take the plate material. Under ded
+      // never-melted sites are unborn: gas until the laser deposits them.
       const int af = haf(s);
       if (af == 6 && !(plate_on && hx(s, 2) * dx < zplate)) bad6 = 1;
+      const unsigned char unmelted = cfg.ded ? (POWDER | UNBORN) : POWDER;
       hP(i, j, k) = af == 6 ? (DENSE | PLATE)
-                  : (af == 2 || af == 3) ? DENSE : (af == 0 || af == 1) ? POWDER : GAS;
+                  : (af == 2 || af == 3) ? DENSE : (af == 0 || af == 1) ? unmelted : GAS;
     }
   }
   if (out) error->one(FLERR,"conduction: a ghost site lies outside the 1-cell halo");
@@ -331,6 +339,7 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   Htab = htab("cond_Htab", false, ts, tl);
   // no plate: the part's tables stand in, and no cell carries PLATE
   Htab2 = plate_on ? htab("cond_Htab2", true, pm.ts, pm.tl) : Htab;
+  if (cfg.ded) Hbirth = H_at(Htab, cfg.T_birth);   // born cells are part powder
   auto up = [](const char *nm, const std::vector<double> &v) {
     Kokkos::View<double*> d(nm, v.size());
     auto h = Kokkos::create_mirror_view(d);
@@ -436,17 +445,19 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
 
 /* ---------------------------------------------------------------------- */
 
+// H(Tr) - Href from a material's table (linear interpolation, end slopes beyond).
+double ConductionSolverKokkos::H_at(Kokkos::View<KK_FLOAT*> tab, double Tr) const
+{
+  auto hH = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), tab);
+  const int n = (int) hH.extent(0);
+  const double u = (Tr - Htab_T0) / Htab_dT;
+  const int i = std::max(0, std::min(n - 2, (int) std::floor(u)));
+  return hH(i) + (u - i) * ((double) hH(i+1) - hH(i));
+}
+
 void ConductionSolverKokkos::reset_field(double Tr)
 {
-  // H(Tr) from each material's table (linear interpolation, end slopes beyond).
-  auto H_at = [&](Kokkos::View<KK_FLOAT*> tab) {
-    auto hH = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), tab);
-    const int n = (int) hH.extent(0);
-    const double u = (Tr - Htab_T0) / Htab_dT;
-    const int i = std::max(0, std::min(n - 2, (int) std::floor(u)));
-    return hH(i) + (u - i) * ((double) hH(i+1) - hH(i));
-  };
-  const double Hr = H_at(Htab), Hr2 = H_at(Htab2);
+  const double Hr = H_at(Htab, Tr), Hr2 = H_at(Htab2, Tr);
   if (Hr2 == Hr) Kokkos::deep_copy(H, Hr);
   else {
     auto H_ = H; auto P_ = P;
@@ -547,6 +558,10 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
   const int nxo_ = nxo, nyo_ = nyo, nz_ = nz;
   const double tl_ = tl;
   const double pack = cfg.packing;
+  // ded birth: laser on, axis within rb of the cell centre, centre in the band
+  const bool birth = cfg.ded && Pq > 0.0;
+  const double rb2 = cfg.ded_radius * cfg.ded_radius, zb = zs - birth_depth;
+  const KK_FLOAT Tb = cfg.T_birth, Hb = Hbirth;
 
   // The Gaussian separates: integrate it over each cell's extent per axis.
   auto Ex_ = Ex, Ey_ = Ey, Ez_ = Ez;   // KK_FLOAT: rounded once, as the stencil used them
@@ -644,7 +659,18 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
           // pack * H(T) * V, so its heat capacity is scaled by pack.
           const unsigned char pfull = P_(i, j, k), pc = pfull & 3;
           const R Tr = T_(i, j, k);
-          if (pc == GAS) {
+          if (pfull & UNBORN) {
+            const double xc = 0.5 * (fxlo_(i) + fxhi_(i)), yc = 0.5 * (fylo_(j) + fyhi_(j));
+            const double zc = 0.5 * (fzlo_(k) + fzhi_(k));
+            if (birth && (xc - xl) * (xc - xl) + (yc - yl) * (yc - yl) <= rb2 &&
+                zc < zs && zc > zb) {
+              H_(i, j, k) = Hb;
+              Tn_(i, j, k) = Tb; Pn_(i, j, k) = (unsigned char) (pfull & ~UNBORN);
+            } else {
+              if (sts) Yo_(i, j, k) = H_(i, j, k);
+              Tn_(i, j, k) = Tr; Pn_(i, j, k) = pfull;
+            }
+          } else if (pc == GAS) {
             if (sts) Yo_(i, j, k) = H_(i, j, k);
             Tn_(i, j, k) = Tr; Pn_(i, j, k) = pfull;
           } else {
@@ -657,7 +683,7 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
             // r_c, r_n: (w/2)/k of this cell and of the neighbour across the face
             auto face = [&](R A, R rc, int ii, int jj, int kk, R rn) {
               const unsigned char pn = P_(ii, jj, kk);
-              if ((pn & 3) == GAS) return surf(A);
+              if ((pn & 3) == GAS || (pn & UNBORN)) return surf(A);
               const R Tv = R(T_(ii, jj, kk));
               const R G = A / (rc + rn);
               return G * (Tv - Tr);

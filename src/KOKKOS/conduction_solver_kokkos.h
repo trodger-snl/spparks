@@ -47,8 +47,9 @@ class ConductionSolverKokkos : protected Pointers {
               Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz, Kokkos::View<int*> d_af,
               int nlocal, int nall, double dx, double ts, double tl);
 
-  // LOOSE: flag bit, see packing. PLATE: flag bit, the plate material
-  enum Phase { GAS = 0, POWDER = 1, DENSE = 3, LOOSE = 4, PLATE = 8 };
+  // LOOSE: flag bit, see packing. PLATE: flag bit, the plate material.
+  // UNBORN: flag bit on POWDER under ded, gas until the laser deposits it
+  enum Phase { GAS = 0, POWDER = 1, DENSE = 3, LOOSE = 4, PLATE = 8, UNBORN = 16 };
 
  private:
   class ConductionTemperatureSource *src;
@@ -77,6 +78,8 @@ class ConductionSolverKokkos : protected Pointers {
   Kokkos::View<double*> wx, wy, wz, fxlo, fxhi, fylo, fyhi, fzlo, fzhi;
   Kokkos::View<KK_FLOAT*> Ex, Ey, Ez;   // per-axis Gaussian integrals, per sub-step
   double zsrc = 0.0;                  // source plane: laser plane, capped at the top face
+  double birth_depth = 1e300;         // ded: cells born within this of zsrc
+  double Hbirth = 0.0;                // ded: H(T_birth) - Href
   Kokkos::View<KK_FLOAT*> Htab, Htab2;   // H(T) - Href, part and plate
   Kokkos::View<double*> kT, kV, kT2, kV2;
   // KK_FLOAT copies for the stencil (aliases under FP64): FP32 then reads
@@ -91,6 +94,7 @@ class ConductionSolverKokkos : protected Pointers {
 
   void build(Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz, Kokkos::View<int*> d_af,
              int nlocal, int nall, double ts);
+  double H_at(Kokkos::View<KK_FLOAT*> tab, double Tr) const;
   void step(double h, double t0);
   void sts_step(double tau, int s);
 

@@ -83,6 +83,16 @@ void ConductionTemperatureSource::setup_temperature_source(
     else if (a == "layer_thickness") cfg.layer_thickness = num(++i);
     else if (a == "packing") cfg.packing = num(++i);
     else if (a == "sts") cfg.sts_smax = (int) num(++i);
+    else if (a == "ded") {
+      cfg.ded = true;
+      while (i + 1 < args.size()) {
+        const std::string &b = args[i+1];
+        if (b == "radius") { i++; cfg.ded_radius = num(++i); }
+        else if (b == "T_birth") { i++; cfg.T_birth = num(++i); }
+        else if (b == "depth") { i++; cfg.ded_depth = num(++i); }
+        else break;
+      }
+    }
     else if (a == "far_bc") {
       if (++i >= args.size()) error->all(FLERR,"setup_temperature_source conduction: far_bc needs a value");
       if (args[i] == "fixed") cfg.far_bc = FAR_FIXED;
@@ -107,6 +117,15 @@ void ConductionTemperatureSource::setup_temperature_source(
     error->all(FLERR,"setup_temperature_source conduction: plate, layer_thickness, latent must be >= 0");
   if (cfg.packing <= 0.0 || cfg.packing > 1.0)
     error->all(FLERR,"setup_temperature_source conduction: packing must be in (0, 1]");
+  if (cfg.ded) {
+    if (cfg.layer_thickness > 0.0 || cfg.packing < 1.0)
+      error->all(FLERR,"setup_temperature_source conduction: ded has no powder bed "
+                 "(drop layer_thickness and packing)");
+    if (cfg.ded_radius < 0.0) cfg.ded_radius = 2.0 * sigma_x();
+    if (cfg.T_birth < 0.0) cfg.T_birth = T0_default;
+    if (cfg.ded_radius == 0.0 || cfg.ded_depth == 0.0)
+      error->all(FLERR,"setup_temperature_source conduction: ded radius and depth must be > 0");
+  }
   if (!cfg.part_region.empty() &&
       domain->find_region((char *) cfg.part_region.c_str()) < 0)
     error->all(FLERR,"setup_temperature_source conduction: part region ID does not exist");
@@ -168,6 +187,11 @@ void ConductionTemperatureSource::print_source_info() const
               << " m (i2 = 6 up to " << plate_surface() << " m): rho=" << pm.rho << ", "
               << pm.k_T.size() << "-point k table, " << pm.cp_T.size() << "-point cp table, latent="
               << pm.latent << " J/kg, solidus " << pm.ts << " K, liquidus " << pm.tl << " K"
+              << std::endl;
+  if (cfg.ded)
+    std::cout << "conduction: ded, birth radius " << cfg.ded_radius << " m, T_birth "
+              << cfg.T_birth << " K, depth "
+              << (cfg.ded_depth > 0.0 ? std::to_string(cfg.ded_depth) + " m" : "layer step")
               << std::endl;
 }
 

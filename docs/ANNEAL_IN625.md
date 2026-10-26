@@ -88,3 +88,25 @@ HIP is np-independent and statistically equivalent (6 seeds, examples/potts_anne
 3. Annealing twins (Sigma3 growth accidents) once recrystallization is calibrated.
 4. Calibration: the user's IN625 data at a couple of conditions + literature
    (recrystallized fraction vs time, grain size, hardness for rho).
+
+## In-grain energy (`energy disorientation`)
+
+With labels, a grain's orientation scatter has no energy and no way to recover, and a
+flip copies a neighbour's orientation: on the ct15 crop, SR then anneal swept 89% of
+sites by deformed-grain growth, leaving clean rims (KAM 0.14 deg) around untouched
+noisy cores (0.9-2 deg). The swept rims are physical (a migrating boundary leaves the
+consumed dislocations behind); the frozen cores are not. `energy disorientation` puts
+Read-Shockley energy on every bond and lets a site copy a same-label neighbour's
+orientation (keeping its H), so the scatter coarsens into subgrains everywhere.
+At kT 2 a 1 deg bond is nearly free, so `mobility` sets the rate. Median KAM (5 um face
+neighbours), start 0.90 deg, r 0.15 for 10 MCS then the 1150 C settings for 250:
+
+| energy, mobility | after SR | after anneal | sites > 1 deg after anneal |
+|---|---|---|---|
+| labels | 0.83 | 0.20 | 19% (the cores) |
+| disorientation, 15 | 0.61 | 0.19 | 4% |
+| disorientation, 5 | 0.52 | 0.21 | 2% |
+| disorientation, M = 1 | 0.28 | 0.08 | 0% |
+
+Neither mode recrystallizes after this SR (H below Hmin), and the deformed grains
+still sweep ~90% of the volume; that is the stage settings, not the energy rule.

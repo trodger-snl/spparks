@@ -27,7 +27,7 @@
 
 <LI>zero or more keyword/value pairs may be appended 
 
-<LI>keyword = <I>nucleation</I> or <I>recovery</I> or <I>mobility</I> or <I>merge</I> 
+<LI>keyword = <I>nucleation</I> or <I>recovery</I> or <I>mobility</I> or <I>merge</I> or <I>energy</I> 
 
 <PRE>  <I>nucleation</I> values = rate Hmin <I>boundary</I> <I>radius</I> r
     rate = nucleation probability per site per unit time (MCS)
@@ -42,7 +42,10 @@
   <I>merge</I> values = theta_merge N
     theta_merge = neighboring labels most of whose boundary is below
                   theta_merge (degrees) become one label (0 = off)
-    N = merge at the start of each run and every N MCS (0 = start only) 
+    N = merge at the start of each run and every N MCS (0 = start only)
+  <I>energy</I> value = <I>labels</I> or <I>disorientation</I>
+    labels = only bonds between labels cost energy (default)
+    disorientation = every bond costs energy, inside a grain too 
 </PRE>
 
 </UL>
@@ -68,7 +71,7 @@ d5      = stored energy H
 d6, d7  = unused
 d8, d9  = G and V at solidification (read by stored_energy) 
 </PRE>
-<P>Sites of one label belong to one grain and feel no boundary, so the
+<P>Sites of one label belong to one grain and by default feel no boundary, so the
 orientation gradients inside a grain survive. The energy of site I is
 </P>
 <PRE>Ei = Sum_j E(theta_ij) + Hi 
@@ -80,6 +83,19 @@ distinct label among its neighbors; site I would take the label,
 orientation and stored energy of a neighbor with that label. The flip
 is accepted with probability M min[1,exp(-dE/kT)], dE the change in
 Ei. Voids never change and lend nothing.
+</P>
+<P>With <I>energy disorientation</I>, the sum runs over all non-void neighbors,
+whatever their label, so the low-angle bonds inside a grain carry
+energy too, and a site may also take the orientation of a neighbor of
+its own label (it keeps its label and H: the stored energy below the
+lattice scale does not move with a subgrain boundary). The candidate is
+a random neighbor of another label or orientation. Orientation
+gradients inside grains then coarsen into subgrains and the scatter
+(KAM) falls, a voxel-scale recovery; scattered grains are consumed
+more readily than clean ones. At kT = 2 a low-angle bond is nearly
+free, so the <I>mobility</I> keyword sets the rate: without it the scatter
+of an AM grain structure is gone within a few MCS. Labels remain the
+grains for Xrx, nucleation and <I>merge</I>.
 </P>
 <P>Stored energy enters the same test as the boundary energy, so a
 recrystallized grain (H = 0) grows into deformed material by the
@@ -127,8 +143,8 @@ grow without regard to curvature and come out rough.
 <PRE>stored_energy pdas K rho0 theta_c b rho_ref Hmax
 anneal_modify keyword values ... 
 </PRE>
-<P><I>anneal_modify</I> takes the <I>nucleation</I>, <I>recovery</I>, <I>mobility</I> and
-<I>merge</I> keywords of app_style and changes them for the following runs, so one
+<P><I>anneal_modify</I> takes the <I>nucleation</I>, <I>recovery</I>, <I>mobility</I>, <I>merge</I>
+and <I>energy</I> keywords of app_style and changes them for the following runs, so one
 input can run the stages of a heat treatment (a stress relief, then a
 recrystallization anneal). <I>nucleation</I> given again replaces all its
 settings (<I>boundary</I> off and <I>radius</I> 1 unless named); <I>nucleation</I> 0
@@ -176,6 +192,6 @@ SPPARKS</A> section for more info.
 <A HREF = "app_potts_rx.html">app_style potts/rx</A>,
 <A HREF = "app_additive_texture.html">app_style additive/texture</A>
 </P>
-<P><B>Default:</B> no nucleation, recovery, mobility or merging
+<P><B>Default:</B> no nucleation, recovery, mobility or merging; energy labels
 </P>
 </HTML>

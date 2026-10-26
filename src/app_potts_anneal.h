@@ -31,8 +31,10 @@ namespace SPPARKS_NS {
 
 // Heat treatment of a grain structure with an orientation per site (e.g. the
 // additive/texture output), shared by potts/anneal (host arrays) and
-// potts/anneal/kk (Kokkos views). Grains are labels (spin): sites of one
-// label feel no boundary, so orientation gradients inside a grain survive.
+// potts/anneal/kk (Kokkos views). Grains are labels (spin). By default sites
+// of one label feel no boundary, so orientation gradients inside a grain
+// survive; with energy disorientation every bond costs Read-Shockley energy,
+// so they evolve (subgrain coarsening) and labels are only bookkeeping.
 namespace anneal {
 
 enum {VOID = 5};                 // i2 of a void site (as additive/texture)
@@ -44,6 +46,7 @@ struct Params {
   double theta_cut;              // Read-Shockley cutoff (degrees)
   double temp, tinv;             // tinv = 0 at T = 0
   double theta_m;                // mobility M = 1 - exp(-5 (theta/theta_m)^4); 0 = off
+  int disorient;                 // 1 = every bond costs energy, not only unlike labels
 };
 
 // the per-site arrays: spin, phase (i2), q0..qz, stored energy
@@ -63,7 +66,8 @@ FD_FN void get_q(const Sites<I, D> &s, int i, double *q)
 }
 
 // boundary energy of site i if it had label lab and orientation q: Read-
-// Shockley over the non-void neighbours of another label
+// Shockley over the non-void neighbours of another label (of any label
+// with disorient)
 template <class NN, class N, class I, class D>
 FD_FN double boundary(int i, int lab, const double *q, const NN &nn, const N &nbr,
                       const Sites<I, D> &s, const Params &p)
@@ -71,7 +75,7 @@ FD_FN double boundary(int i, int lab, const double *q, const NN &nn, const N &nb
   double e = 0.0;
   for (int m = 0; m < nn[i]; m++) {
     const int k = nbr((size_t) i, m);
-    if (s.phase[k] == VOID || s.spin[k] == lab) continue;
+    if (s.phase[k] == VOID || (!p.disorient && s.spin[k] == lab)) continue;
     double qk[4];
     get_q(s, k, qk);
     e += quaternion::read_shockley(
@@ -82,8 +86,12 @@ FD_FN double boundary(int i, int lab, const double *q, const NN &nn, const N &nb
 
 // Site i takes the label, orientation and stored energy of a neighbour of a
 // random distinct other label, by one Metropolis test on dE = d(boundary) +
-// H_j - H_i, scaled by the mobility of the boundary it crosses. Voids never
-// change and lend nothing. Returns 1 if the site changed.
+// H_j - H_i, scaled by the mobility of the boundary it crosses. With
+// disorient the candidates are all neighbours of another label or
+// orientation, and one of the same label lends only its orientation (H
+// stays: the stored energy below the voxel does not move with a subgrain
+// boundary). Voids never change and lend nothing. Returns 1 if the site
+// changed.
 template <class G, class NN, class N, class I, class D>
 FD_FN int event(int i, G &g, const NN &nn, const N &nbr, const Sites<I, D> &s,
                 const Params &p)
@@ -94,7 +102,13 @@ FD_FN int event(int i, G &g, const NN &nn, const N &nbr, const Sites<I, D> &s,
   int nc = 0;
   for (int m = 0; m < nn[i]; m++) {
     const int k = nbr((size_t) i, m);
-    if (s.phase[k] == VOID || s.spin[k] == lab) continue;
+    if (s.phase[k] == VOID) continue;
+    if (p.disorient) {
+      if (s.spin[k] != lab || s.q0[k] != s.q0[i] || s.qx[k] != s.qx[i] ||
+          s.qy[k] != s.qy[i] || s.qz[k] != s.qz[i]) cand[nc++] = k;
+      continue;
+    }
+    if (s.spin[k] == lab) continue;
     int c = 0;
     while (c < nc && s.spin[cand[c]] != s.spin[k]) c++;
     if (c == nc) cand[nc++] = k;
@@ -108,8 +122,10 @@ FD_FN int event(int i, G &g, const NN &nn, const N &nbr, const Sites<I, D> &s,
   get_q(s, i, qi);
   get_q(s, j, qj);
 
+  const int same = s.spin[j] == lab;
   const double de = boundary(i, s.spin[j], qj, nn, nbr, s, p) -
-                    boundary(i, lab, qi, nn, nbr, s, p) + (s.h[j] - s.h[i]);
+                    boundary(i, lab, qi, nn, nbr, s, p) +
+                    (same ? 0.0 : s.h[j] - s.h[i]);
   double prob = 1.0;
   if (p.theta_m > 0.0) {
     const double r = quaternion::disorientation_deg(p.sym, p.nsym, qi, qj) / p.theta_m;
@@ -126,7 +142,7 @@ FD_FN int event(int i, G &g, const NN &nn, const N &nbr, const Sites<I, D> &s,
   s.qx[i] = qj[1];
   s.qy[i] = qj[2];
   s.qz[i] = qj[3];
-  s.h[i] = s.h[j];
+  if (!same) s.h[i] = s.h[j];
   return 1;
 }
 
@@ -173,6 +189,7 @@ class AppPottsAnneal : public AppPottsQuaternion {
   int nradius;                   // nucleus = seed dilated nradius times
   double rrecover;               // recovery: dH/dt = -rrecover*H
   double theta_m;                // mobility cutoff (degrees), 0 = M = 1
+  int disorient;                 // energy disorientation (1) or labels (0)
   double merge_theta;            // merge labels below this disorientation, 0 = off
   int merge_every;               // ... at each run's start and every N MCS (0 = start only)
   rx::Nucleation nuc;

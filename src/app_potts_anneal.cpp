@@ -59,7 +59,7 @@ AppPottsAnneal::AppPottsAnneal(SPPARKS *spk, int narg, char **arg) :
 
   nrate = rrecover = theta_m = merge_theta = 0.0;
   nradius = 1;
-  merge_every = 0;
+  merge_every = disorient = 0;
   nuc = rx::Nucleation{nspins, 0.0, 0.0, 0, 0, 0};
   keywords(narg-4,&arg[4],"app_style");
 
@@ -76,7 +76,7 @@ AppPottsAnneal::AppPottsAnneal(SPPARKS *spk, int narg, char **arg) :
 }
 
 /* ----------------------------------------------------------------------
-   nucleation / recovery / mobility settings, from app_style or, between
+   nucleation / recovery / mobility / energy settings, from app_style or, between
    runs (one stage of a heat treatment to the next), anneal_modify
 ------------------------------------------------------------------------- */
 
@@ -115,6 +115,12 @@ void AppPottsAnneal::keywords(int narg, char **arg, const char *cmd)
       merge_every = atoi(arg[iarg+2]);
       if (merge_theta < 0.0 || merge_every < 0) error->all(FLERR,msg);
       iarg += 3;
+    } else if (strcmp(arg[iarg],"energy") == 0) {
+      if (iarg+2 > narg) error->all(FLERR,msg);
+      if (strcmp(arg[iarg+1],"labels") == 0) disorient = 0;
+      else if (strcmp(arg[iarg+1],"disorientation") == 0) disorient = 1;
+      else error->all(FLERR,msg);
+      iarg += 2;
     } else if (strcmp(arg[iarg],"mobility") == 0) {
       if (iarg+2 > narg) error->all(FLERR,msg);
       theta_m = atof(arg[iarg+1]);
@@ -192,6 +198,7 @@ void AppPottsAnneal::setup_end_app()
   par.temp = temperature;
   par.tinv = temperature > 0.0 ? t_inverse : 0.0;
   par.theta_m = theta_m;
+  par.disorient = disorient;
 }
 
 /* ----------------------------------------------------------------------

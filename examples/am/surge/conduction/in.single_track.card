@@ -28,7 +28,7 @@ diag_style       array d6 sum d6 max
 temperature      0.0
 misorientation_target random_rotation
 # Material and process values from the card; deck commands after `material` win.
-material         ../../materials/316L.toml process single_track_340W
+material         ../../../../materials/316L.toml process single_track_340W
 smooth_greedy_multiproposal on
 smooth_orientation copy
 nuclei_smooth off

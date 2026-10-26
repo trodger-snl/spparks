@@ -16,12 +16,12 @@ What landed, in both apps unless noted:
 - Nucleation shells: `sqrt(D_eff * distance_from_seed)` relative to the seed
   (CPU flipper re-rooted onto the seed; kk unchanged in form). kk
   `t_cool_max` is now `tl - ts` (was 100 K).
-- Check deck `examples/misorientation_walk/in.walk.{cpu,kk}` and
+- Check deck `examples/am/surge/misorientation_walk/in.walk.{cpu,kk}` and
   `spparks_micro_analysis.srod_analysis` (spparks-micro-analysis) (origin-referenced SROD vs distance, D fit,
   width ratio).
 
 Validation (Rosenthal one-pass deck, dx = 5 µm, D = 4.2e5 deg²/m, 4 seeds):
-- `examples/am_validation/compare.sh`: d6 sum/max bit-identical CPU vs kk
+- `examples/am/surge/validation/compare.sh`: d6 sum/max bit-identical CPU vs kk
   on all three decks.
 - Per-hop step exact in both apps: with smoothing off (`nrefine 0`) the
   axis-neighbour same-grain disorientation has a sharp peak in [1.4, 1.5)°

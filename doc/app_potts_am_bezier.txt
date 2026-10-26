@@ -129,7 +129,7 @@ rectangular layer constructed from {am pass} and other parameters. :l
 "am build"_am_build.html: May be used for combinations of layers that
 comprise a pattern. :l,ule
 
-The examples/potts_am_bezier directory has input files which illustrate
+The examples/am/legacy/bezier directory has input files which illustrate
 use of some of these commands. However these commands 
 are not unique to this app and other examples within the examples directory 
 may also further illustrate.

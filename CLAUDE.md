@@ -172,7 +172,11 @@ differ from each other and change with the rank count. Only the
 temperature diagnostic columns (`diag_style array d6 sum d6 max`), expecting a
 bit-for-bit match. A kk app that sweeps needs `sweep color` (or
 `color/strict`); update-only apps (`app_update_only yes`) take any sweep. Base test inputs are in
-`examples/hdf5/`, `examples/{rosenthal,moser}_am/` and `examples/am_validation/`.
+`examples/am/surge/hdf5/`, `examples/am/surge/{rosenthal,moser}/` and `examples/am/surge/validation/`.
+Example layout: AM decks live under `examples/am/` — `legacy/` for the stock
+SPPARKS AM apps (potts/am/weld, am/ellipsoid, bezier, weld, stitch), `surge/`
+for `additive/texture(/kk)` and its temperature sources. Non-AM examples stay
+at the top level; SURGE-only ones are marked [SURGE] in `examples/README`.
 
 ## Commits
 

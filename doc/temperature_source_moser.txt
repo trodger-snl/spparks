@@ -46,8 +46,8 @@ setup_temperature_source moser keyhole 340.0 0.155 11.2 2.0959e-6 573.0 650.0 &
     0.55  60e-6 60e-6  40e-6  0.0 &
     0.45  35e-6 35e-6 100e-6  120e-6 :pre
 
-See examples/am_validation (in.moser_pause.cpu, in.moser_pause_below.kk,
-...) and examples/gp700_moser/in.gp700_thermal.
+See examples/am/surge/validation (in.moser_pause.cpu, in.moser_pause_below.kk,
+...) and examples/am/surge/gp700_moser/in.gp700_thermal.
 
 [Description:]
 

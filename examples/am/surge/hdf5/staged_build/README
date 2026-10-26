@@ -8,7 +8,7 @@ windows, each seeding itself from the previous stage's file:
   stage 2   x = [80, 180)    overlaps stage 1; grows the datasets to x=180
   stage 3   x = [40, 140)    overlaps both
 
-This is the pattern real AM decks use (compare examples/stitch/am_demo,
+This is the pattern real AM decks use (compare examples/am/legacy/stitch/am_demo,
 which does the same thing through 'dump stitch').  The point of the
 example is that the whole staged workflow -- read back, continue the
 clock, extend the domain -- works with a format that keeps only the

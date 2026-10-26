@@ -105,7 +105,7 @@ The simplest end-to-end example is `in.additive.moser` in this
 directory: a single 1.2 mm linear scan over an LPBF-scale box.
 
 ```bash
-cd /path/to/spparks/examples/moser_am
+cd /path/to/spparks/examples/am/surge/moser
 mpirun -n 6 /path/to/spparks/src/build/spparks -in in.additive.moser
 ```
 
@@ -256,7 +256,7 @@ the dump command — re-run with them included.
 | `in.additive.moser_keyhole` | overlapping double-ellipsoid (Goldak) keyhole mode with independent top/bot streams |
 
 For Rosenthal counterparts (steady-state, no fluctuations) see
-`../rosenthal_am/`.
+`../rosenthal/`.
 
 ### Setting up substrate orientations
 
@@ -267,10 +267,10 @@ expects in the d1..d4 site fields:
 
 ```bash
 # [001] along build (+Z), [100] along scan (+X) — identity
-python ../../tools/crystal_to_quat.py --normal 001 --inplane 100
+python ../../../../tools/crystal_to_quat.py --normal 001 --inplane 100
 
 # Emit a ready-to-paste SPPARKS `set` line for substrate spin 7
-python ../../tools/crystal_to_quat.py --normal 110 --inplane 001 --as-set 7
+python ../../../../tools/crystal_to_quat.py --normal 110 --inplane 001 --as-set 7
 ```
 
 See `tools/README` (or `--help`) for full options.

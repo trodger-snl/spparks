@@ -50,7 +50,7 @@ pass"_am_pass.html commands which specify the rectangular domain as well as
 raster path information.  The script should not use the "create_sites"_create_sites.html
 commad -- more on this below.
 
-The directory examples/stitch/stitching_rectangular_domain contains 
+The directory examples/am/legacy/stitch/stitching_rectangular_domain contains 
 an example demonstrating use of this app. There are 3 primary 
 elements to the example: 1) in.path_gen -- input script which 
 uses this app; 2) in.am -- input script for a generic AM SPPARKS 

@@ -84,7 +84,7 @@ rectangular layer constructed from {am pass} and other parameters. :l
 "am build"_am_build.html: May be used for combinations of layers that
 comprise a pattern. :l,ule
 
-The examples/am_ellipsoid and examples/am_path directories have input
+The examples/am/legacy/ellipsoid and examples/am/legacy/path directories have input
 files which illustrate use of these additional commands.
 
 :line

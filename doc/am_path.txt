@@ -22,7 +22,7 @@ V = scan speed of the pass in sites/Monte-Carlo-sweep :ul
 
 [Example ]
 
-This snippet is taken from SPPARKS repository: {examples/am_path/path_raster_a}
+This snippet is taken from SPPARKS repository: {examples/am/legacy/path/path_raster_a}
 
 # Convenience; define set of points to be used in path commands
 variable X0 equal         0.0

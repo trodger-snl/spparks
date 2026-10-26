@@ -131,10 +131,10 @@ set path to mpicxx.
 See some example scripts which use stitch related commands.
 There is a README file
 
-% cd ${SPPARKS_ROOT}/examples/stitch/README
+% cd ${SPPARKS_ROOT}/examples/am/legacy/stitch/README
 
 Examples
-% cd ${SPPARKS_ROOT}/examples/stitch/dump_and_set_cmds
+% cd ${SPPARKS_ROOT}/examples/am/legacy/stitch/dump_and_set_cmds
 
 Run 'stitch_test'
 % cd ${SPPARKS_ROOT}/lib/stitch/libstitch

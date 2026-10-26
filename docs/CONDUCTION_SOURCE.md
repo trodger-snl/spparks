@@ -8,7 +8,7 @@ heat, powder, surface losses, and a thermal domain larger than the lattice box.
 Code: `src/temperature_source_conduction.{h,cpp}` (configuration, tables,
 laser pose; a `MoserTemperatureSource` subclass) and
 `src/KOKKOS/conduction_solver_kokkos.{h,cpp}` (grid, kernels, halo).
-Examples in `examples/conduction_am/`: `in.single_track`; `in.thin_wall`
+Examples in `examples/am/surge/conduction/`: `in.single_track`; `in.thin_wall`
 (four layers, one `laser_path` per layer, ported from am/finitediff's
 ThinWall); `in.large_rectangle` (am/finitediff's LargerRectangle raster path
 through `laser_path file`); `in.thin_wall.ded` (`in.thin_wall` as directed
@@ -190,7 +190,7 @@ in `processors`.
 ## Material (examples: 316L)
 
 The 316L values below are also in the material card `materials/316L.toml`
-(docs/MATERIAL_CARDS.md); `examples/conduction_am/in.single_track.card` runs
+(docs/MATERIAL_CARDS.md); `examples/am/surge/conduction/in.single_track.card` runs
 `in.single_track` from it with `setup_temperature_source conduction card`.
 
 The example decks use 316L, ρ = 7900 kg/m³ (`k` 13.8, `alpha` 3.6166e-6,
@@ -334,8 +334,8 @@ material), so a fixed depth is a guess. Two guards:
   dump, the stitch file is unchanged and the box can be rerun deeper. It also
   prints `floor_check: deepest liquid z = …` whenever the pool reaches a new
   deepest site. Off by default.
-- **Adaptive window in the drivers** (`examples/conduction_am/stitch_layers.py`,
-  `examples/gp700_moser/run_layers.sh`).
+- **Adaptive window in the drivers** (`examples/am/surge/conduction/stitch_layers.py`,
+  `examples/am/surge/gp700_moser/run_layers.sh`).
   - After each box, the next window is max(min window, ⌈F × deepest melt
     below the top⌉ + floor), with F = 1.5 by default.
   - A box stopped by `floor_check` is rerun 1.5× deeper.

@@ -32,7 +32,7 @@ diag_style       array d6 sum d6 max
 temperature      0.0
 misorientation_target random_rotation
 # Material values from the card; deck commands after `material` win.
-material         ../../materials/Ti6Al4V.toml
+material         ../../../../materials/Ti6Al4V.toml
 # The Ti64 card has no nucleation values: in.single_track's.
 nucleation_density      1e14
 critical_undercooling   5
@@ -49,7 +49,7 @@ nuclei_smooth off
 setup_temperature_source conduction card Q 340 T0 573 spot 50e-6 50e-6 75e-6 &
     layer_thickness 30e-6 convection 25 300 &
     margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 &
-    part part plate_top 122.5e-6 plate_material ../../materials/316L.toml far_bc fixed
+    part part plate_top 122.5e-6 plate_material ../../../../materials/316L.toml far_bc fixed
 
 # laser plane at the top face of the top site layer (z = 29.5 dx)
 laser_path start 0.15e-3 0.10e-3 0.1475e-3 end 0.85e-3 0.10e-3 speed 1.2 hatch 40e-6 2 serpentine pause 1.0e-3

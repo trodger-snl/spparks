@@ -58,7 +58,7 @@ various visualization programs, including
 
 The {stitch} style dump file is in an SQLite format which can be read
 by the "set stitch"_set.html command or auxiliary tools provided with
-the Stitch library in lib/stitch.  See the examples/stitch dir for
+the Stitch library in lib/stitch.  See the examples/am/legacy/stitch dir for
 examples of SPPARKS scripts that read and write {stitch} files.
 
 The {hdf5} style writes one chunked HDF5 dataset per field, named {site},

@@ -15,8 +15,8 @@ columns (see CLAUDE.md, "Validating the GPU port").
 The HDF5 device path is covered by `../hdf5/stale_layer`.
 
 ```bash
-./compare.sh ../../build-verify/spparks                       # CPU vs kk, one binary
-./compare.sh ../../build-cpu/spparks ../../build-verify/spparks   # two binaries
+./compare.sh ../../../../build-verify/spparks                       # CPU vs kk, one binary
+./compare.sh ../../../../build-cpu/spparks ../../../../build-verify/spparks   # two binaries
 ```
 
 `fast_forward_search_window 1e-4` is set so the predictors walk finely enough

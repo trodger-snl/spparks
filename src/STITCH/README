@@ -22,5 +22,5 @@ Section_start.html of the SPPARKS manual for general information on
 building SPPARKS with packages and the Stitch library.
 
 Once SPPARKS is successfully built with the {stitch} library, it can be
-verified using SPPARKS input script examples from the examples/stitch
+verified using SPPARKS input script examples from the examples/am/legacy/stitch
 directory.  See  README file for further instructions.

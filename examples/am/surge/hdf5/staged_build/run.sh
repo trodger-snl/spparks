@@ -2,14 +2,14 @@
 # Staged build through 'dump hdf5', with the same build through 'dump stitch'
 # for comparison.  Each stage is a separate SPPARKS invocation that seeds
 # itself from the previous stage's file, which is the pattern real AM decks
-# use (see examples/stitch/am_demo).
+# use (see examples/am/legacy/stitch/am_demo).
 #
 # Requires a build configured with --highfive (and --package stitch for the
 # comparison half).
 
 set -e
 
-SPPARKS=${SPPARKS:-../../../build-cpu/spparks}
+SPPARKS=${SPPARKS:-../../../../../build-cpu/spparks}
 NP=${NP:-4}
 MPIRUN=${MPIRUN:-"mpirun --bind-to none -np $NP"}
 

@@ -16,7 +16,7 @@ reviewed_by = ""
 version = "1.0.0"
 date = 2026-10-17
 author = "T. Rodgers"
-changes = "Initial card from the examples/conduction_am decks (docs/CONDUCTION_SOURCE.md, Material)."
+changes = "Initial card from the examples/am/surge/conduction decks (docs/CONDUCTION_SOURCE.md, Material)."
 
 [[changelog]]
 version = "1.0.1"
@@ -76,7 +76,7 @@ nuclei_volume_deviation = { value = 1.5625e-17, unit = "m^3", ref = "calibration
 # builds; literature sets go alongside them.
 
 [process.conduction_am_150W]
-note = "examples/conduction_am in.thin_wall, in.large_rectangle, stitch_layers.py; power is absorbed power (absorptivity 1)"
+note = "examples/am/surge/conduction in.thin_wall, in.large_rectangle, stitch_layers.py; power is absorbed power (absorptivity 1)"
 power = { value = 150, unit = "W", ref = "calibration" }
 absorptivity = { value = 1.0, unit = "1", ref = "calibration" }
 speed = { value = 1.4, unit = "m/s", ref = "calibration" }
@@ -87,7 +87,7 @@ preheat = { value = 300, unit = "K", ref = "calibration" }
 convection = { h = 25, T_inf = 300, unit = "W/(m^2 K)", atmosphere = "Ar", ref = "estimate" }
 
 [process.single_track_340W]
-note = "examples/conduction_am/in.single_track"
+note = "examples/am/surge/conduction/in.single_track"
 power = { value = 340, unit = "W", ref = "calibration" }
 absorptivity = { value = 0.355, unit = "1", ref = "calibration" }
 speed = { value = 1.2, unit = "m/s", ref = "calibration" }

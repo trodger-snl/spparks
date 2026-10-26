@@ -17,41 +17,55 @@ that these problems should get statistically similar answers when run
 on different machines or different numbers of processors, but not
 identical answers to those in the log of dump files included here.
 
-These are the sample problems in the various sub-directories:
+These are the sample problems in the various sub-directories.
 
-am_ellipsoid:     3d Potts model for additive manufacturing
-am_path:          additive manufacturing applications with use of a path
+General models (stock SPPARKS unless marked [SURGE]; [+kk] = Kokkos decks too):
+
 chemistry:        simple A + B <-> C reaction model
 erbium:           erbium reaction/diffusion model
 groups:           test of tree and group KMC solvers on a reaction network
 ising:            2d Ising model
-thin_film_growth: 2d thin file growth with diffusion app
 membrane:         2d membrane model of lipid, fluid, protein states
-multiphase:       multiphase diffusion
-phasefield:       phase-field-only models (Allen-Cahn, Cahn-Hilliard, grain growth, CH + heat)
-phasefield_potts: 3d Potts with phase field model
-phasefield_potts_table: Potts + phase field, tabulated G(c,T), coupled heat (+ kk)
-potts:            3d Potts model
-potts_am_bezier:  3d Potts AM with Bezier melt-pool shapes
+multiphase:       multiphase diffusion [+kk]
+phasefield:       [SURGE] phase-field-only models (Allen-Cahn, Cahn-Hilliard,
+                  grain growth, CH + heat) [+kk]
+phasefield_potts: 3d Potts with phase field model [+kk]
+phasefield_potts_table: [SURGE] Potts + phase field, tabulated G(c,T),
+                  coupled heat [+kk]
+potts:            3d Potts model [+kk]
+potts_anneal:     [SURGE] IN625 heat treatment (potts/anneal) [+kk]
 potts_grad:       3d Potts model with temperature gradient
-potts_quaternion: Potts with quaternion orientations (+ Kokkos decks)
-potts_weld:       3d Potts model for welding applications
-potts_weld_jom:   second 3d Potts model for welding applications
+potts_quaternion: Potts with quaternion orientations [+kk]
+potts_rx:         [SURGE] recrystallization, static and dynamic [+kk]
 relax:            2d Metropolis atomic relaxation
-sintering:        sintering application
-stitch:           using the Stitch input/output options
+sintering:        sintering application [+kk]
+thin_film_growth: 2d thin film growth with diffusion app
 
-Additive-manufacturing examples added on the SURGE branch (additive/texture
-and its Kokkos twin additive/texture/kk; most CPU decks have a .kk partner):
+Additive manufacturing, under am/:
 
-am_validation:      CPU vs Kokkos d6 temperature checks (compare.sh)
-conduction_am:      nonlinear finite-volume conduction temperature source (kk)
-gp700_moser:        box-per-layer GP700 build (run_layers.sh) and its analysis
-hdf5:               HDF5 thermal sources (stale_layer, unstructured_am) and
-                    a staged build through dump/set hdf5 (staged_build)
-misorientation_walk: misorientation_diffusion random walk on a single hatch
-moser_am:           Moser analytic heat source, incl. laser fluctuations
-rosenthal_am:       Rosenthal analytic heat source (standard, keyhole, aniso)
+am/legacy/  stock SPPARKS AM apps (potts/am/weld, am/ellipsoid,
+            potts/additive, potts/am/bezier, potts/weld, potts/weld/jom,
+            potts/am/path/gen):
+
+  ellipsoid:  3d Potts model for additive manufacturing
+  path:       additive manufacturing applications with use of a path
+  bezier:     3d Potts AM with Bezier melt-pool shapes
+  weld:       3d Potts model for welding applications
+  weld_jom:   second 3d Potts model for welding applications
+  stitch:     using the Stitch input/output options
+
+am/surge/   additive/texture and its Kokkos twin additive/texture/kk,
+            developed on the SURGE branch (most CPU decks have a .kk partner):
+
+  rosenthal:  Rosenthal analytic heat source (standard, keyhole, aniso)
+  moser:      Moser analytic heat source, incl. laser fluctuations
+  conduction: nonlinear finite-volume conduction temperature source (kk),
+              incl. a DED thin wall (in.thin_wall.ded)
+  hdf5:       HDF5 thermal sources (stale_layer, unstructured_am) and
+              a staged build through dump/set hdf5 (staged_build)
+  gp700_moser: box-per-layer GP700 build (run_layers.sh) and its analysis
+  validation: CPU vs Kokkos d6 temperature checks (compare.sh)
+  misorientation_walk: misorientation_diffusion random walk on a single hatch
 
 Here is how you might run and visualize one of the sample problems:
 

@@ -22,9 +22,9 @@ The fixture therefore builds its own three-layer file where layer 1's mesh sits
 ## Run it
 
 ```bash
-cd examples/hdf5/stale_layer
+cd examples/am/surge/hdf5/stale_layer
 python3 make_stale_layer_fixture.py stale_layer_test.hdf5
-mpirun -np 1 ../../../build-verify/spparks < in.stale_layer   # any KOKKOS build
+mpirun -np 1 ../../../../../build-verify/spparks < in.stale_layer   # any KOKKOS build
 ```
 
 The generated file is ~140 KB and is not committed; regenerate it as above.

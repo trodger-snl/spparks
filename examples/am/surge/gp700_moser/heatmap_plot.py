@@ -7,7 +7,7 @@ import sys, os, json, numpy as np
 import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt
 lines = sys.argv[1] == '--lines'; args = sys.argv[2:] if lines else sys.argv[1:]
 out = args[0]; runs = list(zip(args[1::2], args[2::2]))
-D = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'docs')
+D = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', '..', 'docs')
 l26 = json.load(open(os.path.join(D, 'lamb2026_fig7a_srod.json'))); l24 = json.load(open(os.path.join(D, 'lamb2023_fig5a_srod.json')))
 if lines:
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(10.4, 4.2), sharey=True)

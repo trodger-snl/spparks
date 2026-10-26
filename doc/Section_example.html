@@ -23,8 +23,6 @@ own. Each problem has an input script (in.*) and produces a log file (log.*). So
 <P>These are the sample problems in the examples sub-directories:
 </P>
 <DIV ALIGN=center><TABLE  BORDER=1 >
-<TR><TD >am_ellipsoid</TD><TD >     3d Potts model for additive manufacturing</TD></TR>
-<TR><TD >am_path</TD><TD >          additive manufacturing applications with use of a path</TD></TR>
 <TR><TD >chemistry</TD><TD >        simple A + B <-> C reaction model</TD></TR>
 <TR><TD >erbium</TD><TD >           erbium reaction/diffusion model</TD></TR>
 <TR><TD >groups</TD><TD >           test of tree and group KMC solvers on a reaction network</TD></TR>
@@ -36,13 +34,27 @@ own. Each problem has an input script (in.*) and produces a log file (log.*). So
 <TR><TD >potts</TD><TD >            3d Potts model</TD></TR>
 <TR><TD >potts_grad</TD><TD >       3d Potts model with temperature gradient</TD></TR>
 <TR><TD >potts_quaternion</TD><TD > 3d Potts model incorporating crystalline orientations</TD></TR>
-<TR><TD >potts_weld</TD><TD >       3d Potts model for welding applications</TD></TR>
-<TR><TD >potts_weld_jom</TD><TD >   second 3d Potts model for welding applications</TD></TR>
 <TR><TD >relax</TD><TD >            2d Metropolis atomic relaxation</TD></TR>
-<TR><TD >sintering</TD><TD >        sintering application</TD></TR>
-<TR><TD >stitch</TD><TD >           using the Stitch input/output options 
+<TR><TD >sintering</TD><TD >        sintering application 
 </TD></TR></TABLE></DIV>
 
+<P>Additive-manufacturing examples are under examples/am.  am/legacy has
+the original AM applications:
+</P>
+<DIV ALIGN=center><TABLE  BORDER=1 >
+<TR><TD >am/legacy/ellipsoid</TD><TD > 3d Potts model for additive manufacturing</TD></TR>
+<TR><TD >am/legacy/path</TD><TD >      additive manufacturing applications with use of a path</TD></TR>
+<TR><TD >am/legacy/bezier</TD><TD >    3d Potts AM with Bezier melt-pool shapes</TD></TR>
+<TR><TD >am/legacy/weld</TD><TD >      3d Potts model for welding applications</TD></TR>
+<TR><TD >am/legacy/weld_jom</TD><TD >  second 3d Potts model for welding applications</TD></TR>
+<TR><TD >am/legacy/stitch</TD><TD >    using the Stitch input/output options 
+</TD></TR></TABLE></DIV>
+
+<P>am/surge has the <A HREF = "app_additive_texture.html">additive/texture</A>
+applications and their temperature sources (Rosenthal, Moser,
+conduction, HDF5), with CPU vs Kokkos validation decks; see
+examples/README for the list.
+</P>
 <P>Here is how you might run and visualize one of the sample problems:
 </P>
 <PRE>cd examples/potts_quaternion

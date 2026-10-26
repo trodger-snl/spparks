@@ -78,7 +78,7 @@ rectangular layer constructed from {am pass} and other parameters.
 
 {NOTE}: Because {potts/am/weld} is intended for {2D} simulations, only the
 first layer, as specified in the {am build} command, is used; this application
-does not simulate multilayer builds.  The examples/am_path directory
+does not simulate multilayer builds.  The examples/am/legacy/path directory
 has input files which illustrate how to use the rastering commands.  
 
 The "temperature"_temperature.html command should be used to set simulation Monte Carlo temperature.

@@ -194,7 +194,7 @@ def selftest():
     assert len(L) == 21 and [int(float(l[0][2])) for l in L[:3]] == [21, 27, 33], [l[0][2] for l in L[:3]]
     assert [round(duration(l) * 1e3, 1) for l in L[:2]] == [116.4, 171.0], [duration(l) for l in L[:2]]
     assert plate_keys(None) == (3, '')
-    i2, pm = plate_keys('../../materials/316L.toml')
+    i2, pm = plate_keys('../../../../materials/316L.toml')
     assert i2 == 6 and pm.endswith('/materials/316L.toml') and os.path.isabs(pm.split()[-1]), pm
     print('selftest ok')
 

@@ -160,7 +160,7 @@ not fitted to the simulation.
 
 ## 6. Deliverables
 
-- `examples/gp700_moser/`: `in.gp700_init`, `in.gp700_layer` (templated as
+- `examples/am/surge/gp700_moser/`: `in.gp700_init`, `in.gp700_layer` (templated as
   the am10 pair), `run_layers.sh` (box driver, adapted from am10), README with
   the table in §1.
 - `am10_cpu_vs_hip/srod_analysis.py` (Plan 1 B3) run on the stitch file;
@@ -188,7 +188,7 @@ not fitted to the simulation.
 
 **2026-09-04.** Implemented: `laser_path ... hatch <s> <n> [serpentine]`
 (440f3be0, Moser + Rosenthal; CPU/kk d6 bit-identical on a 3-pass serpentine
-deck), `examples/gp700_moser/{in.gp700_layer, run_layers.sh, in.gp700_thermal,
+deck), `examples/am/surge/gp700_moser/{in.gp700_layer, run_layers.sh, in.gp700_thermal,
 thermal_check.py, gp700_analysis.py}`. Two bugs found on the way, both fixed:
 the template's placeholder comment expanded into live `set` lines before
 `app_style` (segfault), and `laser_path` anchored the scan at the stale
@@ -582,7 +582,7 @@ is recorded as the stronger-fibre variant with identical SROD.
 
 ## Status (2026-09-06 10:40)
 
-Calibrated GP700 deck = `examples/gp700_moser/in.gp700_layer` as committed:
+Calibrated GP700 deck = `examples/am/surge/gp700_moser/in.gp700_layer` as committed:
 Moser source with the GP700 constants, 3.5× front law, dt 4 µs, 50 µm
 Voronoi substrate, `smooth_greedy_multiproposal on` / nrefine 1,
 `smooth_orientation copy`, `misorientation_diffusion 2.2e5 30`, per-grain

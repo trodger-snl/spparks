@@ -409,7 +409,7 @@ an HDF5 thermal file):
 </PRE>
 <P>The mask is keyed by absolute lattice index, so one file that covers
 the whole build can be applied in every box of a box-per-layer run
-(examples/gp700_moser/run_layers.sh: DEFECTS=mask.h5).
+(examples/am/surge/gp700_moser/run_layers.sh: DEFECTS=mask.h5).
 </P>
 <P>A box-per-layer build continues the microstructure from a stitch file
 (STITCH package) by dumping and reloading i1 i2 d1 d2 d3 d4 d8 d9 d10,
@@ -419,18 +419,19 @@ e.g. "set i2 stitch file last".
 
 <P><B>Example inputs:</B>
 </P>
-<PRE>examples/am_validation/in.rosenthal.cpu|kk           : Rosenthal standard; fast-forward skip at start
-examples/am_validation/in.moser_pause.cpu|kk         : Moser two-pass schedule with a 1 ms pause
-examples/am_validation/in.moser_pause_below.cpu|kk   : Moser with fluctuations and a pause_below reset pass
-examples/am_validation/compare.sh                    : CPU vs kk bit-for-bit d6 comparison
-examples/hdf5/stale_layer/in.stale_layer : hdf5_csr source on additive/texture/kk
-examples/conduction_am/in.single_track               : conduction source, two hatched passes
-examples/conduction_am/in.single_track.card          : the same, driven by the 316L material card
-examples/conduction_am/in.thin_wall                  : four-layer thin wall in one process
-examples/conduction_am/in.large_rectangle            : 21-layer raster read with laser_path file
-examples/conduction_am/stitch_layers.py              : box-per-layer stitch build with floor_check
-examples/gp700_moser/in.gp700_layer, run_layers.sh   : box-per-layer Moser stitch build (GP700)
-examples/misorientation_walk/in.walk.cpu|kk          : misorientation_diffusion random-walk check 
+<PRE>examples/am/surge/validation/in.rosenthal.cpu|kk            : Rosenthal standard; fast-forward skip at start
+examples/am/surge/validation/in.moser_pause.cpu|kk          : Moser two-pass schedule with a 1 ms pause
+examples/am/surge/validation/in.moser_pause_below.cpu|kk    : Moser with fluctuations and a pause_below reset pass
+examples/am/surge/validation/compare.sh                     : CPU vs kk bit-for-bit d6 comparison
+examples/am/surge/hdf5/stale_layer/in.stale_layer           : hdf5_csr source on additive/texture/kk
+examples/am/surge/conduction/in.single_track                : conduction source, two hatched passes
+examples/am/surge/conduction/in.single_track.card           : the same, driven by the 316L material card
+examples/am/surge/conduction/in.thin_wall                   : four-layer thin wall in one process
+examples/am/surge/conduction/in.large_rectangle             : 21-layer raster read with laser_path file
+examples/am/surge/conduction/in.thin_wall.ded               : the thin wall as directed energy deposition (ded)
+examples/am/surge/conduction/stitch_layers.py               : box-per-layer stitch build with floor_check
+examples/am/surge/gp700_moser/in.gp700_layer, run_layers.sh : box-per-layer Moser stitch build (GP700)
+examples/am/surge/misorientation_walk/in.walk.cpu|kk        : misorientation_diffusion random-walk check 
 </PRE>
 <P>All decks except the <I>.cpu</I> ones use <I>additive/texture/kk</I>.
 </P>

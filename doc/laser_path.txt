@@ -158,7 +158,7 @@ with a fresh thermal history; for the conduction source, see its page.
 {pause}, {pause_below} and {reset_temperature} are not available in
 this form.
 
-An example path file and deck are in examples/conduction_am
+An example path file and deck are in examples/am/surge/conduction
 (large_rectangle.path, in.large_rectangle).
 
 [GPU support:]

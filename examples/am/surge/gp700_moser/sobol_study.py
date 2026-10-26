@@ -44,7 +44,7 @@ DX = 3e-6; PAUSE = 8.8e-3; TGAP = 10.0
 RANGES = {'D_deg2_um': (a.D_range[0], a.D_range[1], 'log'), 'nucleation_density': (1e13, 1e14, 'log'), 'critical_undercooling': (3.0, 25.0, 'lin')}
 if a.texture: RANGES['texture_c2'] = (1.0, 4.0, 'lin')
 for nm, lo, hi in a.range: RANGES[nm] = (float(lo), float(hi), 'log' if nm in ('D_deg2_um','nucleation_density') else 'lin')
-lamb = json.load(open(os.path.join(HERE, '..', '..', 'docs', 'lamb2023_fig5a_srod.json')))
+lamb = json.load(open(os.path.join(HERE, '..', '..', '..', '..', 'docs', 'lamb2023_fig5a_srod.json')))
 def score(summary):
     rows = np.array(summary['srod'].get('height_originating', []))
     if len(rows) == 0: return None

@@ -27,7 +27,7 @@ DH = depth of heat effected zone; always greater than melt_depth :ul
 
 [Examples:]
 
-Taken from examples/stitch/stitching_rectangular_domain.
+Taken from examples/am/legacy/stitch/stitching_rectangular_domain.
 
 
 ###################################

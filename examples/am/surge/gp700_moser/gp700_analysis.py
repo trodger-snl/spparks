@@ -23,7 +23,7 @@ ap.add_argument('--segment-deg', type=float, default=None, help='re-segment grai
 ap.add_argument('--top-um', type=float, default=None, help='ignore everything above this height (um), e.g. the last never-remelted layer')
 ap.add_argument('--crop', type=float, nargs=4, metavar=('X0','X1','Y0','Y1'), default=None, help='analyse only this lateral window (um)')
 ap.add_argument('--heatmap-npz', default=None, help='save the originating-class (height, SROD) 2-D histogram over 0-120 um for heatmap_plot.py')
-ap.add_argument('--lamb', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'docs'), help='dir with lamb2023_fig5{a,c}_srod.json')
+ap.add_argument('--lamb', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', '..', 'docs'), help='dir with lamb2023_fig5{a,c}_srod.json')
 a = ap.parse_args(); os.makedirs(a.out, exist_ok=True); dxu = a.dx*1e6
 with StitchReader(a.stitch) as r:
     b = r.get_global_bounds(); t = a.time if a.time is not None else r.times[-1]

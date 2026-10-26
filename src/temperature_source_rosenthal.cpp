@@ -66,18 +66,19 @@ void RosenthalTemperatureSource::setup_temperature_source(const std::vector<std:
   auto parse = [&](size_t i, const char *what) -> double {
     if (i >= args.size())
       error->all(FLERR,"setup_temperature_source rosenthal: missing argument");
-    try {
-      return std::stod(args[i]);
-    } catch (const std::exception &) {
-      (void)what;
-      error->all(FLERR,"setup_temperature_source rosenthal: invalid numeric argument");
-      return 0.0;
+    size_t end = 0;
+    double v = 0.0;
+    try { v = std::stod(args[i], &end); } catch (const std::exception &) {}
+    if (end == 0 || end != args[i].size()) {
+      std::string msg = std::string("setup_temperature_source rosenthal: invalid ") + what + " " + args[i];
+      error->all(FLERR,msg.c_str());
     }
+    return v;
   };
 
   if (mode_str == "standard") {
-    if (args.size() < 6)
-      error->all(FLERR,"rosenthal standard: expected <Q> <lambda> <k> <alpha> <T0>");
+    if (args.size() != 6)
+      error->all(FLERR,"rosenthal standard: expected exactly <Q> <lambda> <k> <alpha> <T0>");
     mode       = RosenthalMode::STANDARD;
     Q          = parse(1,"Q");
     lambda     = parse(2,"lambda");
@@ -86,8 +87,8 @@ void RosenthalTemperatureSource::setup_temperature_source(const std::vector<std:
     T0_default = parse(5,"T0");
   }
   else if (mode_str == "aniso" || mode_str == "anisotropic") {
-    if (args.size() < 8)
-      error->all(FLERR,"rosenthal aniso: expected <Q> <lambda> <k> <alpha> <T0> <eta_y> <eta_z>");
+    if (args.size() != 8)
+      error->all(FLERR,"rosenthal aniso: expected exactly <Q> <lambda> <k> <alpha> <T0> <eta_y> <eta_z>");
     mode       = RosenthalMode::ANISOTROPIC;
     Q          = parse(1,"Q");
     lambda     = parse(2,"lambda");
@@ -98,8 +99,8 @@ void RosenthalTemperatureSource::setup_temperature_source(const std::vector<std:
     eta_z      = parse(7,"eta_z");
   }
   else if (mode_str == "keyhole") {
-    if (args.size() < 8)
-      error->all(FLERR,"rosenthal keyhole: expected <Q> <lambda_p> <lambda_l> <k> <alpha> <T0> <d> [<n_quad>]");
+    if (args.size() != 8 && args.size() != 9)
+      error->all(FLERR,"rosenthal keyhole: expected exactly <Q> <lambda_p> <lambda_l> <k> <alpha> <T0> <d> [<n_quad>]");
     mode       = RosenthalMode::KEYHOLE;
     Q          = parse(1,"Q");
     lambda_p   = parse(2,"lambda_p");

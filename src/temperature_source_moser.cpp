@@ -106,11 +106,14 @@ MoserTemperatureSource::~MoserTemperatureSource()
 void MoserTemperatureSource::setup_temperature_source(const std::vector<std::string> &args)
 {
   auto parse = [&](size_t i) -> double {
-    try { return std::stod(args[i]); }
-    catch (const std::exception &) {
-      error->all(FLERR,"setup_temperature_source moser: invalid numeric argument");
-      return 0.0;
+    size_t end = 0;
+    double v = 0.0;
+    try { v = std::stod(args[i], &end); } catch (const std::exception &) {}
+    if (end == 0 || end != args[i].size()) {
+      std::string msg = "setup_temperature_source moser: invalid numeric argument " + args[i];
+      error->all(FLERR,msg.c_str());
     }
+    return v;
   };
 
   // Decide mode by looking at the first token.
@@ -129,9 +132,9 @@ void MoserTemperatureSource::setup_temperature_source(const std::vector<std::str
   }
 
   if (mode == MoserMode::STANDARD) {
-    if (args.size() - first_numeric < 9) {
+    if (args.size() - first_numeric != 9) {
       error->all(FLERR,
-        "setup_temperature_source moser [standard]: expected <Q> <lambda> <k> <alpha> <T0> <cp> <sx> <sy> <sz>");
+        "setup_temperature_source moser [standard]: expected exactly <Q> <lambda> <k> <alpha> <T0> <cp> <sx> <sy> <sz>");
     }
     n_lobes_ = 1;
 
@@ -149,9 +152,9 @@ void MoserTemperatureSource::setup_temperature_source(const std::vector<std::str
   }
   else {
     // KEYHOLE: 6 common floats + 5 per lobe * 2 lobes = 16 floats
-    if (args.size() - first_numeric < 16) {
+    if (args.size() - first_numeric != 16) {
       error->all(FLERR,
-        "setup_temperature_source moser keyhole: expected <Q> <lambda> <k> <alpha> <T0> <cp> "
+        "setup_temperature_source moser keyhole: expected exactly <Q> <lambda> <k> <alpha> <T0> <cp> "
         "<f_top> <sx_top> <sy_top> <sz_top> <z_top> "
         "<f_bot> <sx_bot> <sy_bot> <sz_bot> <z_bot>");
     }

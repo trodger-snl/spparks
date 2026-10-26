@@ -54,6 +54,7 @@ class AppPhaseField : public AppLattice {
  protected:
   // for a child that parses its own app_style arguments and sets the model
   AppPhaseField(class SPPARKS *, int, char **, int parse);
+  bool yes_no(const char *word, const char *command);   // else error
 
   enum Model { ALLEN_CAHN, CAHN_HILLIARD, GRAIN_GROWTH, CH_HEAT, TWO_PHASE } model;
   PFAllenCahn ac;

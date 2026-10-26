@@ -209,6 +209,11 @@ query.  It does not support the <I>keyhole</I> mode,
 periodic boundaries, or a <A HREF = "processors.html">processors</A> grid that splits
 z (use processors * * 1).
 </P>
+<P>A word that is not a conduction keyword is an error, as is a number of
+positional (Moser) values other than nine.  With <I>ded</I>, <I>layer_thickness</I>
+must be 0 and <I>packing</I> 1; the <I>card</I> form leaves out the process set's
+layer thickness when <I>ded</I> is given.
+</P>
 <P><B>Related commands:</B>
 </P>
 <P><A HREF = "setup_temperature_source.html">setup_temperature_source</A>,

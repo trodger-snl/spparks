@@ -133,9 +133,6 @@ void CreateSites::command(int narg, char **arg)
     } else error->all(FLERR,"Illegal create_sites command");
   }
 
-  // error checks
-  // full option only allowed for on-lattice, style = BOX, simple lattices
-
   // create sites, either on-lattice or off-lattice
 
   if (domain->me == 0) {

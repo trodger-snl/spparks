@@ -132,7 +132,7 @@ void AppPhaseField::input_app(char *command, int narg, char **arg)
     error->all(FLERR,"Unrecognized command");
 
   if (strcmp(arg[0],"enforce_concentration_limits") == 0 && narg == 2)
-    chh.q.enforce = strcmp(arg[1],"yes") == 0;
+    chh.q.enforce = yes_no(arg[1],"phasefield/command");
   else if (strcmp(arg[0],"scale_energy") == 0 && narg % 2 == 1) {
     for (int i = 1; i < narg; i += 2) {
       if (strcmp(arg[i],"free") == 0) scale_free = atof(arg[i+1]);
@@ -140,6 +140,19 @@ void AppPhaseField::input_app(char *command, int narg, char **arg)
       else error->all(FLERR,"Illegal phasefield/command scale_energy");
     }
   } else error->all(FLERR,"Illegal phasefield/command");
+}
+
+/* ---------------------------------------------------------------------- */
+
+bool AppPhaseField::yes_no(const char *word, const char *command)
+{
+  if (strcmp(word,"yes") == 0) return true;
+  if (strcmp(word,"no") != 0) {
+    char str[128];
+    snprintf(str,128,"Illegal %s: expected yes or no, got %s",command,word);
+    error->all(FLERR,str);
+  }
+  return false;
 }
 
 /* ---------------------------------------------------------------------- */

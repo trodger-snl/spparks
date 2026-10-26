@@ -195,6 +195,11 @@ query.  It does not support the {keyhole} mode,
 periodic boundaries, or a "processors"_processors.html grid that splits
 z (use processors * * 1).
 
+A word that is not a conduction keyword is an error, as is a number of
+positional (Moser) values other than nine.  With {ded}, {layer_thickness}
+must be 0 and {packing} 1; the {card} form leaves out the process set's
+layer thickness when {ded} is given.
+
 [Related commands:]
 
 "setup_temperature_source"_setup_temperature_source.html,

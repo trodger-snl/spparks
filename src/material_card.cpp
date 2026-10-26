@@ -333,7 +333,8 @@ std::vector<std::string> MaterialCard::source_tokens(const std::string &type,
     scalar("latent", latent, "thermal.latent_fusion");
     scalar("k_powder", k_powder, "powder.conductivity");
     scalar("emissivity", emissivity, "thermal.emissivity");
-    scalar("layer_thickness", layer_thickness, "process layer_thickness");
+    if (!in_deck("ded"))           // DED has no powder bed
+      scalar("layer_thickness", layer_thickness, "process layer_thickness");
     if (conv_h) { out.push_back("convection"); out.push_back(num(*conv_h)); out.push_back(num(*conv_Tinf)); }
     else if (!in_deck("convection")) missing += " convection (process convection)";
     if (!missing.empty())

@@ -95,7 +95,8 @@ for {rosenthal} and {moser}, the linear-model constants, or the tables
 evaluated at the card's reference temperature :l
 alpha : k / (density * cp) :l
 for {conduction} also the {k_table}, {cp_table}, {latent}, {k_powder},
-{emissivity}, {layer_thickness} and {convection} keywords. :l,ule
+{emissivity}, {layer_thickness} (not with {ded}, which has no powder
+bed) and {convection} keywords. :l,ule
 
 {Q}, {lambda}, {T0} and {spot} after {card} replace the card's values.
 Every other token is appended after the expanded arguments, so a

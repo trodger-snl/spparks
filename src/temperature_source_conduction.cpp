@@ -36,11 +36,14 @@ void ConductionTemperatureSource::setup_temperature_source(
   auto num = [&](size_t i) -> double {
     if (i >= args.size())
       error->all(FLERR,"setup_temperature_source conduction: missing keyword value");
-    try { return std::stod(args[i]); }
-    catch (const std::exception &) {
-      error->all(FLERR,"setup_temperature_source conduction: invalid numeric argument");
-      return 0.0;
+    size_t end = 0;
+    double v = 0.0;
+    try { v = std::stod(args[i], &end); } catch (const std::exception &) {}
+    if (end == 0 || end != args[i].size()) {
+      std::string msg = "setup_temperature_source conduction: invalid numeric argument " + args[i];
+      error->all(FLERR,msg.c_str());
     }
+    return v;
   };
   auto table = [&](size_t &i, std::vector<double> &T, std::vector<double> &v) {
     const int n = (int) num(++i);
@@ -99,7 +102,16 @@ void ConductionTemperatureSource::setup_temperature_source(
       else if (args[i] == "adiabatic") cfg.far_bc = FAR_ADIABATIC;
       else error->all(FLERR,"setup_temperature_source conduction: far_bc is fixed or adiabatic");
     }
-    else moser_args.push_back(a);
+    else {
+      // positional (Moser) values are numbers; any other word is a typo
+      size_t end = 0;
+      try { std::stod(a, &end); } catch (const std::exception &) {}
+      if (end == 0 || end != a.size()) {
+        std::string msg = "setup_temperature_source conduction: unknown keyword " + a;
+        error->all(FLERR,msg.c_str());
+      }
+      moser_args.push_back(a);
+    }
   }
 
   MoserTemperatureSource::setup_temperature_source(moser_args);
@@ -120,7 +132,7 @@ void ConductionTemperatureSource::setup_temperature_source(
   if (cfg.ded) {
     if (cfg.layer_thickness > 0.0 || cfg.packing < 1.0)
       error->all(FLERR,"setup_temperature_source conduction: ded has no powder bed "
-                 "(drop layer_thickness and packing)");
+                 "(layer_thickness must be 0 and packing 1)");
     if (cfg.ded_radius < 0.0) cfg.ded_radius = 2.0 * sigma_x();
     if (cfg.T_birth < 0.0) cfg.T_birth = T0_default;
     if (cfg.ded_radius == 0.0 || cfg.ded_depth == 0.0)

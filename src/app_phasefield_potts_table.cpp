@@ -165,15 +165,14 @@ void AppPhaseFieldPottsTable::input_app(char *command, int narg, char **arg)
       set_pf_resetlist(narg,arg);
 
     else if (strcmp(arg[0],"print_connectivity") == 0)
-      print_stencil = strcmp(arg[1],"yes") == 0;
+      print_stencil = yes_no(arg[1],"pottspf/command");
 
     else if (strcmp(arg[0],"set_site_phase") == 0) {
-      if (strcmp(arg[1],"yes") == 0) init_site_phase=true;
-      else init_site_phase=false;
+      init_site_phase = yes_no(arg[1],"pottspf/command");
     }
 
     else if (strcmp(arg[0],"enforce_concentration_limits") == 0) {
-      chh.q.enforce = tp.enforce = strcmp(arg[1],"yes") == 0;
+      chh.q.enforce = tp.enforce = yes_no(arg[1],"pottspf/command");
 
       // forcing the limits means there is nothing to warn about;
       // turning it off checks for deviations again

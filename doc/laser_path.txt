@@ -164,7 +164,9 @@ An example path file and deck are in examples/am/surge/conduction
 [GPU support:]
 
 Both forms and all keywords work identically in {additive/texture} and
-{additive/texture/kk}.  In the Kokkos app the host advances the laser
+{additive/texture/kk}, with any temperature source both apps support
+(the "conduction"_temperature_source_conduction.html source runs only in
+{additive/texture/kk}).  In the Kokkos app the host advances the laser
 pose and makes the per-pass firing decisions; the per-site temperature
 is evaluated on the device (see
 "setup_temperature_source"_setup_temperature_source.html for the

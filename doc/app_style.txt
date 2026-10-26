@@ -39,13 +39,26 @@ the list of on-lattice applications SPPARKS currently includes:
 
 "additive/texture"_app_additive_texture.html = additive manufacturing melting, solidification and texture
 "additive/texture/kk"_app_additive_texture.html = Kokkos (GPU) variant of additive/texture
+"am/ellipsoid"_app_am_ellipsoid.html = additive manufacturing with a double-ellipsoid melt pool
 "diffusion"_app_diffusion.html = vacancy exchange diffusion model
+"diffusion/multiphase"_app_diffusion_multiphase.html = multi-species, multi-phase diffusion model
+"diffusion/multiphase/kk"_app_diffusion_multiphase.html = Kokkos (GPU) variant of diffusion/multiphase
 "erbium"_app_erbium.html = H/He diffusion/rection on an Erbium lattice
 "ising"_app_ising.html = Ising model
 "ising/single"_app_ising.html = variant Ising model
 "membrane"_app_membrane.html = membrane model of lipid,water,protein
+"phasefield"_app_phasefield.html = phase-field models (no Potts spins)
+"phasefield/kk"_app_phasefield.html = Kokkos (GPU) variant of phasefield
+"phasefield/potts"_app_phasefield_potts.html = Potts model coupled to a two-phase concentration field
+"phasefield/potts/kk"_app_phasefield_potts.html = Kokkos (GPU) variant of phasefield/potts
+"phasefield/potts/table"_app_phasefield_potts_table.html = Potts model coupled to a concentration field with tabulated free energies
+"phasefield/potts/table/kk"_app_phasefield_potts_table.html = Kokkos (GPU) variant of phasefield/potts/table
 "potts"_app_potts.html = Potts model for grain growth
+"potts/am/bezier"_app_potts_am_bezier.html = additive manufacturing with a Bezier-curve melt pool
+"potts/am/path/gen"_app_potts_am_path_gen.html = generates the computational volumes of an AM build for stitching
+"potts/am/weld"_app_potts_am_weld.html = additive manufacturing weld with rastered passes
 "potts/anneal"_app_potts_anneal.html = Potts model of heat treatments (recovery, recrystallization) of oriented grain structures
+"potts/anneal/kk"_app_potts_anneal.html = Kokkos (GPU) variant of potts/anneal
 "potts/neigh"_app_potts.html = variant Potts model
 "potts/neighonly"_app_potts.html = variant Potts model
 "potts/kk"_app_potts.html = Kokkos (GPU) variant of potts
@@ -55,8 +68,15 @@ the list of on-lattice applications SPPARKS currently includes:
 "potts/quaternion/kk"_app_potts_quaternion.html = Kokkos (GPU) variant of potts/quaternion
 "potts/grad"_app_potts_grad.html = Potts model with temperature gradient
 "potts/pin"_app_potts_pin.html = Potts model with pinning sites
+"potts/pin/kk"_app_potts_pin.html = Kokkos (GPU) variant of potts/pin
 "potts/rx"_app_potts_rx.html = Potts model of static or dynamic recrystallization
-"potts/strain"_app_potts_strain.html = Potts model with per-site strain  :ul
+"potts/rx/kk"_app_potts_rx.html = Kokkos (GPU) variant of potts/rx
+"potts/strain"_app_potts_strain.html = Potts model with per-site strain
+"potts/strain/pin"_app_potts_strain_pin.html = Potts model with per-site strain and pinning sites
+"potts/weld"_app_potts_weld.html = Potts model of welding with an elliptical or teardrop pool
+"potts/weld/jom"_app_potts_weld_jom.html = Potts model of welding by melting and resolidification
+"sinter"_app_sinter.html = sintering model of grains and pores
+"sinter/kk"_app_sinter.html = Kokkos (GPU) variant of sinter :ul
 
 Off-lattice applications define a set of mobile sites in space on
 which events occur.  The sites typically represent particles.  Each

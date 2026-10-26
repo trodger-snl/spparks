@@ -1,0 +1,70 @@
+"SPPARKS Website"_sws - "SPPARKS Documentation"_sd - "SPPARKS Commands"_sc :c
+
+:link(sws,https://spparks.github.io)
+:link(sd,Manual.html)
+:link(sc,Section_commands.html#comm)
+
+:line
+
+read_table command :h3
+
+[Syntax:]
+
+read_table file name :pre
+
+file = name of the table file
+name = name of the table the application provides, e.g. a phase name :ul
+
+[Examples:]
+
+read_table G_fcc.txt fcc
+read_table ../phasefield_potts_table/G_liquid.txt liquid :pre
+
+[Description:]
+
+Read a 2d table of values from a file into a table defined by the
+application.  The application names its tables; for the phasefield
+styles a table is a phase's free energy G(c,T), named by the phase
+names given in the app_style command.  An unknown name is an error.
+
+The file starts with one comment line, which is skipped.  Header lines
+follow; blank lines and anything after a "#" are ignored:
+
+nrows ncols size : the table has nrows rows and ncols columns
+rowcolvals : (optional) the file also carries the row and column values :tb(s=:)
+
+The header ends at a "Values" line, followed by one blank line and
+then the rows of values, one table row per line, separated by white
+space.  With {rowcolvals} the first line holds a 0 followed by the
+ncols column values, and each later line starts with its row value,
+so the file has nrows+1 lines of ncols+1 values.  A line with the wrong
+number of values is an error.  For the phasefield free-energy tables
+the rows are temperatures (positive, evenly spaced) and the columns
+compositions (0 to 1, evenly spaced; the blank lines are not shown):
+
+# Free energy Al-Si fcc phase
+20 101 size
+rowcolvals
+Values
+0     0.00  0.01  0.02 ...
+100.0 1.000 0.997 0.994 ...
+200.0 0.983 0.979 0.976 ...
+... :pre
+
+A file name ending in ".gz" is read through gunzip if SPPARKS was
+built with -DLAMMPS_GZIP.
+
+[Restrictions:]
+
+This command must be used after the "app_style"_app_style.html
+command, and only with applications that define tables:
+"phasefield"_app_phasefield.html and
+"phasefield/potts/table"_app_phasefield_potts_table.html (and their
+/kk variants).
+
+[Related commands:]
+
+"app_style phasefield"_app_phasefield.html,
+"app_style phasefield/potts/table"_app_phasefield_potts_table.html
+
+[Default:] none

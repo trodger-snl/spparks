@@ -180,7 +180,9 @@ this form.
 <P><B>GPU support:</B>
 </P>
 <P>Both forms and all keywords work identically in <I>additive/texture</I> and
-<I>additive/texture/kk</I>.  In the Kokkos app the host advances the laser
+<I>additive/texture/kk</I>, with any temperature source both apps support
+(the <A HREF = "temperature_source_conduction.html">conduction</A> source runs only in
+<I>additive/texture/kk</I>).  In the Kokkos app the host advances the laser
 pose and makes the per-pass firing decisions; the per-site temperature
 is evaluated on the device (see
 <A HREF = "setup_temperature_source.html">setup_temperature_source</A> for the

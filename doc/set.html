@@ -68,6 +68,8 @@ set site stitch equiaxed.st first
 set site stitch equiaxed.st last
 set site stitch equiaxed.st 1.0
 set i1 stitch equiaxed.st 1.0
+set site hdf5 box12.h5
+set i2 hdf5 mask.h5 skip_novalue
 set d1 stitch equiaxed.st 1.0
 set site stitch left.st last region left_half
 set site stitch left.st last skip_novalue
@@ -115,7 +117,7 @@ For lables <I>xyz</I> the site is displaced to a new random point within a
 sphere of radius <I>delta</I> surrounding the site (or a circle for 2d
 models, or a line segement for 1d models).
 </P>
-<P>Styles <I>stitch</I> and <I>bfile</I> can only be used for simple regular
+<P>Styles <I>stitch</I>, <I>hdf5</I> and <I>bfile</I> can only be used for simple regular
 lattices.  This means lattice = line (line/2n) for 1d models, square
 (sq/4n or sq/8n) for 2d, or simple cubic (sc/6n or sc/26n) for 3d.
 See the <A HREF = "create_sites.html">create_sites</A> command for more details.
@@ -149,6 +151,23 @@ value of any sites in a different way.
 </P>
 <P>See the examples/am/legacy/stitch dir for examples of SPPARKS scripts
 that read and write <I>stitch</I> files.
+</P>
+<P>For style <I>hdf5</I>, the values of the specified <I>label</I> are read from a
+file written by the <A HREF = "dump.html">dump hdf5</A> command (or by an external
+program that follows its layout, e.g. the void mask written by
+tools/ct_defects.py).  The file holds one value per site in a dataset
+named after the label (<I>site</I>, <I>iN</I> or <I>dN</I>), keyed by absolute lattice
+index, so a file that covers a whole build can be read into any
+sub-box of it, e.g. each box of a box-per-layer run.  There is no
+timestamp: an hdf5 dump stores one state per site.  Sites the file does
+not cover (outside its extent, or beyond the end of a field that is
+shorter than the file) read as the dataset's "no value present"
+sentinel (<I>no_value</I> attribute; -1 for integer fields and 0.0 for
+floating-point fields by default).  As for <I>stitch</I>, the <I>fraction</I>,
+<I>loop</I>, <I>region</I>, <I>if</I> and <I>skip_novalue</I> keywords select which sites
+are overwritten.  Each rank reads only its own sub-domain; with more
+than one rank the read uses MPI-IO.  It is an error if the file has no
+dataset for the label.
 </P>
 <P>For style <I>bfile</I>, a binary file is read to extract the values
 associated with the specified <I>label</I>.  The binary file must be
@@ -199,8 +218,8 @@ per-site quantity to be reset.  The per-site quantity specified by
 <I>label2</I> is compared to the numeric <I>nvalue2</I> and if the condition is
 not met, then the site is skipped.
 </P>
-<P>The keyword <I>skip_novalue</I> is only valid for the <I>stitch</I> style.  A
-<I>stitch</I> file stores a "no value present" sentinel for each field (-1
+<P>The keyword <I>skip_novalue</I> is only valid for the <I>stitch</I> and <I>hdf5</I>
+styles.  A <I>stitch</I> or <I>hdf5</I> file stores a "no value present" sentinel for each field (-1
 for integer fields, 0.0 for floating-point fields by default) that is
 returned for any site the file has no data for.  When <I>skip_novalue</I> is
 specified, sites whose value read from the file equals this sentinel are
@@ -219,6 +238,10 @@ default.
 <P>The <I>stitch</I> style is part the STITCH package.  It is only enabled if
 SPPARKS was built with that package.  See <A HREF = "Section_start.html#start_3">Section
 2.3</A> for more info on how to do this.
+</P>
+<P>The <I>hdf5</I> style is only enabled if SPPARKS was built with HighFive
+(the CMake option -DSPPARKS_ENABLE_HIGHFIVE=ON, or --highfive with
+src/build_cmake.sh).
 </P>
 <P><B>Related commands:</B>
 </P>

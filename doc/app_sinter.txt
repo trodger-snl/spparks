@@ -138,7 +138,8 @@ The following additional commands are defined by this application:
 The following diagnostic styles are also useful with this application:
 
 "sinter_density"_diag_sinter_density.html - calculate density of the porous compact
-"sinter_free_energy_pore"_diag_sinter_free_energy_pore.html - calculate surface pore area of the porous compact :ul
+"sinter_free_energy_pore"_diag_sinter_free_energy_pore.html - calculate surface pore area of the porous compact
+"sinter_free_energy"_diag_sinter_free_energy_pore.html - count the pore surface over the whole domain :ul
 
 Use of the pore curvature to determine the sintering stress is
 described in the "2012 Garcia-Cardona paper below"_#Garcia-Cardona2.

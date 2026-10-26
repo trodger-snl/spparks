@@ -106,7 +106,15 @@ option.
 (app styles ending in <I>/kk</I>) run rKMC only with the <I>color</I> or
 <I>color/strict</I> style.  With <I>color/strict</I>, <A HREF = "app_potts.html">app_style
 potts/kk</A> gives the same answer as <A HREF = "app_potts.html">app_style
-potts</A>.
+potts</A>, and likewise potts/pin/kk, potts/rx/kk,
+potts/anneal/kk (without fast math), diffusion/multiphase/kk,
+sinter/kk and phasefield/potts(/table)/kk with their CPU styles; see
+each style's page.
+</P>
+<P>An application running in <A HREF = "app_update_only.html">app_update_only</A> mode
+without a KMC solver never sweeps: it needs no sweep command, accepts
+any sweep style, and random or raster sweeps need no sectors in
+parallel.
 </P>
 <P><B>Related commands:</B>
 </P>

@@ -19,6 +19,9 @@ own. Each problem has an input script (in.*) and produces a log file (log.*). So
 (dump.*).
 </P>
 <P>See <A HREF = "Section_tools.html">Additional Tools</A> for visualization of outputs.
+The COUPLE directory has examples of using SPPARKS as a library; see
+COUPLE/README.  examples/README marks the examples developed on the
+SURGE branch and those with Kokkos (<I>/kk</I>) decks.
 </P>
 <P>These are the sample problems in the examples sub-directories:
 </P>
@@ -30,10 +33,14 @@ own. Each problem has an input script (in.*) and produces a log file (log.*). So
 <TR><TD >thin_film_growth</TD><TD > 2d thin file growth with diffusion app</TD></TR>
 <TR><TD >membrane</TD><TD >         2d membrane model of lipid, fluid, protein states</TD></TR>
 <TR><TD >multiphase</TD><TD >       multiphase diffusion</TD></TR>
+<TR><TD >phasefield</TD><TD >       phase-field-only models (Allen-Cahn, Cahn-Hilliard, ...)</TD></TR>
 <TR><TD >phasefield_potts</TD><TD > 3d Potts with phase field model</TD></TR>
+<TR><TD >phasefield_potts_table</TD><TD > Potts + phase field with tabulated G(c,T)</TD></TR>
 <TR><TD >potts</TD><TD >            3d Potts model</TD></TR>
+<TR><TD >potts_anneal</TD><TD >     IN625 heat treatment (potts/anneal)</TD></TR>
 <TR><TD >potts_grad</TD><TD >       3d Potts model with temperature gradient</TD></TR>
 <TR><TD >potts_quaternion</TD><TD > 3d Potts model incorporating crystalline orientations</TD></TR>
+<TR><TD >potts_rx</TD><TD >         static and dynamic recrystallization (potts/rx)</TD></TR>
 <TR><TD >relax</TD><TD >            2d Metropolis atomic relaxation</TD></TR>
 <TR><TD >sintering</TD><TD >        sintering application 
 </TD></TR></TABLE></DIV>
@@ -58,7 +65,7 @@ examples/README for the list.
 <P>Here is how you might run and visualize one of the sample problems:
 </P>
 <PRE>cd examples/potts_quaternion
-mpirun -np 8 ../../src/spk_mpi -in in.potts_cubic_2d # run the problem 
+mpirun -np 8 /path/to/build/spparks -in in.potts_cubic_2d # run the problem 
 </PRE>
 <P>Running the simulation produces the files <I>potts_cubic_2d.st</I> and
 <I>log.spparks</I>.

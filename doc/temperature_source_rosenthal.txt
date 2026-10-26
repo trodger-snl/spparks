@@ -12,7 +12,8 @@ temperature_source rosenthal :h3
 
 setup_temperature_source rosenthal standard Q lambda k alpha T0
 setup_temperature_source rosenthal aniso    Q lambda k alpha T0 eta_y eta_z
-setup_temperature_source rosenthal keyhole  Q lambda_p lambda_l k alpha T0 d \[n_quad\] :pre
+setup_temperature_source rosenthal keyhole  Q lambda_p lambda_l k alpha T0 d \[n_quad\]
+setup_temperature_source rosenthal card \[Q v\] \[lambda v\] \[T0 v\] :pre
 
 mode = {standard}, {aniso} (or {anisotropic}), or {keyhole} :ulb,l
 Q = total laser power (W) :l
@@ -24,7 +25,9 @@ alpha = thermal diffusivity (m^2/s) :l
 T0 = ambient / preheat temperature (K) :l
 eta_y, eta_z = anisotropic stretching factors in y and z (aniso only); both > 0 :l
 d = half-depth of the line source over \[-d, d\] (m), keyhole only :l
-n_quad = optional Gauss-Legendre order in \[2,64\] for the line-source quadrature (default 8) :l,ule
+n_quad = optional Gauss-Legendre order in \[2,64\] for the line-source quadrature (default 8) :l
+card = take the {standard} arguments from the loaded "material"_material.html
+       card; see "setup_temperature_source"_setup_temperature_source.html :l,ule
 
 [Examples:]
 
@@ -124,6 +127,8 @@ Q, k and alpha must be > 0; lambda (standard, aniso), lambda_p and
 lambda_l (keyhole), eta_y and eta_z (aniso), and d (keyhole) must be
 > 0, or setup stops with an error.  {n_quad} is clamped silently to
 \[2, 64\].  Extra trailing arguments are ignored.
+
+The {card} form supports {standard} mode only.
 
 [Related commands:]
 

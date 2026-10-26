@@ -23,7 +23,7 @@
 
 <LI>keyword = <I>delay</I> or <I>delta</I> or <I>fileper</I> or <I>first</I> or <I>flush</I> or <I>logfreq</I> or <I>loglinfreq</I> or <I>nfile</I> or <I>pad</I> or <I>region</I> or <I>sort</I> or <I>thresh</I> or <I>tol</I> 
 
-<LI>this keyword applies only to the <I>stitch</I> dump style 
+<LI>these keywords apply only to the <I>stitch</I> or <I>hdf5</I> dump style (see each keyword) 
 
 <LI>keyword = <I>retain</I> or <I>chunk</I> or <I>origin</I> or <I>extent</I> or <I>verbose</I> or <I>atomic</I> or <I>compress</I> or <I>turns</I> 
 
@@ -232,7 +232,8 @@ timestep order.
 <HR>
 
 <P>The <I>region</I> keyword allows sub-selection of lattice sites to output.
-If specified, only sites in the region will be written to the dump
+It applies to the <I>text</I>, <I>sites</I>, <I>vtk</I> and <I>image</I> styles; <I>stitch</I>
+and <I>hdf5</I> always write every site.  If specified, only sites in the region will be written to the dump
 file or included in the image.  Only one region can be applied as a
 filter (the last one specified).  See the <A HREF = "region.html">region</A> command
 for more details.  Note that a region can be defined as the "inside"
@@ -368,7 +369,8 @@ unsorted output.
 <HR>
 
 <P>The <I>thresh</I> keyword allows sub-selection of lattice sites to output.
-Multiple thresholds can be specified.  Specifying "none" turns off all
+Like <I>region</I>, it applies to the <I>text</I>, <I>sites</I>, <I>vtk</I> and <I>image</I>
+styles only.  Multiple thresholds can be specified.  Specifying "none" turns off all
 threshold criteria.  If thresholds are specified, only sites whose
 attributes meet all the threshold criteria are written to the dump
 file or included in the image.  The possible attributes that can be

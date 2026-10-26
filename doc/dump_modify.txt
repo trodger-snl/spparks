@@ -16,7 +16,7 @@ dump-ID = ID of dump to modify :ulb,l
 one or more keyword/value pairs may be appended :l
 these keywords apply to various dump styles :l
 keyword = {delay} or {delta} or {fileper} or {first} or {flush} or {logfreq} or {loglinfreq} or {nfile} or {pad} or {region} or {sort} or {thresh} or {tol} :l
-this keyword applies only to the {stitch} dump style :l
+these keywords apply only to the {stitch} or {hdf5} dump style (see each keyword) :l
 keyword = {retain} or {chunk} or {origin} or {extent} or {verbose} or {atomic} or {compress} or {turns} :l
   {delay} value = tdelay
     tdelay = delay dump until at least this time (seconds)
@@ -216,7 +216,8 @@ timestep order.
 :line
 
 The {region} keyword allows sub-selection of lattice sites to output.
-If specified, only sites in the region will be written to the dump
+It applies to the {text}, {sites}, {vtk} and {image} styles; {stitch}
+and {hdf5} always write every site.  If specified, only sites in the region will be written to the dump
 file or included in the image.  Only one region can be applied as a
 filter (the last one specified).  See the "region"_region.html command
 for more details.  Note that a region can be defined as the "inside"
@@ -352,7 +353,8 @@ unsorted output.
 :line
 
 The {thresh} keyword allows sub-selection of lattice sites to output.
-Multiple thresholds can be specified.  Specifying "none" turns off all
+Like {region}, it applies to the {text}, {sites}, {vtk} and {image}
+styles only.  Multiple thresholds can be specified.  Specifying "none" turns off all
 threshold criteria.  If thresholds are specified, only sites whose
 attributes meet all the threshold criteria are written to the dump
 file or included in the image.  The possible attributes that can be

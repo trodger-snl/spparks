@@ -15,7 +15,8 @@
 </P>
 <PRE>setup_temperature_source rosenthal standard Q lambda k alpha T0
 setup_temperature_source rosenthal aniso    Q lambda k alpha T0 eta_y eta_z
-setup_temperature_source rosenthal keyhole  Q lambda_p lambda_l k alpha T0 d [n_quad] 
+setup_temperature_source rosenthal keyhole  Q lambda_p lambda_l k alpha T0 d [n_quad]
+setup_temperature_source rosenthal card [Q v] [lambda v] [T0 v] 
 </PRE>
 <UL><LI>mode = <I>standard</I>, <I>aniso</I> (or <I>anisotropic</I>), or <I>keyhole</I> 
 
@@ -38,6 +39,9 @@ setup_temperature_source rosenthal keyhole  Q lambda_p lambda_l k alpha T0 d [n_
 <LI>d = half-depth of the line source over [-d, d] (m), keyhole only 
 
 <LI>n_quad = optional Gauss-Legendre order in [2,64] for the line-source quadrature (default 8) 
+
+<LI>card = take the <I>standard</I> arguments from the loaded <A HREF = "material.html">material</A>
+       card; see <A HREF = "setup_temperature_source.html">setup_temperature_source</A> 
 </UL>
 <P><B>Examples:</B>
 </P>
@@ -137,6 +141,8 @@ or waypoint paths.
 lambda_l (keyhole), eta_y and eta_z (aniso), and d (keyhole) must be
 > 0, or setup stops with an error.  <I>n_quad</I> is clamped silently to
 [2, 64].  Extra trailing arguments are ignored.
+</P>
+<P>The <I>card</I> form supports <I>standard</I> mode only.
 </P>
 <P><B>Related commands:</B>
 </P>

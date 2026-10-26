@@ -1,0 +1,60 @@
+<HTML>
+<CENTER><A HREF = "https://spparks.github.io">SPPARKS Website</A> - <A HREF = "Manual.html">SPPARKS Documentation</A> - <A HREF = "Section_commands.html#comm">SPPARKS Commands</A> 
+</CENTER>
+
+
+
+
+
+
+<HR>
+
+<H3>app_update_only command 
+</H3>
+<P><B>Syntax:</B>
+</P>
+<PRE>app_update_only flag 
+</PRE>
+<UL><LI>flag = <I>yes</I> or <I>no</I> 
+</UL>
+<P><B>Examples:</B>
+</P>
+<PRE>app_update_only yes 
+</PRE>
+<P><B>Description:</B>
+</P>
+<P>Choose whether a run performs only the application's own update
+routine instead of Monte Carlo events.  Some on-lattice applications
+define an update routine (app_update) that advances their state
+directly, e.g. a finite-difference field step or a moving heat source.
+By default (no) it is called after each KMC event or rKMC sweep.  With
+<I>yes</I> the KMC events and rKMC site sweeps are skipped: each timestep
+is one call of the update routine, followed by output.
+</P>
+<P>The timestep is the application's sweep time (one sweep's worth of
+time, set by the application).  When no KMC solver is defined, an
+update-only run needs no <A HREF = "sweep.html">sweep</A> command; if one is given,
+any sweep style is accepted, and random or raster sweeps need no
+sectors in parallel, since the sweep is never performed.
+</P>
+<P>These applications permit <I>yes</I>: potts/anneal, potts/rx, sinter,
+phasefield, phasefield/potts, phasefield/potts/table, am/ellipsoid,
+potts/am/bezier, additive/texture (and the /kk variants of these), and
+diffusion with batch <A HREF = "deposition.html">deposition</A>.  The additive/texture and phasefield styles (and their /kk
+variants) always run update-only and set <I>yes</I> themselves.
+</P>
+<P><B>Restrictions:</B>
+</P>
+<P>This command can only be used with on-lattice applications that define
+an update routine; with any other application, <I>yes</I> is an error.
+</P>
+<P><B>Related commands:</B>
+</P>
+<P><A HREF = "sweep.html">sweep</A>, <A HREF = "solve_style.html">solve_style</A>
+</P>
+<P><B>Default:</B>
+</P>
+<P>The default is no, except for the applications listed above that set
+<I>yes</I> themselves.
+</P>
+</HTML>

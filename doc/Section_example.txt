@@ -16,6 +16,9 @@ own. Each problem has an input script (in.*) and produces a log file (log.*). So
 (dump.*).
 
 See "Additional Tools"_Section_tools.html for visualization of outputs.
+The COUPLE directory has examples of using SPPARKS as a library; see
+COUPLE/README.  examples/README marks the examples developed on the
+SURGE branch and those with Kokkos ({/kk}) decks.
 
 These are the sample problems in the examples sub-directories:
 
@@ -26,10 +29,14 @@ ising:            2d Ising model
 thin_film_growth: 2d thin file growth with diffusion app
 membrane:         2d membrane model of lipid, fluid, protein states
 multiphase:       multiphase diffusion
+phasefield:       phase-field-only models (Allen-Cahn, Cahn-Hilliard, ...)
 phasefield_potts: 3d Potts with phase field model
+phasefield_potts_table: Potts + phase field with tabulated G(c,T)
 potts:            3d Potts model
+potts_anneal:     IN625 heat treatment (potts/anneal)
 potts_grad:       3d Potts model with temperature gradient
 potts_quaternion: 3d Potts model incorporating crystalline orientations
+potts_rx:         static and dynamic recrystallization (potts/rx)
 relax:            2d Metropolis atomic relaxation
 sintering:        sintering application :tb(s=:)
 
@@ -51,7 +58,7 @@ examples/README for the list.
 Here is how you might run and visualize one of the sample problems:
 
 cd examples/potts_quaternion
-mpirun -np 8 ../../src/spk_mpi -in in.potts_cubic_2d # run the problem :pre
+mpirun -np 8 /path/to/build/spparks -in in.potts_cubic_2d # run the problem :pre
 
 Running the simulation produces the files {potts_cubic_2d.st} and
 {log.spparks}.

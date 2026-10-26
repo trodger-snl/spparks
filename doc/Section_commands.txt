@@ -180,11 +180,13 @@ Initialization commands:
 
 Setting commands:
 
+"app_update_only"_app_update_only.html,
 "dimension"_dimension.html,
 "boundary"_boundary.html,
 "lattice"_lattice.html,
 "pair_coeff"_pair_coeff.html,
 "pair_style"_pair_style.html,
+"read_table"_read_table.html,
 "reset_time"_reset_time.html,
 "sector"_sector.html,
 "seed"_seed.html,
@@ -243,6 +245,7 @@ category.  Note that commands which are only usable with certain
 applications are listed in the next section.
 
 "app_style"_app_style.html,
+"app_update_only"_app_update_only.html,
 "boundary"_boundary.html,
 "clear"_clear.html,
 "create_box"_create_box.html,
@@ -266,6 +269,7 @@ applications are listed in the next section.
 "print"_print.html,
 "processors"_processors.html,
 "read_sites"_read_sites.html,
+"read_table"_read_table.html,
 "region"_region.html,
 "reset_time"_reset_time.html,
 "run"_run.html,
@@ -303,8 +307,10 @@ applications.
 "deposition"_deposition.html,
 "diffusion/multiphase"_diffusion_multiphase.html,
 "ecoord"_ecoord.html,
-"elliopsoid_depth"_ellipsoid_depth.html,
+"ellipsoid_depth"_ellipsoid_depth.html,
 "event"_event.html,
+"event_ratios"_event_ratios.html,
+"event_temperatures"_event_temperatures.html,
 "inclusion"_inclusion.html,
 "laser_fluctuations"_laser_fluctuations.html,
 "laser_path"_laser_path.html,
@@ -313,6 +319,11 @@ applications.
 "pulse"_pulse.html,
 "setup_temperature_source"_setup_temperature_source.html,
 "temperature"_temperature.html,
+"temperature_source conduction"_temperature_source_conduction.html,
+"temperature_source hdf5"_temperature_source_hdf5.html,
+"temperature_source moser"_temperature_source_moser.html,
+"temperature_source rosenthal"_temperature_source_rosenthal.html,
+"time_sinter_start"_time_sinter_start.html,
 "volume"_volume.html,
 "weld_shape_ellipse"_weld_shape_ellipse.html,
 "weld_shape_teardrop"_weld_shape_teardrop.html
@@ -402,5 +413,19 @@ full description:
 "erbium"_diag_erbium.html,
 "propensity"_diag_propensity.html,
 "sinter_density"_diag_sinter_density.html,
+"sinter_free_energy"_diag_sinter_free_energy_pore.html,
 "sinter_free_energy_pore"_diag_sinter_free_energy_pore.html
+:tb(c=6,ea=c)
+
+:line
+
+Dump styles.  See the "dump"_dump.html command for a description of
+each style:
+
+"text"_dump.html,
+"sites"_dump.html,
+"vtk"_dump.html,
+"stitch"_dump.html,
+"hdf5"_dump.html,
+"image"_dump_image.html
 :tb(c=6,ea=c)

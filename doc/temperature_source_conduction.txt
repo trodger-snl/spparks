@@ -76,18 +76,18 @@ setup_temperature_source conduction 340.0 0.355 19.442 4.517691892111699e-06 573
     margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 &
     part part layer_thickness 30e-6 plate_top -0.2e-3 far_bc fixed :pre
 
-material ../../materials/316L.toml process single_track_340W
+material ../../../../materials/316L.toml process single_track_340W
 setup_temperature_source conduction card margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 &
     part part plate_top -0.2e-3 far_bc fixed :pre
 
 setup_temperature_source conduction card margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 &
     part plate far_bc fixed ded T_birth 600 :pre
 
-material ../../materials/Ti6Al4V.toml
+material ../../../../materials/Ti6Al4V.toml
 set i2 value 6 region substrate
 setup_temperature_source conduction card Q 340 T0 573 spot 50e-6 50e-6 75e-6 &
     layer_thickness 30e-6 convection 25 300 margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 &
-    part part plate_top 122.5e-6 plate_material ../../materials/316L.toml far_bc fixed :pre
+    part part plate_top 122.5e-6 plate_material ../../../../materials/316L.toml far_bc fixed :pre
 
 [Description:]
 

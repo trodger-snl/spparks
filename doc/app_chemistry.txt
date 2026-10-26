@@ -53,6 +53,6 @@ The following additional commands are defined by this application:
 
 :line
 
-:link(Gillepsie)
-[(Gillepsie)] Gillespie, J Chem Phys, 22, 403-434 (1976);
+:link(Gillespie)
+[(Gillespie)] Gillespie, J Chem Phys, 22, 403-434 (1976);
 Gillespie, J Phys Chem, 81, 2340-2361 (1977).

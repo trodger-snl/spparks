@@ -466,7 +466,7 @@ compile with the -DSPPARKS_SMALLSMALL setting.  This will restrict the
 total number of sites to 2^31 (about 2 billion), as well as store some
 simulation statistics in 4-byte integers.
 </P>
-<P>Note that in src/lmptype.h there are definitions of all these data
+<P>Note that in src/spktype.h there are definitions of all these data
 types as well as the MPI data types associated with them.  The MPI
 types need to be consistent with the associated C data types, or else
 SPPARKS will generate a run-time error.  As far as we know, the
@@ -623,16 +623,25 @@ that their sweeps run on a GPU (CUDA, HIP or SYCL backend) or on CPU
 threads (OpenMP backend).  Their style names end in <I>/kk</I>:
 </P>
 <UL><LI><A HREF = "app_additive_texture.html">additive/texture/kk</A>
+<LI><A HREF = "app_diffusion_multiphase.html">diffusion/multiphase/kk</A>
+<LI><A HREF = "app_phasefield.html">phasefield/kk</A>
+<LI><A HREF = "app_phasefield_potts.html">phasefield/potts/kk</A>
+<LI><A HREF = "app_phasefield_potts_table.html">phasefield/potts/table/kk</A>
 <LI><A HREF = "app_potts.html">potts/kk</A>
+<LI><A HREF = "app_potts_anneal.html">potts/anneal/kk</A>
 <LI><A HREF = "app_potts.html">potts/neigh/kk</A>
 <LI><A HREF = "app_potts.html">potts/neighonly/kk</A>
-<LI><A HREF = "app_potts_quaternion.html">potts/quaternion/kk</A> 
+<LI><A HREF = "app_potts_pin.html">potts/pin/kk</A>
+<LI><A HREF = "app_potts_quaternion.html">potts/quaternion/kk</A>
+<LI><A HREF = "app_potts_rx.html">potts/rx/kk</A>
+<LI><A HREF = "app_sinter.html">sinter/kk</A> 
 </UL>
 <P>An input deck selects one by name in its <A HREF = "app_style.html">app_style</A>
 command; no command-line switch substitutes them for the CPU styles,
 which stay available in a KOKKOS build.  Each takes the same arguments
-and commands as its CPU style; the differences are listed below and on
-each style's page.
+as its CPU style and, apart from a few exceptions (additive/texture/kk
+rejects some commands of additive/texture and adds others), the same
+commands; the differences are listed below and on each style's page.
 </P>
 <P><B>Building:</B>
 </P>
@@ -668,9 +677,12 @@ cmake --build build-hip -j
 </PRE>
 <P>KOKKOS_PREC sets the floating-point precision of the Kokkos kernels,
 with the same names as LAMMPS.  <I>double</I> computes everything in double
-precision.  <I>mixed</I> computes the temperature fields of
-additive/texture/kk and the disorientation angle of potts/quaternion/kk
-in single precision, but sums them per site in double precision.
+precision.  <I>mixed</I> computes in single precision, but sums per site in
+double precision: the temperature fields of additive/texture/kk
+(including the conduction source's solver), the disorientation and
+Read-Shockley energy of potts/quaternion/kk and potts/anneal/kk, and
+the field step of phasefield/kk and phasefield/potts(/table)/kk.
+Stored per-site state stays double.
 <I>single</I> does the sums in single precision as well.  <I>mixed</I> and
 <I>single</I> are meant for testing on GPUs with a reduced FP64 rate;
 their results differ from the <I>double</I> build in the low bits.
@@ -698,12 +710,18 @@ several instances can be created one after another in one process.
 <P><B>Restrictions:</B>
 </P>
 <P>The <I>/kk</I> styles run rejection KMC with <A HREF = "sweep.html">sweep color</A> or
-<A HREF = "sweep.html">sweep color/strict</A> only.  With a KMC solver
+<A HREF = "sweep.html">sweep color/strict</A> only.  The update-only styles
+(additive/texture/kk, phasefield/kk; see
+<A HREF = "app_update_only.html">app_update_only</A>) never sweep and need no sweep
+command.  With a KMC solver
 (<A HREF = "solve_style.html">solve_style</A>) the Potts <I>/kk</I> styles run the CPU
 code on the host.
 </P>
 <P>With <A HREF = "sweep.html">sweep color/strict</A>, potts/kk gives the same answer as
-potts at any number of processors, and potts/quaternion/kk is
+potts at any number of processors (as do potts/pin/kk, potts/rx/kk,
+diffusion/multiphase/kk, sinter/kk and phasefield/potts(/table)/kk
+with their CPU styles, and potts/anneal/kk in a build without fast
+math), and potts/quaternion/kk is
 repeatable run to run and independent of the number of processors.
 potts/neigh/kk and potts/neighonly/kk use a shared random pool, so
 their results depend on GPU thread scheduling.

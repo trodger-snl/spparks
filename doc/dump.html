@@ -42,6 +42,7 @@ dump 1 text 1.0 my.dump id site x y z
 dump 1 sites 1.0 my.sites.* id site i2 i3
 dump 1 vtk 1.0 my.vkt.* site
 dump 1 stitch 1.0 stitch_file.st site
+dump 1 hdf5 1.0 box12.h5 site i2 d6
 dump mydump text 5.0 snap.ising id site energy i1 
 </PRE>
 <P><B>Description:</B>
@@ -405,6 +406,10 @@ details.
 <P>The <I>stitch</I> style is part the STITCH package.  It is only enabled if
 SPPARKS was built with that package.  See <A HREF = "Section_start.html#start_3">Section
 2.3</A> for more info on how to do this.
+</P>
+<P>The <I>hdf5</I> style is only enabled if SPPARKS was built with HighFive
+(the CMake option -DSPPARKS_ENABLE_HIGHFIVE=ON, or --highfive with
+src/build_cmake.sh).
 </P>
 <P>For the filename specified for the <I>sites</I> or <I>vtk</I> styles, a "*"
 wildcard must be used and a "%" wildcard cannot be used.  Likewise a

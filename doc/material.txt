@@ -21,11 +21,11 @@ keyword = {process} :l
 
 [Examples:]
 
-material ../../materials/316L.toml process single_track_340W
+material ../../../../materials/316L.toml process single_track_340W
 setup_temperature_source conduction card margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 part part
 laser_path start 0.15e-3 0.10e-3 0.1475e-3 end 0.85e-3 0.10e-3 speed card hatch card 2 serpentine :pre
 
-material ../../materials/IN625.toml process amb2018_02_cbm_B
+material ../../../../materials/IN625.toml process amb2018_02_cbm_B
 nucleation_density      1e14
 critical_undercooling   5
 undercooling_deviation  3
@@ -40,8 +40,8 @@ This command loads a material parameter card for
 "additive/texture/kk"_app_additive_texture.html, and selects one of its
 example process sets.  A card is a versioned TOML file holding a
 material's properties.  Each value carries its units, its citation and,
-where known, its uncertainty.  Cards for 316L, 304L, IN625, IN718 and
-Ti-6Al-4V are in the materials/ directory of the source tree; the format
+where known, its uncertainty.  Cards for 316L, 304L, IN625, IN718,
+Ti-6Al-4V and Bi2Te3 (a draft) are in the materials/ directory of the source tree; the format
 is specified in docs/MATERIAL_CARDS.md.
 
 The command sets {liquidus}, {solidus}, {solid_front_vel} and the
@@ -67,8 +67,9 @@ overwritten.
 
 [No built-in defaults.]  Once a card is loaded, every material value the
 model uses must come from the card or from an explicit command, or the
-run stops with an error naming what is missing.  The nucleation values
-are not in any card yet, so give them in the input script.  To turn a
+run stops with an error naming what is missing.  Only the 316L card
+carries the nucleation values (as SPPARKS calibrations); with any other
+card give them in the input script.  To turn a
 term off, say so explicitly, e.g. {convection 0 300} on the
 {setup_temperature_source} command.
 
@@ -76,8 +77,10 @@ term off, say so explicitly, e.g. {convection 0 300} on the
 (power, absorptivity, scan speed, hatch, layer thickness, spot size and
 its convention, preheat, and measured melt-pool sizes where published).
 Without {process}, only the material values are available, and a
-{setup_temperature_source ... card} must give Q, lambda and T0, and the
-spot for moser and conduction, on the command line.
+{setup_temperature_source ... card} must give Q and T0, and the spot
+for moser and conduction, on the command line; lambda comes from the
+card's {optical.absorptivity} where it has one, else it must be given
+too.
 
 tools/material_card.py checks a card (units, references, changelog,
 DOIs) and fits tabulated solidification-front velocities with the

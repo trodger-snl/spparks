@@ -108,10 +108,9 @@ with no liquid and the laser away from the domain are skipped by a
 fast-forward predictor.
 
 All physics runs inside the application's per-step update.  Both
-styles run in app_update_only mode, so the rKMC site sweeps
-requested by the "sweep"_sweep.html command are never performed; a
-sweep command is still required to select the update loop, and the
-timestep is {dt} from the app_style command.
+styles run in "app_update_only"_app_update_only.html mode, so no rKMC
+site sweep is ever performed and a "sweep"_sweep.html command is not
+needed; the timestep is {dt} from the app_style command.
 
 Differences in the {additive/texture/kk} style:
 
@@ -388,6 +387,7 @@ examples/am/surge/validation/compare.sh                     : CPU vs kk bit-for-
 examples/am/surge/hdf5/stale_layer/in.stale_layer           : hdf5_csr source on additive/texture/kk
 examples/am/surge/conduction/in.single_track                : conduction source, two hatched passes
 examples/am/surge/conduction/in.single_track.card           : the same, driven by the 316L material card
+examples/am/surge/conduction/in.single_track.plate          : Ti-6Al-4V track on a 316L plate (plate_material, i2 = 6)
 examples/am/surge/conduction/in.thin_wall                   : four-layer thin wall in one process
 examples/am/surge/conduction/in.large_rectangle             : 21-layer raster read with laser_path file
 examples/am/surge/conduction/in.thin_wall.ded               : the thin wall as directed energy deposition (ded)
@@ -412,14 +412,12 @@ The lattice must be simple cubic with 26 neighbors (lattice sc/26n
 {dx}.  Style {additive/texture/kk} checks this and stops with an error
 on any other lattice spacing.
 
-A "sweep"_sweep.html command is required.  For
-{additive/texture}, any rKMC sweep style works (e.g. "sweep random
-mask no"); in parallel, random and raster sweeps need "sector
-yes"_sector.html.  Style {additive/texture/kk} requires "sweep color"
-(or {color/strict}, which is accepted but does not make this
-application repeatable).  A KMC solver cannot be used.  No sweep is
-ever performed: each step advances time by the thermal timestep {dt},
-so the sweep style does not change results.  The "sector"_sector.html
+No "sweep"_sweep.html command is needed.  If one is given, any sweep
+style is accepted (random and raster need no sectors in parallel, and
+{color/strict} does not make this application repeatable): no sweep
+is ever performed, each step advances time by the thermal timestep
+{dt}, so the sweep style does not change results.  A KMC solver
+cannot be used.  The "sector"_sector.html
 {nstop} option must be left at 1 and {tstop} unset, since the step is
 {nstop} times {dt}; both styles stop with an error otherwise.
 

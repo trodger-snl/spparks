@@ -1,0 +1,77 @@
+<HTML>
+<CENTER><A HREF = "https://spparks.github.io">SPPARKS Website</A> - <A HREF = "Manual.html">SPPARKS Documentation</A> - <A HREF = "Section_commands.html#comm">SPPARKS Commands</A> 
+</CENTER>
+
+
+
+
+
+
+<HR>
+
+<H3>read_table command 
+</H3>
+<P><B>Syntax:</B>
+</P>
+<PRE>read_table file name 
+</PRE>
+<UL><LI>file = name of the table file
+<LI>name = name of the table the application provides, e.g. a phase name 
+</UL>
+<P><B>Examples:</B>
+</P>
+<PRE>read_table G_fcc.txt fcc
+read_table ../phasefield_potts_table/G_liquid.txt liquid 
+</PRE>
+<P><B>Description:</B>
+</P>
+<P>Read a 2d table of values from a file into a table defined by the
+application.  The application names its tables; for the phasefield
+styles a table is a phase's free energy G(c,T), named by the phase
+names given in the app_style command.  An unknown name is an error.
+</P>
+<P>The file starts with one comment line, which is skipped.  Header lines
+follow; blank lines and anything after a "#" are ignored:
+</P>
+<DIV ALIGN=center><TABLE  BORDER=1 >
+<TR><TD >nrows ncols size </TD><TD > the table has nrows rows and ncols columns</TD></TR>
+<TR><TD >rowcolvals </TD><TD > (optional) the file also carries the row and column values 
+</TD></TR></TABLE></DIV>
+
+<P>The header ends at a "Values" line, followed by one blank line and
+then the rows of values, one table row per line, separated by white
+space.  With <I>rowcolvals</I> the first line holds a 0 followed by the
+ncols column values, and each later line starts with its row value,
+so the file has nrows+1 lines of ncols+1 values.  A line with the wrong
+number of values is an error.  For the phasefield free-energy tables
+the rows are temperatures (positive, evenly spaced) and the columns
+compositions (0 to 1, evenly spaced; the blank lines are not shown):
+</P>
+<PRE># Free energy Al-Si fcc phase
+20 101 size
+rowcolvals
+Values
+0     0.00  0.01  0.02 ...
+100.0 1.000 0.997 0.994 ...
+200.0 0.983 0.979 0.976 ...
+... 
+</PRE>
+<P>A file name ending in ".gz" is read through gunzip if SPPARKS was
+built with -DLAMMPS_GZIP.
+</P>
+<P><B>Restrictions:</B>
+</P>
+<P>This command must be used after the <A HREF = "app_style.html">app_style</A>
+command, and only with applications that define tables:
+<A HREF = "app_phasefield.html">phasefield</A> and
+<A HREF = "app_phasefield_potts_table.html">phasefield/potts/table</A> (and their
+/kk variants).
+</P>
+<P><B>Related commands:</B>
+</P>
+<P><A HREF = "app_phasefield.html">app_style phasefield</A>,
+<A HREF = "app_phasefield_potts_table.html">app_style phasefield/potts/table</A>
+</P>
+<P><B>Default:</B> none
+</P>
+</HTML>

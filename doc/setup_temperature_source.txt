@@ -34,7 +34,7 @@ setup_temperature_source moser keyhole 340.0 0.155 11.2 2.0959e-6 573.0 650.0 &
     0.45  35e-6 35e-6 100e-6  120e-6
 setup_temperature_source hdf5_csr "stale_layer_test.hdf5" 5e-06 250.0 300.0 :pre
 
-material ../../materials/316L.toml process single_track_340W
+material ../../../../materials/316L.toml process single_track_340W
 setup_temperature_source moser card
 setup_temperature_source conduction card margin 1e-3 1e-3 1e-3 1e-3 plate 1e-3 part part :pre
 
@@ -87,7 +87,7 @@ and the process set it selected.  This works for {rosenthal}, {moser}
 and {conduction}, in {standard} mode only: giving {standard}, {aniso},
 {anisotropic} or {keyhole} after {card} is an error.  The card supplies:
 
-Q, lambda, T0 : the process set's power, absorptivity and preheat :ulb,l
+Q, lambda, T0 : the process set's power, absorptivity (else the card's {optical.absorptivity}) and preheat :ulb,l
 sx = sy, sz : the process {spot}, converted to the 1/e radius, and
 {source_depth} (Moser and conduction only) :l
 k, cp : for {conduction}, the card's thermal tables evaluated at T0;

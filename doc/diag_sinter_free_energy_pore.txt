@@ -7,17 +7,19 @@
 :line
 
 diag_style sinter_free_energy_pore command :h3
+diag_style sinter_free_energy command :h3
 
 [Syntax:]
 
-diag_style sinter_free_energy_pore keyword value keyword value ... :pre
+diag_style style keyword value keyword value ... :pre
 
-sinter_free_energy_pore = style name of this diagnostic
+style = {sinter_free_energy_pore} or {sinter_free_energy}
 see the "diag_style"_diag_style.html command for additional keywords that can be appended to a diagnostic command :ul
 
 [Examples:]
 
-diag_style sinter_free_energy_pore :pre
+diag_style sinter_free_energy_pore
+diag_style sinter_free_energy :pre
 
 [Description:]
 
@@ -26,8 +28,12 @@ the pores in the powder compact simulated. The calculation is done
 over the 1/27th central parallelepiped in order to avoid border
 effects. To obtain a measure independent of the size of the simulation
 the value computed is normalized by dividing over the volume used. The
-pore free energy is printed as stats output via the The density is
-printed as stats output via the "stats"_stats.html command.
+pore free energy is printed as stats output (column FE_psite) via the
+"stats"_stats.html command.
+
+The {sinter_free_energy} diagnostic counts the pore surface over the
+whole domain, unnormalized: the number of (grain site, pore neighbor)
+pairs.  It is printed as stats output in column InterfFE.
 
 [Restrictions:]
 

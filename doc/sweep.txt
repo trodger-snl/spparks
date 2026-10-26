@@ -99,7 +99,15 @@ The Kokkos styles of the "KOKKOS package"_Section_start.html#start_3
 (app styles ending in {/kk}) run rKMC only with the {color} or
 {color/strict} style.  With {color/strict}, "app_style
 potts/kk"_app_potts.html gives the same answer as "app_style
-potts"_app_potts.html.
+potts"_app_potts.html, and likewise potts/pin/kk, potts/rx/kk,
+potts/anneal/kk (without fast math), diffusion/multiphase/kk,
+sinter/kk and phasefield/potts(/table)/kk with their CPU styles; see
+each style's page.
+
+An application running in "app_update_only"_app_update_only.html mode
+without a KMC solver never sweeps: it needs no sweep command, accepts
+any sweep style, and random or raster sweeps need no sectors in
+parallel.
 
 [Related commands:]
 

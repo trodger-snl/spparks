@@ -165,6 +165,15 @@ else()
 endif()
 message(STATUS "Kokkos precision: ${_prec}")
 
+# GPU tile of the conduction stencil, cells per team in x and y (tuned on
+# gfx1151). Only that source sees it, so changing it rebuilds one file.
+set(SPPARKS_COND_TILE "32x8" CACHE STRING "conduction source GPU tile, XxY (team size X*Y <= 1024)")
+if(NOT SPPARKS_COND_TILE MATCHES "^([0-9]+)x([0-9]+)$")
+    message(FATAL_ERROR "SPPARKS_COND_TILE must look like 32x8 (got '${SPPARKS_COND_TILE}')")
+endif()
+set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/KOKKOS/conduction_solver_kokkos.cpp
+    PROPERTIES COMPILE_DEFINITIONS "SPK_COND_TX=${CMAKE_MATCH_1};SPK_COND_TY=${CMAKE_MATCH_2}")
+
 # Configure features
 if(SPPARKS_ENABLE_GZIP)
     add_compile_definitions(SPPARKS_GZIP)

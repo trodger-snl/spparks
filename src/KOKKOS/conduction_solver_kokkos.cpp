@@ -593,10 +593,16 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
   // about a third of the divisions. One barrier per plane: the scratch is
   // double-buffered by plane parity.
   using R = KK_FLOAT;
-  // host backends (OpenMP, Serial) cannot run 256-thread teams: 1 x 1 tiles
+  // host backends (OpenMP, Serial) cannot run 256-thread teams: 1 x 1 tiles.
+  // GPU tile from CMake SPPARKS_COND_TILE (default 32x8, tuned on gfx1151).
+#ifndef SPK_COND_TX
+#define SPK_COND_TX 32
+#define SPK_COND_TY 8
+#endif
   constexpr bool host = std::is_same<Kokkos::DefaultExecutionSpace,
                                      Kokkos::DefaultHostExecutionSpace>::value;
-  constexpr int TX = host ? 1 : 32, TY = host ? 1 : 8;
+  constexpr int TX = host ? 1 : SPK_COND_TX, TY = host ? 1 : SPK_COND_TY;
+  static_assert(TX * TY <= 1024, "SPPARKS_COND_TILE: team size X*Y must be <= 1024");
   const int nbx = (nxo_ + TX - 1) / TX, nby = (nyo_ + TY - 1) / TY;
   const int nsx = TY * (TX + 2), nsy = (TY + 2) * TX;   // rx and ry slots per plane
   using Scratch = Kokkos::View<R*, Kokkos::DefaultExecutionSpace::scratch_memory_space,

@@ -277,8 +277,8 @@ if [ "$ENABLE_KOKKOS" = "ON" ]; then
         GPU_CXX=""
         case "$KOKKOS_BACKEND" in
             HIP)  GPU_CXX=$(command -v hipcc || true) ;;
-            CUDA) [ -x "$SCRIPT_DIR/../lib/kokkos/bin/nvcc_wrapper" ] && \
-                      GPU_CXX="$SCRIPT_DIR/../lib/kokkos/bin/nvcc_wrapper" ;;
+            # configure fetches lib/kokkos before checking the compiler
+            CUDA) GPU_CXX="$(cd "$SCRIPT_DIR/.." && pwd)/lib/kokkos/bin/nvcc_wrapper" ;;
         esac
         if [ -n "$GPU_CXX" ]; then
             CMAKE_ARGS+=("-DCMAKE_CXX_COMPILER=$GPU_CXX")

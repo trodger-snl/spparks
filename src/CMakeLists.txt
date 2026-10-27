@@ -1,5 +1,29 @@
 cmake_minimum_required(VERSION 3.22)  # Kokkos >= 5.0 (bundled submodule) requires CMake >= 3.22
 
+# Kokkos is bundled as the lib/kokkos submodule. A Kokkos build that finds it
+# missing fetches it here, before project(), since a CUDA build's compiler
+# (lib/kokkos/bin/nvcc_wrapper) lives in it: the submodule in a git checkout,
+# else a shallow clone of the pinned tag (needs git and network).
+option(SPPARKS_FETCH_KOKKOS "Fetch lib/kokkos at configure time when a Kokkos build finds it missing" ON)
+set(SPPARKS_KOKKOS_TAG "5.2.2")   # the submodule commit, 8e15454876298832f013ebcaf08d53825b5bda40
+get_filename_component(KOKKOS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../lib/kokkos" ABSOLUTE)
+if(SPPARKS_PACKAGE_KOKKOS AND SPPARKS_FETCH_KOKKOS AND NOT EXISTS "${KOKKOS_DIR}/CMakeLists.txt")
+    find_package(Git QUIET)
+    if(GIT_FOUND)
+        get_filename_component(_spk_top "${KOKKOS_DIR}/../.." ABSOLUTE)
+        if(EXISTS "${_spk_top}/.git")
+            message(STATUS "Kokkos missing: git submodule update --init --depth 1 lib/kokkos")
+            execute_process(COMMAND "${GIT_EXECUTABLE}" submodule update --init --depth 1 lib/kokkos
+                            WORKING_DIRECTORY "${_spk_top}")
+        endif()
+        if(NOT EXISTS "${KOKKOS_DIR}/CMakeLists.txt")
+            message(STATUS "Kokkos missing: cloning ${SPPARKS_KOKKOS_TAG} from github.com into ${KOKKOS_DIR}")
+            execute_process(COMMAND "${GIT_EXECUTABLE}" clone --depth 1 --branch ${SPPARKS_KOKKOS_TAG}
+                                    https://github.com/kokkos/kokkos.git "${KOKKOS_DIR}")
+        endif()
+    endif()
+endif()
+
 # Set project name and version
 project(SPPARKS 
     VERSION 0.1.0
@@ -416,24 +440,24 @@ if(SPPARKS_PACKAGE_KOKKOS)
     set(Kokkos_ENABLE_EXAMPLES OFF CACHE BOOL "Disable Kokkos examples" FORCE)
     set(Kokkos_ENABLE_BENCHMARKS OFF CACHE BOOL "Disable Kokkos benchmarks" FORCE)
 
-    # Check if bundled Kokkos exists
-    set(KOKKOS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../lib/kokkos")
+    # The bundled Kokkos (fetched before project() when SPPARKS_FETCH_KOKKOS)
     if(NOT EXISTS "${KOKKOS_DIR}/CMakeLists.txt")
         message(FATAL_ERROR
-            "Kokkos not found at ${KOKKOS_DIR}\n"
+            "Kokkos not found at ${KOKKOS_DIR}, and fetching it failed or is off\n"
+            "(SPPARKS_FETCH_KOKKOS; it needs git and network).\n"
             "\n"
             "Normally:\n"
-            "  git submodule update --init --recursive\n"
+            "  git submodule update --init lib/kokkos\n"
             "\n"
             "If that fails -- no submodule metadata (source copied rather than\n"
             "cloned), or the submodule fetch is blocked -- clone it directly. This\n"
             "check only requires the directory to exist with a CMakeLists.txt; a\n"
             "registered submodule is not needed:\n"
             "  rm -rf ${KOKKOS_DIR}\n"
-            "  git clone --depth 1 --branch 5.2.2 \\\n"
+            "  git clone --depth 1 --branch ${SPPARKS_KOKKOS_TAG} \\\n"
             "      https://github.com/kokkos/kokkos.git ${KOKKOS_DIR}\n"
             "\n"
-            "Tag 5.2.2 is the pinned commit\n"
+            "Tag ${SPPARKS_KOKKOS_TAG} is the pinned commit\n"
             "(8e15454876298832f013ebcaf08d53825b5bda40). If the machine has no\n"
             "outbound network, clone elsewhere and copy the tree in.\n")
     endif()

@@ -646,11 +646,15 @@ commands; the differences are listed below and on each style's page.
 <P><B>Building:</B>
 </P>
 <P>KOKKOS is built with CMake only.  Kokkos itself is bundled as a git
-submodule in lib/kokkos; fetch it once with
+submodule in lib/kokkos.  When it is missing, configuring a KOKKOS build
+fetches it: the submodule in a git checkout, else a shallow clone of the
+pinned Kokkos release (both need git and network access).  Without
+network access, fetch it beforehand with
 </P>
 <PRE>git submodule update --init lib/kokkos 
 </PRE>
-<P>and enable the package with these options:
+<P>or turn the fetch off with -DSPPARKS_FETCH_KOKKOS=OFF.  Enable the
+package with these options:
 </P>
 <PRE>-DSPPARKS_PACKAGE_KOKKOS=ON       # enable the package (default: OFF)
 -DSPPARKS_KOKKOS_BACKEND=name     # OPENMP (default), CUDA, HIP, SYCL or SERIAL

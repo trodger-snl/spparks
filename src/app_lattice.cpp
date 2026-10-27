@@ -778,7 +778,8 @@ void AppLattice::iterate_app_update_only(double stoptime,double dt)
     if (allow_app_update) app_update(step);
     timer->stamp(TIME_APP);
 
-    time = tnext;
+    // app_update may move time itself (additive fast-forward); keep that
+    time = exact_steps ? tnext : time + step;
     if (time >= stoptime) done = 1;
     if (done || time >= nextoutput) nextoutput = output->compute(time,done);
     timer->stamp(TIME_OUTPUT);

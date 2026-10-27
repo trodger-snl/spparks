@@ -656,7 +656,8 @@ submodule in lib/kokkos; fetch it once with
 -DSPPARKS_KOKKOS_BACKEND=name     # OPENMP (default), CUDA, HIP, SYCL or SERIAL
 -DSPPARKS_KOKKOS_ARCH=token       # GPU architecture; required by CUDA and HIP
 -DSPPARKS_KOKKOS_HOST_OPENMP=ON   # OpenMP host threads with a GPU backend (default: OFF)
--DKOKKOS_PREC=value               # double (default), mixed or single 
+-DKOKKOS_PREC=value               # double (default), mixed or single
+-DSPPARKS_COND_TILE=XxY           # GPU tile of the conduction stencil (default: 32x8) 
 </PRE>
 <P>The architecture token is the Kokkos name of the GPU: for example
 AMD_GFX942_APU (MI300A), AMD_GFX942 (MI300X), AMD_GFX90A (MI200),
@@ -701,6 +702,15 @@ the KOKKOS_DEVICE_ID or KOKKOS_MAP_DEVICE_ID_BY environment variable or
 with --kokkos-device-id.  With the OpenMP backend, launch MPI so that
 each rank's threads are not pinned to one core (for example "mpirun
 --bind-to none" with Open MPI) and set OMP_NUM_THREADS.
+</P>
+<P>On more than one GPU, additive/texture/kk packs its ghost exchange and
+the conduction source's halo on the GPU and stages the packed buffers
+through host memory for MPI.  With an MPI built with GPU support (CUDA-
+or ROCm-aware), setting the environment variable SPPARKS_GPU_AWARE_MPI=1
+hands MPI the GPU buffers instead; with an MPI without GPU support it
+crashes.  On a GPU with its own memory, every stats line, dump and
+diagnostic copies all per-site arrays to the host, so keep their
+intervals coarse on large lattices.
 </P>
 <P>When SPPARKS is used as a library (<A HREF = "#start_4">Section 2.4</A> and the
 <A HREF = "Section_python.html">Python interface</A>), the first SPPARKS instance

@@ -176,7 +176,7 @@ export MPICH_SMP_SINGLE_COPY_MODE=XPMEM
 (`Kokkos_HIP.cpp:79`) and `HIPManaged` misbehaves quietly.
 
 Jobs run under **Flux**, not Slurm. Four MI300A per node, so one rank per APU is
-the natural mapping. `src/main.cpp` handles GPU-to-rank binding itself and
+the natural mapping. `src/spparks.cpp` handles GPU-to-rank binding itself and
 defers to the scheduler when `flux run --gpus-per-task=1` has already bound.
 
 ## 6. First runs, cheapest decisive test first

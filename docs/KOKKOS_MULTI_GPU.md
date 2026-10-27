@@ -4,7 +4,7 @@
 
 `main()` binds each MPI rank to a GPU by **node-local rank**:
 `device = (node_local_rank) % (visible GPUs)`, set via `KOKKOS_DEVICE_ID`
-before `Kokkos::initialize()` (see `src/main.cpp`,
+before `Kokkos::initialize()` (see `src/spparks.cpp`,
 `spk_bind_gpu_by_local_rank`). The local rank is found with
 `MPI_Comm_split_type(MPI_COMM_TYPE_SHARED)`, so it works on **any** launcher
 (srun, mpirun, mpiexec) — not only the few whose env vars Kokkos recognizes.
@@ -75,3 +75,29 @@ KOKKOS_DEVICE_ID=2 ./spparks -in in.foo
 - Temperature is decomposition-invariant: multi-rank `diag d6 sum/max` matches
   single-rank (the ghost-halo design fills T positionally), so it is a quick
   correctness check that the decomposition is sound.
+
+## Discrete GPUs (H100/H200, MI250X/MI300X)
+
+Development ran on APUs, where host and GPU share memory and copies are
+nearly free. On a discrete GPU every host<->device copy crosses PCIe, so:
+
+- **Halo and ghost exchanges move only boundary data.** The conduction halo
+  and the lattice ghost exchange pack on the device and move only the packed
+  buffers. They go through `MPIStagingSpace` (`src/KOKKOS/gpu_aware_mpi.h`):
+  pinned host memory on CUDA, ordinary host memory on HIP, whose pinned space
+  is fine-grained and measured 1.8x slower.
+- **GPU-aware MPI**: `export SPPARKS_GPU_AWARE_MPI=1` hands MPI the device
+  buffers and skips the staging. Only with an MPI built with GPU support
+  (Open MPI: `ompi_info --parsable --all | grep
+  mpi_built_with_cuda_support:value`); otherwise it crashes on the first
+  exchange. Off by default.
+- **Output copies everything.** Each `stats` line, dump or diagnostic step
+  copies every per-site array to the host (about 9 GB at 112.5M sites, about
+  3.5 s through pageable memory on an H200). Keep `stats` coarse (0.1 s
+  rather than 1 ms of simulated time); a 1 ms cadence cost the 2 mm Bi2Te3
+  deck about 1.6x.
+- **Conduction stencil tile**: `-DSPPARKS_COND_TILE=XxY` (default `32x8`,
+  tuned on gfx1151) sets the ConductionStep team tile; results do not depend
+  on it. Sweep it with ncu/nsys on a new GPU.
+- **Precision**: `-DKOKKOS_PREC=mixed` is validated for conduction to 0.010 K
+  per site (`docs/CONDUCTION_SOURCE.md`); measure it before choosing double.

@@ -41,11 +41,10 @@ class ConductionSolverKokkos : protected Pointers {
  public:
   ConductionSolverKokkos(class SPPARKS *, class ConductionTemperatureSource *);
 
-  // Advance the field to t, then write T for all nall sites into d_T.
-  // Returns the max T over owned sites (for the fused-max convention).
-  double fill(double t, Kokkos::View<double*> d_T,
-              Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz, Kokkos::View<int*> d_af,
-              int nlocal, int nall, double dx, double ts, double tl);
+  // Advance the field to t; then sample() writes T for all nall sites into
+  // d_T and returns the max T over owned sites (the fused-max convention).
+  void advance(double t, Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz,
+               Kokkos::View<int*> d_af, int nlocal, int nall, double dx, double ts, double tl);
 
   // LOOSE: flag bit, see packing. PLATE: flag bit, the plate material.
   // UNBORN: flag bit on POWDER under ded, gas until the laser deposits it
@@ -114,7 +113,29 @@ class ConductionSolverKokkos : protected Pointers {
              Kokkos::View<KK_FLOAT***> Y2, Kokkos::View<KK_FLOAT***> Yout);
   void exchange();
   void reset_field(double Tr);
-  double sample(Kokkos::View<double*> d_T, int nlocal, int nall);
+  // Write T for all nall sites into d_T; return the max over owned sites.
+  // Each owned site's T also goes to on_owned(s, T), so the caller's own
+  // per-site pass (the app's active-front list) rides along instead of
+  // reading the whole lattice again.
+  template <class F>
+  double sample(Kokkos::View<double*> d_T, int nlocal, int nall, const F on_owned) {
+    auto T_ = T; auto sc = site_cell;
+    const double Ta = ambient();
+    double m = 0.0;
+    Kokkos::parallel_reduce("ConductionSample", nall, KOKKOS_LAMBDA(const int s, double &mx) {
+      const int i = sc(s, 0);
+      const double v = i < 0 ? Ta : T_(i, sc(s, 1), sc(s, 2));
+      d_T(s) = v;
+      if (s < nlocal) {
+        if (v > mx) mx = v;
+        on_owned(s, v);
+      }
+    }, Kokkos::Max<double>(m));
+    return m;
+  }
+
+ private:
+  double ambient() const;
 };
 
 }

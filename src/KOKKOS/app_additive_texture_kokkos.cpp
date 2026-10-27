@@ -2224,8 +2224,10 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       if (!cond) cond = std::make_unique<ConductionSolverKokkos>(spk, csrc);
       thermal->set_moser_device_filler([this](double t) -> double {
         ensure_device_xyz();
-        fill_maxT_local = cond->fill(t, d_temp, d_xyz, d_active_flag,
-                                     nlocal, nlocal + nghost, dx, ts, tl);
+        cond->advance(t, d_xyz, d_active_flag, nlocal, nlocal + nghost, dx, ts, tl);
+        // the sample also builds the active-front list (no BuildActiveList scan)
+        fill_maxT_local = cond->sample(d_temp, nlocal, nlocal + nghost, active_append());
+        device_active_list_fresh = true;
         Kokkos::fence();
         host_T_stale = true;
         return global_max_temperature_from_fill();
@@ -2544,6 +2546,18 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   // here -- an earlier version added a second `time += dt_sweep`, double-counting
   // time (advancing 2x per step), which halved the MC sweep resolution and
   // shifted the temperature sampling phase vs the CPU app.
+}
+
+ActiveAppend AppAdditiveTextureKokkos::active_append()
+{
+  if ((int) d_active_sites.extent(0) != nlocal)
+    d_active_sites = Kokkos::View<int*>("active_sites", nlocal);
+  if (d_active_count.data() == nullptr)
+    d_active_count = Kokkos::View<int>("active_count");
+  Kokkos::deep_copy(d_active_count, 0);
+  ensure_device_xyz();
+  return ActiveAppend{d_active_sites, d_active_count, d_active_flag, d_solid_d, d_xyz,
+                      plate_rule(), nrefine};
 }
 
 /* ----------------------------------------------------------------------

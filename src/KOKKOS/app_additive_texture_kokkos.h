@@ -69,6 +69,27 @@ struct PlateRule {
   KOKKOS_INLINE_FUNCTION int solid(double z) const { return in(z) ? 6 : 3; }
 };
 
+// The active-front predicate of BuildActiveList, evaluated by a temperature
+// fill that already has each owned site's T: appends the site to the list.
+// The order is atomic, which the kernels do not depend on (d_active_count).
+struct ActiveAppend {
+  Kokkos::View<int*> sites;
+  Kokkos::View<int> count;
+  Kokkos::View<int*> af;
+  Kokkos::View<double*> sd;
+  Kokkos::View<double*[3], Kokkos::LayoutRight> xyz;
+  PlateRule pr;
+  int nrefine;
+  KOKKOS_INLINE_FUNCTION void operator()(int i, double T) const {
+    const int a = af(i);
+    const double s = sd(i);
+    // i2 == 5 (void) never enters the list, so it never melts or solidifies
+    if (a != 5 && (a == 2 || T >= pr.tl_at(xyz(i, 2)) ||
+        (s > -nrefine - 1 && s < 0.0) || ((a == 3 || a == 6) && s == -nrefine - 2)))
+      sites(Kokkos::atomic_fetch_add(&count(), 1)) = i;
+  }
+};
+
 enum { RNG_MELT = 1, RNG_NUCLEATE, RNG_FLIP, RNG_SOLIDIFY, RNG_SMOOTH,
        RNG_COLORS_SOLIDIFY, RNG_COLORS_SMOOTH };
 
@@ -295,6 +316,7 @@ class AppAdditiveTextureKokkos : public QuaternionKokkos<AppAdditiveTexture> {
   // fresh host buffer each time for a single int.
   Kokkos::View<int, Kokkos::HostSpace> h_active_count{"h_active_count"};
   bool device_active_list_fresh = false;
+  ActiveAppend active_append();   // zeroes the count; then a fill appends
 
   // Per-spin nucleation arrays (device-accessible, initialized once)
   Kokkos::View<int*> d_nucleation_flags;     // Can this spin nucleate? (1=yes, 0=no)

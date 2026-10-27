@@ -93,10 +93,10 @@ ConductionSolverKokkos::ConductionSolverKokkos(SPPARKS *spk,
 
 /* ---------------------------------------------------------------------- */
 
-double ConductionSolverKokkos::fill(double t, Kokkos::View<double*> d_T,
-                                    Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz,
-                                    Kokkos::View<int*> d_af, int nlocal,
-                                    int nall, double dx_in, double ts, double tl_in)
+void ConductionSolverKokkos::advance(double t,
+                                     Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz,
+                                     Kokkos::View<int*> d_af, int nlocal,
+                                     int nall, double dx_in, double ts, double tl_in)
 {
   dx = dx_in;
   tl = tl_in;
@@ -140,7 +140,6 @@ double ConductionSolverKokkos::fill(double t, Kokkos::View<double*> d_T,
     }
     t_fd = t;
   }
-  return sample(d_T, nlocal, nall);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -807,16 +806,4 @@ void ConductionSolverKokkos::exchange()
 
 /* ---------------------------------------------------------------------- */
 
-double ConductionSolverKokkos::sample(Kokkos::View<double*> d_T, int nlocal, int nall)
-{
-  auto T_ = T; auto sc = site_cell;
-  const double Ta = src->ambient();
-  double m = 0.0;
-  Kokkos::parallel_reduce("ConductionSample", nall, KOKKOS_LAMBDA(const int s, double &mx) {
-    const int i = sc(s, 0);
-    const double v = i < 0 ? Ta : T_(i, sc(s, 1), sc(s, 2));
-    d_T(s) = v;
-    if (s < nlocal && v > mx) mx = v;
-  }, Kokkos::Max<double>(m));
-  return m;
-}
+double ConductionSolverKokkos::ambient() const { return src->ambient(); }

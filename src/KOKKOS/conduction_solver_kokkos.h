@@ -16,6 +16,7 @@
 
 #include "pointers.h"
 #include "spktype.h"
+#include "gpu_aware_mpi.h"
 #include <Kokkos_Core.hpp>
 #include <vector>
 
@@ -88,8 +89,10 @@ class ConductionSolverKokkos : protected Pointers {
   Kokkos::View<int*[3]> site_cell;   // local (i,j,k) per site, i<0 = above grid
 
   Kokkos::View<double*> sbuf, rbuf;
-  Kokkos::View<double*>::host_mirror_type hsbuf, hrbuf;   // staging; alias sbuf/rbuf
-                                                    // where device memory is host-accessible
+  // host staging of the packed halo (MPIStagingSpace); unused (empty) where MPI
+  // can read sbuf/rbuf itself: host-accessible device memory, or GPU-aware MPI
+  Kokkos::View<double*, MPIStagingSpace> hsbuf, hrbuf;
+  bool stage_host = false;
 
   void build(Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz, Kokkos::View<int*> d_af,
              int nlocal, int nall, double ts);

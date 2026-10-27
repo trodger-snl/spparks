@@ -158,6 +158,29 @@ void CommLattice::all()
   }
 }
 
+/* ---------------------------------------------------------------------- */
+
+void CommLattice::all_lists(std::vector<int> &sproc, std::vector<int> &soff,
+                            std::vector<int> &sidx, std::vector<int> &rproc,
+                            std::vector<int> &roff, std::vector<int> &ridx) const
+{
+  const Swap *s = allswap;
+  sproc.assign(s->sproc, s->sproc + s->nsend);
+  soff.assign(1, 0);
+  sidx.clear();
+  for (int m = 0; m < s->nsend; m++) {
+    sidx.insert(sidx.end(), s->sindex[m], s->sindex[m] + s->scount[m]);
+    soff.push_back((int) sidx.size());
+  }
+  rproc.assign(s->rproc, s->rproc + s->nrecv);
+  roff.assign(1, 0);
+  ridx.clear();
+  for (int m = 0; m < s->nrecv; m++) {
+    ridx.insert(ridx.end(), s->rindex[m], s->rindex[m] + s->rcount[m]);
+    roff.push_back((int) ridx.size());
+  }
+}
+
 /* ----------------------------------------------------------------------
    acquire ghost values for entire proc sub-domain
    communicate only the specific integer and double arrays given by index

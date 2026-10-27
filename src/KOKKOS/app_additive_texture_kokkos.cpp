@@ -206,6 +206,13 @@ void AppAdditiveTextureKokkos::init_app()
   // reads the crystal's symmetries.
   symmetries = CRYSTAL::get_symmetries(crystal.c_str());
   QuaternionKokkos<AppAdditiveTexture>::init_app();
+  // comm->init (AppLattice::init) has just rebuilt its ghost lists. The
+  // upload above sent host ghosts, which the device exchange never updates,
+  // so refill them from their owners (a later run's init uploads again).
+  if (nprocs > 1) {
+    device_ghost_setup();
+    exchange_ghosts();
+  }
   // The inherited colour sweep reads d_neighbor, which this app never fills
   // (it keeps the row-major d_neighbor_rm).
   if (!app_update_only)
@@ -446,42 +453,16 @@ void AppAdditiveTextureKokkos::sync_temperature_to_host()
 }
 
 /* ----------------------------------------------------------------------
-   Selective ghost sync (Phase 2). Move ONLY the neighbor-read Monte Carlo
-   state -- spin (iarray[0]), active_flag (iarray[1]), quaternions q0-3
-   (darray[0-3]) -- between device and the raw host arrays, wrapping each raw
-   pointer as an unmanaged host View so deep_copy writes straight into the
-   comm-visible iarray/darray memory (one contiguous DMA per array, no serial
-   loop, no per-call mirror allocation). T is device-resident (no ghost comm)
-   and mobility/solid_d/G/V are output-only, so none of those are touched here.
-
-   _to_host copies the OWNED slice (so comm->all_selective sends current values);
-   _to_device copies the received GHOST slice back. Owned device state is left
-   untouched (the kernels are authoritative for owned). Quaternions are moved
-   raw (no renormalization); they stay near-unit through the physics, and the
-   output-step full sync renormalizes for dumps.
+   Ghost exchange of the state the kernels read from neighbours: spin,
+   active_flag, q0-3 and spath. T is device-resident (each rank fills its
+   ghosts positionally) and mobility/solid_d/G/V are output-only. Packed on
+   the device, so only boundary sites move; the host ghosts are not updated
+   (nothing on the host reads them: output is owned sites only).
 ------------------------------------------------------------------------- */
 
-void AppAdditiveTextureKokkos::sync_ghost_to_host()
+void AppAdditiveTextureKokkos::exchange_ghosts()
 {
-  download_range(spin, d_spin, nlocal);
-  download_range(active_flag, d_active_flag, nlocal);
-  download_range(q0, d_q0, nlocal);
-  download_range(qx, d_qx, nlocal);
-  download_range(qy, d_qy, nlocal);
-  download_range(qz, d_qz, nlocal);
-  download_range(spath, d_spath, nlocal);
-}
-
-void AppAdditiveTextureKokkos::sync_ghost_to_device()
-{
-  const int nall = nlocal + nghost;
-  upload_range(d_spin, spin, nlocal, nall);
-  upload_range(d_active_flag, active_flag, nlocal, nall);
-  upload_range(d_q0, q0, nlocal, nall);
-  upload_range(d_qx, qx, nlocal, nall);
-  upload_range(d_qy, qy, nlocal, nall);
-  upload_range(d_qz, qz, nlocal, nall);
-  upload_range(d_spath, spath, nlocal, nall);
+  device_ghost_exchange({d_spin, d_active_flag}, {d_q0, d_qx, d_qy, d_qz, d_spath});
 }
 
 /* ----------------------------------------------------------------------
@@ -2509,16 +2490,11 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     // fill, before the kernels; on a device-temp path the fill already wrote
     // d_temp over all nall positionally.
     //
-    // sync_ghost_to_host/device move the OWNED out / ghost in for spin/
-    // active_flag/q0-3 only (T lives in host T[]/d_temp, handled above). all_selective
-    // uses the same swap as all(), so the same ghost sites are exchanged.
-    static const int sel_i[2] = {0, 1};            // spin, active_flag
-    static const int sel_d[5] = {0, 1, 2, 3, 9};             // q0-3 + spath
-    sync_ghost_to_host();                       // device owned -> host raw
+    // exchange_ghosts packs spin, active_flag, q0-3 and spath of the boundary
+    // sites on the device, using the same swap as comm->all().
     timer->stamp();
-    comm->all_selective(sel_i, 2, sel_d, 5);
+    exchange_ghosts();
     timer->stamp(TIME_COMM);
-    sync_ghost_to_device();                     // host ghost -> device
   }
   // Full device->host of ALL arrays only on output steps (stats/dumps/diags read
   // the host iarray/darray). Applies to both single and multi rank.

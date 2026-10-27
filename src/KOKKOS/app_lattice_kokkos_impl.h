@@ -28,6 +28,7 @@
 #include "timer.h"
 #include "output.h"
 #include "comm_lattice.h"
+#include "gpu_aware_mpi.h"
 #include "domain.h"
 #include "random_mars.h"
 
@@ -512,6 +513,117 @@ void LatticeKokkos<Base>::ensure_host_data_current()
   if (!host_data_stale) return;
   sync_app_data_to_host();
   host_data_stale = false;
+}
+
+/* ----------------------------------------------------------------------
+   device ghost exchange: comm's all() lists on the device, once per init
+------------------------------------------------------------------------- */
+
+template <class Base>
+void LatticeKokkos<Base>::device_ghost_setup()
+{
+  std::vector<int> sidx, ridx;
+  comm->all_lists(g_sproc, g_soff, sidx, g_rproc, g_roff, ridx);
+  // per site: its local index and the message it belongs to
+  auto up = [](const char *name, const std::vector<int> &v) {
+    Kokkos::View<int*> d(name, v.size());
+    Kokkos::deep_copy(d, Kokkos::View<const int*, Kokkos::HostSpace,
+                      Kokkos::MemoryTraits<Kokkos::Unmanaged>>(v.data(), v.size()));
+    return d;
+  };
+  auto owner = [](const std::vector<int> &off) {
+    std::vector<int> m;
+    for (int k = 0; k + 1 < (int) off.size(); k++) m.insert(m.end(), off[k+1] - off[k], k);
+    return m;
+  };
+  g_ssite = up("ghost_ssite", sidx);
+  g_rsite = up("ghost_rsite", ridx);
+  g_smsg = up("ghost_smsg", owner(g_soff));
+  g_rmsg = up("ghost_rmsg", owner(g_roff));
+  g_soffd = up("ghost_soff", g_soff);
+  g_roffd = up("ghost_roff", g_roff);
+}
+
+/* ----------------------------------------------------------------------
+   pack the fields of the boundary sites on the device, exchange the packed
+   messages, unpack into the ghosts. Message layout [field][site], ints as
+   doubles, as comm->all_selective() packs them.
+------------------------------------------------------------------------- */
+
+template <class Base>
+void LatticeKokkos<Base>::device_ghost_exchange(
+    const std::vector<Kokkos::View<int*>> &ifield,
+    const std::vector<Kokkos::View<double*>> &dfield)
+{
+  const int nf = (int) (ifield.size() + dfield.size());
+  const int ns = (int) g_ssite.extent(0), nr = (int) g_rsite.extent(0);
+  constexpr bool host_reads_device = Kokkos::SpaceAccessibility<
+      Kokkos::HostSpace, Kokkos::DefaultExecutionSpace::memory_space>::accessible;
+  const bool stage = !host_reads_device && !gpu_aware_mpi();
+  auto grow = [](auto &v, const char *name, size_t n) {
+    using V = std::remove_reference_t<decltype(v)>;
+    if (v.extent(0) < n) v = V(Kokkos::view_alloc(std::string(name), Kokkos::WithoutInitializing), n);
+  };
+  grow(g_sbuf, "ghost_sbuf", (size_t) nf * ns);
+  grow(g_rbuf, "ghost_rbuf", (size_t) nf * nr);
+  if (stage) {
+    grow(g_hsbuf, "ghost_hsbuf", (size_t) nf * ns);
+    grow(g_hrbuf, "ghost_hrbuf", (size_t) nf * nr);
+  }
+
+  Kokkos::DefaultExecutionSpace exec;
+  auto sb = g_sbuf; auto rb = g_rbuf;
+  auto ssite = g_ssite, smsg = g_smsg, soff = g_soffd;
+  auto rsite = g_rsite, rmsg = g_rmsg, roff = g_roffd;
+  const auto spol = Kokkos::RangePolicy<>(exec, 0, ns);
+  const auto rpol = Kokkos::RangePolicy<>(exec, 0, nr);
+  int f = 0;
+  for (const auto &v : ifield) {
+    const int ff = f++; auto vv = v;
+    Kokkos::parallel_for("GhostPack", spol, KOKKOS_LAMBDA(const int e) {
+      sb(ghost_pos(soff, smsg(e), e, ff, nf)) = (double) vv(ssite(e));
+    });
+  }
+  for (const auto &v : dfield) {
+    const int ff = f++; auto vv = v;
+    Kokkos::parallel_for("GhostPack", spol, KOKKOS_LAMBDA(const int e) {
+      sb(ghost_pos(soff, smsg(e), e, ff, nf)) = vv(ssite(e));
+    });
+  }
+  double *hs = sb.data(), *hr = rb.data();
+  if (stage) {
+    Kokkos::deep_copy(exec, Kokkos::subview(g_hsbuf, std::make_pair(0, nf * ns)),
+                      Kokkos::subview(sb, std::make_pair(0, nf * ns)));
+    hs = g_hsbuf.data(); hr = g_hrbuf.data();
+  }
+  exec.fence("GhostExchange: packed");
+
+  const int nrecv = (int) g_rproc.size(), nsend = (int) g_sproc.size();
+  std::vector<MPI_Request> req(nrecv + nsend);
+  for (int m = 0; m < nrecv; m++)
+    MPI_Irecv(hr + (size_t) nf * g_roff[m], nf * (g_roff[m+1] - g_roff[m]), MPI_DOUBLE,
+              g_rproc[m], 0, world, &req[m]);
+  for (int m = 0; m < nsend; m++)
+    MPI_Isend(hs + (size_t) nf * g_soff[m], nf * (g_soff[m+1] - g_soff[m]), MPI_DOUBLE,
+              g_sproc[m], 0, world, &req[nrecv + m]);
+  MPI_Waitall(nrecv + nsend, req.data(), MPI_STATUSES_IGNORE);
+
+  if (stage)
+    Kokkos::deep_copy(exec, Kokkos::subview(rb, std::make_pair(0, nf * nr)),
+                      Kokkos::subview(g_hrbuf, std::make_pair(0, nf * nr)));
+  f = 0;
+  for (const auto &v : ifield) {
+    const int ff = f++; auto vv = v;
+    Kokkos::parallel_for("GhostUnpack", rpol, KOKKOS_LAMBDA(const int e) {
+      vv(rsite(e)) = static_cast<int>(rb(ghost_pos(roff, rmsg(e), e, ff, nf)));
+    });
+  }
+  for (const auto &v : dfield) {
+    const int ff = f++; auto vv = v;
+    Kokkos::parallel_for("GhostUnpack", rpol, KOKKOS_LAMBDA(const int e) {
+      vv(rsite(e)) = rb(ghost_pos(roff, rmsg(e), e, ff, nf));
+    });
+  }
 }
 
 }

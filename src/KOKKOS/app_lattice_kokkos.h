@@ -19,6 +19,7 @@
 #define SPK_APP_LATTICE_KOKKOS_H
 
 #include "app_lattice.h"
+#include "gpu_aware_mpi.h"
 #include <Kokkos_Core.hpp>
 #include <Kokkos_Random.hpp>
 #include <vector>
@@ -145,6 +146,26 @@ public:
   // Shared neighbor sync. Public only because it defines a device lambda,
   // which nvcc rejects in a private or protected member function.
   void sync_neighbors_to_device();
+
+  // Ghost exchange packed on the device: only the sites of comm's all()
+  // messages move, through pinned host buffers or, with SPPARKS_GPU_AWARE_MPI,
+  // straight from device memory. The values are those comm->all_selective()
+  // of the same fields would deliver. Setup takes comm's lists (after
+  // comm->init); public because the exchange defines device lambdas.
+  void device_ghost_setup();
+  void device_ghost_exchange(const std::vector<Kokkos::View<int*>> &ifield,
+                             const std::vector<Kokkos::View<double*>> &dfield);
+  std::vector<int> g_sproc, g_soff, g_rproc, g_roff;   // per message (offsets: n+1)
+  Kokkos::View<int*> g_ssite, g_smsg, g_rsite, g_rmsg;  // per site: index, message
+  Kokkos::View<int*> g_soffd, g_roffd;                  // device copies of the offsets
+  Kokkos::View<double*> g_sbuf, g_rbuf;                 // [message][field][site]
+  Kokkos::View<double*, MPIStagingSpace> g_hsbuf, g_hrbuf;
+  // where list entry e's field f sits in its message m's [field][site] block
+  KOKKOS_INLINE_FUNCTION static int ghost_pos(const Kokkos::View<int*> &off, int m,
+                                              int e, int f, int nf) {
+    const int o = off(m);
+    return nf * o + f * (off(m + 1) - o) + e - o;
+  }
 
 protected:
   using typename Base::Set;

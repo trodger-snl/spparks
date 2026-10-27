@@ -122,10 +122,8 @@ class AppAdditiveTextureKokkos : public QuaternionKokkos<AppAdditiveTexture> {
   void refresh_thermal_host() override;
   void sync_temperature_to_device();
   void sync_temperature_to_host();   // device d_temp -> host T (for diag/host code)
-  // Phase 2 selective ghost sync: move only neighbor-read MC state
-  // (spin/active_flag/q0-3) device<->host raw arrays (owned out, ghost in).
-  void sync_ghost_to_host();
-  void sync_ghost_to_device();
+  // ghosts of the neighbour-read state (spin/active_flag/q0-3/spath), on the device
+  void exchange_ghosts();
   double global_max_temperature_from_fill();  // blocking Allreduce of the fill-fused owned max
   // One-step-stale variant for the HDF5 path at nprocs>1: posts a
   // non-blocking Iallreduce for THIS fill and returns the PREVIOUS fill's

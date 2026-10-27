@@ -34,6 +34,12 @@ class CommLattice : protected Pointers {
   void sector(int);
   void reverse_sector(int);
   int reverse_needed() const { return delreverse; }  // 0: reverse calls no-op
+  // all()'s messages, flattened for packing on a device: per message its
+  // proc and the offset of its sites (n+1 offsets), then the local indices
+  // of every message's sites, owned ones sent and ghost ones received
+  void all_lists(std::vector<int> &sproc, std::vector<int> &soff, std::vector<int> &sidx,
+                 std::vector<int> &rproc, std::vector<int> &roff,
+                 std::vector<int> &ridx) const;
 
  private:
   int me,nprocs;

@@ -326,6 +326,9 @@ void AppAdditiveTextureKokkos::init_app()
                "conduction ... plate_material");
 
   // Note: Powder activation happens after meltpool appears, not during init
+
+  // The setup stats/dumps read the host; keep their copy from the device
+  host_data_stale = true;
 }
 
 /* ----------------------------------------------------------------------
@@ -2186,6 +2189,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   static int step_count = 0;   // cadence for maybe_run_diagnostics
   step_count++;
   rng_step++;
+  host_data_stale = true;      // the kernels below change the device site arrays
 
   // 1. Update temperature + fast-forward.
   //
@@ -2288,7 +2292,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       // The run ends here, and its final output reads the host arrays
       // (diagnostics run before stats(), the other sync), so bring all back.
       time = s.new_time;
-      sync_app_data_to_host();
+      ensure_host_data_current();
       if (host_T_stale) sync_temperature_to_host();
       return;
     }
@@ -2516,7 +2520,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   }
   // Full device->host of ALL arrays only on output steps (stats/dumps/diags read
   // the host iarray/darray). Applies to both single and multi rank.
-  if (host_output_imminent) sync_app_data_to_host();
+  if (host_output_imminent) ensure_host_data_current();
 
   // Optional isotherm-compactness diagnostic on its configured cadence, matching
   // the CPU app. A no-op unless temperature_smooth + a diag interval are set,
@@ -2606,10 +2610,11 @@ void AppAdditiveTextureKokkos::activate_powder_sites() {
 
 void AppAdditiveTextureKokkos::stats(char *strtmp)
 {
-  // Sync device data to host so stats can access current values. sync_app_data_
-  // to_host() does not touch the temperature field, so refresh host T (d6) here
-  // too when a device fill left it stale (the d6 diagnostic reads host T).
-  sync_app_data_to_host();
+  // Sync device data to host so stats can access current values; a no-op when
+  // app_update already copied for this output step (on a discrete GPU each copy
+  // is every site array over PCIe). It does not touch the temperature field, so
+  // refresh host T (d6) here too when a device fill left it stale.
+  ensure_host_data_current();
   if (host_T_stale) sync_temperature_to_host();
 
   AppLattice::stats(strtmp);

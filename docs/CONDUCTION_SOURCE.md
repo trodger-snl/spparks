@@ -170,6 +170,7 @@ in `processors`.
   /vol, 1/(H(i+1) − H(i)) for T(H), and linear cell indexing. That is 13 → 7
   divisions per cell; sm_90 registers 76 → 70 (double), 50 → 48 (mixed).
   Per-site d6 moved ≤ 6e-11 K (HIP, OpenMP); stats lines unchanged.
+  H200 (2 mm deck, 3 ms): 1.22x double, 1.26x mixed.
   **Rank count:** strict (non-fast-math) builds give identical per-site d6
   at np 1/2/4. Under -ffast-math (every Release build) the tiled kernel is
   not np-invariant: tile edges move with the rank boundaries, and fast-math

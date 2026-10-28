@@ -111,3 +111,6 @@ nearly free. On a discrete GPU every host<->device copy crosses PCIe, so:
 - **Precision**: `-DKOKKOS_PREC=mixed` is validated for conduction to 0.010 K
   per site (`docs/CONDUCTION_SOURCE.md`); measure it before choosing double.
   H200: 1.17x (50 registers, 50% occupancy), not the 1.6-3x of gfx1151.
+- **Stage 1 kernel** (6ce12630: 13 -> 7 divisions per cell, linear
+  indexing): H200, same 3 ms, back to back: double 33.8 -> 27.8 s (1.22x),
+  mixed 28.3 -> 22.5 s (1.26x); mixed s1 is 1.50x the old double kernel.

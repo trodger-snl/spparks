@@ -1757,13 +1757,13 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
   // Solidification kernel: parallel over all local sites with event tracking
   // Multicolour Gauss-Seidel: one launch per parity colour in a per-step
   // random order (see shuffled_colors); neighbour reads are live and race-free.
-  int naccept_local = 0;
+  colour_count(false);
+  auto nacc = d_naccept;
   int color_order[8]; shuffled_colors(color_order, RNG_COLORS_SOLIDIFY);
   for (int cc = 0; cc < 8; cc++) {
   const int color_local = color_order[cc];
-  int naccept_color = 0;
-  Kokkos::parallel_reduce("SolidificationKernel", n_active,
-    KOKKOS_LAMBDA(int idx, int& count) {
+  Kokkos::parallel_for("SolidificationKernel", n_active,
+    KOKKOS_LAMBDA(int idx) {
       const int i = d_active_sites_local(idx);
       if (((static_cast<int>(k_xyz_d(i,0)) & 1) | ((static_cast<int>(k_xyz_d(i,1)) & 1) << 1) |
            ((static_cast<int>(k_xyz_d(i,2)) & 1) << 2)) != color_local) return;
@@ -1948,7 +1948,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
 
           // Set to solid state
           d_active_flag_local(i) = pr.solid(k_xyz_d(i, 2));  // SOLID
-          count++;  // Track solidification event
+          Kokkos::atomic_inc(&nacc());  // Track solidification event
 
           // Set solid_d flag to trigger smoothing countdown
           d_solid_d_local(i) = -1.0;
@@ -1962,11 +1962,10 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
         }
       }
       // No else branch - site keeps current values if not liquid/undercooled
-    }, naccept_color);
-  naccept_local += naccept_color;
+    });
   }
 
-  return naccept_local;
+  return colour_count(true);
 }
 
 /* ----------------------------------------------------------------------
@@ -2006,13 +2005,13 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
   auto d_mobility_out_local = d_mobility_out;
 
   // Parallel sweep over ONLY smoothing sites (not all sites!)
-  int naccept_local = 0;
+  colour_count(false);
+  auto nacc = d_naccept;
   int color_order[8]; shuffled_colors(color_order, RNG_COLORS_SMOOTH);
   for (int cc = 0; cc < 8; cc++) {
   const int color_local = color_order[cc];
-  int naccept_color = 0;
-  Kokkos::parallel_reduce("SmoothingKernelEfficient", n_sites,
-    KOKKOS_LAMBDA(int idx, int& count) {
+  Kokkos::parallel_for("SmoothingKernelEfficient", n_sites,
+    KOKKOS_LAMBDA(int idx) {
       // Get actual site index from compact list
       int i = d_smoothing_sites(idx);
       if (((static_cast<int>(k_xyz_d(i,0)) & 1) | ((static_cast<int>(k_xyz_d(i,1)) & 1) << 1) |
@@ -2138,7 +2137,7 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
             d_spin_local(i) = new_spin;
             d_q0_local(i) = a0; d_qx_local(i) = ax;
             d_qy_local(i) = ay; d_qz_local(i) = az;
-            count++;
+            Kokkos::atomic_inc(&nacc());
           }
         }
         // Reject / no-grain: spin and quaternion already hold the original
@@ -2151,11 +2150,18 @@ int AppAdditiveTextureKokkos::smoothing_kernel_efficient(
       // clamped at 0, i.e. one pass regardless of nrefine.)
       d_solid_d_local(i) = solid_d_i - 1.0;
       d_active_flag_local(i) = active_flag_i;
-    }, naccept_color);
-  naccept_local += naccept_color;
+    });
   }
 
-  return naccept_local;
+  return colour_count(true);
+}
+
+int AppAdditiveTextureKokkos::colour_count(bool read)
+{
+  if (read) { Kokkos::deep_copy(h_naccept, d_naccept); return h_naccept(); }
+  if (!d_naccept.data()) d_naccept = Kokkos::View<int>("naccept");
+  Kokkos::deep_copy(Kokkos::DefaultExecutionSpace(), d_naccept, 0);   // no fence
+  return 0;
 }
 
 /* ----------------------------------------------------------------------

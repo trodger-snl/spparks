@@ -66,6 +66,7 @@ struct PlateRule {
   double zplate, dx, tl, tl_plate;
   KOKKOS_INLINE_FUNCTION bool in(double z) const { return on && z * dx < zplate; }
   KOKKOS_INLINE_FUNCTION double tl_at(double z) const { return in(z) ? tl_plate : tl; }
+  KOKKOS_INLINE_FUNCTION double tl_min() const { return on && tl_plate < tl ? tl_plate : tl; }
   KOKKOS_INLINE_FUNCTION int solid(double z) const { return in(z) ? 6 : 3; }
 };
 
@@ -83,8 +84,9 @@ struct ActiveAppend {
   KOKKOS_INLINE_FUNCTION void operator()(int i, double T) const {
     const int a = af(i);
     const double s = sd(i);
-    // i2 == 5 (void) never enters the list, so it never melts or solidifies
-    if (a != 5 && (a == 2 || T >= pr.tl_at(xyz(i, 2)) ||
+    // i2 == 5 (void) never enters the list, so it never melts or solidifies.
+    // tl_min first: a cold site skips the z load (this runs over every site).
+    if (a != 5 && (a == 2 || (T >= pr.tl_min() && T >= pr.tl_at(xyz(i, 2))) ||
         (s > -nrefine - 1 && s < 0.0) || ((a == 3 || a == 6) && s == -nrefine - 2)))
       sites(Kokkos::atomic_fetch_add(&count(), 1)) = i;
   }
@@ -313,6 +315,11 @@ class AppAdditiveTextureKokkos : public QuaternionKokkos<AppAdditiveTexture> {
   // step; a per-step create_mirror_view would allocate (and on HIP register) a
   // fresh host buffer each time for a single int.
   Kokkos::View<int, Kokkos::HostSpace> h_active_count{"h_active_count"};
+  // Event counter of the 8-colour kernels: each colour adds to it on the
+  // device, and the host reads it once per kernel, not once per colour.
+  Kokkos::View<int> d_naccept;
+  Kokkos::View<int, Kokkos::HostSpace> h_naccept{"h_naccept"};
+  int colour_count(bool read);   // zero (read = false) or read back d_naccept
   bool device_active_list_fresh = false;
   ActiveAppend active_append();   // zeroes the count; then a fill appends
 

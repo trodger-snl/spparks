@@ -114,3 +114,8 @@ nearly free. On a discrete GPU every host<->device copy crosses PCIe, so:
 - **Stage 1 kernel** (6ce12630: 13 -> 7 divisions per cell, linear
   indexing): H200, same 3 ms, back to back: double 33.8 -> 27.8 s (1.22x),
   mixed 28.3 -> 22.5 s (1.26x); mixed s1 is 1.50x the old double kernel.
+- **Per-app-step overhead** (stage 4): ConductionSample reads one int cell
+  offset per site and skips the z load for cold sites; the 8-colour
+  solidification/smoothing loops count events on the device and sync once
+  per kernel, not per colour. Output bit-identical; 2 mm deck on gfx1151
+  2.9% faster. What is left per app step is the full-lattice sample.

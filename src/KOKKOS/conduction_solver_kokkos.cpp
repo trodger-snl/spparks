@@ -288,16 +288,17 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
       }
 
   // Site -> local cell; owned sites set the phase of their cell.
-  site_cell = Kokkos::View<int*[3]>("cond_site_cell", nall);
+  // (T, Tn and H share one shape, so one offset serves whichever is T)
+  site_cell = Kokkos::View<int*>("cond_site_cell", nall);
   auto hsc = Kokkos::create_mirror_view(site_cell);
   int out = 0, bad6 = 0;
   for (int s = 0; s < nall; s++) {
     const int i = ax.nlo + g[3*s] - glo[0] - cx0 + 1;
     const int j = ay.nlo + g[3*s+1] - glo[1] - cy0 + 1;
     const int k = az.nlo + g[3*s+2] - glo[2];
-    if (g[3*s+2] > gz_top) { hsc(s, 0) = -1; hsc(s, 1) = hsc(s, 2) = 0; continue; }
-    if (i < 0 || i > nxo + 1 || j < 0 || j > nyo + 1) { out = 1; hsc(s, 0) = -1; continue; }
-    hsc(s, 0) = i; hsc(s, 1) = j; hsc(s, 2) = k;
+    if (g[3*s+2] > gz_top) { hsc(s) = -1; continue; }
+    if (i < 0 || i > nxo + 1 || j < 0 || j > nyo + 1) { out = 1; hsc(s) = -1; continue; }
+    hsc(s) = i * (int) T.stride(0) + j * (int) T.stride(1) + k * (int) T.stride(2);
     if (s < nlocal) {
       // Inside the box i2 alone decides, at every depth: melted (2, 3) is
       // dense, never melted (0, 1) is powder, 5 is gas. So the part's walls

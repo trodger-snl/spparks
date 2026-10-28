@@ -88,7 +88,7 @@ class ConductionSolverKokkos : protected Pointers {
   // so the stencil multiplies: k-table slopes, 1/width, 1/(H(i+1) - H(i))
   Kokkos::View<KK_FLOAT*> kSr, kS2r, iwx, iwy, iwz, iHtab, iHtab2;
   double Htab_T0 = 0.0, Htab_dT = 1.0;
-  Kokkos::View<int*[3]> site_cell;   // local (i,j,k) per site, i<0 = above grid
+  Kokkos::View<int*> site_cell;   // offset of the site's cell in T, -1 = above grid
 
   Kokkos::View<double*> sbuf, rbuf;
   // host staging of the packed halo (MPIStagingSpace); unused (empty) where MPI
@@ -128,8 +128,8 @@ class ConductionSolverKokkos : protected Pointers {
     const double Ta = ambient();
     double m = 0.0;
     Kokkos::parallel_reduce("ConductionSample", nall, KOKKOS_LAMBDA(const int s, double &mx) {
-      const int i = sc(s, 0);
-      const double v = i < 0 ? Ta : T_(i, sc(s, 1), sc(s, 2));
+      const int o = sc(s);
+      const double v = o < 0 ? Ta : T_.data()[o];
       d_T(s) = v;
       if (s < nlocal) {
         if (v > mx) mx = v;

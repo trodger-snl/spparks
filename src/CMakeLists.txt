@@ -195,8 +195,11 @@ set(SPPARKS_COND_TILE "32x8" CACHE STRING "conduction source GPU tile, XxY (team
 if(NOT SPPARKS_COND_TILE MATCHES "^([0-9]+)x([0-9]+)$")
     message(FATAL_ERROR "SPPARKS_COND_TILE must look like 32x8 (got '${SPPARKS_COND_TILE}')")
 endif()
+# Minimum resident teams per SM/CU (Kokkos LaunchBounds): caps the stencil's
+# registers. 0 = no cap. H200 double: 76 regs (3 teams/SM); 4 -> 64 regs.
+set(SPPARKS_COND_MINB "0" CACHE STRING "conduction source GPU min teams per SM (0 = compiler choice)")
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/KOKKOS/conduction_solver_kokkos.cpp
-    PROPERTIES COMPILE_DEFINITIONS "SPK_COND_TX=${CMAKE_MATCH_1};SPK_COND_TY=${CMAKE_MATCH_2}")
+    PROPERTIES COMPILE_DEFINITIONS "SPK_COND_TX=${CMAKE_MATCH_1};SPK_COND_TY=${CMAKE_MATCH_2};SPK_COND_MINB=${SPPARKS_COND_MINB}")
 
 # Configure features
 if(SPPARKS_ENABLE_GZIP)

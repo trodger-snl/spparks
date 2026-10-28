@@ -661,7 +661,8 @@ package with these options:
 -DSPPARKS_KOKKOS_ARCH=token       # GPU architecture; required by CUDA and HIP
 -DSPPARKS_KOKKOS_HOST_OPENMP=ON   # OpenMP host threads with a GPU backend (default: OFF)
 -DKOKKOS_PREC=value               # double (default), mixed or single
--DSPPARKS_COND_TILE=XxY           # GPU tile of the conduction stencil (default: 32x8) 
+-DSPPARKS_COND_TILE=XxY           # GPU tile of the conduction stencil (default: 32x8)
+-DSPPARKS_COND_MINB=N             # min conduction tiles per GPU SM, caps registers (default: 0 = off) 
 </PRE>
 <P>The architecture token is the Kokkos name of the GPU: for example
 AMD_GFX942_APU (MI300A), AMD_GFX942 (MI300X), AMD_GFX90A (MI200),

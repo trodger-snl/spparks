@@ -98,6 +98,13 @@ nearly free. On a discrete GPU every host<->device copy crosses PCIe, so:
   deck about 1.6x.
 - **Conduction stencil tile**: `-DSPPARKS_COND_TILE=XxY` (default `32x8`,
   tuned on gfx1151) sets the ConductionStep team tile; results do not depend
-  on it. Sweep it with ncu/nsys on a new GPU.
+  on it. Sweep it with ncu/nsys on a new GPU. On an H200 (2 mm Bi2Te3 deck,
+  3 ms) 32x8 was fastest: 64x4 +8%, 64x8 +35%, 32x16 +42%. The double kernel
+  uses 76 registers on sm_90, so only 3 teams of 256 fit per SM (37.5%
+  occupancy) and bigger teams fit fewer. `-DSPPARKS_COND_MINB=N` (Kokkos
+  LaunchBounds, default 0 = off) asks for N teams per SM; N = 4 caps it at
+  64 registers with a 24-byte spill. Read register counts without profiler
+  rights: `cuobjdump --dump-resource-usage spparks | grep -A1 ConductionSolverKokkos5stage`.
 - **Precision**: `-DKOKKOS_PREC=mixed` is validated for conduction to 0.010 K
   per site (`docs/CONDUCTION_SOURCE.md`); measure it before choosing double.
+  H200: 1.17x (50 registers, 50% occupancy), not the 1.6-3x of gfx1151.

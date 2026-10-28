@@ -604,6 +604,9 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
 #define SPK_COND_TX 32
 #define SPK_COND_TY 8
 #endif
+#ifndef SPK_COND_MINB
+#define SPK_COND_MINB 0     // CMake SPPARKS_COND_MINB: min teams per SM, 0 = no cap
+#endif
   constexpr bool host = std::is_same<Kokkos::DefaultExecutionSpace,
                                      Kokkos::DefaultHostExecutionSpace>::value;
   constexpr int TX = host ? 1 : SPK_COND_TX, TY = host ? 1 : SPK_COND_TY;
@@ -615,7 +618,8 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
   const size_t shmem = Scratch::shmem_size(2 * (nsx + nsy));
   using Team = Kokkos::TeamPolicy<>::member_type;
   Kokkos::parallel_for("ConductionStep",
-    Kokkos::TeamPolicy<>(nbx * nby, TX * TY).set_scratch_size(0, Kokkos::PerTeam(shmem)),
+    Kokkos::TeamPolicy<Kokkos::LaunchBounds<SPK_COND_MINB ? TX * TY : 0, SPK_COND_MINB>>(
+        nbx * nby, TX * TY).set_scratch_size(0, Kokkos::PerTeam(shmem)),
     KOKKOS_LAMBDA(const Team &team) {
       Scratch sbuf(team.team_scratch(0), 2 * (nsx + nsy));
       const int t = team.team_rank(), nt = team.team_size();

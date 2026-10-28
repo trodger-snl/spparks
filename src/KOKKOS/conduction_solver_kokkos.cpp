@@ -243,6 +243,9 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   fzlo = axis_view("cond_fzlo", az, 0, nz, 1);
   fzhi = axis_view("cond_fzhi", az, 0, nz, 2);
 
+  // the step kernel indexes cells with an int
+  if ((long long) NXL * NYL * nz > INT_MAX)
+    error->one(FLERR,"conduction: more than 2^31 grid cells on one rank; use more ranks");
   H = Kokkos::View<KK_FLOAT***>("cond_H", NXL, NYL, nz);
   T = Kokkos::View<KK_FLOAT***>("cond_T", NXL, NYL, nz);
   Tn = Kokkos::View<KK_FLOAT***>("cond_Tn", NXL, NYL, nz);
@@ -548,8 +551,6 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
   const double sx = src->sigma_x(), sy = src->sigma_y(), sz = src->sigma_z();
   const double zs = zsrc;
 
-  auto H_ = H; auto Y1_ = Y1; auto Y2_ = Y2; auto Yo_ = Yout; auto L0_ = L0;
-  auto T_ = T; auto Tn_ = Tn; auto P_ = P; auto Pn_ = Pn;
   auto wx_ = wxr, wy_ = wyr, wz_ = wzr;
   auto fxlo_ = fxlo, fxhi_ = fxhi, fylo_ = fylo, fyhi_ = fyhi, fzlo_ = fzlo, fzhi_ = fzhi;
   auto Htab1_ = Htab, Htab2_ = Htab2; auto kT_ = kTr, kV_ = kVr, kT2_ = kT2r, kV2_ = kV2r;
@@ -616,6 +617,13 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
   using Scratch = Kokkos::View<R*, Kokkos::DefaultExecutionSpace::scratch_memory_space,
                                Kokkos::MemoryTraits<Kokkos::Unmanaged>>;
   const size_t shmem = Scratch::shmem_size(2 * (nsx + nsy));
+  // Cells by one linear index: every 3D field shares T's extents (and so its
+  // layout), so the x/y/z neighbours of cell c are c -+ si, sj, sk.
+  const int si = (int) T.stride(0), sj = (int) T.stride(1), sk = (int) T.stride(2);
+  const R *Tp = T.data(), *Y1p = Y1.data(), *Y2p = Y2.data();
+  const unsigned char *Pp = P.data();
+  R *Hp = H.data(), *Yop = Yout.data(), *L0p = L0.data(), *Tnp = Tn.data();
+  unsigned char *Pnp = Pn.data();
   using Team = Kokkos::TeamPolicy<>::member_type;
   Kokkos::parallel_for("ConductionStep",
     Kokkos::TeamPolicy<Kokkos::LaunchBounds<SPK_COND_MINB ? TX * TY : 0, SPK_COND_MINB>>(
@@ -637,34 +645,39 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
         return (p & 3) == POWDER ? R(kp)
              : (p & PLATE) ? interp<R>(kT2_, kV2_, Tv) : interp<R>(kT_, kV_, Tv);
       };
-      auto kcell = [&](int ii, int jj, int kk) { return kof(R(T_(ii, jj, kk)), P_(ii, jj, kk)); };
+      auto kcell = [&](int cc) { return kof(Tp[cc], Pp[cc]); };
       // halo ring: 2*TY cells left/right (need rx), 2*TX below/above (need ry)
       const int nhalo = 2 * TY + 2 * TX;
 
-      R kc_next = has ? kcell(i, j, 0) : R(1);
+      const int c0 = has ? i * si + j * sj : 0;
+      R kc_next = has ? kcell(c0) : R(1);
+      // r_z of this plane's cell, carried from the plane below (same operands)
+      R rz_next = half * R(wz_(0)) / kc_next;
       R rz_prev = R(0);
       for (int k = 0; k < nz_; k++) {
         R *rx = sbuf.data() + (k & 1) * (nsx + nsy), *ry = rx + nsx;
-        const R kc = kc_next;
+        const int c = c0 + k * sk;
+        const R kc = kc_next, rzc = rz_next;
         const R dxc = R(wx_(i < nxo_ + 2 ? i : 0)), dyc = R(wy_(j < nyo_ + 2 ? j : 0));
         const R dzc = R(wz_(k));
-        const R rxc = half * dxc / kc, ryc = half * dyc / kc, rzc = half * dzc / kc;
+        const R rxc = half * dxc / kc, ryc = half * dyc / kc;
         if (has) {
           rx[ty * (TX + 2) + tx + 1] = rxc;
           ry[(ty + 1) * TX + tx] = ryc;
-          kc_next = k + 1 < nz_ ? kcell(i, j, k + 1) : R(1);
+          kc_next = k + 1 < nz_ ? kcell(c + sk) : R(1);
         }
+        rz_next = k + 1 < nz_ ? half * R(wz_(k + 1)) / kc_next : R(0);
         for (int hcell = t; hcell < nhalo; hcell += nt) {
           if (hcell < 2 * TY) {                       // x halo: column i0-1 or i0+TX
             const int side = hcell / TY, hy = hcell % TY;
             const int ii = side ? i0 + TX : i0 - 1, jj = j0 + hy;
             if (ii <= nxo_ + 1 && jj <= nyo_)
-              rx[hy * (TX + 2) + (side ? TX + 1 : 0)] = half * R(wx_(ii)) / kcell(ii, jj, k);
+              rx[hy * (TX + 2) + (side ? TX + 1 : 0)] = half * R(wx_(ii)) / kcell(ii * si + jj * sj + k * sk);
           } else {                                    // y halo: row j0-1 or j0+TY
             const int g = hcell - 2 * TY, side = g / TX, hx = g % TX;
             const int ii = i0 + hx, jj = side ? j0 + TY : j0 - 1;
             if (ii <= nxo_ && jj <= nyo_ + 1)
-              ry[(side ? TY + 1 : 0) * TX + hx] = half * R(wy_(jj)) / kcell(ii, jj, k);
+              ry[(side ? TY + 1 : 0) * TX + hx] = half * R(wy_(jj)) / kcell(ii * si + jj * sj + k * sk);
           }
         }
         team.team_barrier();
@@ -672,22 +685,22 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
         if (mine) {
           // H is the dense-equivalent enthalpy H(T); a LOOSE cell holds
           // pack * H(T) * V, so its heat capacity is scaled by pack.
-          const unsigned char pfull = P_(i, j, k), pc = pfull & 3;
-          const R Tr = T_(i, j, k);
+          const unsigned char pfull = Pp[c], pc = pfull & 3;
+          const R Tr = Tp[c];
           if (pfull & UNBORN) {
             const double xc = 0.5 * (fxlo_(i) + fxhi_(i)), yc = 0.5 * (fylo_(j) + fyhi_(j));
             const double zc = 0.5 * (fzlo_(k) + fzhi_(k));
             if (birth && (xc - xl) * (xc - xl) + (yc - yl) * (yc - yl) <= rb2 &&
                 zc < zs && zc > zb) {
-              H_(i, j, k) = Hb;
-              Tn_(i, j, k) = Tb; Pn_(i, j, k) = (unsigned char) (pfull & ~UNBORN);
+              Hp[c] = Hb;
+              Tnp[c] = Tb; Pnp[c] = (unsigned char) (pfull & ~UNBORN);
             } else {
-              if (sts) Yo_(i, j, k) = H_(i, j, k);
-              Tn_(i, j, k) = Tr; Pn_(i, j, k) = pfull;
+              if (sts) Yop[c] = Hp[c];
+              Tnp[c] = Tr; Pnp[c] = pfull;
             }
           } else if (pc == GAS) {
-            if (sts) Yo_(i, j, k) = H_(i, j, k);
-            Tn_(i, j, k) = Tr; Pn_(i, j, k) = pfull;
+            if (sts) Yop[c] = Hp[c];
+            Tnp[c] = Tr; Pnp[c] = pfull;
           } else {
             auto surf = [&](R A) {
               return -A * (R(hc) * (Tr - R(Tinf)) + R(es) * (Tr*Tr*Tr*Tr - R(Tinf)*R(Tinf)*R(Tinf)*R(Tinf)));
@@ -696,37 +709,36 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
               return fixed ? A * kc / halfw * (R(Tfar) - Tr) : R(0);
             };
             // r_c, r_n: (w/2)/k of this cell and of the neighbour across the face
-            auto face = [&](R A, R rc, int ii, int jj, int kk, R rn) {
-              const unsigned char pn = P_(ii, jj, kk);
+            auto face = [&](R A, R rc, int cn, R rn) {
+              const unsigned char pn = Pp[cn];
               if ((pn & 3) == GAS || (pn & UNBORN)) return surf(A);
-              const R Tv = R(T_(ii, jj, kk));
+              const R Tv = Tp[cn];
               const R G = A / (rc + rn);
               return G * (Tv - Tr);
             };
-            const R rz_next = k + 1 < nz_ ? half * R(wz_(k + 1)) / kc_next : R(0);
             const R Ax = dyc * dzc, Ay = dxc * dzc, Az = dxc * dyc;
             const int sx_ = ty * (TX + 2) + tx + 1, sy_ = (ty + 1) * TX + tx;
             R q = R(0);
-            q += (i == 1 && exlo) ? far(Ax, half*dxc) : face(Ax, rxc, i-1, j, k, rx[sx_ - 1]);
-            q += (i == nxo_ && exhi) ? far(Ax, half*dxc) : face(Ax, rxc, i+1, j, k, rx[sx_ + 1]);
-            q += (j == 1 && eylo) ? far(Ay, half*dyc) : face(Ay, ryc, i, j-1, k, ry[sy_ - TX]);
-            q += (j == nyo_ && eyhi) ? far(Ay, half*dyc) : face(Ay, ryc, i, j+1, k, ry[sy_ + TX]);
-            q += (k == 0) ? far(Az, half*dzc) : face(Az, rzc, i, j, k-1, rz_prev);
-            q += (k == nz_ - 1) ? surf(Az) : face(Az, rzc, i, j, k+1, rz_next);
+            q += (i == 1 && exlo) ? far(Ax, half*dxc) : face(Ax, rxc, c - si, rx[sx_ - 1]);
+            q += (i == nxo_ && exhi) ? far(Ax, half*dxc) : face(Ax, rxc, c + si, rx[sx_ + 1]);
+            q += (j == 1 && eylo) ? far(Ay, half*dyc) : face(Ay, ryc, c - sj, ry[sy_ - TX]);
+            q += (j == nyo_ && eyhi) ? far(Ay, half*dyc) : face(Ay, ryc, c + sj, ry[sy_ + TX]);
+            q += (k == 0) ? far(Az, half*dzc) : face(Az, rzc, c - sk, rz_prev);
+            q += (k == nz_ - 1) ? surf(Az) : face(Az, rzc, c + sk, rz_next);
 
             if (Pq > 0.0) q += R(Pq) * Ex_(i) * Ey_(j) * Ez_(k);
 
             const R vol = dxc * dyc * dzc * ((pfull & LOOSE) ? R(pack) : R(1));
             R Hn;
             if (!sts) {
-              Hn = H_(i, j, k) + R(h) * q / vol;
-              H_(i, j, k) = Hn;
+              Hn = Hp[c] + R(h) * q / vol;
+              Hp[c] = Hn;
             } else {
               const R Lc = q / vol;
-              Hn = R(mu) * Y1_(i, j, k) + R(nu) * Y2_(i, j, k) + R(1.0 - mu - nu) * H_(i, j, k)
-                 + R(mut) * Lc + R(gat) * (store_L0 ? Lc : L0_(i, j, k));
-              if (store_L0) L0_(i, j, k) = Lc;
-              Yo_(i, j, k) = Hn;
+              Hn = R(mu) * Y1p[c] + R(nu) * Y2p[c] + R(1.0 - mu - nu) * Hp[c]
+                 + R(mut) * Lc + R(gat) * (store_L0 ? Lc : L0p[c]);
+              if (store_L0) L0p[c] = Lc;
+              Yop[c] = Hn;
             }
             // T(H): table search, end slopes beyond.
             const auto &Htab_ = (pfull & PLATE) ? Htab2_ : Htab1_;
@@ -748,8 +760,8 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
               const R dH = Htab_(lo + 1) - Htab_(lo);
               Tv = H0r + (R(lo) + (dH > R(0) ? (Hn - Htab_(lo)) / dH : R(0))) * dTr;
             }
-            Tn_(i, j, k) = Tv;
-            Pn_(i, j, k) = (do_phase && pc == POWDER && Tv >= tl_)
+            Tnp[c] = Tv;
+            Pnp[c] = (do_phase && pc == POWDER && Tv >= tl_)
                          ? (unsigned char) (DENSE | (pfull & LOOSE)) : pfull;
           }
         }

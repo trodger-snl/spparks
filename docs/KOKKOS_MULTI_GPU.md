@@ -103,7 +103,10 @@ nearly free. On a discrete GPU every host<->device copy crosses PCIe, so:
   uses 76 registers on sm_90, so only 3 teams of 256 fit per SM (37.5%
   occupancy) and bigger teams fit fewer. `-DSPPARKS_COND_MINB=N` (Kokkos
   LaunchBounds, default 0 = off) asks for N teams per SM; N = 4 caps it at
-  64 registers with a 24-byte spill. Read register counts without profiler
+  64 registers with a 24-byte spill, and was 7% SLOWER on the H200: each
+  team marches a whole z column, so the 1122 teams of a 528x528 grid run
+  in 3 waves on 132 SMs at 3 or 4 teams per SM. It can pay where it saves
+  a wave (A100: 108 SMs, 4 -> 3 waves). Read register counts without profiler
   rights: `cuobjdump --dump-resource-usage spparks | grep -A1 ConductionSolverKokkos5stage`.
 - **Precision**: `-DKOKKOS_PREC=mixed` is validated for conduction to 0.010 K
   per site (`docs/CONDUCTION_SOURCE.md`); measure it before choosing double.

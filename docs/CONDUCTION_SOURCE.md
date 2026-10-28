@@ -163,6 +163,18 @@ in `processors`.
   with fastreal copies of the k tables and widths). Not bit-identical to the
   per-face form under -ffast-math (FP64 ≤ ~1e-12 K per step). Small grids
   (< a few hundred tiles) underfill the GPU and can be slower.
+  Stage 1 of the discrete-GPU work (2026-10-28) took out most divisions:
+  one 1/k per cell (r = (w/2)·(1/k), the same expression for the cell, its
+  scratch copy and the halo ring), precomputed k-table slopes (and a walk
+  from the bottom instead of a binary search), 1/width per axis instead of
+  /vol, 1/(H(i+1) − H(i)) for T(H), and linear cell indexing. That is 13 → 7
+  divisions per cell; sm_90 registers 76 → 70 (double), 50 → 48 (mixed).
+  Per-site d6 moved ≤ 6e-11 K (HIP, OpenMP); stats lines unchanged.
+  **Rank count:** strict (non-fast-math) builds give identical per-site d6
+  at np 1/2/4. Under -ffast-math (every Release build) the tiled kernel is
+  not np-invariant: tile edges move with the rank boundaries, and fast-math
+  rounds the halo-ring copy of a cell's r differently from the in-tile one,
+  so np 2 differs from np 1 by ~1e-11 K (7e-12 K already before stage 1).
 - **MPI.** x/y follow the lattice processor grid, with a 1-cell halo of T and
   phase exchanged in x then y every sub-step. Edge ranks also own the margin
   cells; that load imbalance is not rebalanced.
@@ -230,7 +242,7 @@ model does not shrink melted powder, so a build would grow 1/φ per layer.
 | Energy, adiabatic box, latent 0 vs 2.7e5 | stored energy equal to 2.5e-8 (print limit) |
 | `stretch 1.0` (12.5 M cells) vs `1.1` (1.2 M), 0.5 mm margins | box energy 1e-4, peak ≤ 0.08 % |
 | `stretch 1.25` (default) / `1.5` vs `1.1`: ThinWall, LargerRectangle 2 ms | molten sites +0.16 % / +0.7 %, mean pool \|ΔT\| 0.3 / 1.1 K, ThinWall wall identical; loop 1.66× / 2.1× (ThinWall), 1.34× / 1.67× (LargerRectangle) |
-| np 1 / 2 / 4 (4×1×1 and 2×2×1) | per-site d6 identical |
+| np 1 / 2 / 4 (4×1×1 and 2×2×1) | per-site d6 identical (strict build; fast-math since the tiled kernel: ~1e-11 K) |
 | HIP vs OpenMP (including all-features deck at np = 2) | per-site d6 identical |
 | `pause_below` + `reset_temperature`, `pause` + `reset_temperature` | fire and reset as with Moser |
 | `in.thin_wall` (4 layers), np 1 vs 2×2×1 | d6 identical; continuous wall z 16–39, each layer fused to the one below; 28 s |

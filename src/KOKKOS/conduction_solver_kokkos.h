@@ -85,6 +85,8 @@ class ConductionSolverKokkos : protected Pointers {
   // KK_FLOAT copies for the stencil (aliases under FP64): FP32 then reads
   // floats instead of converting doubles at FP64 rate
   Kokkos::View<KK_FLOAT*> kTr, kVr, kT2r, kV2r, wxr, wyr, wzr;
+  // so the stencil multiplies: k-table slopes, 1/width, 1/(H(i+1) - H(i))
+  Kokkos::View<KK_FLOAT*> kSr, kS2r, iwx, iwy, iwz, iHtab, iHtab2;
   double Htab_T0 = 0.0, Htab_dT = 1.0;
   Kokkos::View<int*[3]> site_cell;   // local (i,j,k) per site, i<0 = above grid
 

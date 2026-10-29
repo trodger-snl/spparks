@@ -270,6 +270,10 @@ class AppAdditiveTextureKokkos : public QuaternionKokkos<AppAdditiveTexture> {
   bool device_time_interp_set = false;
   double floor_check_d = 0.0;   // floor_check: error if liquid comes within this (m) of the box bottom
   double floor_zmin_run = 1.0e300;  // deepest liquid z so far (lattice units), printed as it drops
+  // Wall guard on the device, marked by the melting kernel and read by stats():
+  // {faces reached, face-site melts} and the first face-site melt time
+  Kokkos::View<long long[2]> d_wall;
+  Kokkos::View<double[1]> d_wall_t;
 
   // Gradient cache (device-only, computed once per timestep)
   // Uses simple View because computed on device, no host sync needed

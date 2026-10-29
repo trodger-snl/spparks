@@ -334,6 +334,11 @@ void AppAdditiveTextureKokkos::init_app()
 
   // Note: Powder activation happens after meltpool appears, not during init
 
+  wall_guard_setup();
+  d_wall = Kokkos::View<long long[2]>("wall_guard");
+  d_wall_t = Kokkos::View<double[1]>("wall_guard_t");
+  Kokkos::deep_copy(d_wall_t, wall_t);
+
   // The setup stats/dumps read the host; keep their copy from the device
   host_data_stale = true;
 }
@@ -1241,6 +1246,10 @@ int AppAdditiveTextureKokkos::melting_kernel(Kokkos::View<int*> d_active_sites, 
   auto k_xyz_d = d_xyz;
   int nspins_local = this->nspins;
   const uint64_t key_local = rng_key();   // KeyedRNG: this step's draws
+  const WallGuardBounds wb = wall;
+  auto d_wall_local = d_wall;
+  auto d_wall_t_local = d_wall_t;
+  const double t_now = time;
 
   // Melting kernel: parallel over the active-front list with event tracking
   // Race-free: each site only reads/writes itself
@@ -1255,6 +1264,13 @@ int AppAdditiveTextureKokkos::melting_kernel(Kokkos::View<int*> d_active_sites, 
       // Check if site should melt: T >= liquidus && not already liquid
       if (T_i >= pr.tl_at(k_xyz_d(i, 2)) && active_flag_i != 2) {
         KeyedRNG generator(key_local, i, RNG_MELT);
+
+        // Wall guard: only a melting face site writes (atomics, rare)
+        if (const int f = wb.faces(k_xyz_d(i, 0), k_xyz_d(i, 1), k_xyz_d(i, 2))) {
+          Kokkos::atomic_or(&d_wall_local(0), (long long) f);
+          Kokkos::atomic_add(&d_wall_local(1), 1LL);
+          Kokkos::atomic_min(&d_wall_t_local(0), t_now);
+        }
 
         // Transition to liquid state
         d_active_flag_local(i) = 2;  // LIQUID
@@ -2613,6 +2629,14 @@ void AppAdditiveTextureKokkos::stats(char *strtmp)
   ensure_host_data_current();
   if (host_T_stale) sync_temperature_to_host();
 
+  if (d_wall.data()) {   // 24 bytes; stats steps only
+    long long w[2];
+    Kokkos::deep_copy(Kokkos::View<long long[2], Kokkos::HostSpace, Kokkos::MemoryUnmanaged>(w), d_wall);
+    Kokkos::deep_copy(Kokkos::View<double[1], Kokkos::HostSpace, Kokkos::MemoryUnmanaged>(&wall_t), d_wall_t);
+    wall_faces = (int) w[0];
+    wall_count = w[1];
+  }
+  wall_guard_report();
   AppLattice::stats(strtmp);
 }
 

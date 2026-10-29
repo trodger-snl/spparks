@@ -32,10 +32,31 @@ AppStyle(additive_temperature_texture,AppAdditiveTextureDeprecated)
 #include <cmath>
 #include <memory>
 
+#if defined(SPK_KOKKOS) && __has_include(<Kokkos_Macros.hpp>)
+#include <Kokkos_Macros.hpp>
+#endif
+#ifdef KOKKOS_INLINE_FUNCTION
+#define WALL_FN KOKKOS_INLINE_FUNCTION
+#else
+#define WALL_FN inline
+#endif
+
 namespace SPPARKS_NS {
 
 class ThermalManager;
 namespace quaternion { class SiteOrientationRNG; }
+
+// Wall guard: the outermost site coordinates of the box on its four sides and
+// its bottom (not the top, the laser plane). A periodic or one-site-thick
+// dimension has no faces. faces() returns bits 1 x-lo, 2 x-hi, 4 y-lo,
+// 8 y-hi, 16 z-lo, or 0 for an interior site.
+struct WallGuardBounds {
+  double lo[3] = {-1.0e300, -1.0e300, -1.0e300}, hi[3] = {1.0e300, 1.0e300, 1.0e300};
+  WALL_FN int faces(double x, double y, double z) const {
+    return (x <= lo[0]) | (x >= hi[0]) << 1 | (y <= lo[1]) << 2 | (y >= hi[1]) << 3 |
+           (z <= lo[2]) << 4;
+  }
+};
 
 class AppAdditiveTexture : public AppPottsQuaternion, public AdditiveParams {
  public:
@@ -101,6 +122,18 @@ class AppAdditiveTexture : public AppPottsQuaternion, public AdditiveParams {
 
   // Powder phase activation methods
   virtual void activate_powder_sites();
+
+  // Wall guard: a site melting on a side or bottom face means the melt pool
+  // reaches past the lattice (a stitched box is too small). The melt step
+  // marks it; stats() warns once per newly reached face.
+  virtual void stats(char *);
+  void wall_guard_setup();
+  void wall_guard_report();
+  WallGuardBounds wall;
+  int wall_faces = 0;           // faces reached on this rank (bits as faces())
+  long long wall_count = 0;     // face-site melts on this rank
+  double wall_t = 1.0e300;      // first face-site melt on this rank
+  int wall_reported = 0;        // faces already warned about (all ranks)
 
   // Void generation methods
   void generate_voids(class RandomPark *);

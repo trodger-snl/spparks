@@ -30,6 +30,8 @@
 #include <iostream>
 #include <random>
 #include <cstring>
+#include <algorithm>
+#include <string>
 #include "math.h"
 #include "math_const.h"
 #include "app_additive_texture.h"
@@ -341,6 +343,11 @@ void AppAdditiveTexture::app_update(double dt)
     //to avoid repeated initialization
     if( (T[i] >= tl) && active_flag[i] != 2) {
         melting_occurred = true;
+        if (const int f = wall.faces(xyz[i][0], xyz[i][1], xyz[i][2])) {
+          wall_faces |= f;
+          wall_count++;
+          wall_t = std::min(wall_t, time);
+        }
         active_flag[i] = 2;
         spin[i] = (int) (nspins * rng.uniform());
         // Create random orientation as each site
@@ -644,7 +651,69 @@ void AppAdditiveTexture::init_app()
 
   // Note: Powder activation happens after meltpool appears, not during init
 
+  wall_guard_setup();
 	this->app_update(0.0);
+}
+
+/* ----------------------------------------------------------------------
+   Wall guard: face bounds from the outermost sites, once per run (both apps).
+------------------------------------------------------------------------- */
+
+void AppAdditiveTexture::wall_guard_setup()
+{
+  double lo[3] = {1.0e300, 1.0e300, 1.0e300}, hi[3] = {-1.0e300, -1.0e300, -1.0e300};
+  for (int i = 0; i < nlocal; i++)
+    for (int d = 0; d < 3; d++) {
+      lo[d] = std::min(lo[d], xyz[i][d]);
+      hi[d] = std::max(hi[d], xyz[i][d]);
+    }
+  double glo[3], ghi[3];
+  MPI_Allreduce(lo, glo, 3, MPI_DOUBLE, MPI_MIN, world);
+  MPI_Allreduce(hi, ghi, 3, MPI_DOUBLE, MPI_MAX, world);
+  const int periodic[3] = {domain->xperiodic, domain->yperiodic, domain->zperiodic};
+  wall = WallGuardBounds();
+  for (int d = 0; d < 3; d++)
+    if (!periodic[d] && ghi[d] - glo[d] > 0.5) {   // tolerance in lattice units
+      wall.lo[d] = glo[d] + 1.0e-6;
+      wall.hi[d] = ghi[d] - 1.0e-6;
+    }
+  wall_faces = 0;
+  wall_count = 0;
+  wall_t = 1.0e300;
+  wall_reported = 0;
+}
+
+/* ----------------------------------------------------------------------
+   Wall guard: warn once per newly reached face. Collective (from stats);
+   one Allreduce while no new face has been reached.
+------------------------------------------------------------------------- */
+
+void AppAdditiveTexture::wall_guard_report()
+{
+  int faces = 0;
+  MPI_Allreduce(&wall_faces, &faces, 1, MPI_INT, MPI_BOR, world);
+  if (faces == wall_reported) return;
+  long long count = 0;
+  double t = 0.0;
+  MPI_Allreduce(&wall_count, &count, 1, MPI_LONG_LONG, MPI_SUM, world);
+  MPI_Allreduce(&wall_t, &t, 1, MPI_DOUBLE, MPI_MIN, world);
+  wall_reported = faces;
+  if (domain->me != 0) return;
+  static const char *name[5] = {"x-lo", "x-hi", "y-lo", "y-hi", "z-lo"};
+  std::string list;
+  for (int b = 0; b < 5; b++)
+    if (faces & (1 << b)) list += std::string(list.empty() ? "" : " ") + name[b];
+  char msg[512];
+  snprintf(msg, sizeof(msg), "wall_guard: melt reached the box face(s) %s (first at t = %.9g, "
+           "%lld face-site melts by t = %.9g); the melt pool extends past the lattice, "
+           "so a stitched box is too small", list.c_str(), t, count, time);
+  error->warning(FLERR, msg);
+}
+
+void AppAdditiveTexture::stats(char *strtmp)
+{
+  wall_guard_report();
+  AppPottsQuaternion::stats(strtmp);
 }
 
 

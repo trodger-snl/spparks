@@ -359,6 +359,20 @@ prints "floor_check: deepest liquid z = ..." each time the deepest
 liquid site moves down, which a driver script can use to size the
 next box.
 </P>
+<P>Both styles always check for melt on the box's side and bottom faces
+(the wall guard; the top face, the laser plane, and periodic
+dimensions are not checked).  A site melting there means the melt pool
+extends past the lattice, which in a stitched box chain cuts the pool
+off at the wall.  The first time a face is reached, the next stats
+output warns once:
+</P>
+<PRE>WARNING: wall_guard: melt reached the box face(s) x-lo y-lo (first at t = ..., N face-site melts by t = ...) ... 
+</PRE>
+<P>and again only when another face is reached.  A driver can search the
+log for "wall_guard" and rerun the box larger.  A single box whose
+laser path starts outside it warns too.  The check runs only when a
+site melts, so it adds no per-step work.
+</P>
 <HR>
 
 <P><B>Site state:</B>

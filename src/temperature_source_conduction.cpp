@@ -86,6 +86,11 @@ void ConductionTemperatureSource::setup_temperature_source(
     else if (a == "layer_thickness") cfg.layer_thickness = num(++i);
     else if (a == "packing") cfg.packing = num(++i);
     else if (a == "sts") cfg.sts_smax = (int) num(++i);
+    else if (a == "init") {
+      if (++i >= args.size() || args[i] != "d6")
+        error->all(FLERR,"setup_temperature_source conduction: init takes d6");
+      cfg.init_d6 = true;
+    }
     else if (a == "ded") {
       cfg.ded = true;
       while (i + 1 < args.size()) {

@@ -317,10 +317,12 @@ void AppAdditiveTextureKokkos::init_app()
   if (thermal->enabled()) {
     refresh_thermal_host();
     // The conduction source has no point query; its first device fill (step
-    // 1) builds the grid. Until then host T is the ambient.
-    if (ConductionTemperatureSource *c = thermal->conduction_source())
-      for (int i = 0; i < nlocal + nghost; i++) T[i] = c->ambient();
-    else
+    // 1) builds the grid. Until then host T is the ambient, or with `init d6`
+    // the d6 the deck set (e.g. the previous box's), which seeds the grid.
+    if (ConductionTemperatureSource *c = thermal->conduction_source()) {
+      if (c->config().init_d6) upload_range(d_temp, T, 0, nlocal + nghost);
+      else for (int i = 0; i < nlocal + nghost; i++) T[i] = c->ambient();
+    } else
       thermal->update_temperatures(time);
   }
 
@@ -2227,7 +2229,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       if (!cond) cond = std::make_unique<ConductionSolverKokkos>(spk, csrc);
       thermal->set_moser_device_filler([this](double t) -> double {
         ensure_device_xyz();
-        cond->advance(t, d_xyz, d_active_flag, nlocal, nlocal + nghost, dx, ts, tl);
+        cond->advance(t, d_xyz, d_active_flag, d_temp, nlocal, nlocal + nghost, dx, ts, tl);
         // the sample also builds the active-front list (no BuildActiveList scan)
         fill_maxT_local = cond->sample(d_temp, nlocal, nlocal + nghost, active_append());
         device_active_list_fresh = true;

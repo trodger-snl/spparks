@@ -68,6 +68,7 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
     double packing = 1.0;              // powder mass fraction of dense (1 = dense)
     int    far_bc = FAR_FIXED;
     int    sts_smax = 32;               // RKL2 stages per laser-off super-step; 0 = explicit
+    bool   init_d6 = false;             // init d6: the run's first grid takes in-box T from d6
     // plate_material: the dense material of i2 = 6 sites and of the cells
     // below plate_top outside the box. Same keys as the part above.
     struct Plate {

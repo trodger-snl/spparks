@@ -100,8 +100,9 @@ ConductionSolverKokkos::ConductionSolverKokkos(SPPARKS *spk,
 
 void ConductionSolverKokkos::advance(double t,
                                      Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz,
-                                     Kokkos::View<int*> d_af, int nlocal,
-                                     int nall, double dx_in, double ts, double tl_in)
+                                     Kokkos::View<int*> d_af, Kokkos::View<double*> d_T,
+                                     int nlocal, int nall, double dx_in, double ts,
+                                     double tl_in)
 {
   dx = dx_in;
   tl = tl_in;
@@ -109,6 +110,8 @@ void ConductionSolverKokkos::advance(double t,
   if (!built || nall != built_nall || zl_now != built_zl) {
     build(d_xyz, d_af, nlocal, nall, ts);
     reset_field(src->ambient());
+    if (src->config().init_d6 && !seeded) seed_from_sites(d_T, nlocal);
+    seeded = true;
     t_fd = t;
   }
 
@@ -501,6 +504,35 @@ double ConductionSolverKokkos::H_at(Kokkos::View<KK_FLOAT*> tab, double Tr) cons
   const double u = (Tr - Htab_T0) / Htab_dT;
   const int i = std::max(0, std::min(n - 2, (int) std::floor(u)));
   return hH(i) + (u - i) * ((double) hH(i+1) - hH(i));
+}
+
+/* ----------------------------------------------------------------------
+   init d6: each owned site's cell takes the site's temperature (a stitched
+   box hands its field to the next), with H from the cell's material. Sites
+   with d6 <= 0 (never written) and the margin cells keep the reset value.
+------------------------------------------------------------------------- */
+
+void ConductionSolverKokkos::seed_from_sites(Kokkos::View<double*> d_T, int nlocal)
+{
+  auto H_ = H; auto T_ = T; auto Tn_ = Tn; auto P_ = P; auto sc = site_cell;
+  auto tab = Htab, tab2 = Htab2;
+  const double T0 = Htab_T0, dTt = Htab_dT;
+  const int n1 = (int) tab.extent(0), n2 = (int) tab2.extent(0);
+  Kokkos::parallel_for("ConductionSeedD6", nlocal, KOKKOS_LAMBDA(const int s) {
+    const int o = sc(s);
+    const double v = d_T(s);
+    if (o < 0 || !(v > 0.0)) return;
+    const bool plate = P_.data()[o] & PLATE;
+    const int n = plate ? n2 : n1;
+    const double u = (v - T0) / dTt;
+    const int i = u < 0.0 ? 0 : (u > n - 2 ? n - 2 : (int) u);
+    const double h = plate ? tab2(i) + (u - i) * ((double) tab2(i+1) - tab2(i))
+                           : tab(i) + (u - i) * ((double) tab(i+1) - tab(i));
+    H_.data()[o] = h;
+    T_.data()[o] = v;
+    Tn_.data()[o] = v;
+  });
+  exchange();
 }
 
 void ConductionSolverKokkos::reset_field(double Tr)

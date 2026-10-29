@@ -44,8 +44,10 @@ class ConductionSolverKokkos : protected Pointers {
 
   // Advance the field to t; then sample() writes T for all nall sites into
   // d_T and returns the max T over owned sites (the fused-max convention).
+  // d_T: the sites' temperatures (d6), read once by `init d6` at the first build
   void advance(double t, Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz,
-               Kokkos::View<int*> d_af, int nlocal, int nall, double dx, double ts, double tl);
+               Kokkos::View<int*> d_af, Kokkos::View<double*> d_T, int nlocal, int nall,
+               double dx, double ts, double tl);
 
   // LOOSE: flag bit, see packing. PLATE: flag bit, the plate material.
   // UNBORN: flag bit on POWDER under ded, gas until the laser deposits it
@@ -55,6 +57,7 @@ class ConductionSolverKokkos : protected Pointers {
   class ConductionTemperatureSource *src;
 
   bool built = false;
+  bool seeded = false;   // the run's first grid has been built (init d6 reads d6 once)
   int built_nall = -1;
   double built_zl = 0.0;
   double t_fd = 0.0;
@@ -118,6 +121,7 @@ class ConductionSolverKokkos : protected Pointers {
              Kokkos::View<KK_FLOAT***> Y2, Kokkos::View<KK_FLOAT***> Yout);
   void exchange();
   void reset_field(double Tr);
+  void seed_from_sites(Kokkos::View<double*> d_T, int nlocal);
   // Write T for all nall sites into d_T; return the max over owned sites.
   // Each owned site's T also goes to on_owned(s, T), so the caller's own
   // per-site pass (the app's active-front list) rides along instead of

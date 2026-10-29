@@ -23,7 +23,7 @@ sx, sy, sz = Gaussian source widths (m), as in "moser"_temperature_source_moser.
 {card} = take the positional values and material keywords from the loaded
 "material card"_material.html; see "setup_temperature_source"_setup_temperature_source.html :l
 zero or more keyword/value pairs may be appended :l
-keyword = {k_table} or {cp_table} or {latent} or {k_powder} or {convection} or {emissivity} or {margin} or {plate} or {stretch} or {max_cell} or {part} or {layer_thickness} or {packing} or {plate_top} or {plate_material} or {plate_growth} or {far_bc} or {sts} or {ded} :l
+keyword = {k_table} or {cp_table} or {latent} or {k_powder} or {convection} or {emissivity} or {margin} or {plate} or {stretch} or {max_cell} or {part} or {layer_thickness} or {packing} or {plate_top} or {plate_material} or {plate_growth} or {far_bc} or {sts} or {init} or {ded} :l
   {k_table} values = n T1 k1 ... Tn kn
     dense conductivity k(T), piecewise linear, held at the end values (K, W/(m K))
   {cp_table} values = n T1 c1 ... Tn cn
@@ -60,6 +60,8 @@ keyword = {k_table} or {cp_table} or {latent} or {k_powder} or {convection} or {
     outer faces of the thermal domain held at T0, or insulated
   {sts} value = s
     RKL2 stages per laser-off super-step, 0 = explicit steps only, or >= 2
+  {init} value = {d6}
+    the run's first grid takes each site's temperature from {d6} instead of T0
   {ded} values = zero or more sub-keyword/value pairs
     directed energy deposition: no powder bed, laser-deposited material
     {radius} value = r = birth radius around the laser axis (m)
@@ -175,6 +177,17 @@ super-time-stepping of up to {sts} stages.  Once the field is below the
 liquidus with no pass active, the app fast-forwards to the next pass,
 and the skipped interval is still integrated.
 
+[Stitched boxes.]  A run's field starts at T0, so in a chain of
+boxes run one after another (a stitched build) a box that starts while
+the previous one is still hot would begin cold, and a melt pool carried
+across the cut would freeze.  With {init d6} the run's first grid takes
+each site's temperature from its {d6} value, as set by the deck before
+the run (e.g. "set d6 stitch"_set.html from the previous box's dump),
+with the enthalpy of the cell's material; sites with {d6} <= 0 and the
+cells outside the lattice box start at T0.  The heat that was in the
+previous box's margin cells is lost.  Later grids (a new layer) start
+at T0 as before.
+
 [Layers.]  A layer is finished when its last pass has emitted, the
 maximum temperature is below the solidus, and no site is liquid.  With
 {laser_path file} the next layer then starts after the path's recoat
@@ -214,7 +227,7 @@ k_table = constant k, cp_table = constant cp, latent = 0, k_powder =
 k/100, convection h = 0 (T_inf = 300), emissivity = 0, margin = 0, plate
 = 0, stretch = 1.25, max_cell = none, part = whole domain dense,
 layer_thickness = 0, packing = 1, plate_top = box bottom, plate_material
-= none, plate_growth = 0, far_bc = fixed, sts = 32, ded off (when on: radius = 2 sx, T_birth
+= none, plate_growth = 0, far_bc = fixed, sts = 32, init T0, ded off (when on: radius = 2 sx, T_birth
 = T0, depth = the rise of the laser plane since the previous layer,
 unlimited for the first).  With a material card loaded, none of these material
 defaults (latent, k_powder, convection, emissivity, layer_thickness) is

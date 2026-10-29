@@ -370,14 +370,16 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
 
 /* ----------------------------------------------------------------------
    laser_path file F speed V [scale S] [shift DX DY DZ] [jump_speed V]
-     [jump_time T] [recoat T] [layers N]
+     [jump_time T] [recoat T] [layers N] [t0 T]
    Waypoint file, one row per point: x y z p [v] (whitespace or commas,
    '#' comments). Each row is a move from the previous point at power
-   fraction p (0 = laser off) and speed v (default V). Off moves take
-   jump_time if given, else distance / jump_speed (default V). A change of
-   z starts a new layer at that point; layers run one after another, each
-   once the previous one has cooled below the solidus with no liquid left,
-   plus recoat seconds. Coordinates are file units * scale + shift (m).
+   fraction p (0 = laser off) and speed v (default V). Off moves take v
+   seconds if given, else jump_time if given, else distance / jump_speed
+   (default V). A change of z starts a new layer at that point; layers run
+   one after another, each once the previous one has cooled below the
+   solidus with no liquid left, plus recoat seconds. The first layer starts
+   at t0 (default: the current time). Coordinates are file units * scale +
+   shift (m).
 ------------------------------------------------------------------------- */
 
 void ThermalManager::laser_path_file(int narg, char **arg)
@@ -388,7 +390,7 @@ void ThermalManager::laser_path_file(int narg, char **arg)
     error->all(FLERR,"laser_path file: requires the moser or conduction source");
   const double v = atof(arg[2]);
   double scale = 1.0, shift[3] = {0.0, 0.0, 0.0}, jump_speed = v, jump_time = 0.0;
-  double recoat = 0.0;
+  double recoat = 0.0, t0 = host_->time;
   int nlayers = 0;
   for (int i = 3; i < narg; ) {
     auto need = [&](int n) {
@@ -404,8 +406,9 @@ void ThermalManager::laser_path_file(int narg, char **arg)
     else if (strcmp(arg[i],"jump_time") == 0) { need(1); jump_time = atof(arg[i+1]); i += 2; }
     else if (strcmp(arg[i],"recoat") == 0) { need(1); recoat = atof(arg[i+1]); i += 2; }
     else if (strcmp(arg[i],"layers") == 0) { need(1); nlayers = atoi(arg[i+1]); i += 2; }
+    else if (strcmp(arg[i],"t0") == 0) { need(1); t0 = atof(arg[i+1]); i += 2; }
     else error->all(FLERR,"laser_path file: unknown keyword (expected scale, shift, "
-                    "jump_speed, jump_time, recoat or layers)");
+                    "jump_speed, jump_time, recoat, layers or t0)");
   }
   if (v <= 0.0 || scale <= 0.0 || jump_speed <= 0.0 || jump_time < 0.0 ||
       recoat < 0.0 || nlayers < 0)
@@ -453,8 +456,11 @@ void ThermalManager::laser_path_file(int narg, char **arg)
       path_layers.back().segs.push_back({t, t + d / vr, x0, y0, x1, y1, p});
       t += d / vr;
     } else {
+      // an off row's v is the jump's duration (s), e.g. measured in situ;
       // floor keeps a zero-time jump from putting two waypoints at one time
-      t += std::max(jump_time > 0.0 ? jump_time : d / jump_speed, 1.0e-12);
+      const double tj = rows[5*r+4] > 0.0 ? rows[5*r+4]
+                      : jump_time > 0.0 ? jump_time : d / jump_speed;
+      t += std::max(tj, 1.0e-12);
     }
   }
   if (!path_layers.empty() && path_layers.back().segs.empty()) path_layers.pop_back();
@@ -474,7 +480,7 @@ void ThermalManager::laser_path_file(int narg, char **arg)
               << path_layers.front().z << " .. " << path_layers.back().z
               << " m, recoat " << recoat << " s" << std::endl;
   }
-  start_path_layer(0, host_->time);
+  start_path_layer(0, t0);
 }
 
 void ThermalManager::start_path_layer(size_t k, double t_start)

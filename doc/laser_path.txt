@@ -38,7 +38,7 @@ file form: :l
 F = waypoint file (see below) :l
 V = default emitting speed (m/s), > 0, or {card} :l
 zero or more keyword/value pairs may be appended :l
-keyword = {scale} or {shift} or {jump_speed} or {jump_time} or {recoat} or {layers} :l
+keyword = {scale} or {shift} or {jump_speed} or {jump_time} or {recoat} or {layers} or {t0} :l
   {scale} value = S
     S = factor applied to the file coordinates (default 1), > 0
   {shift} values = DX DY DZ
@@ -46,11 +46,13 @@ keyword = {scale} or {shift} or {jump_speed} or {jump_time} or {recoat} or {laye
   {jump_speed} value = Vj
     Vj = speed (m/s) of laser-off moves (default V), > 0
   {jump_time} value = Tj
-    Tj = fixed duration (s) of every laser-off move (default 0 = use jump_speed)
+    Tj = fixed duration (s) of laser-off moves without their own v (default 0 = use jump_speed)
   {recoat} value = Tr
     Tr = extra time (s) between the end of one layer and the start of the next (default 0)
   {layers} value = N
-    N = use only the first N layers of the file (default 0 = all) :pre
+    N = use only the first N layers of the file (default 0 = all)
+  {t0} value = T
+    T = simulation time (s) of the first waypoint (default = the current time) :pre
 :ule
 
 [Examples:]
@@ -60,7 +62,8 @@ laser_path start 0.15e-3 0.10e-3 0.15e-3 end 0.85e-3 0.10e-3 speed 1.2 repeats 2
 laser_path start 0.15e-3 0.10e-3 0.15e-3 end 0.85e-3 0.10e-3 speed 1.2 repeats 3 pause_below 1500 reset_temperature 600
 laser_path start -100e-6 200e-6 90e-6 end 502e-6 200e-6 speed 1.137 hatch 80e-6 5 serpentine pause 8.8e-3
 laser_path start 0.15e-3 0.10e-3 0.1475e-3 end 0.85e-3 0.10e-3 speed card hatch card 2 serpentine pause 1.0e-3
-laser_path file large_rectangle.path speed 1.4 scale 5e-6 shift 0 0 2.5e-6 jump_time 5e-3 layers 2 :pre
+laser_path file large_rectangle.path speed 1.4 scale 5e-6 shift 0 0 2.5e-6 jump_time 5e-3 layers 2
+laser_path file layer_0042.path speed 1.1 scale 1e-3 shift -76e-3 -90e-3 0 t0 2105.3814 :pre
 
 [Description:]
 
@@ -144,11 +147,21 @@ separated by whitespace or commas; text after "#" is a comment and
 blank lines are skipped.  Coordinates are {file value * scale + shift}
 (m).  Each row is a move from the previous waypoint: with power
 fraction {p} > 0 the laser emits {p * lambda Q} and moves at speed {v}
-(default V); with {p} = 0 it is a laser-off jump that takes
-{jump_time} seconds if given, else distance / {jump_speed}.  A change
+(default V); with {p} = 0 it is a laser-off jump that takes {v}
+seconds if given, else {jump_time} seconds if given, else distance /
+{jump_speed}.  A change
 of z starts a new layer at that waypoint (the move to the new height is
 not scanned).  Layers without an emitting move are dropped.  The file
 needs at least two waypoints and one emitting move.
+
+The first waypoint is at time {t0}, by default the current time
+(after any "reset_time"_reset_time.html).  An earlier {t0} starts the
+run part way through the first layer: the Moser source includes the
+heat of the moves before the current time, while the conduction source
+starts from T0 and only sees moves from the current time on.
+"tools/laser_path_convert.py insitu"_Section_tools.html writes one file
+per layer from in-situ monitoring data, with the measured move
+durations and a "# t0" comment giving the layer's start time.
 
 Layers run one at a time.  The next layer starts once the current one
 has finished emitting, the global peak temperature is below the
@@ -191,4 +204,4 @@ the "HDF5 sources"_temperature_source_hdf5.html.
 repeats = 1, no hatch offset, no serpentine, no pause (passes
 back-to-back), fast-forward threshold = liquidus.  File form: scale =
 1, shift = 0 0 0, jump_speed = V, jump_time = 0 (use jump_speed),
-recoat = 0, layers = all.
+recoat = 0, layers = all, t0 = the current time.

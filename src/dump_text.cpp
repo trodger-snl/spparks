@@ -401,7 +401,7 @@ void DumpText::header_binary(bigint ndump, double time)
 void DumpText::header_text(bigint ndump, double time)
 {
   fprintf(fp,"ITEM: TIMESTEP\n");
-  fprintf(fp,"%d %10g\n",idump,time);
+  fprintf(fp,"%d %.15g\n",idump,time);   // full precision: in-situ build clocks run to ~1e5 s
   fprintf(fp,"ITEM: NUMBER OF ATOMS\n");
   fprintf(fp,BIGINT_FORMAT "\n",ndump);
   fprintf(fp,"ITEM: BOX BOUNDS\n");

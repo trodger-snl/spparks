@@ -55,7 +55,7 @@ void DumpSites::write_header(bigint ndump, double time)
 
   if (me) return;
 
-  fprintf(fp,"Site file written by dump sites %s command at time: %d %g\n\n",
+  fprintf(fp,"Site file written by dump sites %s command at time: %d %.15g\n\n",
           id,idump,time);
   fprintf(fp,"%d dimension\n",domain->dimension);
   fprintf(fp,BIGINT_FORMAT " sites\n",ndump);

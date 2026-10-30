@@ -68,6 +68,7 @@ per-move speed).
 | `plate_growth d` | `i2 = 6` may reach `d` above `plate_top` (m) | 0 |
 | `far_bc fixed\|adiabatic` | outer faces of the thermal domain | fixed at `T0` |
 | `sts s` | RKL2 stages per laser-off super-step; 0 = explicit only | 32 |
+| `far R` | laser > R from the box: super-steps with a path-averaged source, app fast-forward while the box is cold, run ends when no pass comes within R again | 0 (off) |
 | `ded [radius r] [T_birth T] [depth d]` | directed energy deposition (see *DED*) | off; r = 2 sx, T = T0, d = layer step |
 
 Not supported (errors): the CPU app (`additive/texture`), `keyhole`,

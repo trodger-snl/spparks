@@ -69,6 +69,7 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
     int    far_bc = FAR_FIXED;
     int    sts_smax = 32;               // RKL2 stages per laser-off super-step; 0 = explicit
     bool   init_d6 = false;             // init d6: the run's first grid takes in-box T from d6
+    double far = 0.0;                   // m; laser farther than this from the box is far (0 = off)
     // plate_material: the dense material of i2 = 6 sites and of the cells
     // below plate_top outside the box. Same keys as the part above.
     struct Plate {
@@ -103,6 +104,13 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
   // DBL_MAX when no scheduled pass remains. Drives the fast-forward.
   double next_laser_on(double t) const;
 
+  // `far`: the lattice box (xy faces, m), set by the solver at each grid build
+  void set_box(double xlo, double xhi, double ylo, double yhi);
+  double next_near(double t) const;
+  void laser_samples(double t0, double t1, double ds, std::vector<double> &xyw) const;
+  void request_freeze() { freeze_pending = true; }
+  bool take_freeze() { const bool f = freeze_pending; freeze_pending = false; return f; }
+
   // Pending field reset (reset_temperature, end of layer): returns true
   // once per request.
   void request_reset(double T_reset);
@@ -122,6 +130,9 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
   bool configured = false;   // set once the keyword defaults are filled in
   bool reset_pending = false;
   double reset_T = 0.0;
+  bool freeze_pending = false;
+  bool box_set = false;
+  double box_[4] = {0, 0, 0, 0};
 };
 
 }

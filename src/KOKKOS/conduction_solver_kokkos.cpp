@@ -124,13 +124,19 @@ void ConductionSolverKokkos::advance(double t,
     t_fd = t;
   }
 
+  // far: the box is done; the field stays as it was
+  if (src->take_freeze()) t_fd = t;
+
   if (t > t_fd) {
     const int n = (int) std::ceil((t - t_fd) / dt_fd - 1e-9);
-    // Laser off for the whole interval: RKL2 super-steps of at most s_max
-    // stages, when that is fewer stage evaluations than n explicit steps.
+    // Laser off for the whole interval, or (far) on but farther than far from
+    // the box throughout: RKL2 super-steps of at most s_max stages, when that
+    // is fewer stage evaluations than n explicit steps.
     const int smax = src->config().sts_smax;
     double xl, yl;
-    bool sts = smax >= 2 && n > 2 && src->laser_window(t_fd, t, xl, yl) == 0.0;
+    const bool off = src->laser_window(t_fd, t, xl, yl) == 0.0;
+    const bool far = !off && src->config().far > 0.0 && src->next_near(t_fd) >= t;
+    bool sts = smax >= 2 && n > 2 && (off || far);
     int m = 0, s = 0;
     if (sts) {
       const double tau_max = dt_fd * (smax * smax + smax - 2) / 4.0;
@@ -141,7 +147,7 @@ void ConductionSolverKokkos::advance(double t,
     }
     if (sts) {
       const double tau = (t - t_fd) / m;
-      for (int k = 0; k < m; k++) sts_step(tau, s);
+      for (int k = 0; k < m; k++) sts_step(tau, s, t_fd + k * tau);
     } else {
       const double h = (t - t_fd) / n;
       for (int k = 0; k < n; k++) step(h, t_fd + k * h);
@@ -185,6 +191,7 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   int glo[3], ghi[3];
   MPI_Allreduce(lo, glo, 3, MPI_INT, MPI_MIN, world);
   MPI_Allreduce(hi, ghi, 3, MPI_INT, MPI_MAX, world);
+  src->set_box((glo[0] - 0.5) * dx, (ghi[0] + 0.5) * dx, (glo[1] - 0.5) * dx, (ghi[1] + 0.5) * dx);
 
   // Grid top: the highest site layer at or below the laser plane.
   zl = src->get_scan_laser_plane_z();
@@ -569,13 +576,50 @@ void ConductionSolverKokkos::step(double h, double t0)
 }
 
 /* ----------------------------------------------------------------------
-   One RKL2 super-step of length tau in s stages (Meyer, Balsara & Aslam,
-   J. Comput. Phys. 257 (2014) 594), laser off. Stable for
-   tau <= dt_fd (s^2 + s - 2)/4; second order. The phase only updates on
-   the last stage.
+   far: the laser's path over [t0, t1] as one source plane,
+   S2(i, j) = sum over path samples of w Ex(i) Ey(j), samples at most sx/2
+   apart. The stage adds Pq S2(i, j) Ez(k), held over the super-step.
 ------------------------------------------------------------------------- */
 
-void ConductionSolverKokkos::sts_step(double tau, int s)
+double ConductionSolverKokkos::path_source(double t0, double t1)
+{
+  const double sx = src->sigma_x(), sy = src->sigma_y();
+  src->laser_samples(t0, t1, 0.5 * std::min(sx, sy), h_samp);
+  const int ns = (int) h_samp.size() / 3;
+  if (ns == 0) return 0.0;
+  if ((int) d_samp.extent(0) < 3 * ns) d_samp = Kokkos::View<double*>("cond_samp", 3 * ns);
+  Kokkos::deep_copy(Kokkos::subview(d_samp, std::make_pair(0, 3 * ns)),
+                    Kokkos::View<const double*, Kokkos::HostSpace,
+                                 Kokkos::MemoryTraits<Kokkos::Unmanaged>>(h_samp.data(), 3 * ns));
+  const int nxl = (int) fxlo.extent(0), nyl = (int) fylo.extent(0);
+  if ((int) S2.extent(0) != nxl || (int) S2.extent(1) != nyl)
+    S2 = Kokkos::View<KK_FLOAT**>("cond_S2", nxl, nyl);
+  auto S2_ = S2; auto smp = d_samp;
+  auto fxlo_ = fxlo, fxhi_ = fxhi, fylo_ = fylo, fyhi_ = fyhi;
+  Kokkos::parallel_for("ConductionPathSource",
+    Kokkos::MDRangePolicy<Kokkos::Rank<2>>({0, 0}, {nxl, nyl}),
+    KOKKOS_LAMBDA(const int i, const int j) {
+      double v = 0.0;
+      for (int k = 0; k < ns; k++) {
+        const double xs = smp(3*k), ys = smp(3*k+1);
+        const double ex = Kokkos::erf((fxhi_(i) - xs) / sx) - Kokkos::erf((fxlo_(i) - xs) / sx);
+        if (ex == 0.0) continue;
+        v += smp(3*k+2) * ex *
+             (Kokkos::erf((fyhi_(j) - ys) / sy) - Kokkos::erf((fylo_(j) - ys) / sy));
+      }
+      S2_(i, j) = v;
+    });
+  return 0.25 * src->absorbed_power();
+}
+
+/* ----------------------------------------------------------------------
+   One RKL2 super-step of length tau in s stages (Meyer, Balsara & Aslam,
+   J. Comput. Phys. 257 (2014) 594), from t0. Stable for
+   tau <= dt_fd (s^2 + s - 2)/4; second order. The phase only updates on
+   the last stage. The laser is off, or (far) held as path_source's plane.
+------------------------------------------------------------------------- */
+
+void ConductionSolverKokkos::sts_step(double tau, int s, double t0)
 {
   if (Ya.extent(0) != H.extent(0) || Ya.extent(1) != H.extent(1) || Ya.extent(2) != H.extent(2)) {
     Ya = Kokkos::View<KK_FLOAT***>("cond_Ya", H.extent(0), H.extent(1), H.extent(2));
@@ -587,6 +631,7 @@ void ConductionSolverKokkos::sts_step(double tau, int s)
 
   Stage c;
   c.sts = true; c.store_L0 = true; c.phase = (s == 1);
+  if (src->config().far > 0.0) { c.Pq = path_source(t0, t0 + tau); c.path = c.Pq > 0.0; }
   c.mu = 1.0; c.nu = 0.0; c.mut = b(1) * w1 * tau; c.gat = 0.0;
   stage(c, H, H, Ya);                       // Y1 = H + mu~1 tau L(H)
   Kokkos::View<KK_FLOAT***> y1 = Ya, y2 = H, spare = Yb;
@@ -618,7 +663,7 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
 {
   const auto &cfg = src->config();
   const double xl = c.xl, yl = c.yl, Pq = c.Pq, h = c.h;
-  const bool sts = c.sts, store_L0 = c.store_L0, do_phase = c.phase;
+  const bool sts = c.sts, store_L0 = c.store_L0, do_phase = c.phase, path = c.path;
   const double mu = c.mu, nu = c.nu, mut = c.mut, gat = c.gat;
   const double sx = src->sigma_x(), sy = src->sigma_y(), sz = src->sigma_z();
   const double zs = zsrc;
@@ -645,12 +690,13 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
 
   // The Gaussian separates: integrate it over each cell's extent per axis.
   auto Ex_ = Ex, Ey_ = Ey, Ez_ = Ez;   // KK_FLOAT: rounded once, as the stencil used them
+  auto S2_ = S2;                       // far: path plane in place of Ex Ey
   if (Pq > 0.0) {
     const int nmax = std::max(std::max((int) Ex.extent(0), (int) Ey.extent(0)), nz_);
     Kokkos::parallel_for("ConductionSource", nmax, KOKKOS_LAMBDA(const int n) {
-      if (n < (int) Ex_.extent(0))
+      if (!path && n < (int) Ex_.extent(0))
         Ex_(n) = Kokkos::erf((fxhi_(n) - xl) / sx) - Kokkos::erf((fxlo_(n) - xl) / sx);
-      if (n < (int) Ey_.extent(0))
+      if (!path && n < (int) Ey_.extent(0))
         Ey_(n) = Kokkos::erf((fyhi_(n) - yl) / sy) - Kokkos::erf((fylo_(n) - yl) / sy);
       if (n < nz_) {
         const double zt = fzhi_(n) < zs ? fzhi_(n) : zs;   // half space z <= zs
@@ -803,7 +849,7 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
             q += (k == 0) ? far(Az, half*dzc) : face(Az, rzc, c - sk, rz_prev);
             q += (k == nz_ - 1) ? surf(Az) : face(Az, rzc, c + sk, rz_next);
 
-            if (Pq > 0.0) q += R(Pq) * Ex_(i) * Ey_(j) * Ez_(k);
+            if (Pq > 0.0) q += R(Pq) * (path ? S2_(i, j) : Ex_(i) * Ey_(j)) * Ez_(k);
 
             const R ivol = iwx_(ic) * iwy_(jc) * iwz_(k) * ((pfull & LOOSE) ? R(ipack) : R(1));
             R Hn;

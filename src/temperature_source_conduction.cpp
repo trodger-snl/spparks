@@ -86,6 +86,7 @@ void ConductionTemperatureSource::setup_temperature_source(
     else if (a == "layer_thickness") cfg.layer_thickness = num(++i);
     else if (a == "packing") cfg.packing = num(++i);
     else if (a == "sts") cfg.sts_smax = (int) num(++i);
+    else if (a == "far") cfg.far = num(++i);
     else if (a == "init") {
       if (++i >= args.size() || args[i] != "d6")
         error->all(FLERR,"setup_temperature_source conduction: init takes d6");
@@ -134,6 +135,10 @@ void ConductionTemperatureSource::setup_temperature_source(
     error->all(FLERR,"setup_temperature_source conduction: plate, layer_thickness, latent must be >= 0");
   if (cfg.packing <= 0.0 || cfg.packing > 1.0)
     error->all(FLERR,"setup_temperature_source conduction: packing must be in (0, 1]");
+  if (cfg.far < 0.0)
+    error->all(FLERR,"setup_temperature_source conduction: far must be >= 0");
+  if (cfg.far > 0.0 && (cfg.ded || cfg.sts_smax == 0))
+    error->all(FLERR,"setup_temperature_source conduction: far needs RKL2 (sts >= 2) and no ded");
   if (cfg.ded) {
     if (cfg.layer_thickness > 0.0 || cfg.packing < 1.0)
       error->all(FLERR,"setup_temperature_source conduction: ded has no powder bed "
@@ -198,6 +203,9 @@ void ConductionTemperatureSource::print_source_info() const
             << "-point k table, " << cfg.cp_T.size() << "-point cp table, latent="
             << cfg.latent << " J/kg, h=" << cfg.h << ", emissivity="
             << cfg.emissivity << ", stretch=" << cfg.stretch << std::endl;
+  if (cfg.far > 0.0)
+    std::cout << "conduction: far " << cfg.far << " m: passes farther from the box "
+              << "ride RKL2 super-steps; the run ends once the box is done" << std::endl;
   const auto &pm = cfg.plate_mat;
   if (pm.on)
     std::cout << "conduction: plate " << pm.name << " below z=" << cfg.plate_top
@@ -284,6 +292,71 @@ double ConductionTemperatureSource::next_laser_on(double t) const
     return t >= it->t0 ? t : it->t0;   // first emitting segment not yet over
   }
   return next;
+}
+
+void ConductionTemperatureSource::set_box(double xlo, double xhi, double ylo, double yhi)
+{
+  box_[0] = xlo; box_[1] = xhi; box_[2] = ylo; box_[3] = yhi;
+  box_set = true;
+}
+
+/* ----------------------------------------------------------------------
+   `far`: the earliest time >= t at which the laser is on inside the lattice
+   box grown by far on each side (xy), or max() if it never is. Each emitting
+   segment is clipped to that rectangle (Liang-Barsky); a segment that left it
+   before t does not count.
+------------------------------------------------------------------------- */
+
+double ConductionTemperatureSource::next_near(double t) const
+{
+  if (!scan_built || !box_set) return t;
+  const double f = cfg.far;
+  const double xlo = box_[0] - f, xhi = box_[1] + f, ylo = box_[2] - f, yhi = box_[3] + f;
+  for (auto it = first_ending_after(segs_, t); it != segs_.end(); ++it) {
+    const ScanSeg &g = *it;
+    if (g.p <= 0.0) continue;
+    double u0 = 0.0, u1 = 1.0;
+    auto clip = [&](double p, double q) {   // keep p u <= q
+      if (p == 0.0) return q >= 0.0;
+      const double r = q / p;
+      if (p < 0.0) { if (r > u1) return false; u0 = std::max(u0, r); }
+      else         { if (r < u0) return false; u1 = std::min(u1, r); }
+      return true;
+    };
+    const double dxs = g.x1 - g.x0, dys = g.y1 - g.y0;
+    if (!(clip(-dxs, g.x0 - xlo) && clip(dxs, xhi - g.x0) &&
+          clip(-dys, g.y0 - ylo) && clip(dys, yhi - g.y0))) continue;
+    if (g.t0 + u1 * (g.t1 - g.t0) < t) continue;
+    return std::max(t, g.t0 + u0 * (g.t1 - g.t0));
+  }
+  return std::numeric_limits<double>::max();
+}
+
+/* ----------------------------------------------------------------------
+   The laser's on-time over [t0, t1] as points along the path, at most ds
+   apart: (x, y, w) triples, w the power-weighted share of [t0, t1], so the
+   weights sum to laser_window's fraction.
+------------------------------------------------------------------------- */
+
+void ConductionTemperatureSource::laser_samples(double t0, double t1, double ds,
+                                                std::vector<double> &xyw) const
+{
+  xyw.clear();
+  if (!scan_built || t1 <= t0) return;
+  for (auto it = first_ending_after(segs_, t0); it != segs_.end() && it->t0 < t1; ++it) {
+    const ScanSeg &g = *it;
+    const double a = std::max(t0, g.t0), b = std::min(t1, g.t1);
+    if (b <= a || g.p <= 0.0) continue;
+    const double vx = (g.x1 - g.x0) / (g.t1 - g.t0), vy = (g.y1 - g.y0) / (g.t1 - g.t0);
+    const int n = std::max(1, (int) std::ceil(std::hypot(vx, vy) * (b - a) / ds));
+    const double h = (b - a) / n, w = h * g.p / (t1 - t0);
+    for (int k = 0; k < n; k++) {
+      const double tm = a + (k + 0.5) * h - g.t0;
+      xyw.push_back(g.x0 + vx * tm);
+      xyw.push_back(g.y0 + vy * tm);
+      xyw.push_back(w);
+    }
+  }
 }
 
 /* ----------------------------------------------------------------------

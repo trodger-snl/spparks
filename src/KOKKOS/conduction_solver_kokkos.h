@@ -35,7 +35,9 @@ namespace SPPARKS_NS {
    ponytail: edge ranks carry all margin cells; rebalance by cell count if
    margin-heavy decks show the imbalance.
    Laser-off intervals use RKL2 super-steps (sts stages); laser-on
-   intervals stay explicit at dt_fd.
+   intervals stay explicit at dt_fd, unless the laser stays farther than
+   `far` from the box: then the super-steps carry it as a path-averaged
+   source plane S2(x, y) times the depth profile Ez.
 ------------------------------------------------------------------------- */
 
 class ConductionSolverKokkos : protected Pointers {
@@ -80,6 +82,9 @@ class ConductionSolverKokkos : protected Pointers {
   // per local cell: width and lower/upper face per axis (halo included)
   Kokkos::View<double*> wx, wy, wz, fxlo, fxhi, fylo, fyhi, fzlo, fzhi;
   Kokkos::View<KK_FLOAT*> Ex, Ey, Ez;   // per-axis Gaussian integrals, per sub-step
+  Kokkos::View<KK_FLOAT**> S2;          // far: path-averaged x-y source, per super-step
+  Kokkos::View<double*> d_samp;         // far: (x, y, w) path samples
+  std::vector<double> h_samp;
   double zsrc = 0.0;                  // source plane: laser plane, capped at the top face
   double birth_depth = 1e300;         // ded: cells born within this of zsrc
   double Hbirth = 0.0;                // ded: H(T_birth) - Href
@@ -103,7 +108,7 @@ class ConductionSolverKokkos : protected Pointers {
              int nlocal, int nall, double ts);
   double H_at(Kokkos::View<KK_FLOAT*> tab, double Tr) const;
   void step(double h, double t0);
-  void sts_step(double tau, int s);
+  void sts_step(double tau, int s, double t0);
 
   // These define device lambdas (KOKKOS_LAMBDA), which nvcc rejects in a
   // private or protected member function, and Stage is a kernel argument,
@@ -113,12 +118,14 @@ class ConductionSolverKokkos : protected Pointers {
   // (sts = true): Yout = mu Y1 + nu Y2 + (1-mu-nu) H + mut L(Y1) + gat L0,
   // with T holding T(Y1); store_L0 saves L(Y1) (stage 1, Y1 = H).
   struct Stage {
-    bool sts = false, store_L0 = false, phase = true;
+    bool sts = false, store_L0 = false, phase = true, path = false;
     double h = 0.0, mu = 1.0, nu = 0.0, mut = 0.0, gat = 0.0;
     double Pq = 0.0, xl = 0.0, yl = 0.0;
   };
   void stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
              Kokkos::View<KK_FLOAT***> Y2, Kokkos::View<KK_FLOAT***> Yout);
+  // far: fill S2 with the laser's path over [t0, t1]; returns Pq (0 if off)
+  double path_source(double t0, double t1);
   void exchange();
   void reset_field(double Tr);
   void seed_from_sites(Kokkos::View<double*> d_T, int nlocal);

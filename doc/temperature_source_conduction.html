@@ -35,7 +35,7 @@ setup_temperature_source conduction card overrides keyword values ...
 
 <LI>zero or more keyword/value pairs may be appended 
 
-<LI>keyword = <I>k_table</I> or <I>cp_table</I> or <I>latent</I> or <I>k_powder</I> or <I>convection</I> or <I>emissivity</I> or <I>margin</I> or <I>plate</I> or <I>stretch</I> or <I>max_cell</I> or <I>part</I> or <I>layer_thickness</I> or <I>packing</I> or <I>plate_top</I> or <I>plate_material</I> or <I>plate_growth</I> or <I>far_bc</I> or <I>sts</I> or <I>init</I> or <I>ded</I> 
+<LI>keyword = <I>k_table</I> or <I>cp_table</I> or <I>latent</I> or <I>k_powder</I> or <I>convection</I> or <I>emissivity</I> or <I>margin</I> or <I>plate</I> or <I>stretch</I> or <I>max_cell</I> or <I>part</I> or <I>layer_thickness</I> or <I>packing</I> or <I>plate_top</I> or <I>plate_material</I> or <I>plate_growth</I> or <I>far_bc</I> or <I>sts</I> or <I>init</I> or <I>far</I> or <I>ded</I> 
 
 <PRE>  <I>k_table</I> values = n T1 k1 ... Tn kn
     dense conductivity k(T), piecewise linear, held at the end values (K, W/(m K))
@@ -75,6 +75,8 @@ setup_temperature_source conduction card overrides keyword values ...
     RKL2 stages per laser-off super-step, 0 = explicit steps only, or >= 2
   <I>init</I> value = <I>d6</I>
     the run's first grid takes each site's temperature from <I>d6</I> instead of T0
+  <I>far</I> value = R
+    passes farther than R from the lattice box ride RKL2 super-steps, and the run ends once the box is done (m, 0 = off)
   <I>ded</I> values = zero or more sub-keyword/value pairs
     directed energy deposition: no powder bed, laser-deposited material
     <I>radius</I> value = r = birth radius around the laser axis (m)
@@ -202,6 +204,23 @@ cells outside the lattice box start at T0.  The heat that was in the
 previous box's margin cells is lost.  Later grids (a new layer) start
 at T0 as before.
 </P>
+<P><B>Far passes.</B>  With <I>far</I> R, the laser is far while it is more than R
+from the lattice box in x or y.  An interval in which it stays far is
+advanced with RKL2 super-steps, like a laser-off interval, with the
+laser's path over each super-step deposited as one source: samples at
+most sx/2 apart along the path, each the cell-integrated Gaussian.  When
+no site is at or above the solidus and none is liquid, the app skips its
+steps until the laser next comes within R (fast-forward), and the solver
+integrates the skipped interval the same way.  In the last layer, once
+no later pass comes within R, the box is done: the field is frozen at
+that moment and the run ends ("Box done" in the log), so <I>run</I> can be
+given the end of the layer instead of a hand-picked stop time.  The
+final <I>d6</I> is then the field when the box went cold, not at the stop
+time.  R must be large enough that a pass beyond it cannot melt the
+box: at least the pool half-width plus a margin, e.g. 0.5 mm.  Inside R
+the solver is unchanged.  <I>far</I> needs <I>sts</I> >= 2 and is not allowed with
+<I>ded</I>.
+</P>
 <P><B>Layers.</B>  A layer is finished when its last pass has emitted, the
 maximum temperature is below the solidus, and no site is liquid.  With
 <I>laser_path file</I> the next layer then starts after the path's recoat
@@ -241,7 +260,7 @@ layer thickness when <I>ded</I> is given.
 k/100, convection h = 0 (T_inf = 300), emissivity = 0, margin = 0, plate
 = 0, stretch = 1.25, max_cell = none, part = whole domain dense,
 layer_thickness = 0, packing = 1, plate_top = box bottom, plate_material
-= none, plate_growth = 0, far_bc = fixed, sts = 32, init T0, ded off (when on: radius = 2 sx, T_birth
+= none, plate_growth = 0, far_bc = fixed, sts = 32, init T0, far = 0 (off), ded off (when on: radius = 2 sx, T_birth
 = T0, depth = the rise of the laser plane since the previous layer,
 unlimited for the first).  With a material card loaded, none of these material
 defaults (latent, k_powder, convection, emissivity, layer_thickness) is

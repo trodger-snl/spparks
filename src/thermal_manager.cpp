@@ -1088,6 +1088,34 @@ ThermalManager::moser_advance(double current_time, double stoptime,
       return step;
     }
 
+    // Conduction `far R`: a pass farther than R from the lattice box cannot
+    // melt it. With every site below the solidus and none liquid, skip the
+    // app steps until the laser next comes within R (the solver carries the
+    // far passes in source-carrying super-steps). If it never does again in
+    // the last layer, the box is done: the field is frozen and the run ends.
+    // (Conditions before any_liquid are rank-uniform, as above.)
+    if (cond && cond->config().far > 0.0 && !dynamic_fire && current_time < stoptime &&
+        gmax < host_->ts && !(host_->any_liquid && host_->any_liquid())) {
+      const double near = cond->next_near(current_time);
+      if (near == std::numeric_limits<double>::max() && !more_layers) {
+        if (domain->me == 0)
+          std::cout << "Box done (conduction far " << cond->config().far
+                    << " m): no pass within reach after t=" << current_time
+                    << " s and max(T) < " << host_->ts
+                    << " K; field frozen, ending the run at stoptime=" << stoptime
+                    << " s" << std::endl;
+        cond->request_freeze();
+        step.new_time = stoptime;
+        step.end_run = true;
+        refill(stoptime);
+        return step;
+      }
+      if (predict_skip(near, current_time, stoptime, host_->ts, "conduction far", step)) {
+        refill(step.new_time);
+        return step;
+      }
+    }
+
     // pause_below: once the FINAL pass has finished and the peak has dropped
     // below threshold, advance to stoptime for a clean early exit.
     if (!dynamic_fire && laser_pause_below > 0.0 &&

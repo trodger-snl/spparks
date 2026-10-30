@@ -21,7 +21,7 @@
 
 <LI>these keywords apply to various dump styles 
 
-<LI>keyword = <I>delay</I> or <I>delta</I> or <I>fileper</I> or <I>first</I> or <I>flush</I> or <I>logfreq</I> or <I>loglinfreq</I> or <I>nfile</I> or <I>pad</I> or <I>region</I> or <I>sort</I> or <I>thresh</I> or <I>tol</I> 
+<LI>keyword = <I>delay</I> or <I>delta</I> or <I>fileper</I> or <I>first</I> or <I>flush</I> or <I>last</I> or <I>logfreq</I> or <I>loglinfreq</I> or <I>nfile</I> or <I>pad</I> or <I>region</I> or <I>sort</I> or <I>thresh</I> or <I>tol</I> 
 
 <LI>these keywords apply only to the <I>stitch</I> or <I>hdf5</I> dump style (see each keyword) 
 
@@ -36,6 +36,7 @@
   <I>first</I> arg = Nfirst
     Nfirst = index of first snapshot produced, useful when restarting
   <I>flush</I> arg = <I>yes</I> or <I>no</I>
+  <I>last</I> arg = <I>yes</I> or <I>no</I>
   <I>logfreq</I> or <I>loglinfreq</I> values = N factor
     N = number of repetitions per interval
     factor = scale factor between intervals
@@ -161,6 +162,15 @@ original <A HREF = "dump.html">dump</A> command.
 <HR>
 
 <P>The <I>fileper</I> keyword is documented below with the <I>nfile</I> keyword.
+</P>
+<HR>
+
+<P>The <I>last</I> keyword, when <I>yes</I>, also writes a snapshot when a run
+ends, unless one was just written at that time.  Without it a dump
+writes only at its scheduled times, so a run that ends between them,
+or goes on past them (see <I>end_when_solid</I> in
+<A HREF = "app_additive_texture.html">app_style additive/texture</A>), leaves its
+final state unwritten.  Default <I>no</I>.
 </P>
 <HR>
 
@@ -678,6 +688,7 @@ details.
 <LI>delta = value for delta used in the <A HREF = "dump.html">dump</A> command
 <LI>dwrap = no
 <LI>flush = yes
+<LI>last = no
 <LI>logfreq = off
 <LI>loglinfreq = off
 <LI>pad = 0

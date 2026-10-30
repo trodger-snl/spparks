@@ -2541,11 +2541,26 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
     sync_temperature_to_host();
   }
 
+  // end_when_solid: at the run's last step, go on while any site is liquid
+  if (end_when_solid_cap >= 0.0 && time + dt_sweep >= stoptime - 1.0e-9*dt_sweep)
+    stoptime = end_when_solid_stop(time + dt_sweep, stoptime, liquid_count(),
+                                   error, screen, domain->me);
+
   // NOTE: time is advanced by the iterate loop (iterate_app_update_only does
   // time += dt), exactly as in the CPU AppAdditiveTexture. Do NOT increment time
   // here -- an earlier version added a second `time += dt_sweep`, double-counting
   // time (advancing 2x per step), which halved the MC sweep resolution and
   // shifted the temperature sampling phase vs the CPU app.
+}
+
+long long AppAdditiveTextureKokkos::liquid_count()
+{
+  auto af = d_active_flag;
+  long long nl = 0, ng = 0;
+  Kokkos::parallel_reduce("LiquidCount", nlocal,
+    KOKKOS_LAMBDA(int i, long long &c) { if (af(i) == 2) c++; }, nl);
+  MPI_Allreduce(&nl, &ng, 1, MPI_LONG_LONG, MPI_SUM, world);
+  return ng;
 }
 
 ActiveAppend AppAdditiveTextureKokkos::active_append()

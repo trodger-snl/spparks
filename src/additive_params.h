@@ -92,6 +92,17 @@ struct AdditiveParams {
   bool smooth_orientation_copy = false;
   bool nuclei_smooth_enabled = false;
 
+  // `end_when_solid CAP|off`: a run that would end with liquid sites goes on,
+  // 1 ms at a time, until none is liquid or until time CAP (absolute, s).
+  // < 0 = off. ews_from = the run's own stop time once it has been extended.
+  double end_when_solid_cap = -1.0;
+  double ews_from = -1.0;
+  double ews_done = -1.0;   // the stop time already decided (summed steps can land just short of it)
+  // At a run's last step (step end t_end), with nliquid sites liquid: the
+  // run's stop time from here on, reported on rank 0 when the run ends.
+  double end_when_solid_stop(double t_end, double stoptime, long long nliquid,
+                             Error *error, FILE *screen, int me);
+
   // Material commands given by the deck or a material card, for the
   // completeness check when a card is loaded.
   std::set<std::string> material_given;

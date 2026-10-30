@@ -754,11 +754,13 @@ void AppLattice::iterate_rejection(double stoptime)
    app is responsible for doing communciation in app_update()
 ------------------------------------------------------------------------- */
 
-void AppLattice::iterate_app_update_only(double stoptime,double dt)
+void AppLattice::iterate_app_update_only(double /*stop*/,double dt)
 {
   // exact_steps: time = start + k dt, not a sum of dt (whose rounding can
   // add a step), snapped onto the next output time or stoptime when within
-  // rounding of it; the last step is cut short to end at stoptime
+  // rounding of it; the last step is cut short to end at stoptime.
+  // stoptime is the member, read every step: app_update may extend the run
+  // (additive end_when_solid).
 
   const double t0 = time;
   const double eps = 1.0e-9*dt;

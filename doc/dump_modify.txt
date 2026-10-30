@@ -15,7 +15,7 @@ dump_modify dump-ID keyword values ... :pre
 dump-ID = ID of dump to modify :ulb,l
 one or more keyword/value pairs may be appended :l
 these keywords apply to various dump styles :l
-keyword = {delay} or {delta} or {fileper} or {first} or {flush} or {logfreq} or {loglinfreq} or {nfile} or {pad} or {region} or {sort} or {thresh} or {tol} :l
+keyword = {delay} or {delta} or {fileper} or {first} or {flush} or {last} or {logfreq} or {loglinfreq} or {nfile} or {pad} or {region} or {sort} or {thresh} or {tol} :l
 these keywords apply only to the {stitch} or {hdf5} dump style (see each keyword) :l
 keyword = {retain} or {chunk} or {origin} or {extent} or {verbose} or {atomic} or {compress} or {turns} :l
   {delay} value = tdelay
@@ -27,6 +27,7 @@ keyword = {retain} or {chunk} or {origin} or {extent} or {verbose} or {atomic} o
   {first} arg = Nfirst
     Nfirst = index of first snapshot produced, useful when restarting
   {flush} arg = {yes} or {no}
+  {last} arg = {yes} or {no}
   {logfreq} or {loglinfreq} values = N factor
     N = number of repetitions per interval
     factor = scale factor between intervals
@@ -145,6 +146,15 @@ original "dump"_dump.html command.
 :line
 
 The {fileper} keyword is documented below with the {nfile} keyword.
+
+:line
+
+The {last} keyword, when {yes}, also writes a snapshot when a run
+ends, unless one was just written at that time.  Without it a dump
+writes only at its scheduled times, so a run that ends between them,
+or goes on past them (see {end_when_solid} in
+"app_style additive/texture"_app_additive_texture.html), leaves its
+final state unwritten.  Default {no}.
 
 :line
 
@@ -660,6 +670,7 @@ delay = 0.0
 delta = value for delta used in the "dump"_dump.html command
 dwrap = no
 flush = yes
+last = no
 logfreq = off
 loglinfreq = off
 pad = 0

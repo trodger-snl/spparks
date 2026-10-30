@@ -89,7 +89,7 @@ double Output::setup(double time, int memflag)
   double dump_time = app->stoptime;
   for (int i = 0; i < ndump; i++) {
     if (dumplist[i]->firstflag && time >= dumplist[i]->delay)
-      dumplist[i]->write(time);
+      dumplist[i]->write(time); dumplist[i]->last_time = time;
     dumplist[i]->next_time = 
       next_time(time+dumplist[i]->tolerance,dumplist[i]->logfreq,
                 dumplist[i]->delta,dumplist[i]->nrepeat,
@@ -182,7 +182,7 @@ double Output::compute(double time, int done)
   double dump_time = app->stoptime;
   for (int i = 0; i < ndump; i++) {
     if (time >= dumplist[i]->next_time - dumplist[i]->tolerance) {
-      dumplist[i]->write(time);
+      dumplist[i]->write(time); dumplist[i]->last_time = time;
       dumplist[i]->next_time = 
 	next_time(time+dumplist[i]->tolerance,dumplist[i]->logfreq,
                   dumplist[i]->delta,dumplist[i]->nrepeat,
@@ -190,6 +190,10 @@ double Output::compute(double time, int done)
       dumplist[i]->next_time -= dumplist[i]->tolerance;
       dump_time = MIN(dump_time,dumplist[i]->next_time);
     } else dump_time = MIN(dump_time,dumplist[i]->next_time);
+    // dump_modify last: the run's final state, unless just written
+    if (done && dumplist[i]->lastflag && dumplist[i]->last_time != time) {
+      dumplist[i]->write(time); dumplist[i]->last_time = time;
+    }
   }
 
   // tnext = next output time for anything
@@ -318,7 +322,7 @@ void Output::dump_one(int narg, char **arg)
 
   if (dumplist[i]->firstflag) dumplist[i]->init();
 
-  dumplist[i]->write(app->time);
+  dumplist[i]->write(app->time); dumplist[i]->last_time = app->time;
 }
 
 /* ---------------------------------------------------------------------- */

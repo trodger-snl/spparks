@@ -107,6 +107,7 @@ class AppAdditiveTextureKokkos : public QuaternionKokkos<AppAdditiveTexture> {
   virtual void app_update(double) override;
   virtual void input_app(char *, int, char **) override;
   virtual void stats(char *) override;
+  long long liquid_count();   // sites liquid on all ranks (end_when_solid)
 
   // Override required virtual methods from AppLatticeKokkos
   virtual void sync_app_data_to_device() override;

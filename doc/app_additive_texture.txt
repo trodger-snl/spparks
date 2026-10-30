@@ -311,6 +311,21 @@ distribution of pore radii in micrometers.  Default 75 25 0 150.
 The voids fill the run's box; in a box-per-layer chain every box
 adds a set of its own, so use a void mask (below) there instead. :l,ule
 
+Box chains, both styles:
+
+{end_when_solid} {CAP|off} : when a run reaches its stop time with
+any site liquid (i2 = 2), keep going, 1 ms at a time, until no site
+is liquid or until time {CAP} (absolute, s), whichever is first.  A
+liquid site below the solidus waits for a front to reach it, so this
+tests the sites, not the temperature.  Rank 0 prints "end_when_solid:
+ran on from T1 to T2 s" when it went on; liquid left at the end (cap
+reached, or {CAP} at or before the stop time: no room) is a warning
+"end_when_solid: N sites still liquid at the end".  A box-chain driver
+sets {CAP} to the start of the next box that touches this one, so a
+box that no later box picks up (a cooling tail, a layer's last box)
+finishes its pool.  Use "dump_modify last yes"_dump_modify.html so the
+dump holds the final state.  Default off. :ulb,l,ule
+
 Box-per-layer builds, {additive/texture/kk} only:
 
 {floor_check} {d} : stop the run with an error if liquid comes within
@@ -486,6 +501,7 @@ nucleation_misorientation_target = on
 smooth_greedy_multiproposal = off, smooth_orientation = average, nuclei_smooth = off
 nucleation_mode = threshold, single_voxel_cleanup = off (additive/texture)
 floor_check = 0 (off) (additive/texture/kk)
+end_when_solid off
 fast_forward_search_window = 0.1 s
 temperature_smooth off, nodal_smooth off
 voids off (additive/texture) :pre

@@ -256,8 +256,40 @@ bool AdditiveParams::parse_command(const char *command, int narg, char **arg,
     if (screen)
       fprintf(screen, "nuclei_smooth %s\n", nuclei_smooth_enabled ? "enabled" : "disabled");
 
+  } else if (strcmp(command, "end_when_solid") == 0) {
+    if (narg != 1) error->all(FLERR, "Illegal end_when_solid command: end_when_solid CAP|off");
+    end_when_solid_cap = strcmp(arg[0], "off") == 0 ? -1.0 : atof(arg[0]);
+    if (strcmp(arg[0], "off") != 0 && end_when_solid_cap < 0)
+      error->all(FLERR, "end_when_solid CAP must be a time >= 0 (or off)");
+
   } else return false;
   return true;
+}
+
+/* ---------------------------------------------------------------------- */
+
+double AdditiveParams::end_when_solid_stop(double t_end, double stoptime, long long nliquid,
+                                           Error *error, FILE *screen, int me)
+{
+  const double chunk = 1.0e-3;
+  if (stoptime == ews_done) return stoptime;
+  if (nliquid > 0 && stoptime < end_when_solid_cap) {
+    if (ews_from < 0) ews_from = stoptime;
+    return std::min(end_when_solid_cap, stoptime + chunk);
+  }
+  char msg[256];
+  if (nliquid > 0) {
+    snprintf(msg, sizeof(msg), "end_when_solid: %lld sites still liquid at the end, t = %.9g "
+             "(cap %.9g%s)", nliquid, t_end, end_when_solid_cap,
+             ews_from >= 0 ? ", reached" : ": no room to go on");
+    if (me == 0) error->warning(FLERR, msg);
+  } else if (ews_from >= 0 && me == 0 && screen) {
+    fprintf(screen, "end_when_solid: ran on from %.9g to %.9g s; no site is liquid\n",
+            ews_from, t_end);
+  }
+  ews_from = -1.0;
+  ews_done = stoptime;
+  return stoptime;
 }
 
 /* ---------------------------------------------------------------------- */

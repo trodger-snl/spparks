@@ -29,6 +29,8 @@ class Dump : protected Pointers {
   char *style;               // style of Dump
   int idump;                 // counter for output snapshots
   int firstflag;             // 1 if no dump yet written, 0 if not first
+  int lastflag;              // 1 = also write when a run ends (dump_modify last)
+  double last_time;          // time of the latest snapshot written
   double next_time,delta;    // params governing output times
   double scale,delay;
   double tolerance;

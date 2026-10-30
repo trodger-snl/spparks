@@ -428,6 +428,14 @@ void AppAdditiveTexture::app_update(double dt)
     }
   }
 
+  // end_when_solid: at the run's last step, go on while any site is liquid
+  if (end_when_solid_cap >= 0.0 && time + dt >= stoptime - 1.0e-9*dt) {
+    long long nl = 0, ng = 0;
+    for (int i = 0; i < nlocal; i++) nl += active_flag[i] == 2;
+    MPI_Allreduce(&nl, &ng, 1, MPI_LONG_LONG, MPI_SUM, world);
+    stoptime = end_when_solid_stop(time + dt, stoptime, ng, error, screen, domain->me);
+  }
+
     timer->stamp(TIME_UPDATE);
 }
 

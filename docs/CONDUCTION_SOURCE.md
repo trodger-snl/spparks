@@ -60,7 +60,7 @@ per-move speed).
 | `plate d` | thermal domain below the lattice box (m) | 0 |
 | `stretch r` | width ratio of successive margin/plate cells | 1.25 |
 | `max_cell w` | cap on margin/plate cell width (m) | none |
-| `part regionID` | outside the box: dense where the region matches, else powder | all dense |
+| `part regionID` | outside the box: dense where the region matches, else powder (`region voxel` takes a footprint mask, `tools/insitu_footprint.py`) | all dense |
 | `layer_thickness t` | outside the box: powder within `t` of the laser plane | 0 |
 | `packing f` | powder (and powder melted in place) holds f × the dense mass | 1 |
 | `plate_top z` | everything below `z` (m) is dense | box bottom face |

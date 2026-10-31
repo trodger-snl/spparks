@@ -625,6 +625,7 @@ set(SPPARKS_SOURCES
     region_intersect.cpp
     region_sphere.cpp
     region_union.cpp
+    region_voxel.cpp
     set.cpp
     shell.cpp
     solve.cpp

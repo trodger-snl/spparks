@@ -17,7 +17,7 @@
 </PRE>
 <UL><LI>ID = user-assigned name for the region 
 
-<LI>style = <I>block</I> or <I>cylinder</I> or <I>sphere</I> or <I>union</I> or <I>intersect</I> 
+<LI>style = <I>block</I> or <I>cylinder</I> or <I>sphere</I> or <I>union</I> or <I>intersect</I> or <I>voxel</I> 
 
 <PRE>  <I>block</I> args = xlo xhi ylo yhi zlo zhi
     xlo,xhi,ylo,yhi,zlo,zhi = bounds of block in all dimensions (distance units)
@@ -34,7 +34,9 @@
     reg-ID1,reg-ID2, ... = IDs of regions to join together
   <I>intersect</I> args = N reg-ID1 reg-ID2 ...
     N = # of regions to follow, must be 2 or greater
-    reg-ID1,reg-ID2, ... = IDs of regions to intersect 
+    reg-ID1,reg-ID2, ... = IDs of regions to intersect
+  <I>voxel</I> args = file
+    file = 0/1 voxel mask (see below) 
 </PRE>
 <LI>zero or more keyword/value pairs may be appended 
 
@@ -51,7 +53,8 @@
 <PRE>region 1 block -3.0 5.0 INF 10.0 INF INF
 region 2 sphere 0.0 0.0 0.0 5 side out
 region void cylinder y 2 3 5 -5.0 EDGE
-region outside union 4 side1 side2 side3 side4 
+region outside union 4 side1 side2 side3 side4
+region part voxel box_000/part.voxel 
 </PRE>
 <P><B>Description:</B>
 </P>
@@ -105,6 +108,16 @@ extending in the y-direction from -5.0 to the upper box boundary.
 <P>The <I>union</I> style creates a region consisting of the volume of all the
 listed regions combined.  The <I>intersect</I> style creates a region
 consisting of the volume that is common to all the listed regions.
+</P>
+<P>The <I>voxel</I> style reads a 0/1 mask from a file: one text line
+"voxel nx ny nz xlo ylo zlo dx dy dz" (distance units: the grid origin
+and cell sizes) followed by nx*ny*nz bytes, x fastest, then y, then z.
+A point matches if its cell is nonzero. Outside the grid in x or y
+nothing matches; below or above it in z the bottom or top slice extends,
+so a part's footprint stacked layer by layer continues down to the
+plate. tools/insitu_footprint.py writes such a mask from in-situ
+monitoring data, for the "part" keyword of the conduction temperature
+source and for <A HREF = "set.html">set</A> ... region on the sites.
 </P>
 <P>The <I>side</I> keyword determines whether the region is considered to be
 inside or outside of the specified geometry.  Using this keyword in

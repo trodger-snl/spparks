@@ -1354,11 +1354,14 @@ std::vector<double> AppAdditiveTexture::normal_finder(int site)
 
 	// Normalize and return gradient direction (with magnitude as 4th element)
 	// Note: Diagnostics (2M+ calls) showed norm always > 1e-12
+	// Signed: cosine_angle_q_u already takes |dot|, so g and -g match. Folding
+	// each component (fabs) mirrored the direction in the sample frame, so the
+	// texture mobility depended on the scan direction and the box frame.
 	double norm = sqrt(grad_x*grad_x + grad_y*grad_y + grad_z*grad_z);
 	std::vector<double> result(4);  // [norm_x, norm_y, norm_z, magnitude]
-	result[0] = fabs(grad_x)/norm;
-	result[1] = fabs(grad_y)/norm;
-	result[2] = fabs(grad_z)/norm;
+	result[0] = grad_x/norm;
+	result[1] = grad_y/norm;
+	result[2] = grad_z/norm;
 	result[3] = norm;
 	return result;
 }

@@ -599,11 +599,11 @@ class AppAdditiveTextureKokkos : public QuaternionKokkos<AppAdditiveTexture> {
       double norm = Kokkos::sqrt(grad_x*grad_x + grad_y*grad_y + grad_z*grad_z);
       *magnitude_out = norm;
 
-      // Normalize gradient direction (with absolute values like CPU version)
+      // Normalize gradient direction (signed, as the CPU normal_finder)
       if (norm > 1.0e-12) {
-        grad_out[0] = Kokkos::fabs(grad_x) / norm;
-        grad_out[1] = Kokkos::fabs(grad_y) / norm;
-        grad_out[2] = Kokkos::fabs(grad_z) / norm;
+        grad_out[0] = grad_x / norm;
+        grad_out[1] = grad_y / norm;
+        grad_out[2] = grad_z / norm;
       } else {
         grad_out[0] = 0.0;
         grad_out[1] = 0.0;

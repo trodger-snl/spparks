@@ -17,7 +17,7 @@ scale S shift DX DY DZ`). A change of z starts a new layer.
       1.6667e-5).
 
   laser_path_convert.py insitu FILE.h5 LAYER --power Q [--every N]
-                         [--window X0 X1 Y0 Y1 --margin M] > layer.path
+                         [--window X0 X1 Y0 Y1 --margin M] [--rotate THETA] > layer.path
       One layer of in-situ monitoring data (HDF5 layer_K groups of
       t_spectral + spectral [x y P ...], or layer_K datasets of [t x y P];
       mm, s, W). Rows are in METRES (deck: no scale) with p = measured
@@ -26,7 +26,9 @@ scale S shift DX DY DZ`). A change of z starts a new layer.
       Each move is split every N samples (default 10). --window (mm) keeps
       only samples within M mm of the box; dropped time goes into the jumps.
       A '# t0' comment gives the time of the first row: pass it as
-      `laser_path file ... t0 T`.
+      `laser_path file ... t0 T`. --rotate THETA (rad) first turns x, y into
+      the frame rotated by THETA about the origin (a rotated box chain layer;
+      the window is in that frame).
 
   laser_path_convert.py selftest
 """
@@ -74,16 +76,24 @@ def from_gcode(lines, travel_feed=None, feed_scale=None):
     return out
 
 
-def read_insitu(path, layer):
+def read_insitu(path, layer, theta=0.0):
+    """(t, x, y, P, z) of one layer (s, mm, W); theta (rad) turns x, y into the frame rotated
+    by theta about the origin."""
     import h5py   # only this mode needs it
+    import numpy as np
     with h5py.File(path, 'r') as f:
         o = f[f'layer_{layer}']
         z = float(o.attrs['z height (mm)'][0])
         if isinstance(o, h5py.Dataset):
             a = o[:]
-            return a[:, 0], a[:, 1], a[:, 2], a[:, 3], z
-        s = o['spectral'][:]
-        return o['t_spectral'][:, 0], s[:, 0], s[:, 1], s[:, 2], z
+            t, x, y, P = a[:, 0], a[:, 1], a[:, 2], a[:, 3]
+        else:
+            s = o['spectral'][:]
+            t, x, y, P = o['t_spectral'][:, 0], s[:, 0], s[:, 1], s[:, 2]
+    if theta:
+        c, s = np.cos(theta), np.sin(theta)
+        x, y = c * x + s * y, -s * x + c * y
+    return t, x, y, P, z
 
 
 def from_insitu(t, x, y, P, z, Q, every=10, window=None, margin=0.0):
@@ -181,7 +191,7 @@ if __name__ == '__main__':
             sys.exit('insitu needs --power Q (the deck\'s laser power, W)')
         w = [float(v) for v in a[a.index('--window') + 1:a.index('--window') + 5]] \
             if '--window' in a else None
-        t0, rows = from_insitu(*read_insitu(a[1], int(a[2])), Q=opt('--power'),
+        t0, rows = from_insitu(*read_insitu(a[1], int(a[2]), opt('--rotate') or 0.0), Q=opt('--power'),
                                every=int(opt('--every') or 10), window=w,
                                margin=opt('--margin') or 0.0)
         if t0 is None:

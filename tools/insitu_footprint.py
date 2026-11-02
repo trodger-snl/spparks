@@ -3,6 +3,7 @@
 
 usage: insitu_footprint.py INSITU.h5 LAYER OUT --dx DX --window XLO XHI YLO YHI
            [--margin 5e-3] [--depth 3e-3] [--grid 50e-6] [--close 0.1e-3] [--pmin 50]
+           [--rotate THETA]
        insitu_footprint.py selftest
 
 Each layer's footprint is where the laser (power >= --pmin W) was on: the samples are
@@ -11,6 +12,8 @@ hatches (hatch spacing 0.12 mm needs >= 0.06 mm) without growing the outline. Th
 footprints of LAYER and the layers below it, down to --depth, stack into one z slice per
 layer over the window plus --margin (all lengths in metres, in-situ frame). The file is in
 lattice units (metres / --dx); `region voxel` extends the bottom slice below it.
+--rotate THETA (rad) builds it in the frame rotated by THETA about the origin (a rotated box
+chain layer; the window is in that frame).
 """
 import sys
 import numpy as np
@@ -39,7 +42,8 @@ def write(path, mask, x0, y0, z0, g, dz, dx):
         f.write(mask.astype(np.uint8).tobytes())
 
 
-def build(src, layer, out, dx, window, margin=5e-3, depth=3e-3, grid=50e-6, close=0.1e-3, pmin=50.0):
+def build(src, layer, out, dx, window, margin=5e-3, depth=3e-3, grid=50e-6, close=0.1e-3, pmin=50.0,
+          theta=0.0):
     import h5py
     from laser_path_convert import read_insitu
     with h5py.File(src, 'r') as f:
@@ -56,7 +60,7 @@ def build(src, layer, out, dx, window, margin=5e-3, depth=3e-3, grid=50e-6, clos
     ny = int(np.ceil((window[3] + margin - y0) / grid))
     mask = np.zeros((len(layers), ny, nx), bool)
     for s, k in enumerate(layers):
-        t, x, y, P, _ = read_insitu(src, k)
+        t, x, y, P, _ = read_insitu(src, k, theta)
         on = P >= pmin
         mask[s] = footprint(x[on] * 1e-3, y[on] * 1e-3, x0, y0, grid, nx, ny, close)
     write(out, mask, x0, y0, zs[0] - dz, grid, dz, dx)
@@ -98,6 +102,6 @@ if __name__ == '__main__':
     w = [float(v) for v in a[a.index('--window') + 1:a.index('--window') + 5]]
     layers, mask = build(a[0], int(a[1]), a[2], opt('--dx', None), w, opt('--margin', 5e-3),
                          opt('--depth', 3e-3), opt('--grid', 50e-6), opt('--close', 0.1e-3),
-                         opt('--pmin', 50.0))
+                         opt('--pmin', 50.0), opt('--rotate', 0.0))
     print(f'layers {layers[0]}-{layers[-1]}: {mask.shape[2]} x {mask.shape[1]} x {mask.shape[0]} voxels, '
           f'top footprint {mask[-1].sum() * opt("--grid", 50e-6) ** 2 * 1e6:.4g} mm^2 -> {a[2]}')

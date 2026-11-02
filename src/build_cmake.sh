@@ -24,6 +24,7 @@ VERBOSE=false
 PARALLEL_JOBS="AUTO"
 AGGRESSIVE_OPT="AUTO"
 NATIVE_OPT="AUTO"
+PRESET=""
 
 # Function to show usage
 show_usage() {
@@ -52,6 +53,11 @@ Options:
     --kokkos-arch ARCH          Kokkos GPU arch token; REQUIRED by the HIP and CUDA
                                   backends (e.g. AMD_GFX942_APU for MI300A,
                                   AMD_GFX1151 for Strix Halo, AMPERE80)
+    --preset NAME|none          Configure from a CMakePresets.json preset (mi300a, strix-halo,
+                                  openmp, ...); the other flags still apply on top of it.
+                                  Default: mi300a for --kokkos-backend hip --kokkos-arch
+                                  AMD_GFX942_APU (its compilers, MPI wrappers and HDF5 pin are
+                                  what links on HPE Cray EX); none = never use one
     -DVAR=VALUE                 Passed straight through to cmake (e.g.
                                   -DHDF5_ROOT=..., -DMPI_C_COMPILER=...)
     --shared                    Build bundled libraries (Kokkos, HighFive) shared
@@ -76,7 +82,8 @@ Examples:
     Kokkos GPU acceleration:
       $0 --kokkos                         # Build with Kokkos (OpenMP backend)
       $0 --kokkos --kokkos-backend cuda --kokkos-arch AMPERE80      # Kokkos CUDA (NVIDIA A100)
-      $0 --kokkos --kokkos-backend hip --kokkos-arch AMD_GFX942_APU # Kokkos HIP (AMD MI300A)
+      $0 --kokkos --kokkos-backend hip --kokkos-arch AMD_GFX942_APU # Kokkos HIP (AMD MI300A, mi300a preset)
+      $0 --kokkos --kokkos-backend hip --kokkos-arch AMD_GFX942_APU --no-native-opt  # same, configured on a login node
 
     Additive (additive/texture, additive/texture/kk):
       $0 --mpi --highfive                 # with HDF5 temperature sources (parallel HDF5)
@@ -183,6 +190,10 @@ while [[ $# -gt 0 ]]; do
             NATIVE_OPT="OFF"
             shift
             ;;
+        --preset)
+            PRESET="$2"
+            shift 2
+            ;;
         --clean)
             CLEAN=true
             shift
@@ -211,6 +222,16 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# HPE Cray EX MI300A: hipcc from PATH and a FindMPI/FindHDF5 search mix C++
+# runtimes there (undefined std::__cxx11 symbols at link); the preset pins
+# amdclang++, the mpiamdclang wrappers and the Cray parallel HDF5.
+if [ -z "$PRESET" ] && [ "$ENABLE_KOKKOS" = "ON" ] && \
+   [ "$(echo "$KOKKOS_BACKEND" | tr '[:lower:]' '[:upper:]')" = "HIP" ] && \
+   [ "$(echo "$KOKKOS_ARCH" | tr '[:lower:]' '[:upper:]')" = "AMD_GFX942_APU" ]; then
+    PRESET="mi300a"
+fi
+[ "$PRESET" = "none" ] && PRESET=""
+
 # Get the source directory (where this script is located)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_DIR="$SCRIPT_DIR"
@@ -219,6 +240,7 @@ echo "=== SPPARKS CMake Build ==="
 echo "Source directory: $SOURCE_DIR"
 echo "Build directory: $BUILD_DIR"
 echo "Build type: $BUILD_TYPE"
+[ -n "$PRESET" ] && echo "Preset: $PRESET (src/CMakePresets.json)"
 
 # Clean build directory if requested
 if [ "$CLEAN" = true ]; then
@@ -272,7 +294,7 @@ if [ "$ENABLE_KOKKOS" = "ON" ]; then
     # HIP -> hipcc from PATH; CUDA -> Kokkos' bundled nvcc_wrapper (host compiler
     # via NVCC_WRAPPER_DEFAULT_COMPILER, default g++). An explicit
     # -DCMAKE_CXX_COMPILER=... or $CXX still wins.
-    if [ -z "${CXX:-}" ] && \
+    if [ -z "$PRESET" ] && [ -z "${CXX:-}" ] && \
        ! printf '%s\n' ${EXTRA_CMAKE_ARGS[@]+"${EXTRA_CMAKE_ARGS[@]}"} | grep -q '^-DCMAKE_CXX_COMPILER[:=]'; then
         GPU_CXX=""
         case "$KOKKOS_BACKEND" in
@@ -312,7 +334,13 @@ if [ "$VERBOSE" = true ]; then
 fi
 
 # EXTRA_CMAKE_ARGS last so a raw -D overrides anything the flags produced.
-cmake "${CMAKE_ARGS[@]}" ${EXTRA_CMAKE_ARGS[@]+"${EXTRA_CMAKE_ARGS[@]}"} "$SOURCE_DIR"
+if [ -n "$PRESET" ]; then
+    # presets are read from the current directory on every CMake >= 3.21
+    BUILD_ABS="$(pwd)"
+    (cd "$SOURCE_DIR" && cmake --preset "$PRESET" -B "$BUILD_ABS" "${CMAKE_ARGS[@]}" ${EXTRA_CMAKE_ARGS[@]+"${EXTRA_CMAKE_ARGS[@]}"})
+else
+    cmake "${CMAKE_ARGS[@]}" ${EXTRA_CMAKE_ARGS[@]+"${EXTRA_CMAKE_ARGS[@]}"} "$SOURCE_DIR"
+fi
 
 # Build
 echo ""

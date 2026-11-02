@@ -1,8 +1,12 @@
 # Building on El Capitan (and other MI300A / HPE Cray EX machines)
 
-**Status:** Build path defined and encoded as a CMake preset. **Not yet run on the
-machine** — every measurement below is from the gfx1151 development APU or from
-LLNL documentation, and is marked as such.
+**Status:** Builds on El Dorado (2026-11-02: `rocmcc/6.4.3-magic`, the LC default,
++ `cray-mpich`, `cmake --preset mi300a`, or `src/build_cmake.sh --kokkos
+--kokkos-backend hip --kokkos-arch AMD_GFX942_APU`, which selects that preset).
+Configuring on El Capitan was worked through in August. Not yet run on either
+machine: every measurement below is from the gfx1151 development APU or from LLNL
+documentation, and is marked as such. Plain `hipcc` builds (build_cmake.sh before
+the preset) fail to link with undefined `std::__cxx11` symbols.
 **Date:** August 3, 2026
 **Applies to:** El Capitan, Tuolumne, El Dorado, RZAdams — any HPE Cray EX node
 with AMD MI300A. Keyed by hardware, not by site.

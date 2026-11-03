@@ -16,8 +16,8 @@ dump-ID = ID of dump to modify :ulb,l
 one or more keyword/value pairs may be appended :l
 these keywords apply to various dump styles :l
 keyword = {delay} or {delta} or {fileper} or {first} or {flush} or {last} or {logfreq} or {loglinfreq} or {nfile} or {pad} or {region} or {sort} or {thresh} or {tol} :l
-these keywords apply only to the {stitch} or {hdf5} dump style (see each keyword) :l
-keyword = {retain} or {chunk} or {origin} or {extent} or {verbose} or {atomic} or {compress} or {turns} :l
+these keywords apply only to the {stitch}, {hdf5} or {conduction} dump style (see each keyword) :l
+keyword = {retain} or {chunk} or {origin} or {extent} or {verbose} or {atomic} or {compress} or {turns} or {precision} :l
   {delay} value = tdelay
     tdelay = delay dump until at least this time (seconds)
   {delta} arg = dt
@@ -49,6 +49,7 @@ keyword = {retain} or {chunk} or {origin} or {extent} or {verbose} or {atomic} o
   {compress} arg = N
     N = deflate level 1-9, or 0 for no compression (hdf5 style only)
   {turns} arg = {yes} or {no} (hdf5 style only)
+  {precision} arg = {double} or {float} (conduction style only)
   {sort} arg = {off} or {id} or N or -N
      off = no sorting of per-site lines within a snapshot
      id = sort per-site lines by atom ID
@@ -334,6 +335,13 @@ on one node being read correctly on the next open from another, which
 Lustre and GPFS guarantee and NFS does not.  By default turns are used
 when compressing and every processor has more than one OpenMP thread.
 One processor always compresses on all its threads and writes alone.
+
+:line
+
+{precision} applies only to the {conduction} dump style: {float} stores
+the grid's {T} as 32-bit floats, 5 bytes per cell instead of 9, at
+about 1e-4 K near the melting point.  The {init grid} reader takes
+either.  Default {double}.
 
 :line
 
@@ -683,6 +691,7 @@ verbose = 0 (hdf5 style only)
 atomic = no (hdf5 style only)
 compress = 1 (hdf5 style only)
 turns = yes when compressing with more than one OpenMP thread per processor, else no (hdf5 style only)
+precision = double (conduction style only)
 scolor = * c1/c2/.../c140 where c1-c140 are the names of the 140 pre-defined colors
 sdiam = * 1.0
 smap = min max cf 2 min blue max red

@@ -591,10 +591,10 @@ void ConductionSolverKokkos::reset_field(double Tr)
    sees a half-written grid.
 ------------------------------------------------------------------------- */
 
-void ConductionSolverKokkos::write_grid(const std::string &file, double time)
+void ConductionSolverKokkos::write_grid(const std::string &file, double time, bool single)
 {
 #ifndef SPPARKS_HIGHFIVE
-  (void) file; (void) time;
+  (void) file; (void) time; (void) single;
   error->all(FLERR,"dump conduction needs HighFive (-DSPPARKS_ENABLE_HIGHFIVE=ON)");
 #else
   if (!built) error->all(FLERR,"dump conduction: no conduction grid yet (a dump before the first step)");
@@ -629,7 +629,9 @@ void ConductionSolverKokkos::write_grid(const std::string &file, double time)
       HighFive::File f(tmp, mode, fapl);
       if (me == 0) {
         const HighFive::DataSpace sp({NZ, NY, NX});
-        f.createDataSet<double>("T", sp);
+        // single: T stored as float, HDF5 converts the double buffer on write (and back on read)
+        if (single) f.createDataSet<float>("T", sp);
+        else f.createDataSet<double>("T", sp);
         f.createDataSet<unsigned char>("phase", sp);
         f.createDataSet("x_faces", gfx);
         f.createDataSet("y_faces", gfy);

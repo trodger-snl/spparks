@@ -23,9 +23,9 @@
 
 <LI>keyword = <I>delay</I> or <I>delta</I> or <I>fileper</I> or <I>first</I> or <I>flush</I> or <I>last</I> or <I>logfreq</I> or <I>loglinfreq</I> or <I>nfile</I> or <I>pad</I> or <I>region</I> or <I>sort</I> or <I>thresh</I> or <I>tol</I> 
 
-<LI>these keywords apply only to the <I>stitch</I> or <I>hdf5</I> dump style (see each keyword) 
+<LI>these keywords apply only to the <I>stitch</I>, <I>hdf5</I> or <I>conduction</I> dump style (see each keyword) 
 
-<LI>keyword = <I>retain</I> or <I>chunk</I> or <I>origin</I> or <I>extent</I> or <I>verbose</I> or <I>atomic</I> or <I>compress</I> or <I>turns</I> 
+<LI>keyword = <I>retain</I> or <I>chunk</I> or <I>origin</I> or <I>extent</I> or <I>verbose</I> or <I>atomic</I> or <I>compress</I> or <I>turns</I> or <I>precision</I> 
 
 <LI>  <I>delay</I> value = tdelay
     tdelay = delay dump until at least this time (seconds)
@@ -58,6 +58,7 @@
   <I>compress</I> arg = N
     N = deflate level 1-9, or 0 for no compression (hdf5 style only)
   <I>turns</I> arg = <I>yes</I> or <I>no</I> (hdf5 style only)
+  <I>precision</I> arg = <I>double</I> or <I>float</I> (conduction style only)
   <I>sort</I> arg = <I>off</I> or <I>id</I> or N or -N
      off = no sorting of per-site lines within a snapshot
      id = sort per-site lines by atom ID
@@ -350,6 +351,13 @@ on one node being read correctly on the next open from another, which
 Lustre and GPFS guarantee and NFS does not.  By default turns are used
 when compressing and every processor has more than one OpenMP thread.
 One processor always compresses on all its threads and writes alone.
+</P>
+<HR>
+
+<P><I>precision</I> applies only to the <I>conduction</I> dump style: <I>float</I> stores
+the grid's <I>T</I> as 32-bit floats, 5 bytes per cell instead of 9, at
+about 1e-4 K near the melting point.  The <I>init grid</I> reader takes
+either.  Default <I>double</I>.
 </P>
 <HR>
 
@@ -701,6 +709,7 @@ details.
 <LI>atomic = no (hdf5 style only)
 <LI>compress = 1 (hdf5 style only)
 <LI>turns = yes when compressing with more than one OpenMP thread per processor, else no (hdf5 style only)
+<LI>precision = double (conduction style only)
 <LI>scolor = * c1/c2/.../c140 where c1-c140 are the names of the 140 pre-defined colors
 <LI>sdiam = * 1.0
 <LI>smap = min max cf 2 min blue max red

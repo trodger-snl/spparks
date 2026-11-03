@@ -39,7 +39,10 @@ class DumpConductionKokkos : public Dump {
   void write(double) override;
 
  private:
+  bool single = false;   // dump_modify ID precision float
+
   void init_style() override;
+  int modify_param(int, char **) override;
   void write_header(bigint, double) override {}
   int count() override { return 0; }
   void pack(tagint *) override {}

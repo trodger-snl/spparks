@@ -135,7 +135,8 @@ lattice and does not support the '*' or '%' filename wildcards.
 The {conduction} style writes the grid of the "conduction temperature
 source"_temperature_source_conduction.html, including its cells past
 the lattice box (the margins and the plate), to one HDF5 file that each
-dump overwrites: datasets {T} (K, double) and {phase} (uint8: 0 gas, 1
+dump overwrites: datasets {T} (K, double, or float with "dump_modify
+precision float"_dump_modify.html) and {phase} (uint8: 0 gas, 1
 powder, 3 dense, plus the flag bits 4 loose, 8 plate, 16 unborn),
 indexed [z][y][x] over the whole grid; {x_faces}, {y_faces} and
 {z_faces}, the cell faces along each axis (m, one more than the cells,

@@ -59,7 +59,7 @@ class ConductionSolverKokkos : protected Pointers {
   bool ready() const { return built; }
   // dump conduction: T and phase of every cell (margins too) and the cell
   // faces, to one HDF5 file; `init grid FILE` reads it back
-  void write_grid(const std::string &file, double time);
+  void write_grid(const std::string &file, double time, bool single = false);
 
  private:
   class ConductionTemperatureSource *src;

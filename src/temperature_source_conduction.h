@@ -91,6 +91,7 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
 
   double density() const { return rho; }
   double ambient() const { return T0_default; }
+  double diffusivity() const { return alpha; }   // at T0 [m^2/s]
   double absorbed_power() const { return lambda * Q; }
   double sigma_x() const { return lobes_[0].sx; }
   double sigma_y() const { return lobes_[0].sy; }

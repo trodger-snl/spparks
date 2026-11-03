@@ -201,7 +201,10 @@ outside the file's grid start at T0.  A powder cell outside the lattice
 box whose nearest file cell is dense becomes dense (powder the previous
 box melted); lattice cells keep the phase their {i2} gives.  The field
 is taken as it is at the file's time, which is printed: a gap until the
-run's start is not integrated.  {init grid} and {init d6} may both be
+run's start is not integrated.  A warning is printed when the gap, either
+way, is longer than the time heat takes to diffuse one cell (dx^2 /
+alpha); set the run's start to the file's time with
+"reset_time"_reset_time.html.  {init grid} and {init d6} may both be
 given; the grid is read first, then {d6} sets the sites.
 
 [Far passes.]  With {far} R, the laser is far while it is more than R

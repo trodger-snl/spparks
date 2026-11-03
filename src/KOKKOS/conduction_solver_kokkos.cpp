@@ -123,7 +123,7 @@ void ConductionSolverKokkos::advance(double t,
     reset_field(src->ambient());
     if (!seeded) {
       // grid first (margins and all), then d6 (the sites, exact) if both are given
-      if (!src->config().init_grid.empty()) seed_from_grid(src->config().init_grid);
+      if (!src->config().init_grid.empty()) seed_from_grid(src->config().init_grid, t);
       if (src->config().init_d6) seed_from_sites(d_T, nlocal);
     }
     seeded = true;
@@ -667,10 +667,10 @@ void ConductionSolverKokkos::write_grid(const std::string &file, double time)
    cells are coarser than the file's, the heat is sampled, not summed.
 ------------------------------------------------------------------------- */
 
-void ConductionSolverKokkos::seed_from_grid(const std::string &file)
+void ConductionSolverKokkos::seed_from_grid(const std::string &file, double t)
 {
 #ifndef SPPARKS_HIGHFIVE
-  (void) file;
+  (void) file; (void) t;
   error->all(FLERR,"conduction: init grid needs HighFive (-DSPPARKS_ENABLE_HIGHFIVE=ON)");
 #else
   // per local cell along one axis: the file centre below its centre and the
@@ -782,6 +782,16 @@ void ConductionSolverKokkos::seed_from_grid(const std::string &file)
              "from the file\n", file.c_str(), tfile, tot[0], tot[1]);
     if (screen) fputs(msg, screen);
     if (logfile) fputs(msg, logfile);
+    // the gap is not integrated: past the time heat takes to diffuse one cell
+    // (dx^2 / alpha at T0) the seeded field is visibly too sharp, or, with the
+    // file later than the run, already holds heat this run deposits again
+    const double gap = t - tfile, tcell = dx * dx / src->diffusivity();
+    if (std::fabs(gap) > tcell) {
+      snprintf(msg, sizeof(msg), "conduction: init grid %s is %.3g s %s the run start "
+               "(%.3g x the %.3g s one-cell diffusion time); the gap is not integrated",
+               file.c_str(), std::fabs(gap), gap > 0 ? "before" : "after", std::fabs(gap) / tcell, tcell);
+      error->warning(FLERR, msg);
+    }
   }
 #endif
 }

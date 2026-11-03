@@ -273,7 +273,10 @@ double AdditiveParams::end_when_solid_stop(double t_end, double stoptime, long l
 {
   const double chunk = 1.0e-3;
   if (stoptime == ews_done) return stoptime;
-  if (nliquid > 0 && stoptime < end_when_solid_cap) {
+  // go on only if the cap lies past this step's end: the cap and the run's stop
+  // can parse a few ulp apart, and an "extension" that short ends the run at once,
+  // liquid and unreported
+  if (nliquid > 0 && end_when_solid_cap > t_end + 1.0e-12 * fabs(t_end)) {
     if (ews_from < 0) ews_from = stoptime;
     return std::min(end_when_solid_cap, stoptime + chunk);
   }

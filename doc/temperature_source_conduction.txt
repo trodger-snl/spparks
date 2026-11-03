@@ -60,8 +60,8 @@ keyword = {k_table} or {cp_table} or {latent} or {k_powder} or {convection} or {
     outer faces of the thermal domain held at T0, or insulated
   {sts} value = s
     RKL2 stages per laser-off super-step, 0 = explicit steps only, or >= 2
-  {init} value = {d6}
-    the run's first grid takes each site's temperature from {d6} instead of T0
+  {init} value = {d6} or {grid} file
+    the run's first grid takes each site's temperature from {d6}, or every cell's from a "dump conduction"_dump.html file, instead of T0
   {far} value = R
     passes farther than R from the lattice box ride RKL2 super-steps, and the run ends once the box is done (m, 0 = off)
   {ded} values = zero or more sub-keyword/value pairs
@@ -189,6 +189,20 @@ with the enthalpy of the cell's material; sites with {d6} <= 0 and the
 cells outside the lattice box start at T0.  The heat that was in the
 previous box's margin cells is lost.  Later grids (a new layer) start
 at T0 as before.
+
+With {init grid} file every cell of the first grid, margins included,
+takes the temperature of a "dump conduction"_dump.html file (written
+by the previous box, e.g. with "dump_modify last yes"_dump_modify.html),
+interpolated trilinearly between the file's cell centres at the cell's
+centre, with the enthalpy of the cell's material.  Where both boxes'
+cells are lattice cells they coincide, so the copy is exact; past the
+lattice box the values are sampled, not volume averaged.  Cells centred
+outside the file's grid start at T0.  A powder cell outside the lattice
+box whose nearest file cell is dense becomes dense (powder the previous
+box melted); lattice cells keep the phase their {i2} gives.  The field
+is taken as it is at the file's time, which is printed: a gap until the
+run's start is not integrated.  {init grid} and {init d6} may both be
+given; the grid is read first, then {d6} sets the sites.
 
 [Far passes.]  With {far} R, the laser is far while it is more than R
 from the lattice box in x or y.  An interval in which it stays far is

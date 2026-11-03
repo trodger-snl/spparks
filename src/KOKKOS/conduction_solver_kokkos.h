@@ -18,6 +18,7 @@
 #include "spktype.h"
 #include "gpu_aware_mpi.h"
 #include <Kokkos_Core.hpp>
+#include <string>
 #include <vector>
 
 namespace SPPARKS_NS {
@@ -55,6 +56,11 @@ class ConductionSolverKokkos : protected Pointers {
   // UNBORN: flag bit on POWDER under ded, gas until the laser deposits it
   enum Phase { GAS = 0, POWDER = 1, DENSE = 3, LOOSE = 4, PLATE = 8, UNBORN = 16 };
 
+  bool ready() const { return built; }
+  // dump conduction: T and phase of every cell (margins too) and the cell
+  // faces, to one HDF5 file; `init grid FILE` reads it back
+  void write_grid(const std::string &file, double time);
+
  private:
   class ConductionTemperatureSource *src;
 
@@ -72,6 +78,11 @@ class ConductionSolverKokkos : protected Pointers {
   bool edge[4] = {false, false, false, false};   // xlo xhi ylo yhi
   int nbr[4] = {-1, -1, -1, -1};
   double zl = 0.0;
+  // global cell faces per axis (NX+1, NY+1, nz+1), this rank's first owned
+  // global x/y cell, and the lattice box (m) whose cells take i2's phase
+  std::vector<double> gfx, gfy, gfz;
+  int gcx0 = 0, gcy0 = 0;
+  double blo[3] = {0, 0, 0}, bhi[3] = {0, 0, 0};
 
   // State in KK_FLOAT. H is stored relative to Href = H(T0) when
   // KK_FLOAT is float (it resolves small increments near T0 that way; 0 in
@@ -129,6 +140,7 @@ class ConductionSolverKokkos : protected Pointers {
   void exchange();
   void reset_field(double Tr);
   void seed_from_sites(Kokkos::View<double*> d_T, int nlocal);
+  void seed_from_grid(const std::string &file);
   // Write T for all nall sites into d_T; return the max over owned sites.
   // Each owned site's T also goes to on_owned(s, T), so the caller's own
   // per-site pass (the app's active-front list) rides along instead of

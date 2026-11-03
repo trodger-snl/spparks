@@ -69,6 +69,7 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
     int    far_bc = FAR_FIXED;
     int    sts_smax = 32;               // RKL2 stages per laser-off super-step; 0 = explicit
     bool   init_d6 = false;             // init d6: the run's first grid takes in-box T from d6
+    std::string init_grid;              // init grid FILE: ... and every cell's T from a dump conduction file
     double far = 0.0;                   // m; laser farther than this from the box is far (0 = off)
     // plate_material: the dense material of i2 = 6 sites and of the cells
     // below plate_top outside the box. Same keys as the part above.

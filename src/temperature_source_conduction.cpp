@@ -88,9 +88,9 @@ void ConductionTemperatureSource::setup_temperature_source(
     else if (a == "sts") cfg.sts_smax = (int) num(++i);
     else if (a == "far") cfg.far = num(++i);
     else if (a == "init") {
-      if (++i >= args.size() || args[i] != "d6")
-        error->all(FLERR,"setup_temperature_source conduction: init takes d6");
-      cfg.init_d6 = true;
+      if (i + 1 < args.size() && args[i+1] == "d6") { i++; cfg.init_d6 = true; }
+      else if (i + 2 < args.size() && args[i+1] == "grid") { cfg.init_grid = args[i+2]; i += 2; }
+      else error->all(FLERR,"setup_temperature_source conduction: init takes d6 or grid FILE");
     }
     else if (a == "ded") {
       cfg.ded = true;

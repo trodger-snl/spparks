@@ -19,7 +19,7 @@
 </PRE>
 <UL><LI>dump-ID = user-assigned name for the dump 
 
-<LI>style = <I>text</I> or <I>sites</I> or <I>vtk</I> or <I>stitch</I> or <I>hdf5</I> or <I>image</I> 
+<LI>style = <I>text</I> or <I>sites</I> or <I>vtk</I> or <I>stitch</I> or <I>hdf5</I> or <I>conduction</I> or <I>image</I> 
 
 <LI>delta = time increment between dumps (seconds) 
 
@@ -31,6 +31,7 @@
      <I>id</I> or <I>site</I> or <I>x</I> or <I>y</I> or <I>z</I> or
      <I>energy</I> or <I>propensity</I> or <I>iN</I> or <I>dN</I>
   <I>hdf5</I> fields = <I>site</I> or <I>iN</I> or <I>dN</I>
+  <I>conduction</I> fields = none
   <I>image</I> fields = discussed on <A HREF = "dump_image.html">dump image</A> doc page 
 </PRE>
 
@@ -43,6 +44,7 @@ dump 1 sites 1.0 my.sites.* id site i2 i3
 dump 1 vtk 1.0 my.vkt.* site
 dump 1 stitch 1.0 stitch_file.st site
 dump 1 hdf5 1.0 box12.h5 site i2 d6
+dump grid conduction 1e9 thermal_grid.h5
 dump mydump text 5.0 snap.ising id site energy i1 
 </PRE>
 <P><B>Description:</B>
@@ -139,6 +141,23 @@ without it, with a message, the first time it is dumped to.
 </P>
 <P>Like <I>stitch</I>, the <I>hdf5</I> style requires a simple square or cubic
 lattice and does not support the '*' or '%' filename wildcards.
+</P>
+<P>The <I>conduction</I> style writes the grid of the <A HREF = "temperature_source_conduction.html">conduction temperature
+source</A>, including its cells past
+the lattice box (the margins and the plate), to one HDF5 file that each
+dump overwrites: datasets <I>T</I> (K, double) and <I>phase</I> (uint8: 0 gas, 1
+powder, 3 dense, plus the flag bits 4 loose, 8 plate, 16 unborn),
+indexed <B>z</B><B>y</B><B>x</B> over the whole grid; <I>x_faces</I>, <I>y_faces</I> and
+<I>z_faces</I>, the cell faces along each axis (m, one more than the cells,
+so the cells are non-uniform past the box); and the attributes <I>time</I>
+(s) and <I>dx</I> (m).  The processors write their own cells in turn to
+filename.tmp, which is then renamed to filename, so a reader never
+sees a half-written grid.  The usual use is <A HREF = "dump_modify.html">dump_modify
+last yes</A> with a delta longer than the run: the grid
+as the run ends, which the next box of a stitched chain reads with the
+conduction source's <I>init grid</I> keyword.  It needs app_style
+additive/texture/kk with the conduction source, and writes nothing
+before the run's first step.
 </P>
 <P>As described below, the filename determines the kind of output (text
 or binary or gzipped, one big file or one per timestep, one big file

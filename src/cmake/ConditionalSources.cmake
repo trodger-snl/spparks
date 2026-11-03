@@ -75,6 +75,10 @@ function(configure_conditional_sources)
         if(SPPARKS_ENABLE_MPI)
             list(APPEND SPPARKS_SOURCES KOKKOS/app_additive_texture_kokkos.cpp
                                         KOKKOS/conduction_solver_kokkos.cpp)
+            # dump conduction writes the solver's grid with HighFive
+            if(SPPARKS_ENABLE_HIGHFIVE)
+                list(APPEND SPPARKS_SOURCES KOKKOS/dump_conduction_kokkos.cpp)
+            endif()
         endif()
         message(STATUS "Added KOKKOS package sources")
     endif()
@@ -125,7 +129,7 @@ function(should_include_header HEADER_NAME RESULT_VAR REASON_VAR)
     if(HEADER_NAME MATCHES "dump_image\\.h|image\\.h" AND NOT (JPEG_FOUND OR PNG_FOUND))
         set(ok FALSE)
         set(why "needs JPEG or PNG -- -DSPPARKS_ENABLE_JPEG=ON plus libjpeg headers")
-    elseif(HEADER_NAME MATCHES "app_additive_texture(_kokkos)?\\.h"
+    elseif(HEADER_NAME MATCHES "app_additive_texture(_kokkos)?\\.h|dump_conduction_kokkos\\.h"
            AND NOT SPPARKS_ENABLE_MPI)
         set(ok FALSE)
         set(why "needs MPI -- -DSPPARKS_ENABLE_MPI=ON")

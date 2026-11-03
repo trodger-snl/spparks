@@ -25,12 +25,23 @@
 #include <cstdio>
 #include <type_traits>
 #include <vector>
+#ifdef SPPARKS_HIGHFIVE
+#include "highfive/highfive.hpp"
+#endif
 
 using namespace SPPARKS_NS;
 
 namespace {
 
 const double SIGMA_SB = 5.670374419e-8;
+
+#ifdef SPPARKS_HIGHFIVE
+// ranks take turns on the file (as dump hdf5 does); an HDF5 lock adds nothing
+// and fails on file systems mounted without flock
+struct NoFileLocking {
+  void apply(hid_t fapl) const { H5Pset_file_locking(fapl, false, true); }
+};
+#endif
 
 // Outward cell widths covering length L: dx*r, dx*r^2, ... capped at cap; a
 // remainder under half a cell is merged into the last one.
@@ -110,7 +121,11 @@ void ConductionSolverKokkos::advance(double t,
   if (!built || nall != built_nall || zl_now != built_zl) {
     build(d_xyz, d_af, nlocal, nall, ts);
     reset_field(src->ambient());
-    if (src->config().init_d6 && !seeded) seed_from_sites(d_T, nlocal);
+    if (!seeded) {
+      // grid first (margins and all), then d6 (the sites, exact) if both are given
+      if (!src->config().init_grid.empty()) seed_from_grid(src->config().init_grid);
+      if (src->config().init_d6) seed_from_sites(d_T, nlocal);
+    }
     seeded = true;
     t_fd = t;
   }
@@ -230,6 +245,12 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   nxo = cx1 - cx0 + 1;
   nyo = cy1 - cy0 + 1;
   const int NXL = nxo + 2, NYL = nyo + 2;
+  auto faces = [](const Axis &a) { std::vector<double> f(a.lo); f.push_back(a.hi.back()); return f; };
+  gfx = faces(ax); gfy = faces(ay); gfz = faces(az);
+  gcx0 = cx0; gcy0 = cy0;
+  blo[0] = (glo[0] - 0.5) * dx; bhi[0] = (ghi[0] + 0.5) * dx;
+  blo[1] = (glo[1] - 0.5) * dx; bhi[1] = (ghi[1] + 0.5) * dx;
+  blo[2] = (glo[2] - 0.5) * dx; bhi[2] = az.hi.back();
 
   // Per-local-cell geometry (halo cells past a domain edge get dummies).
   auto axis_view = [](const char *nm, const Axis &a, int c0, int n, int which) {
@@ -560,6 +581,209 @@ void ConductionSolverKokkos::reset_field(double Tr)
   // phase is kept: a reset cools the part, it does not un-melt powder
   Kokkos::deep_copy(Pn, P);
   exchange();
+}
+
+/* ----------------------------------------------------------------------
+   dump conduction: datasets T (K, double) and phase (uint8), [z][y][x] over
+   the whole grid, the cell faces x_faces, y_faces, z_faces (m, N+1 each) and
+   attributes time (s) and dx (m). Ranks write their owned cells in turn into
+   FILE.tmp, which rank 0 then renames to FILE: a reader (the next box) never
+   sees a half-written grid.
+------------------------------------------------------------------------- */
+
+void ConductionSolverKokkos::write_grid(const std::string &file, double time)
+{
+#ifndef SPPARKS_HIGHFIVE
+  (void) file; (void) time;
+  error->all(FLERR,"dump conduction needs HighFive (-DSPPARKS_ENABLE_HIGHFIVE=ON)");
+#else
+  if (!built) error->all(FLERR,"dump conduction: no conduction grid yet (a dump before the first step)");
+  int me, np;
+  MPI_Comm_rank(world, &me);
+  MPI_Comm_size(world, &np);
+  const size_t NX = gfx.size() - 1, NY = gfy.size() - 1, NZ = nz;
+  auto hT = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), T);
+  auto hP = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), P);
+  std::vector<double> tb((size_t) nz * nyo * nxo);
+  std::vector<unsigned char> pb(tb.size());
+  for (int k = 0; k < nz; k++)
+    for (int j = 0; j < nyo; j++)
+      for (int i = 0; i < nxo; i++) {
+        const size_t n = ((size_t) k * nyo + j) * nxo + i;
+        tb[n] = hT(i+1, j+1, k);
+        pb[n] = hP(i+1, j+1, k);
+      }
+  const std::string tmp = file + ".tmp";
+  const std::vector<size_t> off = {0, (size_t) gcy0, (size_t) gcx0};
+  const std::vector<size_t> cnt = {NZ, (size_t) nyo, (size_t) nxo};
+  int bad = 0;
+  std::string why;
+  if (me > 0) MPI_Recv(&bad, 1, MPI_INT, me - 1, 0, world, MPI_STATUS_IGNORE);
+  if (!bad) {
+    try {
+      HighFive::FileAccessProps fapl;
+      fapl.add(NoFileLocking{});
+      const unsigned mode = me == 0
+          ? (HighFive::File::ReadWrite | HighFive::File::Create | HighFive::File::Truncate)
+          : HighFive::File::ReadWrite;
+      HighFive::File f(tmp, mode, fapl);
+      if (me == 0) {
+        const HighFive::DataSpace sp({NZ, NY, NX});
+        f.createDataSet<double>("T", sp);
+        f.createDataSet<unsigned char>("phase", sp);
+        f.createDataSet("x_faces", gfx);
+        f.createDataSet("y_faces", gfy);
+        f.createDataSet("z_faces", gfz);
+        f.createAttribute("time", time);
+        f.createAttribute("dx", dx);
+      }
+      f.getDataSet("T").select(off, cnt).write_raw(tb.data());
+      f.getDataSet("phase").select(off, cnt).write_raw(pb.data());
+      f.flush();
+    } catch (const std::exception &e) {
+      bad = 1;
+      why = e.what();
+    }
+  }
+  if (me < np - 1) MPI_Send(&bad, 1, MPI_INT, me + 1, 0, world);
+  if (!why.empty()) error->one(FLERR, ("dump conduction: writing " + tmp + " failed: " + why).c_str());
+  int any;
+  MPI_Allreduce(&bad, &any, 1, MPI_INT, MPI_MAX, world);
+  if (any) error->all(FLERR, ("dump conduction: writing " + tmp + " failed").c_str());
+  if (me == 0 && std::rename(tmp.c_str(), file.c_str()) != 0)
+    error->one(FLERR, ("dump conduction: cannot rename " + tmp + " to " + file).c_str());
+  MPI_Barrier(world);
+#endif
+}
+
+/* ----------------------------------------------------------------------
+   init grid FILE: each owned cell takes the T of a dump conduction file,
+   trilinear between the file's cell centres at its own centre, with H from
+   the cell's material, so the previous box's margin heat carries over too.
+   Cells centred outside the file's grid keep the reset value. Outside the
+   lattice box a powder cell becomes dense where the file's nearest cell is
+   dense (powder the previous box melted); lattice cells keep i2's phase.
+   ponytail: point interpolation, not a conservative remap; where the new
+   cells are coarser than the file's, the heat is sampled, not summed.
+------------------------------------------------------------------------- */
+
+void ConductionSolverKokkos::seed_from_grid(const std::string &file)
+{
+#ifndef SPPARKS_HIGHFIVE
+  (void) file;
+  error->all(FLERR,"conduction: init grid needs HighFive (-DSPPARKS_ENABLE_HIGHFIVE=ON)");
+#else
+  // per local cell along one axis: the file centre below its centre and the
+  // weight of the one above; a < 0 = centred outside the file's grid
+  struct Wt { int a, b; double w; };
+  auto bracket = [](const std::vector<double> &f, const std::vector<double> &gf, int c0, int n) {
+    std::vector<double> c(f.size() - 1);
+    for (size_t m = 0; m + 1 < f.size(); m++) c[m] = 0.5 * (f[m] + f[m+1]);
+    const int nc = (int) c.size();
+    std::vector<Wt> out(n);
+    for (int m = 0; m < n; m++) {
+      const double x = 0.5 * (gf[c0 + m] + gf[c0 + m + 1]);
+      if (x < f.front() || x > f.back()) { out[m] = {-1, -1, 0.0}; continue; }
+      int a = (int) (std::upper_bound(c.begin(), c.end(), x) - c.begin()) - 1;
+      a = std::max(0, std::min(nc - 1, a));
+      const int b = std::min(nc - 1, a + 1);
+      const double w = b == a ? 0.0 : std::max(0.0, std::min(1.0, (x - c[a]) / (c[b] - c[a])));
+      out[m] = {a, b, w};
+    }
+    return out;
+  };
+  auto span = [](const std::vector<Wt> &v, int &lo, int &hi) {
+    lo = INT_MAX; hi = -1;
+    for (const Wt &q : v) if (q.a >= 0) { lo = std::min(lo, q.a); hi = std::max(hi, q.b); }
+    return hi >= 0;
+  };
+
+  std::vector<Wt> bx, by, bz;
+  std::vector<double> tb;
+  std::vector<unsigned char> pb;
+  int x0 = 0, x1 = -1, y0 = 0, y1 = -1, z0 = 0, z1 = -1;
+  double tfile = 0.0;
+  bool any = false;
+  try {
+    HighFive::FileAccessProps fapl;
+    fapl.add(NoFileLocking{});
+    HighFive::File f(file, HighFive::File::ReadOnly, fapl);
+    std::vector<double> fx, fy, fz;
+    f.getDataSet("x_faces").read(fx);
+    f.getDataSet("y_faces").read(fy);
+    f.getDataSet("z_faces").read(fz);
+    f.getAttribute("time").read(tfile);
+    bx = bracket(fx, gfx, gcx0, nxo);
+    by = bracket(fy, gfy, gcy0, nyo);
+    bz = bracket(fz, gfz, 0, nz);
+    any = span(bx, x0, x1) && span(by, y0, y1) && span(bz, z0, z1);
+    if (any) {
+      const std::vector<size_t> off = {(size_t) z0, (size_t) y0, (size_t) x0};
+      const std::vector<size_t> cnt = {(size_t) (z1 - z0 + 1), (size_t) (y1 - y0 + 1), (size_t) (x1 - x0 + 1)};
+      tb.resize(cnt[0] * cnt[1] * cnt[2]);
+      pb.resize(tb.size());
+      f.getDataSet("T").select(off, cnt).read_raw(tb.data());
+      f.getDataSet("phase").select(off, cnt).read_raw(pb.data());
+    }
+  } catch (const std::exception &e) {
+    error->one(FLERR, ("conduction: init grid " + file + ": " + e.what()).c_str());
+  }
+
+  long long n = 0;
+  if (any) {
+    auto hH = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), H);
+    auto hT = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), T);
+    auto hP = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), P);
+    auto h1 = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), Htab);
+    auto h2 = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), Htab2);
+    const int sx = x1 - x0 + 1, sy = y1 - y0 + 1;
+    auto at = [&](int a, int b, int c) { return ((size_t) (c - z0) * sy + (b - y0)) * sx + (a - x0); };
+    for (int i = 1; i <= nxo; i++)
+      for (int j = 1; j <= nyo; j++)
+        for (int k = 0; k < nz; k++) {
+          const Wt &u = bx[i-1], &v = by[j-1], &w = bz[k];
+          if (u.a < 0 || v.a < 0 || w.a < 0) continue;
+          double Tv = 0.0;
+          for (int c = 0; c < 8; c++) {
+            const double wt = ((c & 1) ? u.w : 1.0 - u.w) * ((c & 2) ? v.w : 1.0 - v.w) *
+                              ((c & 4) ? w.w : 1.0 - w.w);
+            if (wt > 0.0) Tv += wt * tb[at((c & 1) ? u.b : u.a, (c & 2) ? v.b : v.a, (c & 4) ? w.b : w.a)];
+          }
+          const double xc = 0.5 * (gfx[gcx0 + i - 1] + gfx[gcx0 + i]);
+          const double yc = 0.5 * (gfy[gcy0 + j - 1] + gfy[gcy0 + j]);
+          const double zc = 0.5 * (gfz[k] + gfz[k + 1]);
+          const bool lattice = xc > blo[0] && xc < bhi[0] && yc > blo[1] && yc < bhi[1] &&
+                               zc > blo[2] && zc < bhi[2];
+          unsigned char &p = hP(i, j, k);
+          const unsigned char fp = pb[at(u.w < 0.5 ? u.a : u.b, v.w < 0.5 ? v.a : v.b, w.w < 0.5 ? w.a : w.b)];
+          if (!lattice && p == POWDER && (fp & 3) == DENSE) p = DENSE;
+          else if (!lattice && p == (POWDER | LOOSE) && (fp & 3) == DENSE) p = DENSE | LOOSE;
+          const auto &tab = (p & PLATE) ? h2 : h1;
+          const int nt = (int) tab.extent(0);
+          const double q = (Tv - Htab_T0) / Htab_dT;
+          const int t = q < 0.0 ? 0 : (q > nt - 2 ? nt - 2 : (int) q);
+          hH(i, j, k) = tab(t) + (q - t) * ((double) tab(t+1) - tab(t));
+          hT(i, j, k) = Tv;
+          n++;
+        }
+    Kokkos::deep_copy(H, hH);
+    Kokkos::deep_copy(T, hT);
+    Kokkos::deep_copy(Tn, T);
+    Kokkos::deep_copy(P, hP);
+    Kokkos::deep_copy(Pn, P);
+  }
+  exchange();
+
+  long long nall_ = n, ncell = (long long) nxo * nyo * nz, tot[2], loc[2] = {nall_, ncell};
+  MPI_Allreduce(loc, tot, 2, MPI_LONG_LONG, MPI_SUM, world);
+  if (domain->me == 0) {
+    char msg[512];
+    snprintf(msg, sizeof(msg), "conduction: init grid %s (t = %.10g s): %lld of %lld cells "
+             "from the file\n", file.c_str(), tfile, tot[0], tot[1]);
+    if (screen) fputs(msg, screen);
+    if (logfile) fputs(msg, logfile);
+  }
+#endif
 }
 
 /* ----------------------------------------------------------------------

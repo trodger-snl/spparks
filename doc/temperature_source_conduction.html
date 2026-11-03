@@ -73,8 +73,8 @@ setup_temperature_source conduction card overrides keyword values ...
     outer faces of the thermal domain held at T0, or insulated
   <I>sts</I> value = s
     RKL2 stages per laser-off super-step, 0 = explicit steps only, or >= 2
-  <I>init</I> value = <I>d6</I>
-    the run's first grid takes each site's temperature from <I>d6</I> instead of T0
+  <I>init</I> value = <I>d6</I> or <I>grid</I> file
+    the run's first grid takes each site's temperature from <I>d6</I>, or every cell's from a <A HREF = "dump.html">dump conduction</A> file, instead of T0
   <I>far</I> value = R
     passes farther than R from the lattice box ride RKL2 super-steps, and the run ends once the box is done (m, 0 = off)
   <I>ded</I> values = zero or more sub-keyword/value pairs
@@ -203,6 +203,20 @@ with the enthalpy of the cell's material; sites with <I>d6</I> <= 0 and the
 cells outside the lattice box start at T0.  The heat that was in the
 previous box's margin cells is lost.  Later grids (a new layer) start
 at T0 as before.
+</P>
+<P>With <I>init grid</I> file every cell of the first grid, margins included,
+takes the temperature of a <A HREF = "dump.html">dump conduction</A> file (written
+by the previous box, e.g. with <A HREF = "dump_modify.html">dump_modify last yes</A>),
+interpolated trilinearly between the file's cell centres at the cell's
+centre, with the enthalpy of the cell's material.  Where both boxes'
+cells are lattice cells they coincide, so the copy is exact; past the
+lattice box the values are sampled, not volume averaged.  Cells centred
+outside the file's grid start at T0.  A powder cell outside the lattice
+box whose nearest file cell is dense becomes dense (powder the previous
+box melted); lattice cells keep the phase their <I>i2</I> gives.  The field
+is taken as it is at the file's time, which is printed: a gap until the
+run's start is not integrated.  <I>init grid</I> and <I>init d6</I> may both be
+given; the grid is read first, then <I>d6</I> sets the sites.
 </P>
 <P><B>Far passes.</B>  With <I>far</I> R, the laser is far while it is more than R
 from the lattice box in x or y.  An interval in which it stays far is

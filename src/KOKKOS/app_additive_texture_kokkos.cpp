@@ -1426,53 +1426,6 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
 }
 
 /* ----------------------------------------------------------------------
-   solidus_capture: liquid still below the solidus after this step's capture
-   freezes in place, keeping the spin and orientation it melted with, and is
-   recorded as a nucleus (V, G, terminal solid_d) without the nucleus growth.
-   Race-free: each site only reads/writes itself.
-------------------------------------------------------------------------- */
-
-int AppAdditiveTextureKokkos::solidus_freeze_kernel(Kokkos::View<int*> d_active_sites, int n_active)
-{
-  auto d_active_sites_local = d_active_sites;
-  auto d_T_local = d_temp;
-  auto d_active_flag_local = d_active_flag;
-  auto d_solid_d_local = d_solid_d;
-  auto d_V_local = d_V;
-  auto d_G_local = d_G;
-  auto k_numneigh_d = d_numneigh;
-  auto k_neighbor_d = d_neighbor_rm;
-  const PlateRule pr = plate_rule();
-  ensure_device_xyz();
-  auto k_xyz_d = d_xyz;
-  const double dx_local = dx;
-  auto d_solid_front_coeffs_local = this->d_solid_front_coeffs;
-  const int solid_front_length_local = this->solid_front_length;
-  const double solid_front_a_local = this->solid_front_a, solid_front_n_local = this->solid_front_n;
-  const double done_d = nuclei_smooth_enabled ? -1.0 : (double)(-nrefine - 3);   // the flipper's nucleus_done_d
-
-  int nfrozen = 0;
-  Kokkos::parallel_reduce("SolidusFreezeKernel", n_active,
-    KOKKOS_LAMBDA(int idx, int& count) {
-      const int i = d_active_sites_local(idx);
-      const double T_i = d_T_local(i);
-      if (d_active_flag_local(i) != 2 || T_i >= pr.ts_at(k_xyz_d(i, 2))) return;
-      d_active_flag_local(i) = pr.solid(k_xyz_d(i, 2));
-      d_solid_d_local(i) = done_d;
-      d_V_local(i) = solid_front_velocity(d_solid_front_coeffs_local, solid_front_length_local,
-                                          solid_front_a_local, solid_front_n_local,
-                                          pr.tl_at(k_xyz_d(i, 2)) - T_i);
-      double grad_dir[3], grad_magnitude = 0.0;
-      ThermalOps::compute_temperature_gradient(
-        i, d_T_local, d_active_flag_local, k_numneigh_d, k_neighbor_d, k_xyz_d, dx_local,
-        grad_dir, &grad_magnitude);
-      d_G_local(i) = grad_magnitude;
-      count++;
-    }, nfrozen);
-  return nfrozen;
-}
-
-/* ----------------------------------------------------------------------
    Phase 3.5: Particle flipper) kernel - grow nuclei to specified volume
 
    Grows newly nucleated grains by flipping neighboring liquid sites to
@@ -1709,11 +1662,10 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
 
 PlateRule AppAdditiveTextureKokkos::plate_rule() const
 {
-  PlateRule r{false, 0.0, dx, tl, tl, ts, ts};
+  PlateRule r{false, 0.0, dx, tl, tl};
   if (ConductionTemperatureSource *c = thermal->conduction_source())
     if (c->config().plate_mat.on) {
       r.on = true; r.zplate = c->plate_surface(); r.tl_plate = c->config().plate_mat.tl;
-      r.ts_plate = c->config().plate_mat.ts;
     }
   return r;
 }
@@ -2495,7 +2447,6 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
 
   // Phase 3.3: Solidification (epitaxial growth with texture weighting)
   naccept += solidification_kernel(d_active_sites, n_active);
-  if (solidus_capture) naccept += solidus_freeze_kernel(d_active_sites, n_active);
 
   // Only launch smoothing kernel if there are eligible sites
   // Process ONLY the sites in the compact list (not all 2.99M sites!)

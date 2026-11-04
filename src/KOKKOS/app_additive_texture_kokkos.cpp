@@ -259,23 +259,7 @@ void AppAdditiveTextureKokkos::init_app()
               (double)gw_maxgid * gw_maxlev * 3 * sizeof(double) / 1e6);
   }
 
-  // Timestep guard, same formula as AppAdditiveTexture::init_app (front must
-  // not advance more than one voxel per step at the full freezing range).
-  // The CPU app aborts; here it is a warning, because the front actually runs
-  // well below Tl-Ts undercooling and the capture reach is sqrt(3) dx, and a
-  // 2 vs 4 us comparison on the GP700 build agreed within seed noise
-  // (docs/GP700_MOSER_SROD_DECK_PLAN.md). The reach-based bound is printed too.
-  {
-    const double vmax = front_velocity(tl - ts);
-    if (vmax > 0.0 && domain->me == 0 && screen) {
-      const double dt_cpu = dx / vmax, dt_reach = 1.7320508075688772 * dx / vmax;
-      if (dt > dt_cpu)
-        fprintf(screen, "WARNING: timestep %g s exceeds the CPU app's front limit dx/V(Tl-Ts) = %g s "
-                "(reach-based limit sqrt(3)*dx/V = %g s); the CPU app would abort here\n", dt, dt_cpu, dt_reach);
-      else
-        fprintf(screen, "Maximum allowable timestep (CPU-app rule dx/V(Tl-Ts)) is %e s\n", dt_cpu);
-    }
-  }
+  check_timestep();   // the CPU app's limit, enforced here too
 
   // Do NOT initialize T / G / V / active_flag / mobility_out / solid_d here.
   //

@@ -163,6 +163,10 @@ class AppAdditiveTexture : public AppPottsQuaternion, public AdditiveParams {
 	// Physical and simulation parameters
 	double dt;
 	double dx;
+  bool dt_auto = false;   // app_style DT = auto: 90% of the front limit, set at init
+  // The front limit dx/V(Tl-Ts) (front advances at most one voxel per step
+  // across the freezing range): set dt under `auto`, abort above it.
+  void check_timestep();
   double t_room;
     
     

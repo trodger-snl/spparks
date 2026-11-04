@@ -102,7 +102,8 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
 
     nspins = atoi(arg[1]);
     dx = atof(arg[2]); //The source lattice spacing ( in m)
-    dt = atof(arg[3]); //The source timestep (in seconds)
+    dt_auto = strcmp(arg[3], "auto") == 0;   // set at init (check_timestep)
+    dt = dt_auto ? 0.0 : atof(arg[3]); //The source timestep (in seconds)
     nrefine = atoi(arg[4]); //How many refinement MC steps to perform after a site solidifies
     
     // Integer arrays (iarray): 0=spin, 1=active_flag
@@ -524,8 +525,6 @@ void AppAdditiveTexture::init_app()
   double sqrt2 = 1.4142135624;
   double sqrt3 = 1.7320508076;
 
-  dt_sweep = dt;
-
   if (nucleation_flags) delete[] nucleation_flags;
   if (nucleation_temps) delete[] nucleation_temps;
   if (nucleation_sizes) delete[] nucleation_sizes;
@@ -630,20 +629,9 @@ void AppAdditiveTexture::init_app()
 
   t_cool_max = tl - ts;
 
-  //Check that our timestep is small enough	
-  double max_front_vel = front_velocity(tl - ts);
+  check_timestep();
+  dt_sweep = dt;
 
-  
-  if(dt > dx/max_front_vel) {
-      fprintf(screen,"Temperature timestep too large, reduce to %f\n", dx/max_front_vel);
-          error->all(FLERR,"Temperature timestep too large");
-  }
-  else{
-    if(domain->me == 0) {
-      fprintf(screen,"Maximum allowable timestep is %e\n", dx/max_front_vel);
-    }
-  }
-  
   // Always use modular temperature source
   if (domain->me == 0) {
     std::cout << "Using modular temperature source" << std::endl;
@@ -818,6 +806,25 @@ void AppAdditiveTexture::execute_nucleation_event(int i, double Tcool,
     if (nucleation_mode == NUCLEATION_CONTINUOUS) {
       T_prev_map.erase(i);
     }
+}
+
+/* ----------------------------------------------------------------------
+   The timestep limit dx/V(Tl-Ts), shared with additive/texture/kk:
+   app_style DT = auto takes 90% of it; an explicit DT above it aborts.
+------------------------------------------------------------------------- */
+void AppAdditiveTexture::check_timestep()
+{
+  const double dt_max = dx / front_velocity(tl - ts);
+  if (dt_auto) dt = 0.9 * dt_max;
+  if (dt > dt_max) {
+    char msg[256];
+    snprintf(msg, sizeof(msg), "Temperature timestep %g s too large: the limit dx/V(Tl-Ts) is %g s "
+             "(app_style timestep auto takes 90%% of it)", dt, dt_max);
+    error->all(FLERR, msg);
+  }
+  if (domain->me == 0 && screen)
+    fprintf(screen, "Timestep %e s%s; maximum allowable dx/V(Tl-Ts) is %e s\n",
+            dt, dt_auto ? " (auto)" : "", dt_max);
 }
 
 /* ----------------------------------------------------------------------

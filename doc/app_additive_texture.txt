@@ -16,7 +16,7 @@ app_style style nspins dx dt nrefine :pre
 style = {additive/texture} or {additive/texture/kk} :ulb,l
 nspins = number of possible Potts model spins :l
 dx = lattice spacing in meters (SI) :l
-dt = simulation timestep in seconds (SI) :l
+dt = simulation timestep in seconds (SI), or {auto} :l
 nrefine = number of boundary-smoothing passes a site receives after it
 solidifies (one pass per timestep) :l,ule
 
@@ -110,7 +110,11 @@ fast-forward predictor.
 All physics runs inside the application's per-step update.  Both
 styles run in "app_update_only"_app_update_only.html mode, so no rKMC
 site sweep is ever performed and a "sweep"_sweep.html command is not
-needed; the timestep is {dt} from the app_style command.
+needed; the timestep is {dt} from the app_style command.  {dt} must
+not exceed dx / v(Tl - Ts), the time the front takes to cross one
+voxel at the full freezing-range undercooling; a larger {dt} is an
+error at the start of a run.  {dt} = {auto} sets it to 90% of that
+limit, from the material in force at each run.
 
 Differences in the {additive/texture/kk} style:
 
@@ -125,8 +129,6 @@ an 8-colour parity ordering of the lattice, so the lattice spacing in
 lattice units must be 1 (see Restrictions). :l
 Nucleation always uses the threshold model ({nucleation_mode} is not
 available). :l
-The timestep check dt <= dx / v(Tl - Ts) is a warning instead of an
-error. :l
 The {floor_check} command is available. :l,ule
 
 The temperature field (d6) is deterministic and matches bit for bit

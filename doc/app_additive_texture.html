@@ -23,7 +23,7 @@
 
 <LI>dx = lattice spacing in meters (SI) 
 
-<LI>dt = simulation timestep in seconds (SI) 
+<LI>dt = simulation timestep in seconds (SI), or <I>auto</I> 
 
 <LI>nrefine = number of boundary-smoothing passes a site receives after it
 solidifies (one pass per timestep) 
@@ -121,7 +121,11 @@ fast-forward predictor.
 <P>All physics runs inside the application's per-step update.  Both
 styles run in <A HREF = "app_update_only.html">app_update_only</A> mode, so no rKMC
 site sweep is ever performed and a <A HREF = "sweep.html">sweep</A> command is not
-needed; the timestep is <I>dt</I> from the app_style command.
+needed; the timestep is <I>dt</I> from the app_style command.  <I>dt</I> must
+not exceed dx / v(Tl - Ts), the time the front takes to cross one
+voxel at the full freezing-range undercooling; a larger <I>dt</I> is an
+error at the start of a run.  <I>dt</I> = <I>auto</I> sets it to 90% of that
+limit, from the material in force at each run.
 </P>
 <P>Differences in the <I>additive/texture/kk</I> style:
 </P>
@@ -139,9 +143,6 @@ lattice units must be 1 (see Restrictions).
 
 <LI>Nucleation always uses the threshold model (<I>nucleation_mode</I> is not
 available). 
-
-<LI>The timestep check dt <= dx / v(Tl - Ts) is a warning instead of an
-error. 
 
 <LI>The <I>floor_check</I> command is available. 
 </UL>

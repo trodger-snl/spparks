@@ -190,6 +190,16 @@ velocity in m/s, with dT the undercooling below the liquidus in K: the
 polynomial v(dT) = c0*dT^(N-1) + c1*dT^(N-2) + ... + cN-1, or the power
 law v(dT) = a*dT^n (a > 0, n > 0). 
 
+<LI><I>solidus_capture</I> <I>on|off</I> : when on, a liquid site still below the
+solidus after the step's nucleation and capture freezes in place: it
+keeps the random spin and orientation it melted with and is recorded
+as a nucleus (d9 = V(dT), d8 = G), without the nucleus growth.  Each
+frozen site is its own grain, so liquid the front has not reached by
+the time it passes the solidus (the top center of a melt pool, where
+the front lags the isotherm) becomes fine equiaxed grains.  Without
+it that liquid waits for the front and freezes far below the solidus.
+Default off. 
+
 <LI><A HREF = "material.html">material</A> <I>file</I> [process <I>name</I>] : load a material
 card; sets the values above and the nucleation values below from the
 card, and supplies <I>card</I> values to
@@ -541,6 +551,7 @@ smooth_greedy_multiproposal = off, smooth_orientation = average, nuclei_smooth =
 nucleation_mode = threshold, single_voxel_cleanup = off (additive/texture)
 floor_check = 0 (off) (additive/texture/kk)
 end_when_solid off
+solidus_capture off
 fast_forward_search_window = 0.1 s
 temperature_smooth off, nodal_smooth off
 voids off (additive/texture) 

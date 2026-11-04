@@ -63,9 +63,10 @@ struct KeyedRNG {
 // A flag, not an infinite zplate: the build uses -ffast-math.
 struct PlateRule {
   bool on;
-  double zplate, dx, tl, tl_plate;
+  double zplate, dx, tl, tl_plate, ts, ts_plate;
   KOKKOS_INLINE_FUNCTION bool in(double z) const { return on && z * dx < zplate; }
   KOKKOS_INLINE_FUNCTION double tl_at(double z) const { return in(z) ? tl_plate : tl; }
+  KOKKOS_INLINE_FUNCTION double ts_at(double z) const { return in(z) ? ts_plate : ts; }
   KOKKOS_INLINE_FUNCTION double tl_min() const { return on && tl_plate < tl ? tl_plate : tl; }
   KOKKOS_INLINE_FUNCTION int solid(double z) const { return in(z) ? 6 : 3; }
 };
@@ -168,6 +169,7 @@ class AppAdditiveTextureKokkos : public QuaternionKokkos<AppAdditiveTexture> {
   void check_melt_floor(int n_active);
   int nucleation_kernel(Kokkos::View<int*> d_active_sites, int n_active);
   int particle_flipper_kernel(Kokkos::View<int*> d_active_sites, int n_active);
+  int solidus_freeze_kernel(Kokkos::View<int*> d_active_sites, int n_active);
   int solidification_kernel(Kokkos::View<int*> d_active_sites, int n_active);
   int smoothing_kernel_efficient(Kokkos::View<int*> d_smoothing_sites, int n_sites);
 

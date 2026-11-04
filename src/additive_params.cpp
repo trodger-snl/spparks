@@ -256,6 +256,10 @@ bool AdditiveParams::parse_command(const char *command, int narg, char **arg,
     if (screen)
       fprintf(screen, "nuclei_smooth %s\n", nuclei_smooth_enabled ? "enabled" : "disabled");
 
+  } else if (strcmp(command, "solidus_capture") == 0) {
+    if (narg != 1) error->all(FLERR, "Illegal solidus_capture command: solidus_capture on|off");
+    solidus_capture = on_off(command, arg[0], error);
+
   } else if (strcmp(command, "end_when_solid") == 0) {
     if (narg != 1) error->all(FLERR, "Illegal end_when_solid command: end_when_solid CAP|off");
     end_when_solid_cap = strcmp(arg[0], "off") == 0 ? -1.0 : atof(arg[0]);

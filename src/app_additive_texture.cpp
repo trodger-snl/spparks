@@ -375,6 +375,17 @@ void AppAdditiveTexture::app_update(double dt)
     //If we're molten, call the mushy_phase function to figure out any phase change
     else if (active_flag[i] == 2 && T[i] <= tl) {
         mushy_phase(i, rng);
+        // solidus_capture: liquid still below the solidus freezes in place
+        // with the spin and orientation it melted with, recorded as a
+        // nucleus without the nucleus growth
+        if (solidus_capture && active_flag[i] == 2 && T[i] < ts) {
+          active_flag[i] = 3;
+          solid_d[i] = nuclei_smooth_enabled ? -1 : -nrefine - 2;
+          G[i] = normal_finder(i)[3];
+          V[i] = V[i] + front_velocity(tl - T[i]);
+          naccept++;
+          T_prev_map.erase(i);
+        }
         if (nucleation_mode == NUCLEATION_CONTINUOUS && active_flag[i] == 2) {
           T_prev_map[i] = T[i];
         }
@@ -792,6 +803,25 @@ void AppAdditiveTexture::site_event_rejection(int /*i*/, RandomPark * /*random*/
 }
 
 /* ----------------------------------------------------------------------
+   The timestep limit dx/V(Tl-Ts), shared with additive/texture/kk:
+   app_style DT = auto takes 90% of it; an explicit DT above it aborts.
+------------------------------------------------------------------------- */
+void AppAdditiveTexture::check_timestep()
+{
+  const double dt_max = dx / front_velocity(tl - ts);
+  if (dt_auto) dt = 0.9 * dt_max;
+  if (dt > dt_max) {
+    char msg[256];
+    snprintf(msg, sizeof(msg), "Temperature timestep %g s too large: the limit dx/V(Tl-Ts) is %g s "
+             "(app_style timestep auto takes 90%% of it)", dt, dt_max);
+    error->all(FLERR, msg);
+  }
+  if (domain->me == 0 && screen)
+    fprintf(screen, "Timestep %e s%s; maximum allowable dx/V(Tl-Ts) is %e s\n",
+            dt, dt_auto ? " (auto)" : "", dt_max);
+}
+
+/* ----------------------------------------------------------------------
    Execute a nucleation event at site i with undercooling Tcool.
    Sets site to solid, computes gradient and solidification rate,
    and grows the nucleus via nucleation_particle_flipper.
@@ -813,25 +843,6 @@ void AppAdditiveTexture::execute_nucleation_event(int i, double Tcool,
     if (nucleation_mode == NUCLEATION_CONTINUOUS) {
       T_prev_map.erase(i);
     }
-}
-
-/* ----------------------------------------------------------------------
-   The timestep limit dx/V(Tl-Ts), shared with additive/texture/kk:
-   app_style DT = auto takes 90% of it; an explicit DT above it aborts.
-------------------------------------------------------------------------- */
-void AppAdditiveTexture::check_timestep()
-{
-  const double dt_max = dx / front_velocity(tl - ts);
-  if (dt_auto) dt = 0.9 * dt_max;
-  if (dt > dt_max) {
-    char msg[256];
-    snprintf(msg, sizeof(msg), "Temperature timestep %g s too large: the limit dx/V(Tl-Ts) is %g s "
-             "(app_style timestep auto takes 90%% of it)", dt, dt_max);
-    error->all(FLERR, msg);
-  }
-  if (domain->me == 0 && screen)
-    fprintf(screen, "Timestep %e s%s; maximum allowable dx/V(Tl-Ts) is %e s\n",
-            dt, dt_auto ? " (auto)" : "", dt_max);
 }
 
 /* ----------------------------------------------------------------------

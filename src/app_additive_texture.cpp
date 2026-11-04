@@ -221,6 +221,13 @@ void AppAdditiveTexture::refresh_thermal_host()
   thermal_host_.nghost_iarray = nghost_iarray;
   thermal_host_.ghost_dindices = ghost_dindices;
   thermal_host_.nghost_darray = nghost_darray;
+  if (!thermal_host_.any_liquid)
+    thermal_host_.any_liquid = [this]() {
+      int any = 0, ng = 0;
+      for (int i = 0; i < nlocal && !any; i++) any = active_flag[i] == 2;
+      MPI_Allreduce(&any, &ng, 1, MPI_INT, MPI_MAX, world);
+      return ng > 0;
+    };
 }
 
 void AppAdditiveTexture::input_app(char *command, int narg, char **arg)

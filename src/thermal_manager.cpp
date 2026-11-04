@@ -851,6 +851,10 @@ bool ThermalManager::predict_skip(double local_next, double current_time,
   const double target_time = std::min(next_thermal_time, stoptime);
   const double time_skip = target_time - current_time;
   if (time_skip <= 1e-6) return false;   // only a meaningful skip
+  // Never skip while a site is liquid: mushy liquid (Ts < T < Tl) left behind
+  // would cool through the skip and be captured far below the solidus.
+  // Collective; every condition before it is rank-uniform.
+  if (host_->any_liquid && host_->any_liquid()) return false;
 
   if (domain->me == 0) {
     std::cout << "Fast-forward (" << tag << "): skipping " << time_skip

@@ -1764,7 +1764,14 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
   int color_order[8]; shuffled_colors(color_order, RNG_COLORS_SOLIDIFY);
   for (int cc = 0; cc < 8; cc++) {
   const int color_local = color_order[cc];
-  Kokkos::parallel_for("SolidificationKernel", n_active,
+  // LaunchBounds<256>: under Kokkos' default 1024-thread bound gfx942 caps this
+  // kernel at 128 VGPRs and it spills to 992 B/lane of scratch (~232 MB per
+  // launch on an MI300A); once enough sites were active the launch was
+  // rejected (HSA_STATUS_ERROR_INVALID_ISA, El Dorado 2026-11-05). At 256 it
+  // keeps 227 VGPRs and 624 B/lane. Colour-sweep launches, so the block size
+  // does not change results.
+  Kokkos::parallel_for("SolidificationKernel",
+    Kokkos::RangePolicy<Kokkos::LaunchBounds<256, 1>>(0, n_active),
     KOKKOS_LAMBDA(int idx) {
       const int i = d_active_sites_local(idx);
       if (((static_cast<int>(k_xyz_d(i,0)) & 1) | ((static_cast<int>(k_xyz_d(i,1)) & 1) << 1) |

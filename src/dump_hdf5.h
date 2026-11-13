@@ -34,12 +34,8 @@ DumpStyle(hdf5, DumpHDF5)
 #include <string>
 #include <vector>
 
-// HighFive is forward declared so that style_dump.h (and therefore output.cpp)
-// does not pull the whole HDF5 C++ header set in.  The destructor is declared
-// here and defined in the .cpp, where HighFive::File is complete.
-namespace HighFive {
-class File;
-}
+// The file is held as its hid_t (an int64_t) so that style_dump.h, and
+// therefore output.cpp, does not pull hdf5.h in.
 
 namespace SPPARKS_NS {
 
@@ -99,7 +95,8 @@ private:
   std::vector<std::string> labels; // dataset name per field: site, iN, dN
 
   class AppLattice *applattice;
-  std::shared_ptr<HighFive::File> file;
+  int64_t file = -1;       // open HDF5 file id, -1 when closed
+  void close_file();
 
   bool opened;             // file created/reopened yet?
   int64_t origin[3];       // absolute lattice index of dataset element [0,0,0]

@@ -27,7 +27,7 @@
 #include "memory.h"
 #include "spktype.h"
 
-#include "highfive/highfive.hpp"
+#include "hdf5_util.h"
 
 #include <algorithm>
 #include <array>
@@ -104,9 +104,14 @@ DumpHDF5::~DumpHDF5() {
   delete[] fields;
   delete[] vtype;
   delete[] vindex;
-  // shared_ptr<HighFive::File> is destroyed here, where the type is complete;
-  // that closes the file and flushes metadata.
-  file.reset();
+  close_file();
+}
+
+// HDF5 refuses (under MPI-IO) to close a file with objects still open: every
+// dataset handle must be out of scope first
+void DumpHDF5::close_file() {
+  if (file >= 0 && H5Idec_ref(file) < 0) error->warning(FLERR, "Dump hdf5 could not close the file");
+  file = -1;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -143,7 +148,7 @@ void DumpHDF5::choose_chunk(const int64_t *extent, int64_t *out) {
 ------------------------------------------------------------------------- */
 
 void DumpHDF5::ensure_dataset(const std::string &label, int type) {
-  if (file->exist(label))
+  if (h5::exists(file, label))
     return;
 
   int64_t c[3];
@@ -155,29 +160,20 @@ void DumpHDF5::ensure_dataset(const std::string &label, int type) {
   // datasets are [z][y][x]; chunk[] and dims[] are stored x,y,z
   std::vector<size_t> shape = {(size_t)dims[2], (size_t)dims[1],
                                (size_t)dims[0]};
-  std::vector<size_t> maxshape = {HighFive::DataSpace::UNLIMITED,
-                                  HighFive::DataSpace::UNLIMITED,
-                                  HighFive::DataSpace::UNLIMITED};
-  HighFive::DataSpace space(shape, maxshape);
-
-  HighFive::DataSetCreateProps props;
-  // Chunking must be added first: it is what materializes the underlying
-  // property list, and getId() below needs a real plist to set fill on.
-  props.add(HighFive::Chunking(
-      std::vector<hsize_t>{(hsize_t)c[2], (hsize_t)c[1], (hsize_t)c[0]}));
+  h5::Handle plist(H5Pcreate(H5P_DATASET_CREATE));
+  if (plist < 0)
+    error->all(FLERR, "Dump hdf5 could not create dataset property list");
+  const hsize_t cdims[3] = {(hsize_t)c[2], (hsize_t)c[1], (hsize_t)c[0]};
+  H5Pset_chunk(plist, 3, cdims);
   if (compress > 0) {
     // shuffle groups the bytes of each value, which is what lets deflate
     // find the redundancy in doubles; parallel HDF5 then requires every
     // write to be collective (write_fields and copy_planes both are)
     if (H5Zfilter_avail(H5Z_FILTER_DEFLATE) <= 0)
       error->all(FLERR, "Dump hdf5 compress: this HDF5 has no deflate filter");
-    props.add(HighFive::Shuffle());
-    props.add(HighFive::Deflate(compress));
+    H5Pset_shuffle(plist);
+    H5Pset_deflate(plist, compress);
   }
-
-  hid_t plist = props.getId();
-  if (plist <= 0)
-    error->all(FLERR, "Dump hdf5 could not create dataset property list");
 
   if (type == INT) {
     int32_t fillv = -1;
@@ -193,21 +189,16 @@ void DumpHDF5::ensure_dataset(const std::string &label, int type) {
   // a double field's real 0.0 is skipped too, as with stitch.
   H5Pset_fill_time(plist, H5D_FILL_TIME_ALLOC);
 
-  HighFive::DataSet dset =
-      (type == INT)
-          ? file->createDataSet(label, space, HighFive::AtomicType<int32_t>(),
-                                props)
-          : file->createDataSet(label, space, HighFive::AtomicType<double>(),
-                                props);
+  h5::Handle dset = h5::create_dataset(
+      file, label, type == INT ? h5::native<int32_t>() : h5::native<double>(), shape, plist, true);
 
-  dset.createAttribute<std::string>("field", label);
-  dset.createAttribute<std::string>("type",
-                                    type == INT ? "int32" : "float64");
-  dset.createAttribute<int32_t>("per_site_length", 1);
+  h5::write_attr(dset, "field", label);
+  h5::write_attr(dset, "type", std::string(type == INT ? "int32" : "float64"));
+  h5::write_attr(dset, "per_site_length", (int32_t)1);
   if (type == INT)
-    dset.createAttribute<int32_t>("no_value", -1);
+    h5::write_attr(dset, "no_value", (int32_t)-1);
   else
-    dset.createAttribute<double>("no_value", 0.0);
+    h5::write_attr(dset, "no_value", 0.0);
 }
 
 /* ----------------------------------------------------------------------
@@ -467,16 +458,12 @@ bool SPPARKS_NS::hdf5_read_box_parallel(int64_t dataset, const size_t *offset, c
    failed writes there that HDF5 reported as success)
 ------------------------------------------------------------------------- */
 
-static HighFive::FileAccessProps access_props(MPI_Comm world, int nprocs) {
-  HighFive::FileAccessProps fapl;
-#ifdef H5_HAVE_PARALLEL
+static h5::Handle access_props(MPI_Comm &world, int nprocs) {
   // Every rank takes the same path through every dump, so collective
   // metadata would be safe here.  It is still left off: it converts a
   // subtle divergence into a hang rather than a slowdown, and it is not
   // needed for correctness.
-  if (nprocs > 1) fapl.add(HighFive::MPIOFileAccess(world, MPI_INFO_NULL));
-#endif
-  return fapl;
+  return h5::file_access(nprocs > 1 ? &world : nullptr);
 }
 
 /* ----------------------------------------------------------------------
@@ -499,21 +486,18 @@ void DumpHDF5::open_file(const char *fname) {
   MPI_Bcast(&exists, 1, MPI_INT, 0, world);
 
   try {
-    HighFive::FileAccessProps fapl = access_props(world, nprocs);
+    h5::Handle fapl = access_props(world, nprocs);
     // A compressed chunk rewritten larger moves, and the space it left is
     // reused only while the file stays open: free space is not persisted
     // across dumps, so a compressed file leaks some space per dump.  Both
     // persistent strategies (FSM_AGGR and PAGE) deadlock or fail in the
     // flush of a parallel compressed write in HDF5 1.12.3 and 1.14.6.
     // ponytail: leaks ~15% over a chain, "h5repack" the file if that matters
-    HighFive::FileCreateProps fcpl;
-    fcpl.add(HighFive::FileSpaceStrategy(H5F_FSPACE_STRATEGY_FSM_AGGR, 0, 1));
-    file = exists ? std::make_shared<HighFive::File>(fname, HighFive::File::ReadWrite, fapl)
-                  : std::make_shared<HighFive::File>(
-                        fname,
-                        HighFive::File::ReadWrite | HighFive::File::Create |
-                            HighFive::File::Truncate,
-                        fcpl, fapl);
+    h5::Handle fcpl(h5::check(H5Pcreate(H5P_FILE_CREATE), "H5Pcreate"));
+    h5::check(H5Pset_file_space_strategy(fcpl, H5F_FSPACE_STRATEGY_FSM_AGGR, 0, 1),
+              "H5Pset_file_space_strategy");
+    file = (exists ? h5::open_file(fname, H5F_ACC_RDWR, fapl)
+                   : h5::create_file(fname, fapl, fcpl)).release();
   } catch (const std::exception &e) {
     char msg[512];
     snprintf(msg, sizeof(msg), "Dump hdf5 could not open %s: %s", fname,
@@ -522,17 +506,17 @@ void DumpHDF5::open_file(const char *fname) {
   }
 
   try {
-    if (exists && file->hasAttribute("origin")) {
+    if (exists && h5::has_attr(file, "origin")) {
       std::vector<int64_t> o, d;
-      file->getAttribute("origin").read(o);
-      file->getAttribute("dims").read(d);
+      h5::read_attr(file, "origin", o);
+      h5::read_attr(file, "dims", d);
       for (int k = 0; k < 3; k++) {
         origin[k] = o[k];
         dims[k] = d[k];
       }
-      if (file->hasAttribute("chunk")) {
+      if (h5::has_attr(file, "chunk")) {
         std::vector<int64_t> ch;
-        file->getAttribute("chunk").read(ch);
+        h5::read_attr(file, "chunk", ch);
         for (int k = 0; k < 3; k++)
           chunk[k] = ch[k];
       }
@@ -560,24 +544,17 @@ void DumpHDF5::open_file(const char *fname) {
         if (dims[k] < 1)
           dims[k] = 1;
       }
-      file->createAttribute<int32_t>("spparks_hdf5_dump_version",
-                                     SPPARKS_HDF5_DUMP_VERSION);
-      file->createAttribute<std::string>("dim_order", "zyx");
-      file->createAttribute<std::vector<int64_t>>(
-          "origin", std::vector<int64_t>(origin, origin + 3));
-      file->createAttribute<std::vector<int64_t>>(
-          "dims", std::vector<int64_t>(dims, dims + 3));
-      file->createAttribute<double>(
-          "lattice_constant", domain->lattice ? domain->lattice->xlattice : 1.0);
-      file->createAttribute<int32_t>("dimension", domain->dimension);
-      // NOTE: pass real vectors, not braced lists -- a braced list here binds
-      // to the createAttribute(name, DataSpace) overload instead.
-      std::vector<double> blo = {domain->boxxlo, domain->boxylo, domain->boxzlo};
-      std::vector<double> bhi = {domain->boxxhi, domain->boxyhi, domain->boxzhi};
-      file->createAttribute<std::vector<double>>("boxlo", blo);
-      file->createAttribute<std::vector<double>>("boxhi", bhi);
-      file->createAttribute<int32_t>("nprocs", nprocs);
-      file->createAttribute<double>("time", 0.0);
+      h5::write_attr(file, "spparks_hdf5_dump_version", (int32_t)SPPARKS_HDF5_DUMP_VERSION);
+      h5::write_attr(file, "dim_order", std::string("zyx"));
+      h5::write_attr(file, "origin", std::vector<int64_t>(origin, origin + 3));
+      h5::write_attr(file, "dims", std::vector<int64_t>(dims, dims + 3));
+      h5::write_attr(file, "lattice_constant",
+                     (double)(domain->lattice ? domain->lattice->xlattice : 1.0));
+      h5::write_attr(file, "dimension", (int32_t)domain->dimension);
+      h5::write_attr(file, "boxlo", std::vector<double>{domain->boxxlo, domain->boxylo, domain->boxzlo});
+      h5::write_attr(file, "boxhi", std::vector<double>{domain->boxxhi, domain->boxyhi, domain->boxzhi});
+      h5::write_attr(file, "nprocs", (int32_t)nprocs);
+      h5::write_attr(file, "time", 0.0);
     }
   } catch (const std::exception &e) {
     char msg[512];
@@ -603,16 +580,15 @@ void DumpHDF5::open_file(const char *fname) {
 ------------------------------------------------------------------------- */
 
 void DumpHDF5::extend_to(const int64_t *needed) {
-  std::vector<HighFive::DataSet> sets;
-  for (const std::string &name : file->listObjectNames())
-    if (file->getObjectType(name) == HighFive::ObjectType::Dataset)
-      sets.push_back(file->getDataSet(name));
+  std::vector<h5::Handle> sets;
+  for (const std::string &name : h5::datasets(file))
+    sets.push_back(h5::open(file, name));
 
   // never shrink: the extent is the largest of dims, needed and every dataset
   bool grew = false;
   for (int k = 0; k < 3; k++) {
     int64_t want = needed[k];
-    for (HighFive::DataSet &d : sets) want = std::max(want, (int64_t)d.getDimensions()[2 - k]);
+    for (const h5::Handle &d : sets) want = std::max(want, (int64_t)h5::dims(d)[2 - k]);
     if (want > dims[k]) {
       dims[k] = want;
       grew = true;
@@ -621,11 +597,12 @@ void DumpHDF5::extend_to(const int64_t *needed) {
 
   std::vector<size_t> shape = {(size_t)dims[2], (size_t)dims[1],
                                (size_t)dims[0]};
-  for (HighFive::DataSet &d : sets)
-    if (d.getDimensions() != shape) d.resize(shape);
+  const hsize_t hshape[3] = {shape[0], shape[1], shape[2]};
+  for (const h5::Handle &d : sets)
+    if (h5::dims(d) != shape) h5::check(H5Dset_extent(d, hshape), "unable to extend a dataset");
 
   if (grew)
-    file->getAttribute("dims").write(std::vector<int64_t>(dims, dims + 3));
+    h5::write_attr(file, "dims", std::vector<int64_t>(dims, dims + 3));
 }
 
 /* ----------------------------------------------------------------------
@@ -657,12 +634,13 @@ void DumpHDF5::write(double time) {
     t[2] += MPI_Wtime() - w;
     w = MPI_Wtime();
     try {
-      file->flush(); // H5Fflush; under MPI-IO it ends in MPI_File_sync
+      // under MPI-IO it ends in MPI_File_sync
+      h5::check(H5Fflush(file, H5F_SCOPE_GLOBAL), "H5Fflush");
     } catch (const std::exception &e) {
       // one rank may fail while the others go on into the collective close
       error->one(FLERR, (std::string("Dump hdf5 flush failed: ") + e.what()).c_str());
     }
-    file.reset(); // collective close
+    close_file(); // collective close
     opened = false;
     t[3] += MPI_Wtime() - w;
     w = MPI_Wtime();
@@ -704,43 +682,41 @@ void DumpHDF5::verify(const char *fname, double time) {
   try {
     // independent reads: a rank whose parallel read falls back must not
     // wait in a collective the others skipped
-    HighFive::File f(fname, HighFive::File::ReadOnly, access_props(world, nprocs));
+    h5::Handle f = h5::open_file(fname, H5F_ACC_RDONLY, access_props(world, nprocs));
     std::vector<size_t> shape = {(size_t)dims[2], (size_t)dims[1], (size_t)dims[0]};
-    for (const std::string &name : f.listObjectNames())
-      if (f.getObjectType(name) == HighFive::ObjectType::Dataset &&
-          f.getDataSet(name).getDimensions() != shape && why.empty())
+    for (const std::string &name : h5::datasets(f))
+      if (h5::dims(h5::open(f, name)) != shape && why.empty())
         why = name + " does not span the file's dims";
     std::vector<int32_t> ibuf;
     std::vector<double> dbuf;
     // the plane read through HDF5's pipeline
     const size_t zp = count[0] / 2, plane = count[1] * count[2];
-    HighFive::HyperSlab pslab{HighFive::RegularHyperSlab({offset[0] + zp, offset[1], offset[2]},
-                                                         {1, count[1], count[2]})};
+    const std::vector<size_t> poff = {offset[0] + zp, offset[1], offset[2]},
+                              pcnt = {1, count[1], count[2]};
     for (int i = 0; i < size_one; i++) {
-      HighFive::DataSet dset = f.getDataSet(labels[i]);
-      HighFive::HyperSlab slab{HighFive::RegularHyperSlab(offset, count)};
+      h5::Handle dset = h5::open(f, labels[i]);
       int same;
       if (vtype[i] == INT) {
         const int *src = (fields[i] == SITE) ? app->iarray[0] : app->iarray[vindex[i]];
         ibuf.resize(nsites);
-        if (!hdf5_read_box_parallel(dset.getId(), offset.data(), count.data(), ibuf.data()))
-          dset.select(slab).read_raw(ibuf.data(), HighFive::AtomicType<int32_t>());
+        if (!hdf5_read_box_parallel(dset, offset.data(), count.data(), ibuf.data()))
+          h5::read_slab(dset, offset, count, ibuf.data());
         same = memcmp(ibuf.data(), src, nsites * sizeof(int32_t)) == 0;
-        dset.select(pslab).read_raw(ibuf.data(), HighFive::AtomicType<int32_t>());
+        h5::read_slab(dset, poff, pcnt, ibuf.data());
         same = same && memcmp(ibuf.data(), src + zp * plane, plane * sizeof(int32_t)) == 0;
       } else {
         const double *src = app->darray[vindex[i]];
         dbuf.resize(nsites);
-        if (!hdf5_read_box_parallel(dset.getId(), offset.data(), count.data(), dbuf.data()))
-          dset.select(slab).read_raw(dbuf.data(), HighFive::AtomicType<double>());
+        if (!hdf5_read_box_parallel(dset, offset.data(), count.data(), dbuf.data()))
+          h5::read_slab(dset, offset, count, dbuf.data());
         same = memcmp(dbuf.data(), src, nsites * sizeof(double)) == 0;
-        dset.select(pslab).read_raw(dbuf.data(), HighFive::AtomicType<double>());
+        h5::read_slab(dset, poff, pcnt, dbuf.data());
         same = same && memcmp(dbuf.data(), src + zp * plane, plane * sizeof(double)) == 0;
       }
       if (!same && bad < 0) bad = i;
     }
     double t;
-    f.getAttribute("time").read(t);
+    h5::read_attr(f, "time", t);
     if (t != time && bad < 0) why = "time attribute";
   } catch (const std::exception &e) {
     why = e.what();
@@ -788,18 +764,16 @@ void DumpHDF5::sync_file(const char *fname) {
 ------------------------------------------------------------------------- */
 
 template <typename T>
-static void copy_planes(HighFive::DataSet &src, HighFive::DataSet &dst,
+static void copy_planes(hid_t src, hid_t dst, const std::string &name,
                         size_t z0, size_t z1, const std::vector<size_t> &d,
                         const size_t *off, size_t step, int niter, bool collective) {
   size_t plane = d[1] * d[2];
-  // a predefined type: an id taken from a temporary HighFive::AtomicType is
-  // closed when the temporary dies
-  hid_t memtype = sizeof(T) == sizeof(int32_t) ? H5T_NATIVE_INT32 : H5T_NATIVE_DOUBLE;
+  hid_t memtype = h5::native<T>();
   hid_t xfer = H5Pcreate(H5P_DATASET_XFER);
 #ifdef H5_HAVE_PARALLEL
   if (collective) H5Pset_dxpl_mpio(xfer, H5FD_MPIO_COLLECTIVE);
 #endif
-  hid_t fspace = H5Dget_space(dst.getId());
+  hid_t fspace = H5Dget_space(dst);
   std::vector<T> buf(1);
   herr_t rc = 0;
   for (int it = 0; it < niter && rc >= 0; it++) {
@@ -809,20 +783,20 @@ static void copy_planes(HighFive::DataSet &src, HighFive::DataSet &dst,
     hid_t mspace = H5Screate_simple(3, nz ? count : one, NULL);
     if (nz) {
       buf.resize(nz * plane);
-      src.select({z, 0, 0}, {(size_t)nz, d[1], d[2]}).read_raw(buf.data());
+      h5::read_slab(src, {z, 0, 0}, {(size_t)nz, d[1], d[2]}, buf.data());
       hsize_t start[3] = {z + off[0], off[1], off[2]};
       H5Sselect_hyperslab(fspace, H5S_SELECT_SET, start, NULL, count, NULL);
     } else {
       H5Sselect_none(fspace);
       H5Sselect_none(mspace);
     }
-    rc = H5Dwrite(dst.getId(), memtype, mspace, fspace, xfer, buf.data());
+    rc = H5Dwrite(dst, memtype, mspace, fspace, xfer, buf.data());
     H5Sclose(mspace);
   }
   H5Sclose(fspace);
   H5Pclose(xfer);
   if (rc < 0)
-    throw std::runtime_error("H5Dwrite failed while copying " + dst.getPath());
+    throw std::runtime_error("H5Dwrite failed while copying " + name);
 }
 
 /* ----------------------------------------------------------------------
@@ -847,27 +821,27 @@ void DumpHDF5::rebuild_if_needed() {
     struct stat sb;
     if (stat(filename, &sb) == 0) {
       try {
-        HighFive::File f(filename, HighFive::File::ReadOnly);
-        if (f.hasAttribute("origin") && f.hasAttribute("dims")) {
+        h5::Handle f = h5::open_file(filename, H5F_ACC_RDONLY);
+        if (h5::has_attr(f, "origin") && h5::has_attr(f, "dims")) {
           std::vector<int64_t> o, d;
-          f.getAttribute("origin").read(o);
-          f.getAttribute("dims").read(d);
+          h5::read_attr(f, "origin", o);
+          h5::read_attr(f, "dims", d);
           for (int k = 0; k < 3; k++) {
             od[k] = o[k];
             od[3 + k] = d[k];
             if (lo[k] < o[k]) below = 1;
           }
-          if (f.hasAttribute("time")) f.getAttribute("time").read(t);
+          if (h5::has_attr(f, "time")) h5::read_attr(f, "time", t);
           // datasets whose compression differs from the requested setting
           // are rebuilt (filters are fixed when a dataset is created)
-          for (const std::string &name : f.listObjectNames()) {
-            hid_t dcpl = H5Dget_create_plist(f.getDataSet(name).getId());
+          for (const std::string &name : h5::datasets(f)) {
+            hid_t dcpl = H5Dget_create_plist(h5::open(f, name));
             if ((H5Pget_nfilters(dcpl) > 0) != (compress > 0)) relayout = 1;
             H5Pclose(dcpl);
           }
           // files from before free-space persistence was dropped: a parallel
           // write to one deadlocks, and the setting is fixed at creation
-          hid_t fcpl = H5Fget_create_plist(f.getId());
+          hid_t fcpl = H5Fget_create_plist(f);
           H5F_fspace_strategy_t strategy;
           hbool_t persist = 0;
           hsize_t threshold;
@@ -913,27 +887,27 @@ void DumpHDF5::rebuild_if_needed() {
   }
 
   try {
-    HighFive::File old(filename, HighFive::File::ReadOnly, access_props(world, nprocs));
+    h5::Handle old = h5::open_file(filename, H5F_ACC_RDONLY, access_props(world, nprocs));
     // dataset index order is z,y,x; od[] and origin[] are x,y,z
     size_t off[3] = {(size_t)(od[2] - origin[2]), (size_t)(od[1] - origin[1]),
                      (size_t)(od[0] - origin[0])};
-    for (const std::string &name : old.listObjectNames()) {
-      HighFive::DataSet src = old.getDataSet(name);
-      bool isint = src.getDataType() == HighFive::AtomicType<int32_t>();
+    for (const std::string &name : h5::datasets(old)) {
+      h5::Handle src = h5::open(old, name);
+      bool isint = H5Tequal(h5::Handle(H5Dget_type(src)), H5T_NATIVE_INT32) > 0;
       ensure_dataset(name, isint ? INT : DOUBLE); // collective, same order everywhere
-      HighFive::DataSet dst = file->getDataSet(name);
-      std::vector<size_t> d = src.getDimensions();
+      h5::Handle dst = h5::open(file, name);
+      std::vector<size_t> d = h5::dims(src);
       size_t per = (d[0] + nprocs - 1) / nprocs;
       size_t z0 = std::min(d[0], (size_t)me * per), z1 = std::min(d[0], z0 + per);
       size_t elem = isint ? sizeof(int32_t) : sizeof(double);
       size_t step = std::max<size_t>(1, ((size_t)256 << 20) / std::max<size_t>(1, d[1] * d[2] * elem));
       int mine = (int)((z1 - z0 + step - 1) / step), niter;
       MPI_Allreduce(&mine, &niter, 1, MPI_INT, MPI_MAX, world);
-      if (isint) copy_planes<int32_t>(src, dst, z0, z1, d, off, step, niter, nprocs > 1);
-      else copy_planes<double>(src, dst, z0, z1, d, off, step, niter, nprocs > 1);
+      if (isint) copy_planes<int32_t>(src, dst, name, z0, z1, d, off, step, niter, nprocs > 1);
+      else copy_planes<double>(src, dst, name, z0, z1, d, off, step, niter, nprocs > 1);
     }
-    file->getAttribute("time").write(t);
-    file->flush();
+    h5::write_attr(file, "time", t);
+    h5::check(H5Fflush(file, H5F_SCOPE_GLOBAL), "H5Fflush");
   } catch (const std::exception &e) {
     // a failing rank leaves copy_planes while the others are still in its
     // collective writes, where no agreement can reach them: stop the job
@@ -943,7 +917,7 @@ void DumpHDF5::rebuild_if_needed() {
              filename, e.what());
     error->one(FLERR, msg);
   }
-  file.reset();
+  close_file();
   opened = false;
   commit(tmp.c_str());
 
@@ -1101,12 +1075,10 @@ void *DumpHDF5::field_data(int i) {
   return app->darray[vindex[i]];
 }
 
-static void write_slab(HighFive::DataSet &dset, const std::vector<size_t> &offset,
-                       const std::vector<size_t> &count, bool isint, void *src,
-                       const HighFive::DataTransferProps &xfer) {
-  HighFive::HyperSlab slab{HighFive::RegularHyperSlab(offset, count)};
-  if (isint) dset.select(slab).write_raw((int *)src, HighFive::AtomicType<int32_t>(), xfer);
-  else dset.select(slab).write_raw((double *)src, HighFive::AtomicType<double>(), xfer);
+static void write_slab(hid_t dset, const std::vector<size_t> &offset,
+                       const std::vector<size_t> &count, bool isint, void *src, hid_t xfer) {
+  if (isint) h5::write_slab(dset, offset, count, (const int32_t *)src, xfer);
+  else h5::write_slab(dset, offset, count, (const double *)src, xfer);
 }
 
 /* ----------------------------------------------------------------------
@@ -1224,14 +1196,6 @@ bool DumpHDF5::share(int i, int64_t dataset, const std::vector<size_t> &offset,
    Lustre and GPFS give and NFS does not.
 ------------------------------------------------------------------------- */
 
-namespace {
-// The turns already give one rank the file at a time; an HDF5 lock would
-// add nothing, and fails outright on a file system mounted without flock.
-struct NoFileLocking {
-  void apply(hid_t fapl) const { H5Pset_file_locking(fapl, false, true); }
-};
-} // namespace
-
 void DumpHDF5::take_turns(const char *fname, int i0, int i1) {
   std::vector<size_t> offset, count;
   my_slab(offset, count);
@@ -1240,20 +1204,20 @@ void DumpHDF5::take_turns(const char *fname, int i0, int i1) {
   if (me > 0) MPI_Recv(&token, 1, MPI_INT, me - 1, 0, world, MPI_STATUS_IGNORE);
   try {
     {
-      HighFive::FileAccessProps fapl;
-      fapl.add(NoFileLocking{});
-      HighFive::File f(fname, HighFive::File::ReadWrite, fapl);
+      // The turns already give one rank the file at a time; an HDF5 lock would
+      // add nothing, and fails outright on a file system mounted without flock.
+      h5::Handle f = h5::open_file(fname, H5F_ACC_RDWR, h5::file_access(nullptr, false));
       for (int i = i0; i < i1; i++) {
-        HighFive::DataSet dset = f.getDataSet(labels[i]);
+        h5::Handle dset = h5::open(f, labels[i]);
         void *src = field_data(i);
         if (!packed_ok[i])
-          write_slab(dset, offset, count, vtype[i] == INT, src, {});
-        else if (!box_chunks(dset.getId(), offset.data(), count.data(), src, true, nullptr,
+          write_slab(dset, offset, count, vtype[i] == INT, src, H5P_DEFAULT);
+        else if (!box_chunks(dset, offset.data(), count.data(), src, true, nullptr,
                              &packed[i]))
           throw std::runtime_error("writing the chunks of " + labels[i] + " failed");
         std::vector<HDF5Chunk>().swap(packed[i]);
       }
-      f.flush();
+      h5::check(H5Fflush(f, H5F_SCOPE_GLOBAL), "H5Fflush");
     } // closed
     // the POSIX close does not fsync, and only this node holds what it wrote:
     // sync before the next rank goes, or a crash of this node after the dump
@@ -1300,9 +1264,9 @@ int DumpHDF5::write_fields(double time, bool pack, int first) {
 
     extend_to(needed);
 
-    HighFive::DataTransferProps xfer;
+    h5::Handle xfer(h5::check(H5Pcreate(H5P_DATASET_XFER), "H5Pcreate"));
 #ifdef H5_HAVE_PARALLEL
-    if (nprocs > 1) xfer.add(HighFive::UseCollectiveIO{});
+    if (nprocs > 1) h5::check(H5Pset_dxpl_mpio(xfer, H5FD_MPIO_COLLECTIVE), "H5Pset_dxpl_mpio");
 #endif
 
     if (pack) {
@@ -1311,12 +1275,12 @@ int DumpHDF5::write_fields(double time, bool pack, int first) {
     }
     int64_t held = 0;
     for (int i = first; i < size_one; i++) {
-      HighFive::DataSet dset = file->getDataSet(labels[i]);
+      h5::Handle dset = h5::open(file, labels[i]);
       void *src = field_data(i);
       if (pack) { // compressed here on all ranks at once, written in take_turns
         HDF5Shared sh;
-        int ok = share(i, dset.getId(), offset, count, sh) &&
-                 box_chunks(dset.getId(), offset.data(), count.data(), src, true, &packed[i],
+        int ok = share(i, dset, offset, count, sh) &&
+                 box_chunks(dset, offset.data(), count.data(), src, true, &packed[i],
                             nullptr, &sh);
         int all;
         MPI_Allreduce(&ok, &all, 1, MPI_INT, MPI_MIN, world);
@@ -1325,12 +1289,12 @@ int DumpHDF5::write_fields(double time, bool pack, int first) {
         int64_t most;
         MPI_Allreduce(&held, &most, 1, MPI_INT64_T, MPI_MAX, world);
         if (most > TURN_BYTES && i + 1 < size_one) {
-          file->getAttribute("time").write(time);
+          h5::write_attr(file, "time", time);
           return i + 1; // write this batch in turns before packing more
         }
         continue;
       }
-      if (nprocs > 1 || !box_chunks(dset.getId(), offset.data(), count.data(), src, true))
+      if (nprocs > 1 || !box_chunks(dset, offset.data(), count.data(), src, true))
         write_slab(dset, offset, count, vtype[i] == INT, src, xfer);
 
 #ifdef H5_HAVE_PARALLEL
@@ -1338,7 +1302,7 @@ int DumpHDF5::write_fields(double time, bool pack, int first) {
         // The only way to tell whether HDF5 actually did collective I/O or
         // silently fell back; without it any scaling number is uninterpretable.
         uint32_t cause_local = 0, cause_global = 0;
-        H5Pget_mpio_no_collective_cause(xfer.getId(), &cause_local,
+        H5Pget_mpio_no_collective_cause(xfer, &cause_local,
                                         &cause_global);
         if (me == 0 && (cause_local || cause_global) && screen)
           fprintf(screen,
@@ -1349,7 +1313,7 @@ int DumpHDF5::write_fields(double time, bool pack, int first) {
 #endif
     }
 
-    file->getAttribute("time").write(time);
+    h5::write_attr(file, "time", time);
   } catch (const std::exception &e) {
     // the writes are collective: a rank that fails here leaves the others in
     // the next collective, so stop the job rather than hang it

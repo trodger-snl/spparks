@@ -39,7 +39,7 @@ public:
 
 protected:
   virtual void read_time_temperature_data(
-      HighFive::Group& grp,
+      int64_t grp,
       const std::vector<std::array<size_t, 2>>& nodeSlices) override;
 };
 

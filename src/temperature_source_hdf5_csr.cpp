@@ -15,7 +15,7 @@
 #include "universe.h"
 #include "error.h"
 #ifdef SPPARKS_HIGHFIVE
-#include "highfive/highfive.hpp"
+#include "hdf5_util.h"
 #endif
 #include <algorithm>
 #include <numeric>
@@ -32,7 +32,7 @@ HDF5CSRTemperatureSource::HDF5CSRTemperatureSource(SPPARKS *spk) :
 /* ---------------------------------------------------------------------- */
 
 void HDF5CSRTemperatureSource::read_time_temperature_data(
-  HighFive::Group& grp,
+  int64_t grp,
   const std::vector<std::array<size_t, 2>>& nodeSlices)
 {
 #ifndef SPPARKS_HIGHFIVE
@@ -71,8 +71,7 @@ void HDF5CSRTemperatureSource::read_time_temperature_data(
   // 2. Read merged nodeOffsets in a single HDF5 read.
   // ------------------------------------------------------------------
   std::vector<int64_t> rawOffsets;
-  grp.getDataSet("nodeOffsets").select(
-    build_hyperslab_1d(mergedOffsetSlices)).read(rawOffsets);
+  h5::read_rows(h5::open(grp, "nodeOffsets"), mergedOffsetSlices, 0, rawOffsets);
 
   // ------------------------------------------------------------------
   // 3. Map global nodeOffset indices back to buffer positions, then
@@ -103,13 +102,12 @@ void HDF5CSRTemperatureSource::read_time_temperature_data(
   // ------------------------------------------------------------------
   // 5. Per chunk: read its contiguous data range into a reused buffer and
   //    copy out the kept rows. Peak temporary = the largest chunk's data.
-  //    Chunks with no kept row are not read. Raw-pointer reads: HighFive's
-  //    vector reader knows only std::allocator.
+  //    Chunks with no kept row are not read.
   // ------------------------------------------------------------------
   SeriesVector<double> timesFlat(localOffsets.back());
   SeriesVector<double> tempsFlat(localOffsets.back());
-  auto timesDset = grp.getDataSet("times");
-  auto tempsDset = grp.getDataSet("temperatures");
+  h5::Handle timesDset = h5::open(grp, "times");
+  h5::Handle tempsDset = h5::open(grp, "temperatures");
   std::vector<double> buf;
   size_t row = 0;  // first local row of this chunk
 
@@ -122,8 +120,8 @@ void HDF5CSRTemperatureSource::read_time_temperature_data(
     const size_t dataStart = static_cast<size_t>(rawOffsets[base]);
     buf.resize(static_cast<size_t>(rawOffsets[base + n]) - dataStart);
 
-    auto strip = [&](HighFive::DataSet& dset, SeriesVector<double>& flat) {
-      dset.select({dataStart}, {buf.size()}).read(buf.data());
+    auto strip = [&](hid_t dset, SeriesVector<double>& flat) {
+      h5::read_slab(dset, {dataStart}, {buf.size()}, buf.data());
       for (size_t r = 0; r < n; r++) {
         const unsigned count = dataCounts[row + r];
         if (count)

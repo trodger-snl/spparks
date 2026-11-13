@@ -26,7 +26,7 @@
 #include <type_traits>
 #include <vector>
 #ifdef SPPARKS_HIGHFIVE
-#include "highfive/highfive.hpp"
+#include "hdf5_util.h"
 #endif
 
 using namespace SPPARKS_NS;
@@ -34,14 +34,6 @@ using namespace SPPARKS_NS;
 namespace {
 
 const double SIGMA_SB = 5.670374419e-8;
-
-#ifdef SPPARKS_HIGHFIVE
-// ranks take turns on the file (as dump hdf5 does); an HDF5 lock adds nothing
-// and fails on file systems mounted without flock
-struct NoFileLocking {
-  void apply(hid_t fapl) const { H5Pset_file_locking(fapl, false, true); }
-};
-#endif
 
 // Outward cell widths covering length L: dx*r, dx*r^2, ... capped at cap; a
 // remainder under half a cell is merged into the last one.
@@ -621,27 +613,23 @@ void ConductionSolverKokkos::write_grid(const std::string &file, double time, bo
   if (me > 0) MPI_Recv(&bad, 1, MPI_INT, me - 1, 0, world, MPI_STATUS_IGNORE);
   if (!bad) {
     try {
-      HighFive::FileAccessProps fapl;
-      fapl.add(NoFileLocking{});
-      const unsigned mode = me == 0
-          ? (HighFive::File::ReadWrite | HighFive::File::Create | HighFive::File::Truncate)
-          : HighFive::File::ReadWrite;
-      HighFive::File f(tmp, mode, fapl);
+      // ranks take turns on the file (as dump hdf5 does); an HDF5 lock adds
+      // nothing and fails on file systems mounted without flock
+      h5::Handle fapl = h5::file_access(nullptr, false);
+      h5::Handle f = me == 0 ? h5::create_file(tmp, fapl) : h5::open_file(tmp, H5F_ACC_RDWR, fapl);
       if (me == 0) {
-        const HighFive::DataSpace sp({NZ, NY, NX});
         // single: T stored as float, HDF5 converts the double buffer on write (and back on read)
-        if (single) f.createDataSet<float>("T", sp);
-        else f.createDataSet<double>("T", sp);
-        f.createDataSet<unsigned char>("phase", sp);
-        f.createDataSet("x_faces", gfx);
-        f.createDataSet("y_faces", gfy);
-        f.createDataSet("z_faces", gfz);
-        f.createAttribute("time", time);
-        f.createAttribute("dx", dx);
+        h5::create_dataset(f, "T", single ? h5::native<float>() : h5::native<double>(), {NZ, NY, NX});
+        h5::create_dataset(f, "phase", h5::native<unsigned char>(), {NZ, NY, NX});
+        h5::write(h5::create_dataset(f, "x_faces", h5::native<double>(), {gfx.size()}), gfx);
+        h5::write(h5::create_dataset(f, "y_faces", h5::native<double>(), {gfy.size()}), gfy);
+        h5::write(h5::create_dataset(f, "z_faces", h5::native<double>(), {gfz.size()}), gfz);
+        h5::write_attr(f, "time", time);
+        h5::write_attr(f, "dx", dx);
       }
-      f.getDataSet("T").select(off, cnt).write_raw(tb.data());
-      f.getDataSet("phase").select(off, cnt).write_raw(pb.data());
-      f.flush();
+      h5::write_slab(h5::open(f, "T"), off, cnt, tb.data());
+      h5::write_slab(h5::open(f, "phase"), off, cnt, pb.data());
+      h5::check(H5Fflush(f, H5F_SCOPE_GLOBAL), "unable to flush " + tmp);
     } catch (const std::exception &e) {
       bad = 1;
       why = e.what();
@@ -707,14 +695,12 @@ void ConductionSolverKokkos::seed_from_grid(const std::string &file, double t)
   double tfile = 0.0;
   bool any = false;
   try {
-    HighFive::FileAccessProps fapl;
-    fapl.add(NoFileLocking{});
-    HighFive::File f(file, HighFive::File::ReadOnly, fapl);
+    h5::Handle f = h5::open_file(file, H5F_ACC_RDONLY, h5::file_access(nullptr, false));
     std::vector<double> fx, fy, fz;
-    f.getDataSet("x_faces").read(fx);
-    f.getDataSet("y_faces").read(fy);
-    f.getDataSet("z_faces").read(fz);
-    f.getAttribute("time").read(tfile);
+    h5::read(h5::open(f, "x_faces"), fx);
+    h5::read(h5::open(f, "y_faces"), fy);
+    h5::read(h5::open(f, "z_faces"), fz);
+    h5::read_attr(f, "time", tfile);
     bx = bracket(fx, gfx, gcx0, nxo);
     by = bracket(fy, gfy, gcy0, nyo);
     bz = bracket(fz, gfz, 0, nz);
@@ -724,8 +710,8 @@ void ConductionSolverKokkos::seed_from_grid(const std::string &file, double t)
       const std::vector<size_t> cnt = {(size_t) (z1 - z0 + 1), (size_t) (y1 - y0 + 1), (size_t) (x1 - x0 + 1)};
       tb.resize(cnt[0] * cnt[1] * cnt[2]);
       pb.resize(tb.size());
-      f.getDataSet("T").select(off, cnt).read_raw(tb.data());
-      f.getDataSet("phase").select(off, cnt).read_raw(pb.data());
+      h5::read_slab(h5::open(f, "T"), off, cnt, tb.data());
+      h5::read_slab(h5::open(f, "phase"), off, cnt, pb.data());
     }
   } catch (const std::exception &e) {
     error->one(FLERR, ("conduction: init grid " + file + ": " + e.what()).c_str());

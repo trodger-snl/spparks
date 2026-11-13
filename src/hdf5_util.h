@@ -77,6 +77,8 @@ class Handle {
     if (id_ >= 0) H5Idec_ref(id_);
   }
   operator hid_t() const { return id_; }
+  // hand the id to a caller that closes it itself (H5Idec_ref)
+  hid_t release() { return std::exchange(id_, -1); }
 
  private:
   hid_t id_;

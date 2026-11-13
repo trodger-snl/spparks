@@ -17,7 +17,7 @@
 #include "universe.h"
 #include "app.h"
 #ifdef SPPARKS_HIGHFIVE
-#include "highfive/highfive.hpp"
+#include "hdf5_util.h"
 #ifdef SPPARKS_ZLIB
 #include <zlib.h>
 #endif
@@ -93,19 +93,18 @@ void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vect
   try {
 #ifdef H5_HAVE_PARALLEL
     // Create file access property list with MPI-IO
-    HighFive::FileAccessProps fapl;
-    fapl.add(HighFive::MPIOFileAccess(universe->uworld, MPI_INFO_NULL));
+    h5::Handle fapl = h5::file_access(&universe->uworld);
     // NOTE: Do NOT enable MPIOCollectiveMetadata here.  With per-rank
     // subdomain chunk filtering, some ranks may load zero chunks and
     // return early from load_layer(), skipping getDataSet() calls that
     // other ranks execute.  Collective metadata would deadlock in that case.
-    file = std::make_shared<HighFive::File>(filename, HighFive::File::ReadOnly, fapl);
+    file = h5::open_file(filename, H5F_ACC_RDONLY, fapl).release();
     use_parallel_hdf5 = true;
     if (universe->me == 0) {
       fprintf(screen, "  Parallel HDF5: ENABLED (MPI-IO)\n");
     }
 #else
-    file = std::make_shared<HighFive::File>(filename, HighFive::File::ReadOnly);
+    file = h5::open_file(filename, H5F_ACC_RDONLY).release();
     if (universe->me == 0) {
       fprintf(screen, "  Parallel HDF5: DISABLED (serial build)\n");
     }
@@ -115,7 +114,7 @@ void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vect
   }
 
   // Read layer times
-  file->getDataSet("layerTimes").read(layerTimes);
+  h5::read(h5::open(file, "layerTimes"), layerTimes);
 
   // Trim trailing zeros from layerTimes (handles pre-allocated HDF5 arrays)
   size_t original_size = layerTimes.size();
@@ -183,7 +182,10 @@ double HDF5UnstructuredTemperatureSource::get_temperature_at_xyz_and_time(
 
 void HDF5UnstructuredTemperatureSource::cleanup()
 {
-  file.reset();
+#ifdef SPPARKS_HIGHFIVE
+  if (file >= 0) H5Idec_ref(file);
+#endif
+  file = -1;
   source_initialized = false;
 }
 
@@ -222,11 +224,10 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   }
 
   // Try to open the layer group with error handling
-  std::shared_ptr<HighFive::Group> grp;
+  h5::Handle grp;
   try {
-    std::string group_name = std::to_string(layerIdx);
-    grp = std::make_shared<HighFive::Group>(file->getGroup(group_name));
-  } catch (const HighFive::Exception& e) {
+    grp = h5::open(file, std::to_string(layerIdx));
+  } catch (const std::exception& e) {
     char error_msg[512];
     snprintf(error_msg, sizeof(error_msg),
              "Failed to open HDF5 group '%u': %s\n"
@@ -234,23 +235,25 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
              "Check that your HDF5 file has groups named '0', '1', '2', ... '%u'",
              layerIdx, e.what(), layerIdx);
     error->all(FLERR, error_msg);
-  } catch (const std::exception& e) {
-    char error_msg[512];
-    snprintf(error_msg, sizeof(error_msg),
-             "Unexpected error opening HDF5 group '%u': %s", layerIdx, e.what());
-    error->all(FLERR, error_msg);
   }
   
-  // Read bounding boxes
+  // Read bounding boxes, one row per chunk
   std::vector<std::vector<double>> bboxes;
-  grp->getDataSet("boundingBoxes").read(bboxes);
+  {
+    h5::Handle ds = h5::open(grp, "boundingBoxes");
+    std::vector<double> flat;
+    h5::read(ds, flat);
+    const size_t w = h5::dims(ds).at(1);
+    for (size_t r = 0; r * w < flat.size(); r++)
+      bboxes.emplace_back(flat.begin() + r * w, flat.begin() + (r + 1) * w);
+  }
 
   // Read element and node pointers
   std::vector<unsigned> elemPtr;
-  grp->getDataSet("elemPtrs").read(elemPtr);
+  h5::read(h5::open(grp, "elemPtrs"), elemPtr);
 
   std::vector<unsigned> nodePtr;
-  grp->getDataSet("nodePtrs").read(nodePtr);
+  h5::read(h5::open(grp, "nodePtrs"), nodePtr);
   
   // Convert SPPARKS per-rank subdomain bounds to physical coordinates (meters).
   // Use subdomain (subxlo/hi) instead of global domain (boxxlo/hi) so each rank
@@ -411,19 +414,16 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
 
   // Read element connectivity
   std::vector<unsigned> elemNodeData;
-  grp->getDataSet("elementToNode").select(
-    build_hyperslab(elemSlices, {0, NODES_PER_ELEM})).read(elemNodeData);
+  h5::read_rows(h5::open(grp, "elementToNode"), elemSlices, NODES_PER_ELEM, elemNodeData);
   elemNode = Array2D<unsigned>(NODES_PER_ELEM, std::move(elemNodeData));
 
   // Read node coordinates
   std::vector<double> nodeCoordsData;
-  grp->getDataSet("nodeCoords").select(
-    build_hyperslab(nodeSlices, {0, DIM})).read(nodeCoordsData);
+  h5::read_rows(h5::open(grp, "nodeCoords"), nodeSlices, DIM, nodeCoordsData);
   nodeCoords = Array2D<double>(DIM, std::move(nodeCoordsData));
 
   // Read data counts
-  grp->getDataSet("dataCounts").select(
-    build_hyperslab_1d(nodeSlices)).read(dataCounts);
+  h5::read_rows(h5::open(grp, "dataCounts"), nodeSlices, 0, dataCounts);
 
   // Build element bounding boxes for spatial queries
   elem_bboxes = build_elem_bounding_boxes();
@@ -463,7 +463,7 @@ void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
   }
 
   // Read time and temperature data (virtual — overridden by CSR subclass)
-  read_time_temperature_data(*grp, nodeSlices);
+  read_time_temperature_data(grp, nodeSlices);
 
   // Compute thermal intervals for efficient time queries
   compute_thermal_intervals_for_layer(layerIdx, threshold_temp);
@@ -520,42 +520,6 @@ void HDF5UnstructuredTemperatureSource::clear_layer_data()
 
 /* ---------------------------------------------------------------------- */
 
-#ifdef SPPARKS_HIGHFIVE
-HighFive::HyperSlab HDF5UnstructuredTemperatureSource::build_hyperslab(
-  const std::vector<std::array<size_t, 2>>& slices,
-  const std::array<size_t, 2>& cols)
-{
-  if (slices.empty()) throw std::runtime_error("No slices for hyperslab");
-
-  HighFive::HyperSlab result(HighFive::RegularHyperSlab(
-    {slices[0][0], cols[0]},
-    {slices[0][1] - slices[0][0], cols[1] - cols[0]}));
-
-  for (size_t r = 1; r < slices.size(); r++) {
-    result |= HighFive::RegularHyperSlab(
-      {slices[r][0], cols[0]},
-      {slices[r][1] - slices[r][0], cols[1] - cols[0]});
-  }
-  return result;
-}
-
-/* ---------------------------------------------------------------------- */
-
-HighFive::HyperSlab HDF5UnstructuredTemperatureSource::build_hyperslab_1d(
-  const std::vector<std::array<size_t, 2>>& slices)
-{
-  if (slices.empty()) throw std::runtime_error("No slices for hyperslab");
-
-  HighFive::HyperSlab result(HighFive::RegularHyperSlab(
-    {slices[0][0]}, {slices[0][1] - slices[0][0]}));
-
-  for (size_t r = 1; r < slices.size(); r++) {
-    result |= HighFive::RegularHyperSlab(
-      {slices[r][0]}, {slices[r][1] - slices[r][0]});
-  }
-  return result;
-}
-#endif // SPPARKS_HIGHFIVE
 
 #if defined(SPPARKS_HIGHFIVE) && defined(SPPARKS_ZLIB)
 /* ----------------------------------------------------------------------
@@ -636,7 +600,7 @@ static bool read_series_chunks_parallel(hid_t ds, const std::vector<std::array<s
 /* ---------------------------------------------------------------------- */
 
 void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
-  HighFive::Group& grp,
+  int64_t grp,
   const std::vector<std::array<size_t, 2>>& nodeSlices)
 {
 #ifndef SPPARKS_HIGHFIVE
@@ -649,8 +613,8 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
   // Peak temporary buffer = max_chunk_rows × readCols × 8 bytes.
 
   // Determine how many columns to read per row
-  auto timesDset = grp.getDataSet("times");
-  auto timesDims = timesDset.getDimensions();
+  h5::Handle timesDset = h5::open(grp, "times");
+  auto timesDims = h5::dims(timesDset);
   unsigned datasetCols = static_cast<unsigned>(timesDims[1]);
 
   unsigned maxData = 0;
@@ -677,7 +641,7 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
   // mismatch sends HDF5 down a per-element chunk-mapping path that took ~4x
   // the whole CSR read on ct15 (H5D__chunk_mem_cb dominated the profile).
   std::vector<double> buf;
-  auto tempsDset = grp.getDataSet("temperatures");
+  h5::Handle tempsDset = h5::open(grp, "temperatures");
   size_t dcPos = 0;  // read cursor into dataCounts / offsets
 
   bool parallel_done = false;
@@ -690,8 +654,8 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
         if (dataCounts[dc] > 0) rows.push_back({r, dc});
     std::sort(rows.begin(), rows.end());
     parallel_done =
-      read_series_chunks_parallel(timesDset.getId(), rows, dataCounts, offsets, timesFlat.data()) &&
-      read_series_chunks_parallel(tempsDset.getId(), rows, dataCounts, offsets, tempsFlat.data());
+      read_series_chunks_parallel(timesDset, rows, dataCounts, offsets, timesFlat.data()) &&
+      read_series_chunks_parallel(tempsDset, rows, dataCounts, offsets, tempsFlat.data());
   }
 #endif
 
@@ -708,8 +672,7 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
     buf.resize(chunkRows * static_cast<size_t>(readCols));
 
     // --- Read & strip times ---
-    timesDset.select({rowStart, 0}, {chunkRows, static_cast<size_t>(readCols)})
-      .read(buf.data());
+    h5::read_slab(timesDset, {rowStart, 0}, {chunkRows, static_cast<size_t>(readCols)}, buf.data());
 
     for (size_t r = 0; r < chunkRows; r++) {
       unsigned count = dataCounts[dcPos + r];
@@ -718,8 +681,7 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
     }
 
     // --- Read & strip temperatures (reuse buf) ---
-    tempsDset.select({rowStart, 0}, {chunkRows, static_cast<size_t>(readCols)})
-      .read(buf.data());
+    h5::read_slab(tempsDset, {rowStart, 0}, {chunkRows, static_cast<size_t>(readCols)}, buf.data());
 
     for (size_t r = 0; r < chunkRows; r++) {
       unsigned count = dataCounts[dcPos + r];

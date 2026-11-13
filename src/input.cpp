@@ -43,8 +43,7 @@
 #endif
 
 #ifdef SPPARKS_HIGHFIVE
-#include "highfive/highfive.hpp"
-#include <stdexcept>
+#include "hdf5_util.h"
 #endif
 
 using namespace SPPARKS_NS;
@@ -842,10 +841,10 @@ void Input::reset_time()
       error->all(FLERR,"Illegal reset_time command; "
                        "'reset_time hdf5 <file>' takes no first/last argument");
     try {
-      HighFive::File f(arg[1],HighFive::File::ReadOnly);
-      if (!f.hasAttribute("time"))
+      h5::Handle f = h5::open_file(arg[1],H5F_ACC_RDONLY);
+      if (!h5::has_attr(f,"time"))
         error->all(FLERR,"reset_time hdf5: file has no 'time' attribute");
-      f.getAttribute("time").read(time);
+      h5::read_attr(f,"time",time);
     } catch (const std::exception &e) {
       char msg[512];
       snprintf(msg,sizeof(msg),"reset_time hdf5 failed on %s: %s",arg[1],e.what());

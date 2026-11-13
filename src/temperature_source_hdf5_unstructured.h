@@ -18,6 +18,7 @@
 #include <memory>
 #include <new>
 #include <array>
+#include <cstdint>
 #include <vector>
 #include <string>
 #include <stdexcept>
@@ -26,12 +27,6 @@
 #ifdef H5_HAVE_PARALLEL
 #include <mpi.h>
 #endif
-
-namespace HighFive {
-  class File;
-  class Group;
-  class HyperSlab;
-}
 
 namespace SPPARKS_NS {
 
@@ -239,8 +234,8 @@ protected:
   CompressedArray2D<double> times;
   CompressedArray2D<double> temperatures;
 
-  // HDF5 file handle
-  std::shared_ptr<HighFive::File> file;
+  // HDF5 file id (an hid_t; the header stays free of hdf5.h)
+  int64_t file = -1;
 
   // Parallel HDF5 state
 #ifdef H5_HAVE_PARALLEL
@@ -250,17 +245,10 @@ protected:
   // Virtual hook: read time/temperature arrays for the loaded node slices.
   // Base implementation reads rectangular 2D datasets and compacts via CompressedArray2D.
   // CSR subclass overrides to read flat 1D data + nodeOffsets directly.
+  // grp is the layer group's hid_t.
   virtual void read_time_temperature_data(
-      HighFive::Group& grp,
+      int64_t grp,
       const std::vector<std::array<size_t, 2>>& nodeSlices);
-
-  // Hyperslab construction helpers (promoted from lambdas for subclass access)
-  static HighFive::HyperSlab build_hyperslab(
-      const std::vector<std::array<size_t, 2>>& slices,
-      const std::array<size_t, 2>& cols);
-
-  static HighFive::HyperSlab build_hyperslab_1d(
-      const std::vector<std::array<size_t, 2>>& slices);
 
 private:
   // File and coordinate parameters

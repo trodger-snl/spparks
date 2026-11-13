@@ -46,8 +46,7 @@
 
 #ifdef SPPARKS_HIGHFIVE
 #include "dump_hdf5.h"
-#include "highfive/highfive.hpp"
-#include <stdexcept>
+#include "hdf5_util.h"
 #endif
 
 using std::string;
@@ -1283,15 +1282,12 @@ void Set::set_hdf5(int lhs, int rhs) {
 
   try {
     // MPI-IO only with more than one rank, as in dump hdf5
-    HighFive::FileAccessProps fapl;
-#ifdef H5_HAVE_PARALLEL
     int np;
     MPI_Comm_size(world, &np);
-    if (np > 1) fapl.add(HighFive::MPIOFileAccess(world, MPI_INFO_NULL));
-#endif
-    HighFive::File f(filename, HighFive::File::ReadOnly, fapl);
+    h5::Handle fapl = h5::file_access(np > 1 ? &world : nullptr);
+    h5::Handle f = h5::open_file(filename, H5F_ACC_RDONLY, fapl);
 
-    if (!f.exist(label)) {
+    if (!h5::exists(f, label)) {
       char msg[512];
       snprintf(msg, sizeof(msg), "Set hdf5: field '%s' does not exist in %s",
                label, filename);
@@ -1299,22 +1295,22 @@ void Set::set_hdf5(int lhs, int rhs) {
     }
 
     std::vector<int64_t> origin(3, 0), dims(3, 0);
-    if (f.hasAttribute("origin"))
-      f.getAttribute("origin").read(origin);
-    if (f.hasAttribute("dims"))
-      f.getAttribute("dims").read(dims);
+    if (h5::has_attr(f, "origin"))
+      h5::read_attr(f, "origin", origin);
+    if (h5::has_attr(f, "dims"))
+      h5::read_attr(f, "dims", dims);
 
-    HighFive::DataSet dset = f.getDataSet(label);
+    h5::Handle dset = h5::open(f, label);
     // a field can be shorter than the file's extent (dumped by fewer boxes,
     // before dump hdf5 grew every field): what lies beyond it is no value
-    std::vector<size_t> shape = dset.getDimensions();
+    std::vector<size_t> shape = h5::dims(dset);
     for (int k = 0; k < 3 && shape.size() == 3; k++)
       dims[k] = std::min<int64_t>(dims[k], (int64_t)shape[2 - k]);
-    if (dset.hasAttribute("no_value")) {
+    if (h5::has_attr(dset, "no_value")) {
       if (lhs == DARRAY)
-        dset.getAttribute("no_value").read(novalue_f64);
+        h5::read_attr(dset, "no_value", novalue_f64);
       else
-        dset.getAttribute("no_value").read(novalue_i32);
+        h5::read_attr(dset, "no_value", novalue_i32);
     }
 
     int64_t lo[3] = {applattice->xlo_me_simple, applattice->ylo_me_simple,
@@ -1351,19 +1347,17 @@ void Set::set_hdf5(int lhs, int rhs) {
                                     (size_t)(i1[0] - origin[0])};
       std::vector<size_t> count = {(size_t)cnt[2], (size_t)cnt[1],
                                    (size_t)cnt[0]};
-      HighFive::HyperSlab slab{HighFive::RegularHyperSlab(offset, count)};
-
       size_t ncells = (size_t)cnt[0] * cnt[1] * cnt[2];
       std::vector<int32_t> ibuf;
       std::vector<double> dbuf;
       if (lhs == DARRAY) {
         dbuf.resize(ncells);
-        if (!hdf5_read_box_parallel(dset.getId(), offset.data(), count.data(), dbuf.data()))
-          dset.select(slab).read_raw(dbuf.data());
+        if (!hdf5_read_box_parallel(dset, offset.data(), count.data(), dbuf.data()))
+          h5::read_slab(dset, offset, count, dbuf.data());
       } else {
         ibuf.resize(ncells);
-        if (!hdf5_read_box_parallel(dset.getId(), offset.data(), count.data(), ibuf.data()))
-          dset.select(slab).read_raw(ibuf.data());
+        if (!hdf5_read_box_parallel(dset, offset.data(), count.data(), ibuf.data()))
+          h5::read_slab(dset, offset, count, ibuf.data());
       }
 
       // scatter the compact intersection into the full subdomain buffer,

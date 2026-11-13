@@ -11,7 +11,7 @@
    See the README file in the top-level SPPARKS directory.
 ------------------------------------------------------------------------- */
 
-#ifdef SPPARKS_HIGHFIVE
+#ifdef SPPARKS_HDF5
 
 #include "dump_conduction_kokkos.h"
 #include "app_additive_texture_kokkos.h"

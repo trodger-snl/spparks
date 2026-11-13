@@ -16,7 +16,7 @@
 ------------------------------------------------------------------------- */
 
 #ifdef DUMP_CLASS
-#ifdef SPPARKS_HIGHFIVE
+#ifdef SPPARKS_HDF5
 
 DumpStyle(hdf5, DumpHDF5)
 
@@ -26,7 +26,7 @@ DumpStyle(hdf5, DumpHDF5)
 #ifndef SPK_DUMP_HDF5_H
 #define SPK_DUMP_HDF5_H
 
-#ifdef SPPARKS_HIGHFIVE
+#ifdef SPPARKS_HDF5
 
 #include "dump.h"
 #include <cstdint>
@@ -148,6 +148,6 @@ private:
 
 } // namespace SPPARKS_NS
 
-#endif // SPPARKS_HIGHFIVE
+#endif // SPPARKS_HDF5
 #endif // SPK_DUMP_HDF5_H
 #endif

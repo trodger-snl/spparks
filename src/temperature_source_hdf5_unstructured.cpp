@@ -16,7 +16,7 @@
 #include "error.h"
 #include "universe.h"
 #include "app.h"
-#ifdef SPPARKS_HIGHFIVE
+#ifdef SPPARKS_HDF5
 #include "hdf5_util.h"
 #ifdef SPPARKS_ZLIB
 #include <zlib.h>
@@ -72,9 +72,9 @@ HDF5UnstructuredTemperatureSource::~HDF5UnstructuredTemperatureSource()
 
 void HDF5UnstructuredTemperatureSource::setup_temperature_source(const std::vector<std::string> &args)
 {
-#ifndef SPPARKS_HIGHFIVE
+#ifndef SPPARKS_HDF5
   (void)args;
-  error->all(FLERR, "HDF5 temperature sources need a build with HighFive (-DSPPARKS_ENABLE_HIGHFIVE=ON)");
+  error->all(FLERR, "HDF5 temperature sources need a build with HDF5 (-DSPPARKS_ENABLE_HDF5=ON)");
 #else
   // Parse arguments: filename dx threshold_temp default_temp [ignored] [grid_cell_mult]
   // (args[4] was a bounds_check_mode that nothing ever read; the slot is kept
@@ -182,7 +182,7 @@ double HDF5UnstructuredTemperatureSource::get_temperature_at_xyz_and_time(
 
 void HDF5UnstructuredTemperatureSource::cleanup()
 {
-#ifdef SPPARKS_HIGHFIVE
+#ifdef SPPARKS_HDF5
   if (file >= 0) H5Idec_ref(file);
 #endif
   file = -1;
@@ -212,9 +212,9 @@ void HDF5UnstructuredTemperatureSource::print_source_info() const
 
 void HDF5UnstructuredTemperatureSource::load_layer(unsigned layerIdx)
 {
-#ifndef SPPARKS_HIGHFIVE
+#ifndef SPPARKS_HDF5
   (void)layerIdx;
-  error->all(FLERR, "HDF5 temperature sources need a build with HighFive (-DSPPARKS_ENABLE_HIGHFIVE=ON)");
+  error->all(FLERR, "HDF5 temperature sources need a build with HDF5 (-DSPPARKS_ENABLE_HDF5=ON)");
 #else
   auto load_start = std::chrono::high_resolution_clock::now();
 
@@ -521,7 +521,7 @@ void HDF5UnstructuredTemperatureSource::clear_layer_data()
 /* ---------------------------------------------------------------------- */
 
 
-#if defined(SPPARKS_HIGHFIVE) && defined(SPPARKS_ZLIB)
+#if defined(SPPARKS_HDF5) && defined(SPPARKS_ZLIB)
 /* ----------------------------------------------------------------------
    Read the kept rows of a series dataset by inflating its storage chunks on
    all threads. HDF5 inflates one chunk at a time under its global lock (~4.5 s
@@ -603,10 +603,10 @@ void HDF5UnstructuredTemperatureSource::read_time_temperature_data(
   int64_t grp,
   const std::vector<std::array<size_t, 2>>& nodeSlices)
 {
-#ifndef SPPARKS_HIGHFIVE
+#ifndef SPPARKS_HDF5
   (void)grp;
   (void)nodeSlices;
-  error->all(FLERR, "HDF5 temperature sources need a build with HighFive (-DSPPARKS_ENABLE_HIGHFIVE=ON)");
+  error->all(FLERR, "HDF5 temperature sources need a build with HDF5 (-DSPPARKS_ENABLE_HDF5=ON)");
 #else
   // Streaming implementation: read one chunk at a time from the padded 2D
   // datasets, stripping padding on the fly into pre-allocated CSR arrays.

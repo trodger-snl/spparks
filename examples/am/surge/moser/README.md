@@ -81,7 +81,7 @@ cd /path/to/spparks/src
 ./build_cmake.sh -m linux        # Linux
 
 # With optional features
-./build_cmake.sh -m mpi --hdf5 --highfive --jpeg
+./build_cmake.sh -m mpi --hdf5 --jpeg
 ./build_cmake.sh -m mpi --package stitch        # enable STITCH I/O
 ./build_cmake.sh --clean -b Debug               # clean debug build
 ```

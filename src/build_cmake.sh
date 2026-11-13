@@ -13,7 +13,6 @@ ENABLE_MPI="AUTO"
 ENABLE_PACKAGES=""
 SHARED_LIBS="OFF"
 ENABLE_HDF5="AUTO"
-ENABLE_HIGHFIVE="AUTO"
 ENABLE_JPEG="AUTO"
 ENABLE_KOKKOS="OFF"
 KOKKOS_BACKEND="OPENMP"
@@ -39,12 +38,12 @@ Options:
     -p, --prefix DIR            Installation prefix
     --mpi                       Enable MPI support
     --no-mpi                    Disable MPI support
-    --hdf5                      Enable HDF5 support
+    --hdf5                      Enable HDF5 support (dump hdf5, set/reset_time hdf5, the
+                                  hdf5_unstructured / hdf5_csr temperature sources, dump
+                                  conduction; the additive apps themselves need only MPI)
     --no-hdf5                   Disable HDF5 support
-    --highfive                  Enable HighFive C++ HDF5 wrapper (adds the hdf5_unstructured /
-                                  hdf5_csr temperature sources; the additive apps themselves
-                                  need only MPI)
-    --no-highfive               Disable HighFive C++ HDF5 wrapper (default)
+    --highfive / --no-highfive  Obsolete aliases of --hdf5 / --no-hdf5 (HighFive is no
+                                  longer used)
     --jpeg                      Enable JPEG support
     --no-jpeg                   Disable JPEG support
     --kokkos                    Enable Kokkos for GPU acceleration
@@ -60,7 +59,7 @@ Options:
                                   what links on HPE Cray EX); none = never use one
     -DVAR=VALUE                 Passed straight through to cmake (e.g.
                                   -DHDF5_ROOT=..., -DMPI_C_COMPILER=...)
-    --shared                    Build bundled libraries (Kokkos, HighFive) shared
+    --shared                    Build bundled libraries (Kokkos) shared
     --package PKG               Enable package (can be used multiple times)
                                   Available: stitch, kokkos (kokkos may not be available on all branches)
     -j, --jobs N                Number of parallel build jobs (default: auto-detect)
@@ -86,8 +85,8 @@ Examples:
       $0 --kokkos --kokkos-backend hip --kokkos-arch AMD_GFX942_APU --no-native-opt  # same, configured on a login node
 
     Additive (additive/texture, additive/texture/kk):
-      $0 --mpi --highfive                 # with HDF5 temperature sources (parallel HDF5)
-      $0 --mpi --no-highfive --no-hdf5    # Rosenthal/Moser only, no HDF5 dependency
+      $0 --mpi --hdf5                     # with HDF5 temperature sources (parallel HDF5)
+      $0 --mpi --no-hdf5                  # Rosenthal/Moser only, no HDF5 dependency
 
     Performance tuning:
       $0 --aggressive-opt --native-opt    # Maximum performance (O3, LTO, native CPU)
@@ -130,12 +129,9 @@ while [[ $# -gt 0 ]]; do
             ENABLE_HDF5="OFF"
             shift
             ;;
-        --highfive)
-            ENABLE_HIGHFIVE="ON"
-            shift
-            ;;
-        --no-highfive)
-            ENABLE_HIGHFIVE="OFF"
+        --highfive|--no-highfive)
+            echo "Note: $1 is obsolete (HighFive is no longer used); taking it as ${1/highfive/hdf5}" >&2
+            [ "$1" = --highfive ] && ENABLE_HDF5="ON" || ENABLE_HDF5="OFF"
             shift
             ;;
         --jpeg)
@@ -267,10 +263,6 @@ fi
 
 if [ "$ENABLE_HDF5" != "AUTO" ]; then
     CMAKE_ARGS+=("-DSPPARKS_ENABLE_HDF5=$ENABLE_HDF5")
-fi
-
-if [ "$ENABLE_HIGHFIVE" != "AUTO" ]; then
-    CMAKE_ARGS+=("-DSPPARKS_ENABLE_HIGHFIVE=$ENABLE_HIGHFIVE")
 fi
 
 if [ "$ENABLE_JPEG" != "AUTO" ]; then

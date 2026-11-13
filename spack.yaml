@@ -24,10 +24,6 @@ spack:
     # HDF5 with parallel support, high-level API, and compression
   - hdf5@1.12+mpi+hl+szip ^openmpi
 
-    # HighFive C++ wrapper for HDF5
-    # Note: If using CMake FetchContent for HighFive, this may not be needed
-  - highfive@2.8
-
     # Image libraries
   - libjpeg
   - libpng

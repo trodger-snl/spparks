@@ -42,7 +42,7 @@
 #include "stitch.h"
 #endif
 
-#ifdef SPPARKS_HIGHFIVE
+#ifdef SPPARKS_HDF5
 #include "hdf5_util.h"
 #endif
 
@@ -835,7 +835,7 @@ void Input::reset_time()
 
   } else if (strcmp(arg[0],"hdf5") == 0) {
 
-#ifdef SPPARKS_HIGHFIVE
+#ifdef SPPARKS_HDF5
 
     if (narg != 2)
       error->all(FLERR,"Illegal reset_time command; "
@@ -852,7 +852,7 @@ void Input::reset_time()
     }
 
 #else
-    error->all(FLERR,"reset_time hdf5 requires SPPARKS built with HighFive");
+    error->all(FLERR,"reset_time hdf5 requires SPPARKS built with HDF5 (-DSPPARKS_ENABLE_HDF5=ON)");
 #endif
 
   // numeric time

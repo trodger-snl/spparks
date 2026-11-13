@@ -33,7 +33,7 @@ not a history, so there is nothing to select between.
 Running
 -------
 
-Requires a build configured with --highfive.  The comparison half of
+Requires a build configured with --hdf5.  The comparison half of
 run.sh additionally needs --package stitch.
 
   ./run.sh                 # or: NP=8 SPPARKS=/path/to/spk ./run.sh

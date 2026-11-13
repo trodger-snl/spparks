@@ -46,12 +46,16 @@ that 6.4.3 patches a rare race in the header-only `rocprim`, and Kokkos pulls
 `rocprim` in for its sort paths. Check the cce/rocm/cray-mpich compatibility
 table on that page before pinning versions.
 
-## 2. HighFive
+## 2. HDF5
 
-`SPPARKS_ENABLE_HIGHFIVE=ON` is required — the `additive/texture*` styles are
-gated on HighFive **and** MPI (`src/cmake/ConditionalSources.cmake`). If it
-resolves to nothing the styles are silently dropped and you find out at runtime
-as "style not recognized".
+`SPPARKS_ENABLE_HDF5=ON` (the `mi300a` preset sets it) is what enables `dump
+hdf5`, `set`/`reset_time hdf5`, `dump conduction` and the `hdf5_unstructured` /
+`hdf5_csr` temperature sources (`src/cmake/ConditionalSources.cmake`). Without
+it the dump styles are not registered ("style not recognized") and the hdf5_*
+sources stop with an error at setup. The `additive/texture*` apps themselves
+need only MPI. SPPARKS calls the HDF5 C API directly (`src/hdf5_util.h`); there
+is no C++ wrapper to fetch or install. The old `SPPARKS_ENABLE_HIGHFIVE` /
+`--highfive` are still accepted and mean HDF5 on.
 
 ### Parallel HDF5 on a magic-module environment
 
@@ -93,22 +97,10 @@ grep H5_HAVE_PARALLEL <prefix>/include/H5pubconf.h    # what our finder greps fo
 ```
 
 and check the configure summary says `HDF5 is parallel: ON`. Since MPI implies a
-parallel requirement here (the temperature sources call
-`HighFive::MPIOFileAccess()` unconditionally), the finder sets
+parallel requirement here (dump hdf5 and the temperature sources open one shared
+file through MPI-IO; configure stops on a serial HDF5 with MPI), the finder sets
 `HDF5_PREFER_PARALLEL` for you — otherwise CMake probes the serial `h5cc`
 wrapper first and a wrapper on `PATH` outranks `HDF5_ROOT`.
-
-### HighFive
-
-By default CMake fetches HighFive from GitHub at configure time. If the machine
-can reach GitHub, nothing to do. If not, install it (header-only) and configure
-with:
-
-```bash
--DSPPARKS_USE_EXTERNAL_HIGHFIVE=ON -DHighFive_DIR=<prefix>/share/cmake/HighFive
-```
-
-The configure summary prints which path was taken.
 
 ## 3. Getting the source there (and the Kokkos submodule)
 

@@ -44,7 +44,7 @@
 #include "stitch.h"
 #endif
 
-#ifdef SPPARKS_HIGHFIVE
+#ifdef SPPARKS_HDF5
 #include "dump_hdf5.h"
 #include "hdf5_util.h"
 #endif
@@ -155,7 +155,7 @@ void Set::command(int narg, char **arg) {
     iarg = 4;
 #endif
 
-#ifdef SPPARKS_HIGHFIVE
+#ifdef SPPARKS_HDF5
   } else if (strcmp(arg[1], "hdf5") == 0) {
     // No time argument: an hdf5 dump stores one state per site, so there is no
     // history for 'first'/'last' to select between.  Reject a stray time
@@ -171,6 +171,9 @@ void Set::command(int narg, char **arg) {
     filename = new char[n];
     strcpy(filename, arg[2]);
     iarg = 3;
+#else
+  } else if (strcmp(arg[1], "hdf5") == 0) {
+    error->all(FLERR, "Set hdf5 requires SPPARKS built with HDF5 (-DSPPARKS_ENABLE_HDF5=ON)");
 #endif
 
   } else if (strcmp(arg[1], "bfile") == 0) {
@@ -1248,7 +1251,7 @@ void Set::apply_temp_buffer(int lhs, int32_t *itmp, double *dtmp,
 ------------------------------------------------------------------------- */
 
 void Set::set_hdf5(int lhs, int rhs) {
-#ifdef SPPARKS_HIGHFIVE
+#ifdef SPPARKS_HDF5
   if (app->appclass != App::LATTICE)
     error->all(FLERR, "Set hdf5 only allowed for on-lattice apps");
 
@@ -1395,7 +1398,7 @@ void Set::set_hdf5(int lhs, int rhs) {
   memory->destroy(itmp);
   memory->destroy(dtmp);
 #else
-  error->all(FLERR, "Set hdf5 requires SPPARKS built with HighFive");
+  error->all(FLERR, "Set hdf5 requires SPPARKS built with HDF5 (-DSPPARKS_ENABLE_HDF5=ON)");
 #endif
 }
 

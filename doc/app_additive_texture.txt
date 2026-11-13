@@ -70,7 +70,7 @@ and latent heat, on a stretched thermal grid that can extend past the
 lattice box.  {additive/texture/kk} only. :l
 "hdf5_unstructured / hdf5_csr"_temperature_source_hdf5.html : reads
 time-resolved unstructured FE thermal data from HDF5 files and
-interpolates it to lattice sites.  Requires a build with HighFive. :l,ule
+interpolates it to lattice sites.  Requires a build with HDF5. :l,ule
 
 The {rosenthal}, {moser}, and {conduction} sources consume a
 "laser_path"_laser_path.html command that defines the laser
@@ -435,8 +435,8 @@ All decks except the {.cpu} ones use {additive/texture/kk}.
 These styles are part of the core build but are compiled only when
 SPPARKS is built with MPI.  Style {additive/texture/kk} also requires
 the KOKKOS package.  The hdf5_unstructured and hdf5_csr temperature
-sources require a build with HighFive (and parallel HDF5); without it
-they stop with an error at input time.
+sources require a build with (parallel) HDF5; without it they stop
+with an error at input time.
 
 The lattice must be simple cubic with 26 neighbors (lattice sc/26n
 1.0); site coordinates are converted to meters by multiplying by

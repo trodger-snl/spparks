@@ -114,9 +114,7 @@ option(SPPARKS_ENABLE_MPI "Enable MPI support" ON)
 option(SPPARKS_ENABLE_GZIP "Enable GZIP support" ON)
 option(SPPARKS_ENABLE_JPEG "Enable JPEG support" ON)
 option(SPPARKS_ENABLE_PNG "Enable PNG support" OFF)
-option(SPPARKS_ENABLE_HDF5 "Enable HDF5 support" OFF)
-option(SPPARKS_ENABLE_HIGHFIVE "Enable HighFive C++ HDF5 wrapper" OFF)
-option(SPPARKS_USE_EXTERNAL_HIGHFIVE "Use system-provided HighFive instead of FetchContent" OFF)
+option(SPPARKS_ENABLE_HDF5 "Enable HDF5 support (dump hdf5, set/reset_time hdf5, hdf5_* temperature sources)" OFF)
 option(SPPARKS_ENABLE_OPENMP "Thread the host per-site loops with OpenMP" ON)
 
 # Packages: optional components whose sources live in src/KOKKOS/ and src/STITCH/
@@ -232,11 +230,19 @@ if(SPPARKS_ENABLE_PNG)
     endif()
 endif()
 
-# HighFive is a C++ wrapper over HDF5, so it implies HDF5.
-if(SPPARKS_ENABLE_HIGHFIVE AND NOT SPPARKS_ENABLE_HDF5)
-    message(STATUS "HighFive requires HDF5 - enabling HDF5 automatically")
-    set(SPPARKS_ENABLE_HDF5 ON CACHE BOOL "Enable HDF5 support" FORCE)
+# HighFive is no longer used (the HDF5 code calls the C API through
+# src/hdf5_util.h). SPPARKS_ENABLE_HIGHFIVE=ON from old scripts and caches is
+# taken as SPPARKS_ENABLE_HDF5=ON, once, and then dropped from the cache.
+if(DEFINED SPPARKS_ENABLE_HIGHFIVE)
+    if(SPPARKS_ENABLE_HIGHFIVE)
+        set(SPPARKS_ENABLE_HDF5 ON CACHE BOOL "Enable HDF5 support (dump hdf5, set/reset_time hdf5, hdf5_* temperature sources)" FORCE)
+    endif()
+    message(DEPRECATION "SPPARKS_ENABLE_HIGHFIVE is obsolete (HighFive is no longer used); "
+                        "use SPPARKS_ENABLE_HDF5. Continuing with SPPARKS_ENABLE_HDF5=${SPPARKS_ENABLE_HDF5}.")
+    unset(SPPARKS_ENABLE_HIGHFIVE CACHE)
+    unset(SPPARKS_ENABLE_HIGHFIVE)
 endif()
+unset(SPPARKS_USE_EXTERNAL_HIGHFIVE CACHE)
 
 if(SPPARKS_ENABLE_HDF5)
     # Add cmake module path for enhanced HDF5 finder
@@ -244,129 +250,26 @@ if(SPPARKS_ENABLE_HDF5)
     
     find_package(HDF5Enhanced REQUIRED)
     if(HDF5_FOUND)
-        add_compile_definitions(SPPARKS_HDF)
+        add_compile_definitions(SPPARKS_HDF5)
         # Check if HDF5 is parallel (MPI-enabled)
         if(HDF5_IS_PARALLEL AND SPPARKS_ENABLE_MPI)
             message(STATUS "Found parallel HDF5 (MPI-enabled)")
             add_compile_definitions(H5_HAVE_PARALLEL)
         elseif(SPPARKS_ENABLE_MPI AND NOT HDF5_IS_PARALLEL)
-            # Not a performance note. The HDF5 temperature sources call
-            # HighFive::MPIOFileAccess(...) unconditionally, so serial HDF5 with
-            # HighFive+MPI is a compile failure in
-            # temperature_source_hdf5_unstructured.cpp, not a slow build.
-            if(SPPARKS_ENABLE_HIGHFIVE)
-                message(FATAL_ERROR
-                    "MPI is enabled but the HDF5 found at ${HDF5_INCLUDE_DIRS} is serial.\n"
-                    "The additive/texture temperature sources call HighFive::MPIOFileAccess() "
-                    "unconditionally, so this will fail to compile rather than run slowly.\n"
-                    "Load a parallel HDF5 (on a Cray system: module load cray-hdf5-parallel) "
-                    "and point at it with -DHDF5_ROOT=<prefix>, or configure with "
-                    "-DSPPARKS_ENABLE_HIGHFIVE=OFF to drop the additive/texture styles.")
-            else()
-                message(WARNING
-                    "MPI is enabled but the HDF5 found at ${HDF5_INCLUDE_DIRS} is serial. "
-                    "Parallel I/O will be unavailable.")
-            endif()
+            # Not a performance note: dump hdf5 and the hdf5_* sources open one
+            # shared file from every rank through MPI-IO. Serial HDF5 would let
+            # several ranks write it through the POSIX driver and damage it.
+            message(FATAL_ERROR
+                "MPI is enabled but the HDF5 found at ${HDF5_INCLUDE_DIRS} is serial.\n"
+                "dump hdf5 and the hdf5_* temperature sources share one file across "
+                "ranks through MPI-IO, which needs a parallel HDF5.\n"
+                "Load a parallel HDF5 (on a Cray system: module load cray-hdf5-parallel) "
+                "and point at it with -DHDF5_ROOT=<prefix>, or configure with "
+                "-DSPPARKS_ENABLE_HDF5=OFF.")
         endif()
     else()
         message(FATAL_ERROR "HDF5 was requested but not found")
     endif()
-endif()
-
-if(SPPARKS_ENABLE_HIGHFIVE)
-    # Use external HighFive or fetch from source
-    if(SPPARKS_USE_EXTERNAL_HIGHFIVE)
-        # Try to find system-provided HighFive (e.g., from Spack, Homebrew, or system package manager)
-        # Add Spack installation paths as hints for find_package (cross-platform)
-        file(GLOB SPACK_HIGHFIVE_DIRS
-            # macOS Homebrew Spack
-            "/opt/homebrew/Cellar/spack/*/opt/spack/*/highfive-*"
-            "/opt/homebrew/opt/spack/opt/spack/*/highfive-*"
-            # Linux/HPC common Spack locations
-            "/opt/spack/opt/spack/*/highfive-*"
-            "/usr/local/spack/opt/spack/*/highfive-*"
-            "$ENV{HOME}/.spack/opt/spack/*/highfive-*"
-            "/spack/opt/spack/*/highfive-*"
-        )
-        if(SPACK_HIGHFIVE_DIRS)
-            list(APPEND CMAKE_PREFIX_PATH ${SPACK_HIGHFIVE_DIRS})
-            message(STATUS "Added Spack HighFive paths to search: ${SPACK_HIGHFIVE_DIRS}")
-        endif()
-
-        find_package(HighFive QUIET CONFIG)
-
-        if(HighFive_FOUND)
-            message(STATUS "Using system-provided HighFive")
-        else()
-            message(FATAL_ERROR "SPPARKS_USE_EXTERNAL_HIGHFIVE is ON but HighFive was not found. "
-                               "Please install HighFive or set SPPARKS_USE_EXTERNAL_HIGHFIVE=OFF to use FetchContent.")
-        endif()
-    else()
-        # Fetch HighFive using FetchContent
-        message(STATUS "Fetching HighFive from GitHub")
-        include(FetchContent)
-
-        # CMake 4.x compatibility: HighFive requires CMake 3.1 minimum, which is incompatible with CMake 4.0+
-        # Set policy version minimum to 3.5 as a workaround for older HighFive CMakeLists.txt
-        if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
-            set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "Minimum policy version for FetchContent compatibility")
-            message(STATUS "CMake 4.x detected - applying policy workaround for HighFive compatibility")
-        endif()
-
-        FetchContent_Declare(
-            HighFive
-            GIT_REPOSITORY https://github.com/BlueBrain/HighFive.git
-            GIT_TAG        v2.10.1  # Latest stable version - CMake 4.x compatible
-            GIT_SHALLOW    TRUE
-        )
-
-        # Configure HighFive options
-        set(HIGHFIVE_EXAMPLES OFF CACHE BOOL "Enable HighFive examples")
-        set(HIGHFIVE_UNIT_TESTS OFF CACHE BOOL "Enable HighFive unit tests")
-        set(HIGHFIVE_USE_BOOST OFF CACHE BOOL "Enable Boost support in HighFive")
-        set(HIGHFIVE_USE_EIGEN OFF CACHE BOOL "Enable Eigen support in HighFive")
-        set(HIGHFIVE_USE_XTENSOR OFF CACHE BOOL "Enable xtensor support in HighFive")
-        set(HIGHFIVE_USE_OPENCV OFF CACHE BOOL "Enable OpenCV support in HighFive")
-
-        # Make HighFive available
-        # HighFive requires a FULL MPI when HDF5 is parallel, including the C
-        # component we deliberately do not require ourselves. Its
-        # CMake/HighFiveTargetDeps.cmake:111-112 does
-        #
-        #   if(HIGHFIVE_PARALLEL_HDF5 OR HDF5_IS_PARALLEL)
-        #     find_package(MPI REQUIRED)        # all enabled languages
-        #
-        # and then uses only MPI_CXX_*. So on a machine where FindMPI cannot
-        # validate the C wrapper, configure dies inside third-party code with
-        # "Could NOT find MPI_C (missing: MPI_C_WORKS)" and a trace into
-        # HighFiveTargetDeps.cmake, which reads like a HighFive problem and is
-        # not. The same file is included by the installed HighFiveConfig.cmake,
-        # so SPPARKS_USE_EXTERNAL_HIGHFIVE does not avoid it either.
-        #
-        # Say so before it happens, with the fix.
-        if(SPPARKS_ENABLE_MPI AND HDF5_IS_PARALLEL)
-            find_package(MPI QUIET COMPONENTS C)
-            if(NOT MPI_C_FOUND)
-                message(WARNING
-                    "Parallel HDF5 is in use and MPI's C component was not usable "
-                    "(MPI_C_FOUND is false). SPPARKS itself does not need MPI C -- "
-                    "it has no C sources -- but HighFive requires it unconditionally "
-                    "in CMake/HighFiveTargetDeps.cmake, so configure is likely to "
-                    "fail there next with 'Could NOT find MPI_C (missing: "
-                    "MPI_C_WORKS)'.\n"
-                    "Fix by pointing FindMPI at a working MPI C wrapper, e.g.\n"
-                    "  -DMPI_C_COMPILER=cc              (Cray PE C wrapper)\n"
-                    "  -DMPI_C_COMPILER=mpiamdclang     (LLNL magic-module wrapper)\n"
-                    "  -DMPI_C_COMPILER=mpicc\n"
-                    "Pick whichever exists in your environment: `which cc mpiamdclang mpicc`.")
-            endif()
-        endif()
-
-        FetchContent_MakeAvailable(HighFive)
-    endif()
-
-    add_compile_definitions(SPPARKS_HIGHFIVE)
-    message(STATUS "HighFive C++ HDF5 wrapper enabled")
 endif()
 
 # Configure Kokkos if enabled
@@ -671,9 +574,6 @@ if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
     target_include_directories(spparks_lib PUBLIC ${HDF5_INCLUDE_DIRS})
     target_compile_definitions(spparks_lib PUBLIC ${HDF5_DEFINITIONS})
 endif()
-if(SPPARKS_ENABLE_HIGHFIVE)
-    target_link_libraries(spparks_lib PUBLIC HighFive)
-endif()
 
 # Host OpenMP for the plain #pragma omp per-site loops: the HDF5 source's layer
 # cache (~40 s/layer serial on a 5M-site box), the color/strict site seeds, and
@@ -695,7 +595,7 @@ endif()
 if(SPPARKS_PACKAGE_STITCH)
     target_link_libraries(spparks_lib PUBLIC stitch)
 endif()
-if(SPPARKS_ENABLE_GZIP OR SPPARKS_ENABLE_HIGHFIVE)
+if(SPPARKS_ENABLE_GZIP OR SPPARKS_ENABLE_HDF5)
     find_package(ZLIB)
     if(ZLIB_FOUND)
         target_link_libraries(spparks_lib PUBLIC ZLIB::ZLIB)
@@ -732,14 +632,6 @@ message(STATUS "OpenMP host loops: ${SPPARKS_ENABLE_OPENMP}")
 if(SPPARKS_ENABLE_HDF5 AND HDF5_FOUND)
     message(STATUS "HDF5 version: ${HDF5_VERSION}")
     message(STATUS "HDF5 is parallel: ${HDF5_IS_PARALLEL}")
-endif()
-message(STATUS "HighFive support: ${SPPARKS_ENABLE_HIGHFIVE}")
-if(SPPARKS_ENABLE_HIGHFIVE)
-    if(SPPARKS_USE_EXTERNAL_HIGHFIVE)
-        message(STATUS "  HighFive source: external (${HighFive_DIR})")
-    else()
-        message(STATUS "  HighFive source: FetchContent from github.com (needs network at configure time)")
-    endif()
 endif()
 message(STATUS "Kokkos support: ${SPPARKS_PACKAGE_KOKKOS}")
 if(SPPARKS_PACKAGE_KOKKOS)

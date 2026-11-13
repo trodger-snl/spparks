@@ -25,7 +25,7 @@
 #include <cstdio>
 #include <type_traits>
 #include <vector>
-#ifdef SPPARKS_HIGHFIVE
+#ifdef SPPARKS_HDF5
 #include "hdf5_util.h"
 #endif
 
@@ -585,9 +585,9 @@ void ConductionSolverKokkos::reset_field(double Tr)
 
 void ConductionSolverKokkos::write_grid(const std::string &file, double time, bool single)
 {
-#ifndef SPPARKS_HIGHFIVE
+#ifndef SPPARKS_HDF5
   (void) file; (void) time; (void) single;
-  error->all(FLERR,"dump conduction needs HighFive (-DSPPARKS_ENABLE_HIGHFIVE=ON)");
+  error->all(FLERR,"dump conduction needs a build with HDF5 (-DSPPARKS_ENABLE_HDF5=ON)");
 #else
   if (!built) error->all(FLERR,"dump conduction: no conduction grid yet (a dump before the first step)");
   int me, np;
@@ -659,9 +659,9 @@ void ConductionSolverKokkos::write_grid(const std::string &file, double time, bo
 
 void ConductionSolverKokkos::seed_from_grid(const std::string &file, double t)
 {
-#ifndef SPPARKS_HIGHFIVE
+#ifndef SPPARKS_HDF5
   (void) file; (void) t;
-  error->all(FLERR,"conduction: init grid needs HighFive (-DSPPARKS_ENABLE_HIGHFIVE=ON)");
+  error->all(FLERR,"conduction: init grid needs a build with HDF5 (-DSPPARKS_ENABLE_HDF5=ON)");
 #else
   // per local cell along one axis: the file centre below its centre and the
   // weight of the one above; a < 0 = centred outside the file's grid

@@ -416,8 +416,8 @@ The {stitch} style is part the STITCH package.  It is only enabled if
 SPPARKS was built with that package.  See "Section
 2.3"_Section_start.html#start_3 for more info on how to do this.
 
-The {hdf5} style is only enabled if SPPARKS was built with HighFive
-(the CMake option -DSPPARKS_ENABLE_HIGHFIVE=ON, or --highfive with
+The {hdf5} style is only enabled if SPPARKS was built with HDF5
+(the CMake option -DSPPARKS_ENABLE_HDF5=ON, or --hdf5 with
 src/build_cmake.sh).
 
 For the filename specified for the {sites} or {vtk} styles, a "*"

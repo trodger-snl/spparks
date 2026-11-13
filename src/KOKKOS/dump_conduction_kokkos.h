@@ -12,7 +12,7 @@
 ------------------------------------------------------------------------- */
 
 #ifdef DUMP_CLASS
-#ifdef SPPARKS_HIGHFIVE
+#ifdef SPPARKS_HDF5
 
 DumpStyle(conduction, DumpConductionKokkos)
 

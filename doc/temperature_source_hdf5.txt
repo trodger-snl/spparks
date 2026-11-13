@@ -97,8 +97,8 @@ sites, so no ghost temperature communication is needed.  With
 
 [Restrictions:]
 
-The HDF5 sources need a build with HDF5 and HighFive
-(-DSPPARKS_ENABLE_HIGHFIVE=ON); without it, both stop with an error at
+The HDF5 sources need a build with HDF5
+(-DSPPARKS_ENABLE_HDF5=ON); without it, both stop with an error at
 setup.
 
 The simulation time must stay within \[{layerTimes} first, last\]; a

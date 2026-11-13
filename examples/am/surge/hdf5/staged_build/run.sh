@@ -4,7 +4,7 @@
 # itself from the previous stage's file, which is the pattern real AM decks
 # use (see examples/am/legacy/stitch/am_demo).
 #
-# Requires a build configured with --highfive (and --package stitch for the
+# Requires a build configured with --hdf5 (and --package stitch for the
 # comparison half).
 
 set -e

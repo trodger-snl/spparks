@@ -192,7 +192,7 @@ the handoff data path:
 Goal: a standalone Kokkos exe that owns Kokkos, links `libspparks`, opens SPPARKS
 on a sub-comm, runs an **existing** HDF5 additive input, and closes — with no
 double Kokkos init.
-- Build with `-DSPPARKS_BUILD_LIB=ON` (+ existing KOKKOS/HighFive options) and
+- Build with `-DSPPARKS_BUILD_LIB=ON` (+ existing KOKKOS/HDF5 options) and
   confirm `libspparks` includes the KOKKOS + additive sources and installs the
   `Spparks` package (`src/CMakeLists.txt`).
 - Extract the Kokkos init + GPU rank→device binding out of `src/main.cpp` into a

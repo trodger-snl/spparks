@@ -189,7 +189,7 @@ Executable links and both apps run.
 
 **Validation order:** Rosenthal temperature source first, then HDF5.
 
-Build/test for all of the above: `./build_cmake.sh --highfive --package stitch`
+Build/test for all of the above: `./build_cmake.sh --hdf5 --package stitch`
 under the `spparks-dev` spack env (`[[feedback_spack_build]]`).
 
 ---

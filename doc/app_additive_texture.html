@@ -81,7 +81,7 @@ lattice box.  <I>additive/texture/kk</I> only.
 
 <LI><A HREF = "temperature_source_hdf5.html">hdf5_unstructured / hdf5_csr</A> : reads
 time-resolved unstructured FE thermal data from HDF5 files and
-interpolates it to lattice sites.  Requires a build with HighFive. 
+interpolates it to lattice sites.  Requires a build with HDF5. 
 </UL>
 <P>The <I>rosenthal</I>, <I>moser</I>, and <I>conduction</I> sources consume a
 <A HREF = "laser_path.html">laser_path</A> command that defines the laser
@@ -472,8 +472,8 @@ examples/am/surge/misorientation_walk/in.walk.cpu|kk        : misorientation_dif
 <P>These styles are part of the core build but are compiled only when
 SPPARKS is built with MPI.  Style <I>additive/texture/kk</I> also requires
 the KOKKOS package.  The hdf5_unstructured and hdf5_csr temperature
-sources require a build with HighFive (and parallel HDF5); without it
-they stop with an error at input time.
+sources require a build with (parallel) HDF5; without it they stop
+with an error at input time.
 </P>
 <P>The lattice must be simple cubic with 26 neighbors (lattice sc/26n
 1.0); site coordinates are converted to meters by multiplying by

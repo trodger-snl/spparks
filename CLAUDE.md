@@ -18,13 +18,13 @@ The CPU `additive/texture` app is the correctness reference for the GPU port.
 ## Build & run
 
 All builds use the **spack environment `spparks-dev`** (provides openmpi,
-HDF5+parallel, HighFive). Activate it first or commands fail:
+HDF5+parallel). Activate it first or commands fail:
 
 ```bash
 . /home/tron/spack/share/spack/setup-env.sh && spack env activate spparks-dev
 ```
 
-The working GPU build is configured in `build-verify/` (hipcc, HighFive+HDF5+MPI,
+The working GPU build is configured in `build-verify/` (hipcc, HDF5+MPI,
 Kokkos HIP/gfx1151). Reconfigure + build:
 
 ```bash
@@ -38,10 +38,10 @@ The executable is **`spparks`** (not `spk`). Run an input:
 mpirun -np 1 build-verify/spparks < in.somefile     # -np N for multi-rank
 ```
 
-`src/build_cmake.sh` is the convenience wrapper (`--highfive --kokkos
+`src/build_cmake.sh` is the convenience wrapper (`--hdf5 --kokkos
 --kokkos-backend hip --package stitch --mpi` etc.); the raw `cmake -S src -B`
 form above is what's used day-to-day here. The Makefile build (`make mpi`) also
-exists but the CMake/HighFive path is the supported one for the additive apps.
+exists but the CMake/HDF5 path is the supported one for the additive apps.
 
 There is no unit-test harness for this work; correctness is verified by running
 inputs and comparing output — see "Validating the GPU port" below.
@@ -59,9 +59,13 @@ list and the style headers are built at configure time.
 `style_*.h` headers are auto-generated (`src/cmake/generate_styles.cmake`) and
 register app/command/etc. classes via `AppStyle(...)` macros in the headers.
 The `additive/texture*` styles are gated on **MPI** only
-(`src/cmake/ConditionalSources.cmake`); HighFive (`--highfive`) adds the
-`hdf5_*` temperature sources, which otherwise error at input time
-(`#ifdef SPPARKS_HIGHFIVE` in `temperature_source_hdf5_*.cpp`). If a style is "not recognized" at
+(`src/cmake/ConditionalSources.cmake`); HDF5 (`--hdf5`,
+`-DSPPARKS_ENABLE_HDF5=ON`) adds `dump hdf5`, `dump conduction`, `set`/`reset_time
+hdf5` and the `hdf5_*` temperature sources, which otherwise error at input time
+(`#ifdef SPPARKS_HDF5`). All HDF5 I/O goes through the C API helpers in
+`src/hdf5_util.h` (HighFive was dropped 2026-11; `--highfive` /
+`SPPARKS_ENABLE_HIGHFIVE` are obsolete aliases of the HDF5 switch;
+`tools/hdf5_util_check.cpp` is its self-check). If a style is "not recognized" at
 runtime, the style header generation skipped it — check that gating, not the
 C++. The headers are generated per build dir (`<build>/styles/`), so build
 dirs with different features (e.g. `build-verify` and the no-Kokkos

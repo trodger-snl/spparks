@@ -23,7 +23,7 @@
 // std::runtime_error with HDF5's innermost error description, so a caller
 // wraps a block of calls in one try/catch(std::exception).
 //
-// Files written match what HighFive 2.x wrote: native numeric types, scalar
+// Files written match what HighFive 2.x (used until 2026-11) wrote: native numeric types, scalar
 // attributes in a scalar dataspace, vectors 1-D, strings variable-length
 // UTF-8 (h5py reads them as str).  tools/hdf5_util_check.cpp exercises it.
 

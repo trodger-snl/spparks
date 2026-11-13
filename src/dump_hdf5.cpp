@@ -17,7 +17,7 @@
 
 #include "dump_hdf5.h"
 
-#ifdef SPPARKS_HIGHFIVE
+#ifdef SPPARKS_HDF5
 
 #include "app.h"
 #include "app_lattice.h"
@@ -1434,4 +1434,4 @@ int DumpHDF5::modify_param(int narg, char **arg) {
   return 0;
 }
 
-#endif // SPPARKS_HIGHFIVE
+#endif // SPPARKS_HDF5

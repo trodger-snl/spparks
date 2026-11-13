@@ -6,15 +6,12 @@ function(configure_conditional_sources)
     
     # Add additive/texture sources (needs MPI only).
     #
-    # HighFive is optional. Only temperature_source_hdf5_{unstructured,csr}.cpp
-    # include it (headers forward-declare the HighFive types), and those two TUs
-    # compile in every build: without HighFive their HighFive-using functions are
-    # #ifdef SPPARKS_HIGHFIVE'd out and setup_temperature_source() errors, so the
-    # additive apps run Rosenthal/Moser sources and reject hdf5_* at input time.
-    # With HighFive they read through HighFive::MPIOFileAccess (parallel HDF5).
-    #
-    # Gate on HighFive, NOT bare HDF5, for the HDF5 sources: an env can have HDF5
-    # but not HighFive (`--hdf5` without `--highfive`).
+    # HDF5 is optional. temperature_source_hdf5_{unstructured,csr}.cpp compile
+    # in every build (their headers hold the file as a plain int64_t id):
+    # without HDF5 their HDF5 code is #ifdef SPPARKS_HDF5'd out and
+    # setup_temperature_source() errors, so the additive apps run the other
+    # sources and reject hdf5_* at input time. With HDF5 they read through
+    # MPI-IO (parallel HDF5).
     if(SPPARKS_ENABLE_MPI)
         list(APPEND SPPARKS_SOURCES
             app_additive_texture.cpp
@@ -33,17 +30,17 @@ function(configure_conditional_sources)
         if(SPPARKS_PACKAGE_KOKKOS AND SPPARKS_KOKKOS_BACKEND STREQUAL "CUDA")
             set_source_files_properties(material_card.cpp PROPERTIES COMPILE_OPTIONS --host-only)
         endif()
-        if(SPPARKS_ENABLE_HIGHFIVE)
+        if(SPPARKS_ENABLE_HDF5)
             message(STATUS "Added additive/texture sources (HDF5 temperature sources: ON)")
         else()
-            message(STATUS "Added additive/texture sources (HDF5 temperature sources: OFF, needs HighFive)")
+            message(STATUS "Added additive/texture sources (HDF5 temperature sources: OFF, needs HDF5)")
         endif()
     endif()
 
     # The HDF5 dump style (dump hdf5 / set hdf5 / reset_time hdf5) has a serial
-    # fallback, so it needs HighFive but not MPI. dump_hdf5.h guards its
-    # DumpStyle with SPPARKS_HIGHFIVE.
-    if(SPPARKS_ENABLE_HIGHFIVE)
+    # fallback, so it needs HDF5 but not MPI. dump_hdf5.h guards its
+    # DumpStyle with SPPARKS_HDF5.
+    if(SPPARKS_ENABLE_HDF5)
         list(APPEND SPPARKS_SOURCES dump_hdf5.cpp)
     endif()
 
@@ -75,8 +72,8 @@ function(configure_conditional_sources)
         if(SPPARKS_ENABLE_MPI)
             list(APPEND SPPARKS_SOURCES KOKKOS/app_additive_texture_kokkos.cpp
                                         KOKKOS/conduction_solver_kokkos.cpp)
-            # dump conduction writes the solver's grid with HighFive
-            if(SPPARKS_ENABLE_HIGHFIVE)
+            # dump conduction writes the solver's grid to HDF5
+            if(SPPARKS_ENABLE_HDF5)
                 list(APPEND SPPARKS_SOURCES KOKKOS/dump_conduction_kokkos.cpp)
             endif()
         endif()
@@ -93,7 +90,7 @@ function(configure_conditional_sources)
     # generate_styles.cmake); at configure time should_include_header() reads
     # the same variables straight from this scope.
     set(_status "# Auto-generated feature status for style generation\n")
-    foreach(_v SPPARKS_ENABLE_HIGHFIVE SPPARKS_ENABLE_MPI JPEG_FOUND PNG_FOUND
+    foreach(_v SPPARKS_ENABLE_HDF5 SPPARKS_ENABLE_MPI JPEG_FOUND PNG_FOUND
                 SPPARKS_PACKAGE_STITCH SPPARKS_PACKAGE_KOKKOS)
         string(APPEND _status "set(${_v} \"${${_v}}\")\n")
     endforeach()
@@ -105,8 +102,8 @@ function(configure_conditional_sources)
     set(_skipped_styles "")
     if(NOT SPPARKS_ENABLE_MPI)
         list(APPEND _skipped_styles "additive/texture (app)    needs MPI        → add -m mpi")
-    elseif(NOT SPPARKS_ENABLE_HIGHFIVE)
-        list(APPEND _skipped_styles "hdf5_* temperature source needs HighFive   → add --highfive")
+    elseif(NOT SPPARKS_ENABLE_HDF5)
+        list(APPEND _skipped_styles "hdf5_* temperature source needs HDF5       → add --hdf5")
     endif()
     if(NOT ((SPPARKS_ENABLE_JPEG AND JPEG_FOUND) OR (SPPARKS_ENABLE_PNG AND PNG_FOUND)))
         list(APPEND _skipped_styles "image (dump)              needs JPEG/PNG   → add --jpeg")

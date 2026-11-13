@@ -133,8 +133,7 @@ The build system supports many configuration options:
 Feature Options:
 
 -DSPPARKS_ENABLE_MPI=ON/OFF         # MPI parallel support (default: ON)
--DSPPARKS_ENABLE_HDF5=ON/OFF        # HDF5 data format (default: OFF)
--DSPPARKS_ENABLE_HIGHFIVE=ON/OFF    # Modern C++ HDF5 wrapper (default: OFF)
+-DSPPARKS_ENABLE_HDF5=ON/OFF        # HDF5: dump hdf5, set/reset_time hdf5, hdf5_* temperature sources (default: OFF)
 -DSPPARKS_ENABLE_JPEG=ON/OFF        # JPEG image output (default: ON)
 -DSPPARKS_ENABLE_PNG=ON/OFF         # PNG image output (default: OFF)
 -DSPPARKS_ENABLE_GZIP=ON/OFF        # GZIP compression (default: ON)
@@ -249,7 +248,7 @@ cd src
 
 Install SPPARKS directly via Spack:
 
-spack install spparks@develop+mpi+hdf5+highfive+jpeg
+spack install spparks@develop+mpi+hdf5+jpeg
 spack install spparks@develop+mpi+hdf5+stitch
 spack install spparks@develop+mpi~hdf5+jpeg          # Without HDF5 :pre
 

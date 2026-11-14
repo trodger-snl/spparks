@@ -253,6 +253,170 @@ void pool_stability()
   check("pool conditions, 1e5 steps: max |u| (lattice; 0.1 = 1 m/s)", finite ? umax : NAN, 0.3);
 }
 
+// ---- scalar advection (melt_advect) ----
+
+template <class R>
+void advect_all(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> tmp, double cfl)
+{
+  const int lo[3] = {0, 0, 0}, hi[3] = {m.nx, m.ny, m.nz};
+  melt_advect(m, q, tmp, cfl, lo, hi);
+}
+
+// 8. A uniform field in a real (slightly compressible) LBM flow stays uniform.
+template <class R>
+void advect_uniform()
+{
+  MeltFlow<R> m;
+  const int N = 32;
+  m.resize(N, N, 1);
+  m.p.periodic[0] = m.p.periodic[1] = m.p.periodic[2] = true;
+  m.p.nu = 0.05;
+  const R kr = R(2.0 * M_PI / N);
+  m.init(KOKKOS_LAMBDA(int i, int j, int, R &, R &u, R &v, R &) {
+    u = R(0.08) * Kokkos::cos(kr * i) * Kokkos::sin(kr * j);
+    v = R(-0.08) * Kokkos::sin(kr * i) * Kokkos::cos(kr * j);
+  });
+  Kokkos::View<R***> q("q", N, N, 1), tmp("tmp", N, N, 1);
+  Kokkos::deep_copy(q, R(0.37));
+  double div = 0.0;
+  for (int s = 0; s < 100; s++) {
+    m.step(); m.step();
+    advect_all(m, q, tmp, 2.0);
+  }
+  auto h = host(q); auto u = host(m.ux); auto v = host(m.uy);
+  double err = 0.0;
+  for (int i = 0; i < N; i++)
+    for (int j = 0; j < N; j++) {
+      err = std::max(err, std::fabs(h(i, j, 0) - 0.37));
+      div = std::max(div, std::fabs(0.5 * (u((i + 1) % N, j, 0) - u((i + N - 1) % N, j, 0) +
+                                           v(i, (j + 1) % N, 0) - v(i, (j + N - 1) % N, 0))));
+    }
+  check("8 uniform field in an LBM flow: max |q - q0|", err, pick<R>(1e-13, 1e-5));
+  check("8   (that flow is not divergence-free: max |div u|)", div, 1e-7, false);
+}
+
+// 9. Step and Gaussian carried once around a periodic line by a uniform flow.
+template <class R>
+double advect_line(int N, bool step, double &dsum, double &over, double &shift)
+{
+  MeltFlow<R> m;
+  m.resize(N, 1, 1);
+  m.p.periodic[0] = m.p.periodic[1] = m.p.periodic[2] = true;
+  Kokkos::deep_copy(m.ux, R(0.1));
+  Kokkos::View<R***> q("q", N, 1, 1), tmp("tmp", N, 1, 1);
+  auto h0 = Kokkos::create_mirror_view(q);
+  const double sig = N / 16.0;
+  for (int i = 0; i < N; i++)
+    h0(i, 0, 0) = step ? R(i >= N / 4 && i < N / 2) : R(std::exp(-0.5 * (i - N / 2.0) * (i - N / 2.0) / (sig * sig)));
+  Kokkos::deep_copy(q, h0);
+  for (int s = 0; s < 10 * N; s++) advect_all(m, q, tmp, 1.0);
+  auto h = host(q);
+  double s0 = 0, s1 = 0, e2 = 0, n2 = 0, lo = 1e300, hi = -1e300, cr = 0, ci = 0, c0r = 0, c0i = 0;
+  for (int i = 0; i < N; i++) {
+    const double a = h0(i, 0, 0), b = h(i, 0, 0), ph = 2.0 * M_PI * i / N;
+    s0 += a; s1 += b; e2 += (b - a) * (b - a); n2 += a * a;
+    lo = std::min(lo, b); hi = std::max(hi, b);
+    cr += b * std::cos(ph); ci += b * std::sin(ph); c0r += a * std::cos(ph); c0i += a * std::sin(ph);
+  }
+  dsum = (s1 - s0) / s0;
+  over = std::max(hi - 1.0, -lo);
+  shift = std::remainder(std::atan2(ci, cr) - std::atan2(c0i, c0r), 2.0 * M_PI) * N / (2.0 * M_PI);
+  return std::sqrt(e2 / n2);
+}
+
+// 10. A cube of q = 1 carried by a diagonal uniform flow in a periodic box.
+template <class R>
+void advect_cube()
+{
+  MeltFlow<R> m;
+  const int N = 32;
+  m.resize(N, N, N);
+  m.p.periodic[0] = m.p.periodic[1] = m.p.periodic[2] = true;
+  Kokkos::deep_copy(m.ux, R(0.08)); Kokkos::deep_copy(m.uy, R(0.06)); Kokkos::deep_copy(m.uz, R(0.04));
+  Kokkos::View<R***> q("q", N, N, N), tmp("tmp", N, N, N);
+  auto h0 = Kokkos::create_mirror_view(q);
+  for (int i = 8; i < 16; i++)
+    for (int j = 8; j < 16; j++)
+      for (int k = 8; k < 16; k++) h0(i, j, k) = R(1);
+  Kokkos::deep_copy(q, h0);
+  for (int s = 0; s < 400; s++) advect_all(m, q, tmp, 1.0);
+  auto h = host(q);
+  // centre of mass per axis from the phase of the first Fourier mode
+  // (the box is periodic and the cube ends across its edge in y)
+  double sum = 0, lo = 1e300, hi = -1e300, re[3] = {0, 0, 0}, im[3] = {0, 0, 0};
+  for (int i = 0; i < N; i++)
+    for (int j = 0; j < N; j++)
+      for (int k = 0; k < N; k++) {
+        const double b = h(i, j, k);
+        const int x[3] = {i, j, k};
+        sum += b; lo = std::min(lo, b); hi = std::max(hi, b);
+        for (int d = 0; d < 3; d++) {
+          re[d] += b * std::cos(2.0 * M_PI * x[d] / N); im[d] += b * std::sin(2.0 * M_PI * x[d] / N);
+        }
+      }
+  check("10 cube, diagonal flow: |sum change| / sum", sum / 512.0 - 1.0, pick<R>(1e-12, 1e-5));
+  check("10 cube: over/undershoot beyond [0, 1]", std::max(hi - 1.0, -lo), pick<R>(1e-12, 1e-6));
+  const double want[3] = {11.5 + 0.08 * 400, 11.5 + 0.06 * 400, 11.5 + 0.04 * 400};
+  double err = 0.0;
+  for (int d = 0; d < 3; d++)
+    err = std::max(err, std::fabs(std::remainder(std::atan2(im[d], re[d]) * N / (2.0 * M_PI) - want[d], (double) N)));
+  check("10 cube: centre of mass error (cells)", err, 0.5);
+}
+
+// 11. A Gaussian carried and diffused: variance grows as s0^2 + 2 alpha t.
+//     The diffusion is a plain explicit step here; melt_advect must not add
+//     more than a little of its own.
+template <class R>
+void advect_diffuse()
+{
+  MeltFlow<R> m;
+  const int N = 256, nstep = 400;
+  const double al = 0.05, s0 = 6.0, x0 = 60.0, uv = 0.2;
+  m.resize(N, 1, 1);
+  m.p.periodic[0] = m.p.periodic[1] = m.p.periodic[2] = true;
+  Kokkos::deep_copy(m.ux, R(uv));
+  Kokkos::View<R***> q("q", N, 1, 1), tmp("tmp", N, 1, 1);
+  auto h0 = Kokkos::create_mirror_view(q);
+  for (int i = 0; i < N; i++) h0(i, 0, 0) = R(std::exp(-0.5 * (i - x0) * (i - x0) / (s0 * s0)));
+  Kokkos::deep_copy(q, h0);
+  const R a = R(al);
+  for (int s = 0; s < nstep; s++) {
+    advect_all(m, q, tmp, 1.0);
+    Kokkos::parallel_for("diffuse", N, KOKKOS_LAMBDA(const int i) {
+      tmp(i, 0, 0) = q(i, 0, 0) + a * (q((i + 1) % N, 0, 0) - R(2) * q(i, 0, 0) + q((i + N - 1) % N, 0, 0));
+    });
+    Kokkos::deep_copy(q, tmp);
+  }
+  auto h = host(q);
+  double sum = 0, mean = 0, var = 0;
+  for (int i = 0; i < N; i++) { sum += h(i, 0, 0); mean += i * (double) h(i, 0, 0); }
+  mean /= sum;
+  for (int i = 0; i < N; i++) var += (i - mean) * (i - mean) * h(i, 0, 0);
+  var /= sum;
+  check("11 carried + diffused Gaussian: width / sqrt(s0^2 + 2 alpha t) - 1",
+        std::sqrt(var / (s0 * s0 + 2.0 * al * nstep)) - 1.0, 2e-2);
+  check("11 its centre: |x - (x0 + u t)| (cells)", mean - (x0 + uv * nstep), 0.5);
+}
+
+template <class R>
+void advect_suite()
+{
+  advect_uniform<R>();
+  double ds, ov, sh, d2, o2, s2;
+  advect_line<R>(128, true, ds, ov, sh);
+  check("9 step, one pass: |sum change| / sum", ds, pick<R>(1e-12, 1e-5));
+  check("9 step: over/undershoot beyond [0, 1]", ov, pick<R>(1e-12, 1e-6));
+  check("9 step: centre shift (cells)", sh, 0.5);
+  const double e64 = advect_line<R>(64, false, ds, ov, sh), e128 = advect_line<R>(128, false, d2, o2, s2);
+  check("9 Gaussian N=128: |sum change| / sum", d2, pick<R>(1e-12, 1e-5));
+  check("9 Gaussian N=128: over/undershoot", o2, pick<R>(1e-12, 1e-6));
+  check("9 Gaussian N=128: centre shift (cells)", s2, 0.5);
+  check("9 Gaussian N=128: L2 error / norm", e128, 5e-2);
+  check("9 Gaussian: error(64) / error(128) >= 2", e64 / e128, 2.0, false);
+  advect_cube<R>();
+  advect_diffuse<R>();
+}
+
 template <class R>
 void suite(const char *name)
 {
@@ -279,6 +443,7 @@ void suite(const char *name)
   darcy<R>();
   block<R>();
   pool_stability<R>();
+  advect_suite<R>();
 }
 
 }   // namespace

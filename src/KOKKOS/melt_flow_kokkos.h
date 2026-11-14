@@ -271,6 +271,84 @@ struct MeltFlow {
   }
 };
 
+/* ----------------------------------------------------------------------
+   Carry the cell field q with the flow's u for one step of `cfl` lattice
+   steps (the Courant number is cfl * u; keep it under 1/2). Three 1-D
+   sweeps, x then y then z, each upwind with the van Leer limiter in
+   Lax-Wendroff form, so a sharp front stays sharp and no sweep makes a new
+   maximum or minimum. Flux crosses only the faces between two FLUID cells
+   (face velocity = the mean of the two); other cells keep their q.
+
+   Each sweep is q - d(u q) + q d(u): the last term removes what the
+   velocity's own divergence would add, so a uniform q stays uniform
+   exactly. The price: where u is not divergence-free (LBM's is, to
+   O(Mach^2)) the sum of q is conserved only to that order.
+   ponytail: fixed sweep order; alternate it if a directional bias shows.
+
+   tmp is scratch of q's shape. [lo, hi) must hold every FLUID cell and
+   two cells around them (or reach the block's edge): the limiter reads
+   that far, and tmp is only valid inside the window.
+------------------------------------------------------------------------- */
+
+template <class R>
+void melt_advect(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> tmp,
+                 double cfl, const int lo[3], const int hi[3])
+{
+  auto ty = m.type;
+  const int n[3] = {m.nx, m.ny, m.nz};
+  const R c = R(cfl);
+  for (int d = 0; d < 4; d++) {
+    // sweeps 0..2 along x, y, z (q -> tmp -> q -> tmp), then tmp -> q
+    auto src = (d & 1) ? tmp : q, dst = (d & 1) ? q : tmp;
+    if (d == 3) {
+      Kokkos::parallel_for("FlowAdvectCopy",
+        Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
+        KOKKOS_LAMBDA(const int i, const int j, const int k) { dst(i, j, k) = src(i, j, k); });
+      break;
+    }
+    auto u = d == 0 ? m.ux : d == 1 ? m.uy : m.uz;
+    const int nd = n[d];
+    const bool per = m.p.periodic[d];
+    Kokkos::parallel_for("FlowAdvect",
+      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
+      KOKKOS_LAMBDA(const int i, const int j, const int k) {
+        const R q0 = src(i, j, k);
+        if (ty(i, j, k) != MeltFlow<R>::FLUID) { dst(i, j, k) = q0; return; }
+        const int x[3] = {i, j, k};
+        // the cell s along the sweep axis: index in range, or -1 (none)
+        auto at = [&](int s, int &ii, int &jj, int &kk) -> bool {
+          int y[3] = {x[0], x[1], x[2]};
+          y[d] += s;
+          if (y[d] < 0 || y[d] >= nd) { if (!per) return false; y[d] = (y[d] + nd) % nd; }
+          ii = y[0]; jj = y[1]; kk = y[2];
+          return true;
+        };
+        // flux through the face between cells s and s + 1 (s = -1 or 0),
+        // and that face's velocity; zero unless both are fluid
+        auto face = [&](int s, R &uf) -> R {
+          int ia, ja, ka, ib, jb, kb;
+          uf = R(0);
+          if (!at(s, ia, ja, ka) || !at(s + 1, ib, jb, kb)) return R(0);
+          if (ty(ia, ja, ka) != MeltFlow<R>::FLUID || ty(ib, jb, kb) != MeltFlow<R>::FLUID) return R(0);
+          uf = c * R(0.5) * (u(ia, ja, ka) + u(ib, jb, kb));
+          const bool up = uf > R(0);
+          const R qu = up ? src(ia, ja, ka) : src(ib, jb, kb);
+          const R qd = up ? src(ib, jb, kb) : src(ia, ja, ka);
+          int iu, ju, ku;
+          R phi = R(0);
+          if (at(up ? s - 1 : s + 2, iu, ju, ku) && qd != qu) {
+            const R r = (qu - src(iu, ju, ku)) / (qd - qu);
+            phi = r > R(0) ? R(2) * r / (R(1) + r) : R(0);
+          }
+          return uf * (qu + R(0.5) * phi * (R(1) - Kokkos::abs(uf)) * (qd - qu));
+        };
+        R ul, uh;
+        const R fl = face(-1, ul), fh = face(0, uh);
+        dst(i, j, k) = q0 - (fh - fl) + q0 * (uh - ul);
+      });
+  }
+}
+
 }
 
 #endif

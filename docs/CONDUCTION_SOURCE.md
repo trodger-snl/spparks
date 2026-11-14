@@ -285,6 +285,26 @@ enough for mixing; one rank first.
   after each flow step and after `flow_step` cut the 3-layer peak from
   1.76 to 1.13 GB (no-flow: 0.60) at the same speed. Next: fewer launches
   (fuse the flow's setup/advect kernels), and find what the runtime keeps.
+- Memory investigation (2026-11-14). Full pillar with flow, fenced + fused:
+  7.5 GB peak (12.6 GB before). What is established:
+  - the growth is glibc heap ([heap] in smaps), ~5.5 MB/s; the GPU-shared
+    mappings only step at grid rebuilds;
+  - the allocations are live during the run and freed at shutdown
+    (mallinfo2 in use 107 -> 150 MB mid-run, 16 MB at exit);
+  - a sampling LD_PRELOAD shim puts them inside libamdhip64 (rocm-hip
+    7.1.1): 56-216 byte objects made per kernel launch and per async copy
+    (stacks from MeltFlow::run, flow_step, Kokkos DeepCopyAsyncHIP);
+  - about 200 bytes per launch inside spparks, 14 standalone with the same
+    kernels: the trigger is something in the spparks process.
+  Ruled out as the trigger or a cure: MPI (same without mpirun), pinned
+  host memory (hipHostMalloc present and used: no change standalone),
+  reducer type, window shape, AMD_DIRECT_DISPATCH=0, HIP_FORCE_SYNC_COPY,
+  ROC_ACTIVE_WAIT_TIMEOUT, hipDeviceSynchronize / null-stream sync per step
+  (-4%); GPU_FLUSH_ON_EXECUTION=1 and event syncs make it worse.
+  Not yet tried: a newer ROCm; bisecting which spparks-side call turns the
+  retention on (start from the standalone harness and add the app's
+  per-step host<->device scalar copies, the team-policy stage kernel, the
+  halo exchange); periodic Kokkos finalize is not an option.
 - Limits: one rank; flat surface; thermal Marangoni only (no solutal);
   one density and one set of flow constants for every composition, not in
   the cards; melted LOOSE cells carried as dense; d11's sum conserved to

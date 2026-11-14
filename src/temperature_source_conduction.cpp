@@ -152,7 +152,12 @@ void ConductionTemperatureSource::setup_temperature_source(
         if (++i >= args.size()) error->all(FLERR,"setup_temperature_source conduction: composition needs x card pairs");
         comp_cards.push_back(args[i]);
       }
-      if (i + 1 < args.size() && args[i+1] == "bins") { i++; comp_bins = (int) num(++i); }
+      while (i + 2 < args.size() && (args[i+1] == "bins" || args[i+1] == "mix")) {
+        const std::string k = args[++i], v = args[++i];
+        if (k == "bins") comp_bins = (int) num(i);
+        else if (v == "pool" || v == "none") cfg.comp_mix = v == "pool";
+        else error->all(FLERR,"setup_temperature_source conduction: composition mix is pool or none");
+      }
     }
     else if (a == "plate_growth") cfg.plate_growth = num(++i);
     else if (a == "layer_thickness") cfg.layer_thickness = num(++i);
@@ -294,7 +299,8 @@ void ConductionTemperatureSource::print_source_info() const
     const auto &a = cfg.comp.front(), &b = cfg.comp.back();
     std::cout << "conduction: composition " << cfg.comp.size() << " bins, x " << cfg.comp_x0
               << ".." << cfg.comp_x1 << " (d11): solidus " << a.ts << ".." << b.ts << " K, liquidus "
-              << a.tl << ".." << b.tl << " K, rho " << a.rho << ".." << b.rho << std::endl;
+              << a.tl << ".." << b.tl << " K, rho " << a.rho << ".." << b.rho
+              << (cfg.comp_mix ? ", mix pool" : ", mix none") << std::endl;
   }
   if (cfg.ded)
     std::cout << "conduction: ded, birth radius " << cfg.ded_radius << " m, T_birth "

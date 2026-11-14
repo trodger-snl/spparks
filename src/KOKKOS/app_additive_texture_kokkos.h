@@ -172,6 +172,7 @@ class AppAdditiveTextureKokkos : public QuaternionKokkos<AppAdditiveTexture> {
   void initialize_nucleation_parameters();
   int melting_kernel(Kokkos::View<int*> d_active_sites, int n_active);
   void check_melt_floor(int n_active);
+  void mix_pool(Kokkos::View<int*> d_active_sites, int n_active);
   int nucleation_kernel(Kokkos::View<int*> d_active_sites, int n_active);
   int particle_flipper_kernel(Kokkos::View<int*> d_active_sites, int n_active);
   int solidification_kernel(Kokkos::View<int*> d_active_sites, int n_active);
@@ -290,6 +291,7 @@ class AppAdditiveTextureKokkos : public QuaternionKokkos<AppAdditiveTexture> {
   Kokkos::View<double*> d_spath;    // inheritance path length (d10)
   // composition (conduction): each site's material from d11, its liquidus
   Kokkos::View<unsigned char*> d_mat;
+  Kokkos::View<double*> d_comp;   // d11, allocated under composition only
   Kokkos::View<double*> d_tlm;
   Kokkos::View<double*> d_mobility_out; // 1 once a site has been smoothed (d5), as on the CPU
 

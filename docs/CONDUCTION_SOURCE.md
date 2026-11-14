@@ -252,7 +252,14 @@ relative to its own H(T0), as the part and plate tables were.
 (linear in x, tables on the union T grid). The kk app maps each site's d11
 to a bin at init (`setup_composition`, `d_mat`), passes it to the solver for
 the lattice cells, and `PlateRule::tl_at(i, z)` returns the bin's liquidus.
-Static within a run: no pool mixing yet.
+`mix pool` (default; 2026-11-14): after the melt kernel, `mix_pool` sums
+the liquid (i2 = 2) sites' x over the active-front list in fixed point
+(2^30 over x1..xn, so exact: independent of list order and rank count),
+Allreduces, and gives every liquid site the mean and its bin. The solver's
+`remat` moves a lattice cell whose bin changed to the new table at the same
+T at each `advance` (then a halo exchange), and the stable step bounds
+every part cell by all bins. One pool for the whole domain; equal weight
+per site. `mix none` keeps x as loaded.
 
 Checks (gfx1151, FP64):
 - `in.single_track.plate`, `in.thin_wall.ded`, `in.single_track.card`:
@@ -268,8 +275,15 @@ Checks (gfx1151, FP64):
   deck at x = 0: wall width at mid-layer 12/14/16/16 sites vs 12/12/14/14
   (IN625 melts 85 K lower); every solid site keeps its layer's x.
 
-Next: pool mixing (x averaged over each melt pool at solidification, i.e.
-dilution), x set at powder birth from a feed schedule, and a composition
+- `mix none`: the graded deck bit-identical to the static version
+  (3c9a0e0b); the decks without composition bit-identical to 51788775.
+- `mix pool`, graded deck (fed x = 0.25/0.5/0.75/1 on x = 0): mean x of
+  the solid at sites z 20/24/28/32/36 = 0.31/0.50/0.64/0.86/0.87, the top
+  substrate picks up 0.01; the top layer ends at 0.87, not 1 (about half
+  of each pool is remelt). Repeats bit for bit; np 2 and mixed precision
+  give the same layer means to 3 digits.
+
+Next: x set at powder birth from a feed schedule, and a composition
 database file in place of cards at nodes.
 
 ## Validation (2026-10-16, gfx1151 + OpenMP backend)

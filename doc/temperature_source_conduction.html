@@ -69,9 +69,10 @@ setup_temperature_source conduction card overrides keyword values ...
     material card of the baseplate: the dense material of <I>i2</I> = 6 sites and of the cells below <I>plate_top</I>
   <I>plate_growth</I> value = d
     <I>i2</I> = 6 may reach d above <I>plate_top</I> (m)
-  <I>composition</I> values = n x1 file1 ... xn filen <B>bins b</B>
+  <I>composition</I> values = n x1 file1 ... xn filen <B>bins b</B> <B>mix m</B>
     n >= 2 material cards at increasing compositions x1 < ... < xn;
-    each site's composition is d11; b bins over x1..xn (default 21, 2..254)
+    each site's composition is d11; b bins over x1..xn (default 21, 2..254);
+    m = <I>pool</I> (default) or <I>none</I>: the melt pool mixes compositions, or not
   <I>far_bc</I> value = <I>fixed</I> or <I>adiabatic</I>
     outer faces of the thermal domain held at T0, or insulated
   <I>sts</I> value = s
@@ -174,9 +175,12 @@ convection and <I>k_powder</I> stay one value for every x.  A lattice cell
 takes its site's x; a part cell outside the box takes x1.  In the
 microstructure model a site melts at its own bin's liquidus
 (additive/texture/kk); fast-forward and the end of a layer wait for the
-lowest liquidus and solidus of all bins.  x is read from d11 at the
-start of each run and does not change during it: the melt pool does not
-mix compositions (no dilution) yet.  The solid_front_vel law and the
+lowest liquidus and solidus of all bins.  x starts from d11 (set it
+per layer or region with "set"); with <I>mix pool</I> every liquid site takes
+the mean x of all liquid sites at each step, so the pool is well mixed
+and a layer is diluted by what it remelts (each site counts equally;
+all liquid in the domain is one pool).  With <I>mix none</I> x does not
+change.  The solid_front_vel law and the
 nucleation values are the same for every x.  Example:
 examples/am/surge/conduction/in.thin_wall.ded.graded.
 </P>
@@ -299,7 +303,7 @@ layer thickness when <I>ded</I> is given.
 k/100, convection h = 0 (T_inf = 300), emissivity = 0, margin = 0, plate
 = 0, stretch = 1.25, max_cell = none, part = whole domain dense,
 layer_thickness = 0, packing = 1, plate_top = box bottom, plate_material
-= none, plate_growth = 0, composition = none, far_bc = fixed, sts = 32, init T0, far = 0 (off), ded off (when on: radius = 2 sx, T_birth
+= none, plate_growth = 0, composition = none (mix pool when given), far_bc = fixed, sts = 32, init T0, far = 0 (off), ded off (when on: radius = 2 sx, T_birth
 = T0, depth = the rise of the laser plane since the previous layer,
 unlimited for the first).  With a material card loaded, none of these material
 defaults (latent, k_powder, convection, emissivity, layer_thickness) is

@@ -88,6 +88,9 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
     // ponytail: cards at nodes stand in for a composition database file.
     std::vector<Material> comp;
     double comp_x0 = 0.0, comp_x1 = 1.0;
+    // mix pool: every liquid site takes the mean x of all liquid sites, each
+    // step (a well-mixed pool: dilution). none: x stays as loaded.
+    bool comp_mix = true;
     double plate_growth = 0.0;          // i2 = 6 reaches plate_top + this (m)
     // ded: no powder bed. Non-part cells are gas; i2 = 0/1 cells are unborn
     // (gas) until the laser axis passes within ded_radius, then powder at T_birth.

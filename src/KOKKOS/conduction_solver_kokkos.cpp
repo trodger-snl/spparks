@@ -119,6 +119,7 @@ void ConductionSolverKokkos::advance(double t,
     seeded = true;
     t_fd = t;
   }
+  else if (src->config().comp_mix && !src->config().comp.empty()) remat(d_mat, nlocal);
 
   double Tr;
   if (src->take_reset(Tr)) { reset_field(Tr); t_fd = t; }
@@ -464,6 +465,13 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
     }
     kmax[m] = kx; cmin[m] = cn;
   }
+  // mix: a part cell can change material between builds; bound by all of them
+  if (cfg.comp_mix && !cfg.comp.empty()) {
+    const int np_ = src->ncomp();
+    const double kx = *std::max_element(kmax.begin(), kmax.begin() + np_);
+    const double cn = *std::min_element(cmin.begin(), cmin.begin() + np_);
+    for (int m = 0; m < np_; m++) { kmax[m] = kx; cmin[m] = cn; }
+  }
   const double hsurf = cfg.h + 4.0 * cfg.emissivity * SIGMA_SB * 4000.0 * 4000.0 * 4000.0;
   // an adiabatic far face carries no flux, so it does not limit the step
   const bool far_fixed = cfg.far_bc == ConductionTemperatureSource::FAR_FIXED;
@@ -553,6 +561,31 @@ void ConductionSolverKokkos::seed_from_sites(Kokkos::View<double*> d_T, int nloc
     Tn_.data()[o] = v;
   });
   exchange();
+}
+
+/* ----------------------------------------------------------------------
+   composition mix: a site whose material changed (the pool mixed) moves
+   its cell to the new material at the same T (H from the new table).
+   ponytail: a pass over nlocal per advance; pass the changed sites if it shows.
+------------------------------------------------------------------------- */
+
+void ConductionSolverKokkos::remat(Kokkos::View<unsigned char*> d_mat, int nlocal)
+{
+  auto H_ = H; auto T_ = T; auto M_ = M; auto P_ = P; auto sc = site_cell;
+  auto tab = Htab;
+  const double T0 = Htab_T0, dTt = Htab_dT;
+  const int n = (int) tab.extent(1);
+  Kokkos::parallel_for("ConductionRemat", nlocal, KOKKOS_LAMBDA(const int s) {
+    const int o = sc(s);
+    if (o < 0 || (P_.data()[o] & PLATE)) return;
+    const int m = d_mat(s);
+    if (M_.data()[o] == m) return;
+    M_.data()[o] = m;
+    const double u = (T_.data()[o] - T0) / dTt;
+    const int i = u < 0.0 ? 0 : (u > n - 2 ? n - 2 : (int) u);
+    H_.data()[o] = tab(m, i) + (u - i) * ((double) tab(m, i+1) - tab(m, i));
+  });
+  exchange();   // halo materials
 }
 
 void ConductionSolverKokkos::reset_field(double Tr)

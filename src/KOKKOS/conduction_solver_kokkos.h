@@ -147,6 +147,7 @@ class ConductionSolverKokkos : protected Pointers {
   double path_source(double t0, double t1);
   void exchange();
   void reset_field(double Tr);
+  void remat(Kokkos::View<unsigned char*> d_mat, int nlocal);
   void seed_from_sites(Kokkos::View<double*> d_T, int nlocal);
   void seed_from_grid(const std::string &file, double t);
   // Write T for all nall sites into d_T; return the max over owned sites.

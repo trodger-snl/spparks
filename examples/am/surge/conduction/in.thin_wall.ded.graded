@@ -1,7 +1,9 @@
 # in.thin_wall.ded graded from 316L to IN625 (conduction keyword composition).
 # Each site's composition x is d11, the mass fraction of the second card:
-# here set per layer (x = 0.25, 0.5, 0.75, 1 from the bottom; the substrate
-# is x = 0, 316L), i.e. no dilution: the pool does not mix x yet. The
+# the powder of each layer is fed at x = 0.25, 0.5, 0.75, 1 from the bottom
+# (the substrate is x = 0, 316L). The pool mixes (mix pool, the default),
+# so each layer is diluted by what it remelts: the solid ends at about
+# 0.31/0.50/0.64/0.87 per layer (mix none keeps the fed x). The
 # thermal grid takes each cell's density, k(T), cp(T), latent heat,
 # solidus and liquidus from its x (21 bins interpolated linearly between the
 # two cards), and a site melts at its own liquidus (316L 1708 K, IN625

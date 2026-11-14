@@ -352,6 +352,7 @@ void AppAdditiveTextureKokkos::sync_app_data_to_device()
   upload_range(d_V, V, 0, nall);
   upload_range(d_spath, spath, 0, nall);
   upload_range(d_mobility_out, mobility_out, 0, nall);
+  if ((int) d_comp.extent(0) == nall) upload_range(d_comp, comp, 0, nall);
 }
 
 /* ----------------------------------------------------------------------
@@ -371,6 +372,7 @@ void AppAdditiveTextureKokkos::sync_app_data_to_host()
   download_range(V, d_V, nlocal);
   download_range(spath, d_spath, nlocal);
   download_range(mobility_out, d_mobility_out, nlocal);
+  if ((int) d_comp.extent(0) == nlocal + nghost) download_range(comp, d_comp, nlocal);
 }
 
 /* ----------------------------------------------------------------------
@@ -1686,7 +1688,8 @@ PlateRule AppAdditiveTextureKokkos::plate_rule() const
 
 /* ----------------------------------------------------------------------
    Each site's conduction material from its composition (d11): the nearest
-   bin, 0 without composition. Read at init: composition is static in a run.
+   bin, 0 without composition. Under `mix pool` the device copy d_comp
+   changes (mix_pool) and comes back to the host with the other arrays.
 ------------------------------------------------------------------------- */
 
 void AppAdditiveTextureKokkos::setup_composition()
@@ -1694,8 +1697,13 @@ void AppAdditiveTextureKokkos::setup_composition()
   const int nall = nlocal + nghost;
   d_mat = Kokkos::View<unsigned char*>("site_material", nall);
   d_tlm = Kokkos::View<double*>();
+  d_comp = Kokkos::View<double*>();
   ConductionTemperatureSource *c = thermal->conduction_source();
   if (!c || c->config().comp.empty()) return;
+  if (c->config().comp_mix) {
+    d_comp = Kokkos::View<double*>("site_comp", nall);
+    upload_range(d_comp, comp, 0, nall);
+  }
   auto hm = Kokkos::create_mirror_view(d_mat);
   for (int i = 0; i < nall; i++) hm(i) = (unsigned char) c->comp_bin(comp[i]);
   Kokkos::deep_copy(d_mat, hm);
@@ -1704,6 +1712,41 @@ void AppAdditiveTextureKokkos::setup_composition()
   auto ht = Kokkos::create_mirror_view(d_tlm);
   for (size_t m = 0; m < cm.size(); m++) ht(m) = cm[m].tl;
   Kokkos::deep_copy(d_tlm, ht);
+}
+
+/* ----------------------------------------------------------------------
+   composition mix pool: every liquid site (i2 = 2) takes the mean x of all
+   liquid sites, over all ranks -- a well-mixed pool, so remelted layers
+   dilute the new powder. Equal weight per site. The sum is in fixed point
+   (x scaled to 2^30 over x1..xn), exact, so the mean does not depend on the
+   list order or the rank count.
+   ponytail: one pool -- every liquid site mixes with every other; label
+   connected pools if a deck ever holds two apart.
+------------------------------------------------------------------------- */
+
+void AppAdditiveTextureKokkos::mix_pool(Kokkos::View<int*> d_active_sites, int n_active)
+{
+  ConductionTemperatureSource *c = thermal->conduction_source();
+  const double x0 = c->config().comp_x0, w = c->config().comp_x1 - x0;
+  const double S = 1073741824.0;   // 2^30
+  auto af = d_active_flag; auto cx = d_comp; auto mat = d_mat;
+  long long loc[2] = {0, 0}, tot[2];
+  Kokkos::parallel_reduce("MixPoolSum", n_active,
+    KOKKOS_LAMBDA(const int idx, long long &sum, long long &cnt) {
+      const int i = d_active_sites(idx);
+      if (af(i) != 2) return;
+      const double u = (cx(i) - x0) / w;
+      sum += (long long) ((u < 0.0 ? 0.0 : u > 1.0 ? 1.0 : u) * S + 0.5);
+      cnt++;
+    }, loc[0], loc[1]);
+  MPI_Allreduce(loc, tot, 2, MPI_LONG_LONG, MPI_SUM, world);
+  if (tot[1] == 0) return;
+  const double x = x0 + w * ((double) tot[0] / (double) tot[1] / S);
+  const unsigned char m = (unsigned char) c->comp_bin(x);
+  Kokkos::parallel_for("MixPoolSet", n_active, KOKKOS_LAMBDA(const int idx) {
+    const int i = d_active_sites(idx);
+    if (af(i) == 2) { cx(i) = x; mat(i) = m; }
+  });
 }
 
 // This step's KeyedRNG key: the deck seed, the rank and the step. A site's
@@ -2421,6 +2464,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   int nmelt = melting_kernel(d_active_sites, n_active);
   naccept += nmelt;
   if (floor_check_d > 0.0) check_melt_floor(n_active);
+  if (d_comp.extent(0)) mix_pool(d_active_sites, n_active);
   bool melting_occurred = (nmelt > 0);
 
   // Phase 3.2: Nucleation (stochastic nucleation in undercooled liquid)

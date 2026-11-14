@@ -304,16 +304,19 @@ double advect_line(int N, bool step, double &dsum, double &over, double &shift)
   m.p.periodic[0] = m.p.periodic[1] = m.p.periodic[2] = true;
   Kokkos::deep_copy(m.ux, R(0.1));
   Kokkos::View<R***> q("q", N, 1, 1), tmp("tmp", N, 1, 1);
-  auto h0 = Kokkos::create_mirror_view(q);
+  // the start profile is kept apart: on a host backend a mirror view is q itself
+  std::vector<R> q0(N);
+  auto hq = Kokkos::create_mirror_view(q);
   const double sig = N / 16.0;
   for (int i = 0; i < N; i++)
-    h0(i, 0, 0) = step ? R(i >= N / 4 && i < N / 2) : R(std::exp(-0.5 * (i - N / 2.0) * (i - N / 2.0) / (sig * sig)));
-  Kokkos::deep_copy(q, h0);
+    hq(i, 0, 0) = q0[i] = step ? R(i >= N / 4 && i < N / 2)
+                               : R(std::exp(-0.5 * (i - N / 2.0) * (i - N / 2.0) / (sig * sig)));
+  Kokkos::deep_copy(q, hq);
   for (int s = 0; s < 10 * N; s++) advect_all(m, q, tmp, 1.0);
   auto h = host(q);
   double s0 = 0, s1 = 0, e2 = 0, n2 = 0, lo = 1e300, hi = -1e300, cr = 0, ci = 0, c0r = 0, c0i = 0;
   for (int i = 0; i < N; i++) {
-    const double a = h0(i, 0, 0), b = h(i, 0, 0), ph = 2.0 * M_PI * i / N;
+    const double a = q0[i], b = h(i, 0, 0), ph = 2.0 * M_PI * i / N;
     s0 += a; s1 += b; e2 += (b - a) * (b - a); n2 += a * a;
     lo = std::min(lo, b); hi = std::max(hi, b);
     cr += b * std::cos(ph); ci += b * std::sin(ph); c0r += a * std::cos(ph); c0i += a * std::sin(ph);

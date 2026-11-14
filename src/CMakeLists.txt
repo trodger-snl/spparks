@@ -607,6 +607,14 @@ endif()
 add_executable(spparks main.cpp)
 target_link_libraries(spparks PRIVATE spparks_lib)
 
+# Self-check of KOKKOS/melt_flow_kokkos.h against analytical flows; not part
+# of the default build: cmake --build <dir> --target melt_flow_check
+if(SPPARKS_PACKAGE_KOKKOS)
+    add_executable(melt_flow_check EXCLUDE_FROM_ALL ${CMAKE_CURRENT_SOURCE_DIR}/../tools/melt_flow_check.cpp)
+    target_include_directories(melt_flow_check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/KOKKOS)
+    target_link_libraries(melt_flow_check PRIVATE Kokkos::kokkos)
+endif()
+
 # Compiler flags, per target
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")

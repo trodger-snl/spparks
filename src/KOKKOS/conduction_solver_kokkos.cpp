@@ -950,6 +950,21 @@ void ConductionSolverKokkos::step(double h, double t0)
    ponytail: a melted LOOSE cell (packing < 1) is carried as if dense.
 ------------------------------------------------------------------------- */
 
+namespace {
+// bounding box of cells as a sum-reducible value: += joins two boxes
+struct FlowBox {
+  int lo[3], hi[3];
+  KOKKOS_INLINE_FUNCTION FlowBox() { for (int d = 0; d < 3; d++) { lo[d] = INT_MAX; hi[d] = -1; } }
+  KOKKOS_INLINE_FUNCTION FlowBox &operator+=(const FlowBox &o) {
+    for (int d = 0; d < 3; d++) {
+      if (o.lo[d] < lo[d]) lo[d] = o.lo[d];
+      if (o.hi[d] > hi[d]) hi[d] = o.hi[d];
+    }
+    return *this;
+  }
+};
+}
+
 void ConductionSolverKokkos::flow_step(double h)
 {
   auto &F = *flow;
@@ -958,9 +973,9 @@ void ConductionSolverKokkos::flow_step(double h)
   auto P_ = P; auto M_ = M; auto T_ = T; auto H_ = H;
   auto ty = F.type; auto fT = F.T; auto ffl = F.fl;
   auto ts_ = tsm; auto tl_ = tlm; auto Hr = Hrefm;
-  int lo[3] = {INT_MAX, INT_MAX, INT_MAX}, hi[3] = {-1, -1, -1};
+  FlowBox box;
   Kokkos::parallel_reduce("FlowCells", bx * by * bz,
-    KOKKOS_LAMBDA(const int n, int &x0, int &y0, int &z0, int &x1, int &y1, int &z1) {
+    KOKKOS_LAMBDA(const int n, FlowBox &b) {
       const int i = n % bx, j = (n / bx) % by, k = n / (bx * by);
       const unsigned char p = P_(i + o0, j + o1, k + o2);
       const int m = M_(i + o0, j + o1, k + o2);
@@ -973,11 +988,12 @@ void ConductionSolverKokkos::flow_step(double h)
       fT(i, j, k) = (KK_FLOAT) Tv;
       ffl(i, j, k) = (KK_FLOAT) (f < 0.0 ? 0.0 : f > 1.0 ? 1.0 : f);
       if (fluid) {
-        if (i < x0) x0 = i; if (j < y0) y0 = j; if (k < z0) z0 = k;
-        if (i > x1) x1 = i; if (j > y1) y1 = j; if (k > z1) z1 = k;
+        FlowBox c;
+        c.lo[0] = c.hi[0] = i; c.lo[1] = c.hi[1] = j; c.lo[2] = c.hi[2] = k;
+        b += c;
       }
-    }, Kokkos::Min<int>(lo[0]), Kokkos::Min<int>(lo[1]), Kokkos::Min<int>(lo[2]),
-       Kokkos::Max<int>(hi[0]), Kokkos::Max<int>(hi[1]), Kokkos::Max<int>(hi[2]));
+    }, box);
+  const int *lo = box.lo, *hi = box.hi;
   // this step's fluid cells and two around them, joined with the last
   // step's window (cells that just froze are reset in both copies of f)
   const bool any = hi[0] >= 0;
@@ -1029,6 +1045,7 @@ void ConductionSolverKokkos::flow_step(double h)
       H_(i + o0, j + o1, k + o2) = (KK_FLOAT) (q(i, j, k) - Hr(M_(i + o0, j + o1, k + o2)));
     });
   if (fX.extent(0)) melt_advect(F, fX, ftmp, (double) n, w, w + 3);
+  Kokkos::fence();   // as in MeltFlow::run
 }
 
 /* ----------------------------------------------------------------------

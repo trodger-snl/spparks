@@ -300,7 +300,9 @@ struct MeltFlow {
     p.buoy[2] = ph.beta_g * dt * dt / ph.dx;
     p.Tref = ph.Tref;
     p.darcy = ph.darcy * dt;
-    for (int s = 0; s < n; s++) step(lo, hi);
+    // fence per step: on HIP (gfx1151) unsynchronised launches pile up
+    // host memory that is never returned (measured: about half the growth)
+    for (int s = 0; s < n; s++) { step(lo, hi); Kokkos::fence(); }
     auto px_ = px; auto py_ = py; auto pz_ = pz;
     R m2 = 0;
     Kokkos::parallel_reduce("FlowMax",

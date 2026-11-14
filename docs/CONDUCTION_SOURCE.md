@@ -255,6 +255,19 @@ enough for mixing; one rank first.
   2814 K, mixed within 0.43 K. Graded wall `mix flow`: top layer 0.99 vs
   0.87 well-mixed, central plume, sum of d11 -0.015%. DED pillar's first
   track (Ti-6Al-4V, 10 mm/s, 20 um, mixed): 1.0 m/s, peak 2972 vs 3479 K.
+- Full DED pillar with flow (`in.rectangle.ded` + `flow lbm`, 20 layers,
+  mixed, gfx1151): completes, 1779 s vs 919 s without flow; sampled peaks
+  <= 3012 K (3400 without); 1717 unfused sites, all in the first site
+  plane above the substrate (153 without: the flow's pool is shallower on
+  the cold plate); grains per section 51/35/21/17/20/36 at z 30..220.
+- OPEN: host memory grows with the number of kernel launches on HIP
+  (gfx1151). The conduction-only pillar ends at 2.1 GB; with flow (about
+  5x the launches per thermal step) it reached 12.6 GB. Not a leak in
+  MeltFlow (700k launches standalone: flat 180 MB) nor in any reduction
+  pattern or window shape tested alone; seen only inside spparks. A fence
+  after each flow step and after `flow_step` cut the 3-layer peak from
+  1.76 to 1.13 GB (no-flow: 0.60) at the same speed. Next: fewer launches
+  (fuse the flow's setup/advect kernels), and find what the runtime keeps.
 - Limits: one rank; flat surface; thermal Marangoni only (no solutal);
   one density and one set of flow constants for every composition, not in
   the cards; melted LOOSE cells carried as dense; d11's sum conserved to

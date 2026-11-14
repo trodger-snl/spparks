@@ -155,8 +155,10 @@ void ConductionTemperatureSource::setup_temperature_source(
       while (i + 2 < args.size() && (args[i+1] == "bins" || args[i+1] == "mix")) {
         const std::string k = args[++i], v = args[++i];
         if (k == "bins") comp_bins = (int) num(i);
-        else if (v == "pool" || v == "none") cfg.comp_mix = v == "pool";
-        else error->all(FLERR,"setup_temperature_source conduction: composition mix is pool or none");
+        else if (v == "pool" || v == "none" || v == "flow") {
+          cfg.comp_mix = v != "none"; cfg.comp_flow = v == "flow";
+        }
+        else error->all(FLERR,"setup_temperature_source conduction: composition mix is pool, flow or none");
       }
     }
     else if (a == "plate_growth") cfg.plate_growth = num(++i);
@@ -274,6 +276,8 @@ void ConductionTemperatureSource::setup_temperature_source(
     } catch (const std::exception &e) {
       error->all(FLERR, ("setup_temperature_source conduction: composition " + std::string(e.what())).c_str());
     }
+    if (cfg.comp_flow && !cfg.flow.on)
+      error->all(FLERR,"setup_temperature_source conduction: composition mix flow needs flow lbm");
     cfg.comp_x0 = comp_x.front(); cfg.comp_x1 = comp_x.back();
     for (int b = 0; b < comp_bins; b++) {
       const double x = cfg.comp_x0 + (cfg.comp_x1 - cfg.comp_x0) * b / (comp_bins - 1);
@@ -320,7 +324,7 @@ void ConductionTemperatureSource::print_source_info() const
     std::cout << "conduction: composition " << cfg.comp.size() << " bins, x " << cfg.comp_x0
               << ".." << cfg.comp_x1 << " (d11): solidus " << a.ts << ".." << b.ts << " K, liquidus "
               << a.tl << ".." << b.tl << " K, rho " << a.rho << ".." << b.rho
-              << (cfg.comp_mix ? ", mix pool" : ", mix none") << std::endl;
+              << (cfg.comp_flow ? ", mix flow" : cfg.comp_mix ? ", mix pool" : ", mix none") << std::endl;
   }
   if (cfg.flow.on)
     std::cout << "conduction: flow lbm, dsigma/dT " << cfg.flow.dsigma_dT << " N/m/K, beta "

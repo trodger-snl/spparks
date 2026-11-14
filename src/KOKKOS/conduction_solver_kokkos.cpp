@@ -103,6 +103,7 @@ void ConductionSolverKokkos::advance(double t,
                                      Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz,
                                      Kokkos::View<int*> d_af, Kokkos::View<double*> d_T,
                                      Kokkos::View<unsigned char*> d_mat,
+                                     Kokkos::View<double*> d_comp,
                                      int nlocal, int nall, double dx_in, double ts,
                                      double tl)
 {
@@ -117,7 +118,7 @@ void ConductionSolverKokkos::advance(double t,
     if (carry && t > t_fd) integrate(t);
     auto Told = T;
     const auto fx0 = gfx, fy0 = gfy, fz0 = gfz;
-    build(d_xyz, d_af, d_mat, nlocal, nall, ts, tl);
+    build(d_xyz, d_af, d_mat, d_comp, nlocal, nall, ts, tl);
     reset_field(src->ambient());
     if (carry) carry_field(Told, fx0, fy0, fz0);
     if (!seeded) {
@@ -143,6 +144,7 @@ void ConductionSolverKokkos::advance(double t,
   if (src->take_freeze()) t_fd = t;
 
   if (t > t_fd) integrate(t);
+  if (fX.extent(0)) comp_out(d_comp, d_mat, nlocal);
 }
 
 /* ----------------------------------------------------------------------
@@ -183,6 +185,7 @@ void ConductionSolverKokkos::integrate(double t)
 
 void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz,
                                    Kokkos::View<int*> d_af, Kokkos::View<unsigned char*> d_mat,
+                                   Kokkos::View<double*> d_comp,
                                    int nlocal, int nall, double ts, double tl)
 {
   const auto &cfg = src->config();
@@ -550,6 +553,22 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
     ph.darcy = cfg.flow.mushy; ph.u_ref = cfg.flow.u_ref;
     fq = Kokkos::View<KK_FLOAT***>("cond_fq", bn[0], bn[1], bn[2]);
     ftmp = Kokkos::View<KK_FLOAT***>("cond_ftmp", bn[0], bn[1], bn[2]);
+    fX = Kokkos::View<KK_FLOAT***>();
+    if (cfg.comp_flow && !cfg.comp.empty()) {
+      // each cell starts at its site's composition
+      fX = Kokkos::View<KK_FLOAT***>("cond_fX", bn[0], bn[1], bn[2]);
+      site_blk = Kokkos::View<int*>("cond_site_blk", nlocal);
+      auto hX = Kokkos::create_mirror_view(fX);
+      auto hb = Kokkos::create_mirror_view(site_blk);
+      auto hc = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), d_comp);
+      for (int s = 0; s < nlocal; s++) {
+        const int bi = g[3*s] - glo[0], bj = g[3*s+1] - glo[1], bk = g[3*s+2] - glo[2];
+        if (bk >= bn[2]) { hb(s) = -1; continue; }
+        hb(s) = bi + bn[0] * (bj + bn[1] * bk);
+        hX(bi, bj, bk) = (KK_FLOAT) hc(s);
+      }
+      Kokkos::deep_copy(fX, hX); Kokkos::deep_copy(site_blk, hb);
+    }
   }
 
   built = true;
@@ -1009,6 +1028,31 @@ void ConductionSolverKokkos::flow_step(double h)
       if (ty(i, j, k) != MeltFlow<KK_FLOAT>::FLUID) return;
       H_(i + o0, j + o1, k + o2) = (KK_FLOAT) (q(i, j, k) - Hr(M_(i + o0, j + o1, k + o2)));
     });
+  if (fX.extent(0)) melt_advect(F, fX, ftmp, (double) n, w, w + 3);
+}
+
+/* ----------------------------------------------------------------------
+   mix flow: a site whose cell's composition moved takes it (d11) and its
+   bin; remat then moves the cell to that bin's table at the next advance.
+   ponytail: a pass over nlocal per advance, as remat.
+------------------------------------------------------------------------- */
+
+void ConductionSolverKokkos::comp_out(Kokkos::View<double*> d_comp,
+                                      Kokkos::View<unsigned char*> d_mat, int nlocal)
+{
+  auto X = fX; auto sb = site_blk;
+  const int bx = flow->nx, by = flow->ny;
+  const double x0 = src->config().comp_x0, w = src->config().comp_x1 - x0;
+  const int nb = src->ncomp();
+  Kokkos::parallel_for("ConductionCompOut", nlocal, KOKKOS_LAMBDA(const int s) {
+    const int b = sb(s);
+    if (b < 0) return;
+    const double x = X(b % bx, (b / bx) % by, b / (bx * by));
+    if (Kokkos::abs(x - d_comp(s)) <= 1e-7 * w) return;
+    d_comp(s) = x;
+    const int m = (int) Kokkos::lround((x - x0) / w * (nb - 1));
+    d_mat(s) = (unsigned char) (m < 0 ? 0 : m > nb - 1 ? nb - 1 : m);
+  });
 }
 
 /* ----------------------------------------------------------------------

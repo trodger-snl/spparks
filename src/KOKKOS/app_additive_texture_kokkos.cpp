@@ -2299,7 +2299,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       if (!cond) cond = std::make_unique<ConductionSolverKokkos>(spk, csrc);
       thermal->set_moser_device_filler([this](double t) -> double {
         ensure_device_xyz();
-        cond->advance(t, d_xyz, d_active_flag, d_temp, d_mat, nlocal, nlocal + nghost, dx, ts, tl);
+        cond->advance(t, d_xyz, d_active_flag, d_temp, d_mat, d_comp, nlocal, nlocal + nghost, dx, ts, tl);
         // the sample also builds the active-front list (no BuildActiveList scan)
         fill_maxT_local = cond->sample(d_temp, nlocal, nlocal + nghost, active_append());
         device_active_list_fresh = true;
@@ -2464,7 +2464,9 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   int nmelt = melting_kernel(d_active_sites, n_active);
   naccept += nmelt;
   if (floor_check_d > 0.0) check_melt_floor(n_active);
-  if (d_comp.extent(0)) mix_pool(d_active_sites, n_active);
+  // mix pool; under mix flow the conduction solver's flow carries d11 instead
+  if (d_comp.extent(0) && !thermal->conduction_source()->config().comp_flow)
+    mix_pool(d_active_sites, n_active);
   bool melting_occurred = (nmelt > 0);
 
   // Phase 3.2: Nucleation (stochastic nucleation in undercooled liquid)

@@ -52,10 +52,12 @@ class ConductionSolverKokkos : protected Pointers {
   // d_T: the sites' temperatures (d6), read once by `init d6` at the first build.
   // d_mat: each site's material (ConductionTemperatureSource::materials), read
   // at each grid build; i2 = 6 sites take the plate whatever it says.
+  // d_comp: each site's composition (d11), empty unless it changes in a run;
+  // mix flow reads it at each grid build and writes it and d_mat back.
   void advance(double t, Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz,
                Kokkos::View<int*> d_af, Kokkos::View<double*> d_T,
-               Kokkos::View<unsigned char*> d_mat, int nlocal, int nall,
-               double dx, double ts, double tl);
+               Kokkos::View<unsigned char*> d_mat, Kokkos::View<double*> d_comp,
+               int nlocal, int nall, double dx, double ts, double tl);
 
   // LOOSE: flag bit, see packing. PLATE: flag bit, an i2 = 6 site's cell or
   // a cell below plate_top (the material byte M says which material).
@@ -126,6 +128,8 @@ class ConductionSolverKokkos : protected Pointers {
   bool fwin_on = false;
   double flow_cap_seen = 0.0;
   Kokkos::View<KK_FLOAT***> fq, ftmp;
+  Kokkos::View<KK_FLOAT***> fX;      // mix flow: composition of the block's cells
+  Kokkos::View<int*> site_blk;       // mix flow: a site's block cell (flat), -1 = none
   Kokkos::View<double*> tsm, Hrefm;
   Kokkos::View<int*> site_cell;   // offset of the site's cell in T, -1 = above grid
 
@@ -136,7 +140,8 @@ class ConductionSolverKokkos : protected Pointers {
   bool stage_host = false;
 
   void build(Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz, Kokkos::View<int*> d_af,
-             Kokkos::View<unsigned char*> d_mat, int nlocal, int nall, double ts, double tl);
+             Kokkos::View<unsigned char*> d_mat, Kokkos::View<double*> d_comp,
+             int nlocal, int nall, double ts, double tl);
   double H_at(int m, double Tr) const;   // material m's H(Tr) - Href
   void integrate(double t);
   void step(double h, double t0);
@@ -163,6 +168,8 @@ class ConductionSolverKokkos : protected Pointers {
   void remat(Kokkos::View<unsigned char*> d_mat, int nlocal);
   // flow lbm: h seconds of flow on the pool, then the enthalpy carried with it
   void flow_step(double h);
+  // mix flow: the cells' composition back to the sites (d11 and the bin)
+  void comp_out(Kokkos::View<double*> d_comp, Kokkos::View<unsigned char*> d_mat, int nlocal);
   void carry_field(Kokkos::View<KK_FLOAT***> Told, const std::vector<double> &fx0,
                    const std::vector<double> &fy0, const std::vector<double> &fz0);
   void seed_from_sites(Kokkos::View<double*> d_T, int nlocal);

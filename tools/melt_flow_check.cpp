@@ -253,6 +253,62 @@ void pool_stability()
   check("pool conditions, 1e5 steps: max |u| (lattice; 0.1 = 1 m/s)", finite ? umax : NAN, 0.3);
 }
 
+// A 3-D pool at Ti-6Al-4V values through the SI driver: a half-ellipsoid of
+// liquid (0.8 mm across, 0.24 mm deep, dx 20 um) under a Gaussian hot spot
+// 1200 K above the liquidus, nu 8.5e-7 m^2/s, dsigma/dT -2.6e-4 N/m/K,
+// rho 4100. 20 ms in thermal-sized steps of 5 us. No analytical answer.
+// It must stay finite and keep the lattice speed in range; the speed should
+// be of the inertial Marangoni scale, (dsigma^2 dT^2 / (rho mu L))^(1/3)
+// = 2.6 m/s, and flow outward along the surface (dsigma/dT < 0).
+template <class R>
+double pool_si(double u_ref)
+{
+  MeltFlow<R> m;
+  const int nx = 64, nz = 24;
+  m.resize(nx, nx, nz);
+  m.ph.dx = 20e-6; m.ph.nu = 8.5e-7; m.ph.dsdT_rho = -2.6e-4 / 4100.0;
+  m.ph.beta_g = 1e-5 * 9.81; m.ph.Tref = 1928.0; m.ph.darcy = 1e4; m.ph.u_ref = u_ref;
+  auto ht = Kokkos::create_mirror_view(m.type);
+  auto hT = Kokkos::create_mirror_view(m.T);
+  auto hf = Kokkos::create_mirror_view(m.fl);
+  for (int i = 0; i < nx; i++)
+    for (int j = 0; j < nx; j++)
+      for (int k = 0; k < nz; k++) {
+        const double x = i - 31.5, y = j - 31.5, d = nz - 0.5 - k;   // depth below the surface
+        const double e = (x * x + y * y) / (20.0 * 20.0) + d * d / (12.0 * 12.0);
+        ht(i, j, k) = e < 1.0 ? MeltFlow<R>::FLUID : MeltFlow<R>::WALL;
+        hT(i, j, k) = R(1928.0 + 1200.0 * std::exp(-(x * x + y * y) / (12.0 * 12.0) - d * d / (8.0 * 8.0)));
+        hf(i, j, k) = R(std::min(1.0, std::max(0.05, 4.0 * (1.0 - e))));   // mushy near the wall
+      }
+  Kokkos::deep_copy(m.type, ht); Kokkos::deep_copy(m.T, hT); Kokkos::deep_copy(m.fl, hf);
+  const int lo[3] = {0, 0, 0}, hi[3] = {nx, nx, nz};
+  double lat_max = 0.0, u_late = 0.0;
+  int nmax = 0, bad = 0;
+  for (int s = 0; s < 4000 && !bad; s++) {
+    const int n = m.run(5e-6, lo, hi);
+    if (n < 0 || !std::isfinite(m.umax)) { bad = 1; break; }
+    nmax = std::max(nmax, n);
+    if (s >= 200) lat_max = std::max(lat_max, m.umax * m.dt / m.ph.dx);
+    if (s >= 3000) u_late = std::max(u_late, m.umax);
+  }
+  auto u = host(m.ux);
+  // surface flow at half the pool radius on +x: outward means u > 0
+  const double us = bad ? NAN : u(42, 32, nz - 1) * m.ph.dx / m.dt;
+  if (u_ref != 1.0) {
+    // started 4x too coarse: the cap must have doubled, f been rescaled
+    check("pool from u_ref 0.25: the step adapted (u_cap, m/s) >= 1", bad ? NAN : m.u_cap, 1.0, false);
+    check("pool from u_ref 0.25: max lattice speed after start-up", bad ? NAN : lat_max, 0.2);
+    return bad ? NAN : u_late;
+  }
+  check("pool (SI driver, Ti-6Al-4V, 20 ms): stays finite, steps <= nmax", bad, 0.0);
+  check("pool: max lattice speed after start-up", bad ? NAN : lat_max, 0.2);
+  check("pool: max speed in the last 5 ms (m/s), >= 0.5", bad ? NAN : u_late, 0.5, false);
+  check("pool: max speed in the last 5 ms (m/s), <= 10", bad ? NAN : u_late, 10.0);
+  check("pool: surface flows outward, u at r/2 (m/s) > 0.1", us, 0.1, false);
+  printf("       pool: %d flow steps per 5 us at most, u_cap %.3g m/s, dt %.3g s\n", nmax, m.u_cap, m.dt);
+  return bad ? NAN : u_late;
+}
+
 // ---- scalar advection (melt_advect) ----
 
 template <class R>
@@ -446,6 +502,8 @@ void suite(const char *name)
   darcy<R>();
   block<R>();
   pool_stability<R>();
+  const double u1 = pool_si<R>(1.0), u2 = pool_si<R>(0.25);
+  check("pool: speed from u_ref 0.25 / from u_ref 1 - 1", u2 / u1 - 1.0, 0.15);
   advect_suite<R>();
 }
 

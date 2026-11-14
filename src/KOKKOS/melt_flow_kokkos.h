@@ -15,6 +15,8 @@
 #define SPK_MELT_FLOW_KOKKOS_H
 
 #include <Kokkos_Core.hpp>
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace SPPARKS_NS {
@@ -255,6 +257,91 @@ struct MeltFlow {
         }
       });
     std::swap(f, fn);
+  }
+
+  /* --------------------------------------------------------------------
+     SI driver. run(h) advances the flow by h seconds in an even number of
+     steps (so u, the two-step mean, is clean), setting the lattice
+     parameters from ph. The step is chosen so the fastest cell moves at
+     about 0.1 cell per step, where LBM is accurate: u_cap is the speed
+     mapped to 0.1. It starts at ph.u_ref, doubles when the measured
+     maximum passes 0.15 and halves again below 0.03; f is rescaled when
+     the step changes. Returns the number of steps, or -1 if h would take
+     more than ph.nmax of them (the flow is running away).
+     After run(): u in m/s is ux * ph.dx / dt, and melt_advect's cfl is the
+     returned step count.
+  -------------------------------------------------------------------- */
+  struct Phys {
+    double dx = 1.0;          // cell (m)
+    double nu = 1e-6;         // kinematic viscosity (m^2/s)
+    double smag = 0.17;       // Smagorinsky constant
+    double dsdT_rho = 0.0;    // dsigma/dT / rho (m^3 / s^2 / K)
+    double beta_g = 0.0;      // thermal expansion * g (m / s^2 / K), hot rises
+    double Tref = 0.0;        // buoyancy is zero at this T
+    double darcy = 0.0;       // mushy drag constant (1/s)
+    double u_ref = 1.0;       // expected speed (m/s): the first u_cap
+    int nmax = 256;
+  } ph;
+  double dt = 0.0, u_cap = 0.0, umax = 0.0;   // step (s), cap and last max speed (m/s)
+
+  int run(double h, const int lo[3], const int hi[3]) {
+    if (u_cap == 0.0) u_cap = ph.u_ref;
+    while (umax > 1.5 * u_cap) u_cap *= 2.0;
+    if (umax < 0.3 * u_cap && u_cap > ph.u_ref) u_cap = std::max(ph.u_ref, 0.5 * u_cap);
+    const int n = 2 * std::max(1, (int) std::ceil(0.5 * h * u_cap / (0.1 * ph.dx) - 1e-9));
+    if (n > ph.nmax) return -1;
+    const double dtn = h / n;
+    if (dt > 0.0 && dtn != dt) rescale(dtn / dt, lo, hi);
+    dt = dtn;
+    p.nu = ph.nu * dt / (ph.dx * ph.dx);
+    p.smag = ph.smag;
+    p.marangoni = ph.dsdT_rho * dt * dt / (ph.dx * ph.dx * ph.dx);
+    p.buoy[0] = p.buoy[1] = 0.0;
+    p.buoy[2] = ph.beta_g * dt * dt / ph.dx;
+    p.Tref = ph.Tref;
+    p.darcy = ph.darcy * dt;
+    for (int s = 0; s < n; s++) step(lo, hi);
+    auto px_ = px; auto py_ = py; auto pz_ = pz;
+    R m2 = 0;
+    Kokkos::parallel_reduce("FlowMax",
+      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
+      KOKKOS_LAMBDA(const int i, const int j, const int k, R &mx) {
+        const R v = px_(i, j, k) * px_(i, j, k) + py_(i, j, k) * py_(i, j, k) + pz_(i, j, k) * pz_(i, j, k);
+        if (v > mx) mx = v;
+      }, Kokkos::Max<R>(m2));
+    umax = std::sqrt((double) m2) * ph.dx / dt;
+    return n;
+  }
+
+  // The step changes by the factor s: lattice velocities scale by s, the
+  // pressure deviation by s^2, the non-equilibrium part (stress) by s.
+  void rescale(double s_, const int lo[3], const int hi[3]) {
+    auto f_ = f; auto ty = type;
+    auto ux_ = ux; auto uy_ = uy; auto uz_ = uz; auto px_ = px; auto py_ = py; auto pz_ = pz;
+    const R s = R(s_);
+    Kokkos::parallel_for("FlowRescale",
+      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
+      KOKKOS_LAMBDA(const int i, const int j, const int k) {
+        if (ty(i, j, k) != FLUID) return;
+        R dr = 0, mx = 0, my = 0, mz = 0;
+        for (int q = 0; q < 19; q++) {
+          int cx, cy, cz; vel(q, cx, cy, cz);
+          const R v = f_(i, j, k, q);
+          dr += v; mx += cx * v; my += cy * v; mz += cz * v;
+        }
+        const R r = R(1) + dr, u = mx / r, v = my / r, w = mz / r;
+        const R dr2 = dr * s * s, r2 = R(1) + dr2, u2 = u * s, v2 = v * s, w2 = w * s;
+        const R usq = u * u + v * v + w * w, usq2 = usq * s * s;
+        for (int q = 0; q < 19; q++) {
+          int cx, cy, cz; vel(q, cx, cy, cz);
+          const R cu = cx * u + cy * v + cz * w, cu2 = cu * s;
+          const R e = wgt(q) * (dr + r * (R(3) * cu + R(4.5) * cu * cu - R(1.5) * usq));
+          const R e2 = wgt(q) * (dr2 + r2 * (R(3) * cu2 + R(4.5) * cu2 * cu2 - R(1.5) * usq2));
+          f_(i, j, k, q) = e2 + s * (f_(i, j, k, q) - e);
+        }
+        ux_(i, j, k) *= s; uy_(i, j, k) *= s; uz_(i, j, k) *= s;
+        px_(i, j, k) *= s; py_(i, j, k) *= s; pz_(i, j, k) *= s;
+      });
   }
 
   // sum of rho - 1 over the fluid cells

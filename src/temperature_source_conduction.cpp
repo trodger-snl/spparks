@@ -163,6 +163,21 @@ void ConductionTemperatureSource::setup_temperature_source(
     else if (a == "layer_thickness") cfg.layer_thickness = num(++i);
     else if (a == "packing") cfg.packing = num(++i);
     else if (a == "sts") cfg.sts_smax = (int) num(++i);
+    else if (a == "flow") {
+      if (args.at(++i) != "lbm") error->all(FLERR,"setup_temperature_source conduction: flow takes lbm");
+      cfg.flow.on = true;
+      while (i + 2 < args.size()) {
+        const std::string &k = args[i+1];
+        double *v = k == "dsigma_dT" ? &cfg.flow.dsigma_dT : k == "beta" ? &cfg.flow.beta
+                  : k == "viscosity" ? &cfg.flow.viscosity : k == "mushy" ? &cfg.flow.mushy
+                  : k == "u_ref" ? &cfg.flow.u_ref : k == "smagorinsky" ? &cfg.flow.smag : nullptr;
+        if (!v) break;
+        *v = num(i + 2);
+        i += 2;
+      }
+      if (cfg.flow.viscosity <= 0.0 || cfg.flow.u_ref <= 0.0 || cfg.flow.mushy < 0.0 || cfg.flow.smag < 0.0)
+        error->all(FLERR,"setup_temperature_source conduction: flow needs viscosity, u_ref > 0 and mushy, smagorinsky >= 0");
+    }
     else if (a == "carry") {
       const std::string v = args.at(++i);
       if (v != "yes" && v != "no") error->all(FLERR,"setup_temperature_source conduction: carry is yes or no");
@@ -307,6 +322,11 @@ void ConductionTemperatureSource::print_source_info() const
               << a.tl << ".." << b.tl << " K, rho " << a.rho << ".." << b.rho
               << (cfg.comp_mix ? ", mix pool" : ", mix none") << std::endl;
   }
+  if (cfg.flow.on)
+    std::cout << "conduction: flow lbm, dsigma/dT " << cfg.flow.dsigma_dT << " N/m/K, beta "
+              << cfg.flow.beta << " 1/K, viscosity " << cfg.flow.viscosity << " m^2/s, mushy "
+              << cfg.flow.mushy << " 1/s, u_ref " << cfg.flow.u_ref << " m/s, smagorinsky "
+              << cfg.flow.smag << std::endl;
   if (cfg.ded)
     std::cout << "conduction: ded, birth radius " << cfg.ded_radius << " m, T_birth "
               << cfg.T_birth << " K, depth "

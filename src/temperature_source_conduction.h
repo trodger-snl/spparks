@@ -67,6 +67,17 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
     double layer_thickness = 0.0;      // powder depth outside the box
     double packing = 1.0;              // powder mass fraction of dense (1 = dense)
     int    far_bc = FAR_FIXED;
+    // flow lbm: melt-pool flow (KOKKOS/melt_flow_kokkos.h) on the lattice
+    // box's liquid cells; it carries the enthalpy (and, mix flow, d11).
+    struct Flow {
+      bool   on = false;
+      double dsigma_dT = -2.6e-4;       // N/m/K (thermal Marangoni)
+      double beta = 1.7e-4;             // 1/K, volumetric expansion of the liquid
+      double viscosity = 8.5e-7;        // m^2/s, kinematic
+      double mushy = 1.0e4;             // 1/s, Carman-Kozeny drag constant
+      double u_ref = 1.0;               // m/s, expected speed (sets the first flow step)
+      double smag = 0.17;               // Smagorinsky constant, 0 = off
+    } flow;
     bool   carry = false;               // a layer's grid rebuild keeps the field (else T0)
     int    sts_smax = 32;               // RKL2 stages per laser-off super-step; 0 = explicit
     bool   init_d6 = false;             // init d6: the run's first grid takes in-box T from d6

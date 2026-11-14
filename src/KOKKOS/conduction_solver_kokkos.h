@@ -17,7 +17,9 @@
 #include "pointers.h"
 #include "spktype.h"
 #include "gpu_aware_mpi.h"
+#include "melt_flow_kokkos.h"
 #include <Kokkos_Core.hpp>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -115,6 +117,16 @@ class ConductionSolverKokkos : protected Pointers {
   // KK_FLOAT copies for the stencil (aliases under FP64)
   Kokkos::View<KK_FLOAT*> wxr, wyr, wzr, iwx, iwy, iwz;
   double Htab_T0 = 0.0, Htab_dT = 1.0;
+  // flow lbm: the flow's block is the lattice box's cells, local cell =
+  // block cell + fb0; fwin is the window of the last step's fluid cells.
+  // tsm, Hrefm: each material's solidus and the H(T0) its H is relative to.
+  std::unique_ptr<MeltFlow<KK_FLOAT>> flow;
+  int fb0[3] = {0, 0, 0};
+  int fwin[6] = {0, 0, 0, 0, 0, 0};
+  bool fwin_on = false;
+  double flow_cap_seen = 0.0;
+  Kokkos::View<KK_FLOAT***> fq, ftmp;
+  Kokkos::View<double*> tsm, Hrefm;
   Kokkos::View<int*> site_cell;   // offset of the site's cell in T, -1 = above grid
 
   Kokkos::View<double*> sbuf, rbuf;
@@ -149,6 +161,8 @@ class ConductionSolverKokkos : protected Pointers {
   void exchange();
   void reset_field(double Tr);
   void remat(Kokkos::View<unsigned char*> d_mat, int nlocal);
+  // flow lbm: h seconds of flow on the pool, then the enthalpy carried with it
+  void flow_step(double h);
   void carry_field(Kokkos::View<KK_FLOAT***> Told, const std::vector<double> &fx0,
                    const std::vector<double> &fy0, const std::vector<double> &fz0);
   void seed_from_sites(Kokkos::View<double*> d_T, int nlocal);

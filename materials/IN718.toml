@@ -6,9 +6,9 @@ schema_version = 1
 material = "IN718"
 designation = { UNS = "N07718", W_Nr = "2.4668", spec = "wrought per AMS 5596/5662; LPBF per ASTM F3055" }
 composition_wt_pct = { Ni_plus_Co = "50.0-55.0", Cr = "17.0-21.0", Fe = "bal", Nb_plus_Ta = "4.75-5.50", Mo = "2.80-3.30", Ti = "0.65-1.15", Al = "0.20-0.80", Co = "<1.0", C = "<0.08", Mn = "<0.35", Si = "<0.35", Cu = "<0.30", B = "<0.006", P = "<0.015", S = "<0.015", ref = "specialmetals_718", note = "UNS N07718 limiting composition (Special Metals SMC-045 Table 1), not a measured heat" }
-version = "2.0.0"
+version = "2.1.0"
 created = 2026-10-17
-modified = 2026-10-17
+modified = 2026-11-14
 status = "draft"
 reviewed_by = ""
 
@@ -23,6 +23,12 @@ version = "2.0.0"
 date = 2026-10-17
 author = "T. Rodgers"
 changes = "solid_front_vel is now the front_velocity_source power law itself, which SPPARKS reads directly, instead of a degree-6 polynomial fit (5.7% max error); front velocities change by up to that error."
+
+[[changelog]]
+version = "2.1.0"
+date = 2026-11-14
+author = "research agent (Claude)"
+changes = "Added [flow] (liquid properties, weakly sourced: an abstract, conference slides and a modelling paper's input table) and one laser DED process set with measured clad geometry (Chen 2023). No existing value changed."
 
 [references.agazhanov2019]
 citation = "A.Sh. Agazhanov, D.A. Samoshkin, Yu.M. Kozlovskii, Thermophysical properties of Inconel 718 alloy, J. Phys.: Conf. Ser. 1382 (2019) 012175"
@@ -64,6 +70,19 @@ doi = "10.1016/j.addma.2018.02.002"
 citation = "Special Metals Corporation, INCONEL alloy 718, Publication SMC-045 (2007), vendor datasheet"
 url = "https://www.specialmetals.com/documents/technical-bulletins/inconel/inconel-alloy-718.pdf"
 
+[references.nishi2024]
+citation = "T. Nishi, S. Matsumoto, H. Yamano, K. Hayashi, R. Endo, M. Belle, L. Neubert, O. Volkova, Density, Surface Tension, and Viscosity of Molten Ni-Based Superalloys Using the Maximum Bubble Pressure and Oscillating Crucible Methods, steel research international 96, 2300766 (online 2024)"
+doi = "10.1002/srin.202300766"
+
+[references.sansoucie2018]
+citation = "M.P. SanSoucie, J.R. Rogers, X. Xiao, J. Nawer, M. Pleskus, D.M. Matson, Thermophysical Properties of Nickel-Based Superalloys, presentation slides, Twentieth Symposium on Thermophysical Properties, Boulder CO (June 2018), NASA NTRS 20180005535. Conference slides, not peer reviewed"
+url = "https://ntrs.nasa.gov/api/citations/20180005535/downloads/20180005535.pdf"
+
+[references.chen2023]
+citation = "B. Chen, Y. Bian, Z. Li, B. Dong, S. Li, C. Tian, X. He, G. Yu, Effect of Laser Beam Profile on Thermal Transfer, Fluid Flow and Solidification Parameters during Laser-Based Directed Energy Deposition of Inconel 718, Materials 16 (2023) 4221"
+doi = "10.3390/ma16124221"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC10303503/"
+
 [thermal]
 density = { value = 8170, unit = "kg/m^3", ref = "agazhanov2019", uncertainty = [8090, 8250], uncertainty_type = "bounds", T_range = [298, 298], note = "room-temperature bar stock, 8.17 +/- 0.08 g/cm^3 (confidence level not stated); Hosaeus 2001 and SMC-045 quote 8190" }
 solidus = { value = 1528, unit = "K", ref = "hosaeus2001", uncertainty = [1528, 1538], uncertainty_type = "bounds", note = "DTA, 1255 C; Agazhanov 2019 DSC melting onset 1537.65 K; SMC-045 melting range starts at 1260 C (1533 K)" }
@@ -83,6 +102,17 @@ conductivity = { value = 0.22, unit = "W/(m K)", ref = "wei2018", uncertainty = 
 
 [optical]
 absorptivity = { value = 0.6, unit = "1", ref = "honda2025", T_range = [423, 673], note = "powder bed (Concept Laser CL 100NB), no melting: calorimetry in an SLM280 under Ar, 1070 nm Gaussian beam, 50 W, ~2.2 mm spot, ~16 m/s. No significant T dependence over 150-400 C. Not a melting-mode (conduction or keyhole) coupling; the same paper cites 0.30 for polished flat IN718 at 1.06 um and 300 C (Sainte-Catherine et al.)" }
+
+[flow]
+# Liquid-state properties for the conduction source's melt-pool flow (flow lbm).
+# Recorded only: pass them in the deck (docs/MATERIAL_CARDS.md, Flow).
+# WEAKLY SOURCED: no primary measurement of dsigma/dT or viscosity of liquid
+# IN718 could be opened for this card. Mills 2002 (the usual source) was not seen.
+surface_tension = { value = 1.54, unit = "N/m", ref = "nishi2024", note = "average surface tension of Alloy 718 by the maximum bubble pressure method, FROM THE ABSTRACT ONLY (the paper is open access but the publisher blocked the download); temperature range and composition not seen. The unreviewed electrostatic-levitator slides of SanSoucie 2018 show 1.77 N/m at 1572 K" }
+dsigma_dT = { value = -1.1e-4, unit = "N/(m K)", ref = "chen2023", composition = "not stated", note = "SECONDARY: the input table (Table 2) of the DED flow model of Chen 2023, attributed there to Li et al., Mater. Des. 119 (2017) 351 (not read) and not traced to a measurement. The sign and size of dsigma/dT of steels and Ni alloys depend on dissolved S and O (a few tens of ppm S turn it positive): match the composition entry to your feedstock before using it. The slides of SanSoucie 2018 fit -3.2e-3 N/(m K) over only 40 K, not usable" }
+viscosity = { value = 6.0e-3, unit = "Pa s", ref = "chen2023", note = "SECONDARY: dynamic viscosity in the same input table of Chen 2023 (no temperature). The slides of SanSoucie 2018 show 14.9 mPa s at 1572 K, falling 0.05 mPa s per K, 2.5 times higher. Nishi 2024 measured it with an oscillating crucible, but the fit is missing from the abstract. Kinematic nu = 8.4e-7 m^2/s with the liquid density below" }
+density_liquid = { value = 7158, T_ref = 1572, slope = -0.628, unit = "kg/m^3", slope_unit = "kg/(m^3 K)", ref = "sansoucie2018", note = "SanSoucie 2018 slide 13, electrostatic levitation at NASA MSFC, corrected for evaporation: rho = 7158.3 +/- 3.0 - (0.6278 +/- 0.0036) (T - Tm) with Tm = 1572 K on the slide (this card's liquidus is 1610 K); conference slides, not peer reviewed, range of the fit not stated. Nishi 2024 (abstract only) gives an average of 7430 kg/m^3 and Chen 2023 uses 7400" }
+thermal_expansion = { value = 8.8e-5, unit = "1/K", ref = "sansoucie2018", note = "volumetric, derived for this card as -slope/density of density_liquid (0.628 / 7158)" }
 
 [microstructure]
 # Literature tip kinetics; nucleation records are left to the decks.
@@ -110,3 +140,16 @@ hatch = { value = 110e-6, unit = "m", ref = "wang2023", note = "10 mm stripes" }
 layer_thickness = { value = 40e-6, unit = "m", ref = "wang2023" }
 preheat = { value = 353, unit = "K", ref = "wang2023", note = "bottom centre of the substrate heated to 80 C" }
 validation = { melt_pool_width = 179.2e-6, melt_pool_depth = 173.9e-6, unit = "m", ref = "wang2023", note = "width = 2 x the reported half-width 89.6 +/- 5.5 um; depth 173.9 +/- 13.4 um (Table 1, layer 300, mid-of-hatch)" }
+
+# Laser DED (blown powder) process set. Extra DED records (powder_feed,
+# beam_diameter) are recorded only.
+
+[process.ded_chen2023_1500W]
+method = "laser DED, blown powder"
+machine = "IPG YLS-10000 fibre laser at 1070 nm, continuous coaxial nozzle, KUKA six-axis robot"
+note = "single track on a 100 x 40 x 40 mm Inconel 718 substrate, powder 59-123 um, Ar carrier and shield; the validation case of a thermal-fluid DED model. The same table gives 1800 W (clad width 1.57 mm, penetration 0.39 mm, height 0.34 mm) and 2100 W (1.88, 0.46, 0.34 mm). Preheat and capture efficiency not reported; the model's absorptance was not found in what I read."
+power = { value = 1500, unit = "W", ref = "chen2023" }
+speed = { value = 10e-3, unit = "m/s", ref = "chen2023" }
+beam_diameter = { value = 3.2e-3, unit = "m", profile = "top-hat", ref = "chen2023", note = "twice the stated spot radius of 1.6 mm; the authors model the beam as a super-Gaussian of order about 5, nearly top-hat, so no Gaussian spot record" }
+powder_feed = { value = 8.33e-5, unit = "kg/s", ref = "chen2023", note = "5 g/min" }
+validation = { track_width = 1.46e-3, track_height = 0.35e-3, melt_pool_depth = 0.32e-3, unit = "m", ref = "chen2023", note = "Table 6, experiment: clad width, deposition height above and penetration depth below the substrate surface" }

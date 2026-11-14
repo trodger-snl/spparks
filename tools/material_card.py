@@ -33,10 +33,15 @@ UNITS = {
     'microstructure.nucleation_density': '1/m^3', 'microstructure.critical_undercooling': 'K',
     'microstructure.undercooling_deviation': 'K', 'microstructure.mean_nuclei_volume': 'm^3',
     'microstructure.nuclei_volume_deviation': 'm^3',
+    # [flow]: liquid properties for the conduction source's `flow lbm` (recorded; decks pass them)
+    'flow.surface_tension': 'N/m', 'flow.dsigma_dT': 'N/(m K)', 'flow.viscosity': 'Pa s',
+    'flow.density_liquid': 'kg/m^3', 'flow.thermal_expansion': '1/K',
 }
 PROCESS_UNITS = {'power': 'W', 'speed': 'm/s', 'hatch': 'm', 'layer_thickness': 'm', 'spot': 'm',
                  'source_depth': 'm', 'preheat': 'K', 'absorptivity': '1', 'convection': 'W/(m^2 K)',
-                 'validation': 'm'}
+                 'validation': 'm',
+                 # DED sets (recorded only)
+                 'powder_feed': 'kg/s', 'capture_efficiency': '1', 'beam_diameter': 'm'}
 SPOT_CONVENTIONS = {'1/e radius', '1/e2 radius', '1/e2 diameter', 'D4sigma', 'FWHM'}
 UNCERTAINTY_TYPES = {'1sigma', '2sigma', 'bounds', 'relative_1sigma'}
 
@@ -125,7 +130,7 @@ def lint(card, check_doi=False):
             elif isinstance(v, dict):
                 yield from walk(v, p)
 
-    for sec in ('thermal', 'powder', 'optical', 'microstructure', 'process'):
+    for sec in ('thermal', 'powder', 'optical', 'flow', 'microstructure', 'process'):
         for p, rec in walk(card.get(sec, {}), sec):
             parts = p.split('.')
             unit = PROCESS_UNITS.get(parts[-1]) if sec == 'process' else UNITS.get(p)
@@ -186,6 +191,8 @@ def selftest():
     assert any('nobody2099' in e for e in lint(bad)), lint(bad)
     bad = dict(card, thermal=dict(card['thermal'], density={'value': 7.9, 'unit': 'g/cm^3', 'ref': 'estimate'}))
     assert any('unit must be' in e for e in lint(bad))
+    bad = dict(card, flow=dict(card.get('flow', {}), dsigma_dT={'value': -4.3e-4, 'unit': 'N/m/K', 'ref': 'estimate'}))
+    assert any('flow.dsigma_dT: unit must be' in e for e in lint(bad)), lint(bad)
     poly = {'form': 'polynomial', 'coeffs': [2e-6, 1e-7, 0, 0]}
     assert max_rel_err(fit_poly(lambda x: front_source(poly, x), 0, 50, 3), lambda x: front_source(poly, x), 0, 50) < 1e-9
     src = {'form': 'power_law', 'a': 1e-4, 'n': 2.0}       # a quadratic is fitted exactly

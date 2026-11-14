@@ -6,9 +6,9 @@ schema_version = 1
 material = "304L"
 designation = { UNS = "S30403", spec = "AISI 304L; wrought per ASTM A240/A276; LPBF powder gas-atomised 304L" }
 composition_wt_pct = { Fe = "bal", Cr = "18-20", Ni = "8-12", Mn = "<2", Si = "<0.75", N = "<0.10", C = "<0.03", note = "UNS S30403 ranges, not a measured heat" }
-version = "1.0.0"
+version = "1.1.0"
 created = 2026-10-17
-modified = 2026-10-17
+modified = 2026-11-14
 status = "draft"
 reviewed_by = ""
 
@@ -17,6 +17,12 @@ version = "1.0.0"
 date = 2026-10-17
 author = "research agent (Claude)"
 changes = "Initial draft from literature: Kim 1975 304L tables, Mills 2002 melting range, Cezairliyan 1980 emittance, Simonds 2018 absorptance, Li & Tan 2017 growth kinetics, two 304L LPBF process sets."
+
+[[changelog]]
+version = "1.1.0"
+date = 2026-11-14
+author = "research agent (Claude)"
+changes = "Added [flow] (surface tension and its temperature coefficient of a low-sulfur SUS304 from Ozawa 2014, stainless-steel viscosity and liquid density from Mills 2004) and one laser DED process set (Zhang 2025). No existing value changed."
 
 [references.kim1975]
 citation = "C.S. Kim, Thermophysical Properties of Stainless Steels, Argonne National Laboratory report ANL-75-55 (1975)"
@@ -62,6 +68,21 @@ citation = "M.M. Parvez, T. Pan, Y. Chen, S. Karnati, J.W. Newkirk, F. Liou, Hig
 doi = "10.3390/ma13071591"
 url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC7177987/"
 
+[references.ozawa2014]
+citation = "S. Ozawa, K. Morohoshi, T. Hibiya, Influence of Oxygen Partial Pressure on Surface Tension of Molten Type 304 and 316 Stainless Steels Measured by Oscillating Droplet Method Using Electromagnetic Levitation, ISIJ Int. 54 (2014) 2097-2103"
+doi = "10.2355/isijinternational.54.2097"
+url = "https://www.jstage.jst.go.jp/article/isijinternational/54/9/54_2097/_pdf"
+
+[references.mills2004]
+citation = "K.C. Mills, Y. Su, Z. Li, R.F. Brooks, Equations for the Calculation of the Thermo-physical Properties of Stainless Steel, ISIJ Int. 44 (2004) 1661-1668"
+doi = "10.2355/isijinternational.44.1661"
+url = "https://www.jstage.jst.go.jp/article/isijinternational1989/44/10/44_10_1661/_pdf"
+
+[references.zhang2025]
+citation = "X. Zhang, X. Lu, Grain Refinement Caused by Larger Particles in Laser 3D Printing of AISI 304L Stainless Steel, Materials 18 (2025) 1223"
+doi = "10.3390/ma18061223"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC11944023/"
+
 [thermal]
 density = { value = 7894, unit = "kg/m^3", ref = "kim1975", T_range = [300, 300], note = "Kim Table 7 (7.894 g/cm^3 at 300 K), smoothed from Type 304 (not 304L) density data; carbon effect taken as negligible. The conduction solver uses one dense density" }
 solidus = { value = 1673, unit = "K", ref = ["mills2002", "li_lough2017"], note = "Mills 2002 value as quoted for 304L by Li et al. 2017 (book table not read). Cezairliyan & Miiller 1980 measured a single melting point of 1707 +/- 8 K on 304L; Kim 1975 gives a 1670-1730 K melting range" }
@@ -82,6 +103,15 @@ T_ref = { value = 1000, unit = "K", ref = "estimate", note = "between preheat an
 
 [optical]
 absorptivity = { value = 0.31, unit = "1", ref = "simonds2018", note = "316L proxy: bulk NIST SRM 1155a (316L), stationary 1070 nm spot welds, conduction mode (Table 3, coupling 0.31 at 1.2-2.05 J); rises to 0.5-0.86 in transition/keyhole mode. Bulk, not powder; LPBF powder beds absorb more" }
+
+[flow]
+# Liquid-state properties for the conduction source's melt-pool flow (flow lbm).
+# Recorded only: pass them in the deck (docs/MATERIAL_CARDS.md, Flow).
+surface_tension = { value = 1.692, unit = "N/m", ref = "ozawa2014", T_range = [1694, 1694], note = "at 1694 K, Ozawa 2014 Eq. 13: electromagnetic levitation, oscillating drop, in Ar-He-5 vol% H2 (reducing). Measurement uncertainty under 5 % (abstract). The sample is a clean laboratory SUS304 (17.75Cr-7.94Ni, Mn 0.01, S < 10 ppm), not a commercial 304L heat" }
+dsigma_dT = { value = -3.291e-4, unit = "N/(m K)", ref = "ozawa2014", T_range = [1582, 2076], composition = "S < 10 ppm before and after, Mn 0.01 wt%, reducing Ar-He-5 vol% H2 atmosphere", note = "Ozawa 2014 Eq. 13, sigma = 1692 - 0.3291 (T - 1694) mN/m: the low-sulfur, oxygen-free case. The sign and size of dsigma/dT of steels and Ni alloys depend on dissolved S and O (a few tens of ppm S turn it positive): match the composition entry to your feedstock before using it. The same sample in Ar-He with an oxygen partial pressure of 1e-2 Pa gave +0.4175 mN/(m K) (Eq. 14, 1422 + 0.4175 (T - 1694) over 1620-2080 K) and joined the reducing-gas line above about 2080 K. Ozawa quotes Brooks & Quested (not read): 304 with about 10 ppm S has -0.25 to -0.40 mN/(m K), and the sign turns positive above about 45 ppm S. Mills 2004 Table 4 (S series at 5 ppm soluble O) is quoted in the 316L card" }
+viscosity = { T = [1773, 1800, 1900], value = [8.07e-3, 7.54e-3, 5.98e-3], unit = "Pa s", extrapolation = "clamp", ref = "mills2004", note = "dynamic viscosity, Mills 2004 Table 3(b); the table follows Eq. 28, ln eta(mPa s) = -2.396 + 7950/T, which is R.F. Brooks's oscillation viscometry on one stainless steel (25.6Cr-6.5Ni-4Mo) applied by Mills to all stainless steels on the assumption that Fe, Cr and Ni have similar viscosities. Not a measurement on 304L. Mills warns that inclusions in commercial steels raise it. Kinematic: with the liquid density below, nu = 1.10e-6 m^2/s at 1800 K (7.54e-3 / 6842)" }
+density_liquid = { value = 6908, T_ref = 1723, slope = -0.86, unit = "kg/m^3", slope_unit = "kg/(m^3 K)", ref = "mills2004", T_range = [1723, 1900], note = "Mills 2004 Table 3(b), calculated values for austenitic stainless steel (6908 at 1723 K, 6842 at 1800 K, 6756 at 1900 K; stated uncertainty 3 %); slope from Eq. 6. The composition behind the table was not checked. Not a measurement on 304L" }
+thermal_expansion = { value = 1.24e-4, unit = "1/K", ref = "mills2004", note = "volumetric, derived for this card as -slope/density of density_liquid (0.86 / 6908)" }
 
 [microstructure]
 # Literature growth kinetics, a polynomial in dT = liquidus - T (highest power first).
@@ -109,3 +139,16 @@ speed = { value = 0.8, unit = "m/s", ref = "parvez2020" }
 hatch = { value = 85e-6, unit = "m", ref = "parvez2020" }
 layer_thickness = { value = 50e-6, unit = "m", ref = "parvez2020" }
 preheat = { value = 353.15, unit = "K", ref = "parvez2020", note = "substrate and powder held at 80 C (Sec. 2.2)" }
+
+# Laser DED (blown powder) process set. Extra DED records (powder_feed,
+# beam_diameter) are recorded only.
+
+[process.ded_zhang2025_1100W]
+method = "laser DED, blown powder"
+machine = "powder-fed laser melting deposition device (make not given)"
+note = "single 20 mm tracks and a 42-pass, 6-layer block (13 mm high, 45 mm long) on a 50 x 50 x 10 mm 304L plate, 30 s dwell between fill runs (Table 1); the study varies the powder particle size. Hatch, absorptivity, preheat and bead dimensions are not given in what I read."
+power = { value = 1100, unit = "W", ref = "zhang2025" }
+speed = { value = 8.0e-3, unit = "m/s", ref = "zhang2025", note = "480 mm/min" }
+layer_thickness = { value = 1.5e-3, unit = "m", ref = "zhang2025", note = "layer height" }
+beam_diameter = { value = 3.0e-3, unit = "m", profile = "unstated", ref = "zhang2025", note = "laser beam diameter, no convention or profile given" }
+powder_feed = { value = 1.55e-4, unit = "kg/s", ref = "zhang2025", note = "9.3 g/min" }

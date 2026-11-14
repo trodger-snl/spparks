@@ -6,9 +6,9 @@ schema_version = 1
 material = "IN625"
 designation = { UNS = "N06625", spec = "ASTM F3056 (PBF nickel alloy UNS N06625); wrought ASTM B443/B446; W.Nr. 2.4856" }
 composition_wt_pct = { Ni = ">=58.0", Cr = "20.0-23.0", Mo = "8.0-10.0", Nb_plus_Ta = "3.15-4.15", Fe = "<=5.0", C = "<=0.10", Mn = "<=0.50", Si = "<=0.50", P = "<=0.015", S = "<=0.015", Al = "<=0.40", Ti = "<=0.40", Co = "<=1.0", note = "UNS N06625 limits (Special Metals datasheet Table 1), not a measured heat. AM-Bench 2018 powder lot (heigel2020 Table 1): Ni 64.66, Cr 20.61, Mo 8.82, Nb 3.97, Fe 0.81, Ti 0.39, Al 0.3, Si 0.18, Co 0.17, Mn 0.04, C 0.02" }
-version = "2.0.0"
+version = "2.1.0"
 created = 2026-10-17
-modified = 2026-10-17
+modified = 2026-11-14
 status = "draft"
 reviewed_by = ""
 
@@ -23,6 +23,12 @@ version = "2.0.0"
 date = 2026-10-17
 author = "T. Rodgers"
 changes = "solid_front_vel is now the front_velocity_source power law itself, which SPPARKS reads directly, instead of a degree-5 polynomial fit (4.8% max error); front velocities change by up to that error."
+
+[[changelog]]
+version = "2.1.0"
+date = 2026-11-14
+author = "research agent (Claude)"
+changes = "Added [flow] (liquid surface tension, its temperature coefficient and density of Boehler L625 from Leitner 2021, viscosity from Pichler 2021) and two laser DED process sets (Fillingim 2024, Wang 2025). No existing value changed."
 
 [references.specialmetals625]
 citation = "Special Metals Corporation, INCONEL alloy 625 (technical bulletin SMC-063), 2013. Vendor datasheet: Table 1 composition, Table 2 density, melting range and calculated specific heat, Table 3 thermal conductivity (measured at Battelle Memorial Institute, annealed 2100 F/1 h)"
@@ -69,6 +75,34 @@ url = "https://www.osti.gov/servlets/purl/2538332"
 citation = "L. Li, F. Wang, J. Gao, K. Yu, L. Wang, Y. Liu, Accurately Measuring the Infrared Spectral Emissivity of Inconel 601, Inconel 625, and Inconel 718 Alloys during the Oxidation Process, Sensors 24 (2024) 5906"
 doi = "10.3390/s24185906"
 
+[references.leitner2021]
+citation = "T. Leitner, Thermophysical property measurement of industrial metals and alloys using electromagnetic levitation, doctoral thesis, Graz University of Technology (May 2021)"
+url = "https://www.tugraz.at/fileadmin/user_upload/Institute/IEP/Thermophysics_Group/Files/Diss-LeitnerThomas.pdf"
+
+[references.pichler2021diss]
+citation = "P. Pichler, Thermophysical property measurement: On earth and in microgravity on-board of parabolic flights and the International Space Station, doctoral thesis, Graz University of Technology (March 2021)"
+url = "https://www.tugraz.at/fileadmin/user_upload/Institute/IEP/Thermophysics_Group/Files/DissPeterPichler_finale.pdf"
+
+[references.brosius2021]
+citation = "N. Brosius, K. Ward, E. Wilson, Z. Karpinsky, M. SanSoucie, T. Ishikawa, S. Matsumoto, R. Narayanan, Benchmarking surface tension measurement method using two oscillation modes in levitated liquid metals, npj Microgravity 7 (2021) 10"
+doi = "10.1038/s41526-021-00137-9"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC7943785/"
+
+[references.fillingim2024]
+citation = "K.B. Fillingim, R. Kannan, L. Heinrich, K. Saleeby, P. Nandwana, T. Feldhausen, Process parameter translation strategies for variable directed energy deposition spot size using 316L, copper, and Inconel 625, Heliyon 10 (2024) e37658"
+doi = "10.1016/j.heliyon.2024.e37658"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC11422052/"
+
+[references.wang2025]
+citation = "W. Wang, G. Xu, Y. Hou, C. Zhang, G. Cui, P. Qin, J. Shang, X. Fan, Laser Directed Energy Deposition of Inconel625 to Ti6Al4V Heterostructure via Nonlinear Gradient Transition Interlayers, Materials 18 (2025) 5598"
+doi = "10.3390/ma18245598"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC12734892/"
+
+[references.lia2017]
+citation = "F. Lia, J. Park, J. Tressler, R. Martukanitz, Partitioning of laser energy during directed energy deposition, Addit. Manuf. 18 (2017) 31-39"
+doi = "10.1016/j.addma.2017.08.012"
+url = "https://pure.psu.edu/en/publications/partitioning-of-laser-energy-during-directed-energy-deposition/"
+
 [thermal]
 density = { value = 8440, unit = "kg/m^3", ref = "specialmetals625", note = "room-temperature solid (8.44 g/cm^3, vendor). Heugenhauser & Kaschnitz, High Temp.-High Press. 48 (2019/2020), doi 10.32908/hthp.v48.726, measured solid+liquid density but was not accessible" }
 solidus = { value = 1563, unit = "K", ref = "specialmetals625", note = "melting range 1290-1350 C (2350-2460 F). Lane 2020 also assumes Tfreeze = 1290 C; Thermo-Calc solidus 1587 K is used by Ghosh et al. JOM 70 (2018)" }
@@ -90,6 +124,15 @@ psd = { D10 = 16.4e-6, D50 = 30.6e-6, D90 = 47.5e-6, unit = "m", method = "dynam
 
 [optical]
 absorptivity = { value = 0.28, unit = "1", ref = "ye2019", note = "bare IN625 plate, 1080 nm CW, calorimetric; minimum absorptivity Am at the conduction-keyhole transition (Ye Table 1; flat Ni literature value 0.27). Absorptivity rises sharply above the keyhole threshold and saturates near 0.7 for IN625/Ti64/316L. Use 0.28 for conduction mode only; powder-covered values are not given separately for IN625 here" }
+
+[flow]
+# Liquid-state properties for the conduction source's melt-pool flow (flow lbm).
+# Recorded only: pass them in the deck (docs/MATERIAL_CARDS.md, Flow).
+surface_tension = { value = 1.779, unit = "N/m", ref = "leitner2021", uncertainty = 0.011, uncertainty_type = "2sigma", T_range = [1623, 1623], note = "at the liquidus 1623 K, Leitner 2021 Table 3.15: ground-based electromagnetic levitation, oscillating drop, Boehler L625 (an Alloy 625; nominal Ni-21Cr-8.5Mo-3.4Nb-0.18Al). Brosius 2021 Table 2, Inconel 625 in an electrostatic levitator at 1623 K: 1.72 +/- 0.15 and 1.75 +/- 0.04 N/m (two oscillation modes). Pichler 2021 Table A.4, same L625 batch on parabolic flights: 1.78-1.93 N/m over 1470-1633 K" }
+dsigma_dT = { value = -1.8e-4, unit = "N/(m K)", ref = "leitner2021", uncertainty = 1.0e-4, uncertainty_type = "2sigma", T_range = [1607, 1849], composition = "Boehler L625, nominal Ni-21Cr-8.5Mo-3.4Nb-0.18Al; S and O not reported", note = "Leitner 2021 Table 3.15, -0.18 +/- 0.10 mN/(m K), five samples. The sign and size of dsigma/dT of steels and Ni alloys depend on dissolved S and O (a few tens of ppm S turn it positive): match the composition entry to your feedstock before using it. No sulfur or oxygen series for Alloy 625 was found. Thesis data; a journal version was not found" }
+viscosity = { value = 9.0e-3, unit = "Pa s", ref = "pichler2021diss", T_range = [1623, 1623], note = "dynamic viscosity at the liquidus from Pichler 2021 Eq. 5.6, eta = 8.514e-3 exp(1.131e4 / T) mPa s fitted over 1520-1690 K: oscillating-drop damping in the TEMPUS levitator on parabolic flights, one sample of the same L625 batch. Mostly undercooled data and scattered above the liquidus (Table A.5: 8.3 mPa s at 1619 K, 3.3 at 1633 K, 7.9 at 1647 K, 5.3 at 1687 K), so trust it to a factor of about two. Kinematic nu = 1.2e-6 m^2/s with the liquid density below; 7.3e-7 at 1750 K if the fit is extrapolated" }
+density_liquid = { value = 7516, T_ref = 1623, slope = -0.51, unit = "kg/m^3", slope_unit = "kg/(m^3 K)", ref = "leitner2021", uncertainty = 75, uncertainty_type = "2sigma", T_range = [1624, 1803], note = "Leitner 2021 Table 3.15, 7516 +/- 75 at 1623 K, slope -0.51 +/- 0.78 (the uncertainty exceeds the slope). Pichler 2021 Eq. 5.8, preliminary ISS electrostatic-levitator data on the same batch: 8994 - 0.781 T over 1630-1760 K (7726 at 1623 K, 3 % higher). Heugenhauser & Kaschnitz 2020 (dilatometry, not read) lies between the two according to both theses" }
+thermal_expansion = { value = 6.8e-5, unit = "1/K", ref = "leitner2021", note = "volumetric, derived for this card as -slope/density of density_liquid (0.51 / 7516); poorly constrained, since the slope is uncertain by more than its value. 1.0e-4 from the Pichler 2021 fit" }
 
 [microstructure]
 # Front velocity only; nucleation parameters are deliberately omitted (decks supply them).
@@ -126,3 +169,28 @@ speed = { value = 0.8, unit = "m/s", ref = "heigel2020" }
 hatch = { value = 100e-6, unit = "m", ref = "heigel2020" }
 layer_thickness = { value = 20e-6, unit = "m", ref = "heigel2020" }
 spot = { value = 100e-6, unit = "m", convention = "D4sigma", ref = ["heigel2020", "lane2020"], note = "heigel2020 gives a nominally Gaussian 0.10 mm diameter from vendor values without a convention; lane2020 gives D4sigma 100 um on the same machine" }
+
+# Laser DED (blown powder) process sets. Extra DED records (powder_feed,
+# beam_diameter) are recorded only. Lia 2017 (abstract only) measured by
+# calorimetry that 37 % of the laser energy was absorbed in total during DED
+# of Inconel 625 at about 1 kW, 11 % of the total being lost with unfused
+# powder: a guide for lambda in DED decks, not a value of any set below.
+
+[process.ded_fillingim2024_2000W]
+method = "laser DED, blown powder"
+machine = "Okuma MU-8000V Laser EX hybrid, intermediate nozzle (1.5-3.5 mm spots)"
+note = "10 x 5 x 9 mm wall of 100 % Inconel 625 (Praxair powder -106+45 um) on a 316L substrate, the reference sample of an Inconel 625/copper blending study (Tables 3 and 4); parameters from operator experience on this machine. Porosity 0.100 %, with cracking near the 316L substrate reported for the 75 % Inconel sample. Preheat, absorptivity, bead width and beam profile not reported."
+power = { value = 2000, unit = "W", ref = "fillingim2024" }
+speed = { value = 15e-3, unit = "m/s", ref = "fillingim2024", note = "900 mm/min" }
+hatch = { value = 1.65e-3, unit = "m", ref = "fillingim2024", note = "stepover" }
+layer_thickness = { value = 0.62e-3, unit = "m", ref = "fillingim2024" }
+beam_diameter = { value = 3.5e-3, unit = "m", profile = "unstated", ref = "fillingim2024", note = "spot size with no stated convention or profile, so no spot record: give the source size in the deck" }
+powder_feed = { value = 2.0e-4, unit = "kg/s", ref = "fillingim2024", note = "12 g/min" }
+
+[process.ded_wang2025_1800W]
+method = "laser DED, blown powder, graded build"
+machine = "Raycham LDM-8060 L-DED, inert atmosphere"
+note = "Inconel 625 end of an Inconel 625 to Ti-6Al-4V (TC4) graded build: 20 to 40 layers of IN625 on a 200 x 100 x 20 mm IN625 plate; rotating-electrode powders 45-105 um. The power was raised linearly with the TC4 fraction, 1800 W for IN625 to 2300 W for TC4 in 50 W steps per 10 vol% (Table 2), at fixed speed and layer thickness; shielding gas 15 L/min. Spot size, hatch and powder feed rate are not given in what I read."
+power = { value = 1800, unit = "W", ref = "wang2025" }
+speed = { value = 12e-3, unit = "m/s", ref = "wang2025", note = "720 mm/min" }
+layer_thickness = { value = 0.6e-3, unit = "m", ref = "wang2025" }

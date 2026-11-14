@@ -6,9 +6,9 @@ schema_version = 1
 material = "Ti6Al4V"
 designation = { UNS = "R56400 (Grade 5), R56401 (Grade 23 ELI)", spec = "LPBF: ASTM F2924 (Grade 5), ASTM F3001 (ELI)" }
 composition_wt_pct = { Ti = "bal", Al = "5.50-6.75", V = "3.50-4.50", Fe = "<0.30", O = "<0.20", C = "<0.08", N = "<0.05", H = "<0.015", note = "Grade 5 ranges; ELI (F3001) narrows Al to 5.50-6.50, Fe <0.25, O <0.13, H <0.012. Al/V ranges as quoted by bartsch2021; interstitial limits from the ASTM F2924/F3001 tables, not re-checked against the standard text for this card. Measured LPBF powder heat (rottler2025 Table 1): Al 6.23, V 3.76, O 0.119, N 0.035, H 0.004." }
-version = "1.0.0"
+version = "1.1.0"
 created = 2026-10-17
-modified = 2026-10-17
+modified = 2026-11-14
 status = "draft"
 reviewed_by = ""
 
@@ -17,6 +17,12 @@ version = "1.0.0"
 date = 2026-10-17
 author = "research agent (Claude)"
 changes = "Initial card: Bartsch 2021 LPBF material model (k, cp, Ts, Tl, latent heat, powder k), Mohr 2020 liquid cp, Cezairliyan 1977 emittance, Rottler 2025 density/packing, Ye 2019 absorptivity, Panwisawas 2017 KGT front law, three published LPBF process sets."
+
+[[changelog]]
+version = "1.1.0"
+date = 2026-11-14
+author = "research agent (Claude)"
+changes = "Added [flow] (liquid surface tension, its temperature coefficient, viscosity and density from the ISS levitation measurements of Mohr 2020) and three laser DED process sets (Marshall 2016 LENS thin wall, Seely 2024 graded Ti-6Al-4V/Ti-1B, Wang 2025). No existing value changed."
 
 [references.bartsch2021]
 citation = "K. Bartsch, D. Herzog, B. Bossen, C. Emmelmann, Material modeling of Ti-6Al-4V alloy processed by laser powder bed fusion for application in macro-scale process simulation, Mater. Sci. Eng. A 814 (2021) 141237"
@@ -65,6 +71,30 @@ citation = "E. Vaglio, T. De Monte, A. Lanzutti, G. Totis, M. Sortino, L. Fedriz
 doi = "10.1016/j.dib.2020.106443"
 url = "https://data.mendeley.com/datasets/s9438vb5xd"
 
+[references.leitner2021]
+citation = "T. Leitner, Thermophysical property measurement of industrial metals and alloys using electromagnetic levitation, doctoral thesis, Graz University of Technology (May 2021)"
+url = "https://www.tugraz.at/fileadmin/user_upload/Institute/IEP/Thermophysics_Group/Files/Diss-LeitnerThomas.pdf"
+
+[references.marshall2016]
+citation = "G.J. Marshall, S.M. Thompson, N. Shamsaei, Data indicating temperature response of Ti-6Al-4V thin-walled structure during its additive manufacture via Laser Engineered Net Shaping, Data in Brief 7 (2016) 697-703"
+doi = "10.1016/j.dib.2016.02.084"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC4802429/"
+
+[references.seely2024]
+citation = "D. Seely, M.A. Bagheri, D. Dickel, H.E. Cho, H. Rhee, M.F. Horstemeyer, The Chemistry-Process-Structure Relationships of a Functionally Graded Ti-6Al-4V/Ti-1B Alloy Processed with Laser-Engineered Net Shaping Creates Borlite, Materials 17 (2024) 3491"
+doi = "10.3390/ma17143491"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC11278465/"
+
+[references.wang2025]
+citation = "W. Wang, G. Xu, Y. Hou, C. Zhang, G. Cui, P. Qin, J. Shang, X. Fan, Laser Directed Energy Deposition of Inconel625 to Ti6Al4V Heterostructure via Nonlinear Gradient Transition Interlayers, Materials 18 (2025) 5598"
+doi = "10.3390/ma18245598"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC12734892/"
+
+[references.lia2017]
+citation = "F. Lia, J. Park, J. Tressler, R. Martukanitz, Partitioning of laser energy during directed energy deposition, Addit. Manuf. 18 (2017) 31-39"
+doi = "10.1016/j.addma.2017.08.012"
+url = "https://pure.psu.edu/en/publications/partitioning-of-laser-energy-during-directed-energy-deposition/"
+
 [thermal]
 density = { value = 4417.5, unit = "kg/m^3", ref = "rottler2025", uncertainty = [4410, 4430], uncertainty_type = "bounds", T_range = [293, 298], note = "as-built LPBF Ti-6Al-4V ELI, He pycnometry (4.4175 g/cm^3, ~0.6% porosity); powder skeletal 4414.0. Bounds = data-sheet spread 4410-4430 quoted by bartsch2021. One dense density for the conduction solver." }
 solidus = { value = 1878, unit = "K", ref = "bartsch2021", uncertainty = [1873, 1878], uncertainty_type = "bounds", note = "median of experimental + simulation literature (Bartsch 2021 Sec. 3.3; experimental values 1873 and 1878 K). Cezairliyan 1977 saw a melting plateau at 1943 +/- 8 K in subsecond heating; panwisawas2017 also uses 1878 K." }
@@ -85,6 +115,15 @@ packing = { value = 0.61, unit = "1", ref = "rottler2025", uncertainty = [0.60, 
 
 [optical]
 absorptivity = { value = 0.26, unit = "1", ref = "ye2019", note = "minimum calorimetric absorptivity of bare Ti-6Al-4V plate at ~1080 nm in conduction mode (flat melt surface), Ye 2019 Table 1; flat-Ti room-temperature value 0.39. Absorptivity rises sharply above the keyhole threshold (Ye 2019 Fig. 1, not read numerically). cook2023 calibrates 0.27 +/- 0.03 in situ for LPBF at 1.07 um; bartsch2021 reviews solid 0.34-0.55 (median 0.4) and powder 0.65-0.74 (median 0.7)." }
+
+[flow]
+# Liquid-state properties for the conduction source's melt-pool flow (flow lbm).
+# Recorded only: pass them in the deck (docs/MATERIAL_CARDS.md, Flow).
+surface_tension = { value = 1.493, unit = "N/m", ref = "mohr2020", T_range = [1933, 1933], note = "at 1933 K, Mohr 2020 Eq. 23, (1.493 +/- 0.008) N/m: oscillating drop in the electromagnetic levitator on the ISS, five cycles, 1700-1950 K (stable and undercooled liquid). Oxygen content of the sample not given. Leitner 2021 Table 3.9, ground levitation of LPBF-printed Ti-6Al-4V: 1470 +/- 4 mN/m (fresh powder) and 1452 +/- 5 (reused powder) at 1928 K" }
+dsigma_dT = { value = -1.9e-4, unit = "N/(m K)", ref = "mohr2020", uncertainty = 0.5e-4, T_range = [1700, 1950], composition = "Ti-6Al-4V, oxygen not reported (the authors infer below 0.047 wt% from the viscosity)", note = "Mohr 2020 Eq. 23, -(1.9 +/- 0.5)e-4; the paper does not say what the +/- is. Leitner 2021 Table 3.9 on printed material: -0.23 +/- 0.11 mN/(m K) (fresh powder) and -0.08 +/- 0.11 (reused, more O and N), 1922-1992 K, k = 2. Oxygen pickup lowers the magnitude; no sign change reported for Ti-6Al-4V. The flow lbm default is -2.6e-4" }
+viscosity = { value = 4.0e-3, unit = "Pa s", ref = "mohr2020", T_range = [1933, 1933], note = "dynamic viscosity at the liquidus, about 4 mPa s: the authors' Arrhenius extrapolation of 5-8 mPa s measured only in the undercooled liquid at 1700-1850 K (the damping was too weak above). The fit coefficients are not printed. Kinematic nu = 9.8e-7 m^2/s with the liquid density below (the flow lbm default is 8.5e-7). Wunderlich 2008 (parabolic flights, not read) found higher values on samples with 0.047 and 0.096 wt% O" }
+density_liquid = { value = 4087, T_ref = 1933, slope = -0.204, unit = "kg/m^3", slope_unit = "kg/(m^3 K)", ref = "mohr2020", note = "Mohr 2020 Eq. 21, (4.087 +/- 0.001) - (0.204 +/- 0.007)e-3 (T - Tliq) g/cm^3, +/- the 95 % confidence interval of the fit, measurement uncertainty about 0.2 %. Tliq is taken as the 1933 K of Eq. 23; the text I read does not restate it for this equation, nor the range of the fit. Leitner 2021 Table 3.9: 4007 +/- 18 at 1928 K, slope -0.26 +/- 0.52 (1857-1973 K), 2 % lower" }
+thermal_expansion = { value = 5.0e-5, unit = "1/K", ref = "mohr2020", note = "volumetric, derived for this card as -slope/density of density_liquid (0.204 / 4087). The flow lbm default, 1.7e-4, is 3.4 times this" }
 
 [microstructure]
 # KGT tip kinetics for beta-Ti dendrites; nucleation records omitted (decks provide them).
@@ -117,3 +156,34 @@ power = { value = 110, unit = "W", ref = "rottler2025" }
 speed = { value = 0.905, unit = "m/s", ref = "rottler2025" }
 hatch = { value = 80e-6, unit = "m", ref = "rottler2025" }
 layer_thickness = { value = 20e-6, unit = "m", ref = "rottler2025" }
+
+# Laser DED (blown powder, LENS) process sets. Extra DED records (powder_feed)
+# are recorded only. Lia 2017 (abstract only) measured by calorimetry that 42 %
+# of the laser energy was absorbed in total during DED of Ti-6Al-4V at about
+# 1 kW, 14 % of the total being lost with unfused powder: a guide for lambda
+# in DED decks, not a value of any set below.
+
+[process.ded_marshall2016_lens_290W]
+method = "laser DED, blown powder (LENS)"
+machine = "OPTOMEC LENS 750 with a 1 kW Nd:YAG laser (IPG), four 1.016 mm nozzles"
+note = "thin wall, one track wide, 60 layers of 50.8 mm on a Ti-6Al-4V substrate, unidirectional, return at 25.4 mm/s with the laser off; PREP powder 44-149 um (Phelly Materials); Ar-purged, 16.2 to 14.9 ppm O2; nozzle standoff about 6.7 mm at the start and 10.2 mm at the end (the wall built 27.56 mm against 30.48 mm set). Spot size, absorptivity and preheat not given. The dataset holds melt-pool pyrometer and infrared images per layer. Closest published set to the 150-300 W, 10 mm/s decks."
+power = { value = 290, unit = "W", ref = "marshall2016" }
+speed = { value = 12.7e-3, unit = "m/s", ref = "marshall2016" }
+layer_thickness = { value = 0.508e-3, unit = "m", ref = "marshall2016", note = "z increment per layer" }
+powder_feed = { value = 3.2e-4, unit = "kg/s", ref = "marshall2016", note = "0.32 g/s as printed (19 g/min), high for 290 W: most of it cannot have been captured" }
+validation = { track_width = 1.78e-3, unit = "m", ref = "marshall2016", note = "measured thickness of the single-track wall (Table 1); mean layer height 27.56 mm / 60 = 0.46 mm" }
+
+[process.ded_seely2024_fgm_ti1b]
+method = "laser DED, blown powder (LENS), functionally graded"
+machine = "OPTOMEC LENS 750, two powder feeders"
+note = "functionally graded build from two pre-alloyed powders, Ti-6Al-4V and Ti-1B (1 wt% B): 25.4 x 25.4 mm on a 6.35 mm commercially pure Ti plate, eight composition layers from 100 % Ti-6Al-4V in 10 % steps of the Ti-1B feeder, six hatched passes per composition layer rotated 45 degrees, each pass depositing 200-400 um. One laser power and speed for all compositions. THE LASER POWER IS NOT REPORTED (chosen by the operator by trial and error), nor the spot or feed rates, so this set cannot drive a source by itself: pair it with ded_marshall2016_lens_290W (same machine type)."
+speed = { value = 8.5e-3, unit = "m/s", ref = "seely2024" }
+hatch = { value = 0.381e-3, unit = "m", ref = "seely2024" }
+
+[process.ded_wang2025_tc4_2300W]
+method = "laser DED, blown powder, graded build"
+machine = "Raycham LDM-8060 L-DED, inert atmosphere"
+note = "Ti-6Al-4V (TC4) end of an Inconel 625 to TC4 graded build on an IN625 plate; rotating-electrode powders 45-105 um. The power was raised linearly with the TC4 fraction, 1800 W for IN625 to 2300 W for TC4 in 50 W steps per 10 vol% (Table 2), at fixed speed and layer thickness; shielding gas 15 L/min. Spot size, hatch and powder feed rate are not given in what I read."
+power = { value = 2300, unit = "W", ref = "wang2025" }
+speed = { value = 12e-3, unit = "m/s", ref = "wang2025", note = "720 mm/min" }
+layer_thickness = { value = 0.6e-3, unit = "m", ref = "wang2025" }

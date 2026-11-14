@@ -3,7 +3,8 @@
 A material card is a TOML file (`materials/<name>.toml`) holding the
 material parameters the additive apps need. That covers the conduction
 source's tables, the constants Rosenthal and Moser use, solidus/liquidus and
-the microstructure calibrations, plus example LPBF process sets. Every value
+the microstructure calibrations, the liquid properties the melt-pool flow
+model needs, plus example LPBF and laser DED process sets. Every value
 carries a citation, so a run's log records which data it used. Example:
 `materials/316L.toml`.
 
@@ -127,6 +128,11 @@ the table below exactly; it never converts units.
 | `thermal.heat_capacity` (table), `thermal.linear.heat_capacity` | `J/(kg K)` |
 | `thermal.emissivity`, `powder.packing`, `optical.absorptivity` | `1` |
 | `powder.psd` (`{ D10, D50, D90 }`, recorded only) | `m` |
+| `flow.surface_tension` | `N/m` |
+| `flow.dsigma_dT` | `N/(m K)` |
+| `flow.viscosity` (dynamic; scalar or table) | `Pa s` |
+| `flow.density_liquid` | `kg/m^3`, with `T_ref` (K) and `slope` (`slope_unit = "kg/(m^3 K)"`) |
+| `flow.thermal_expansion` (volumetric) | `1/K` |
 | `microstructure.solid_front_vel` | `m/s`, with `dT_unit = "K"` |
 | `microstructure.nucleation_density` | `1/m^3` |
 | `microstructure.critical_undercooling`, `undercooling_deviation` | `K` |
@@ -137,6 +143,9 @@ the table below exactly; it never converts units.
 | `process.<set>.preheat` | `K` |
 | `process.<set>.absorptivity` | `1` |
 | `process.<set>.convection` | `W/(m^2 K)`, as `{ h, T_inf }` |
+| `process.<set>.powder_feed` (DED, recorded only) | `kg/s` |
+| `process.<set>.capture_efficiency` (DED, recorded only) | `1` |
+| `process.<set>.beam_diameter` (recorded only) | `m`, with `profile` |
 
 **Front velocity.**
 - `solid_front_vel` is what SPPARKS evaluates, in undercooling
@@ -168,6 +177,55 @@ the table below exactly; it never converts units.
   `1/e2 diameter`, `D4sigma` or `FWHM`.
 - `source_depth` is Moser's sz, a calibration rather than a beam property.
 
+**DED process sets.** Laser directed energy deposition (blown powder, LENS)
+sets are named `ded_<source>_<power>` and carry `method = "laser DED, ..."`.
+They use the same records, with `hatch` for the stepover and
+`layer_thickness` for the layer height (z step), plus three records that
+SPPARKS does not read:
+- `powder_feed`: powder mass flow at the nozzle.
+- `capture_efficiency`: the fraction of the fed powder that ends up in the
+  track or part (catchment efficiency); the note says which.
+- `beam_diameter`, with `profile = "top-hat"`, `"gaussian"` or `"unstated"`:
+  the spot as the paper gives it when it is not a Gaussian measure that
+  `spot.convention` covers. Most DED papers print a bare "spot size". A set
+  with `beam_diameter` and no `spot` gives `setup_temperature_source ... card`
+  no source size, so the run stops and asks for `spot sx sy sz` in the deck;
+  choosing that radius is then the user's modelling decision.
+
+`validation` may hold `track_width` and `track_height` (the bead on the
+surface) next to `melt_pool_depth` (penetration below the substrate
+surface). A DED set without its own `absorptivity` falls back to
+`[optical]`, which is a bare-plate or powder-bed value; the fraction of the
+laser power absorbed in DED also depends on the powder stream (the Ti6Al4V
+and IN625 cards quote a calorimetric measurement in a comment).
+
+**Flow.** `[flow]` holds the liquid-state properties of the conduction
+source's melt-pool flow (`flow lbm`, doc/temperature_source_conduction.txt).
+SPPARKS does not read the section yet, so pass the values in the deck:
+
+| `flow lbm` keyword | From the card |
+|---|---|
+| `dsigma_dT` | `flow.dsigma_dT` |
+| `beta` | `flow.thermal_expansion` |
+| `viscosity` (kinematic, m^2/s) | `flow.viscosity` / liquid density at the same temperature; each card's viscosity note gives the number |
+
+- `surface_tension` is the value at `T_range` (the liquidus); the flow model
+  uses only its temperature coefficient.
+- `dsigma_dT` carries a `composition` string. For steels and Ni alloys it
+  depends on dissolved sulfur and oxygen and changes sign: a clean melt has
+  about -4e-4 N/(m K), 20 to 30 ppm S is enough for a positive value (316L
+  card). Check the composition against the feedstock before using the number,
+  and expect it to hold only near the measured range, a few hundred K above
+  the liquidus at most.
+- `viscosity` is the dynamic viscosity, as a scalar at `T_range` or as a
+  table.
+- `density_liquid = { value, T_ref, slope, ... }` is the linear fit
+  rho(T) = value + slope (T - T_ref).
+- `thermal_expansion` is the volumetric coefficient, -slope/value of
+  `density_liquid`, derived for the card.
+- The IN718 values are secondary or unreviewed, and several others rest on a
+  thesis or a single levitation campaign; the notes say which.
+
 ## Tooling
 
 `tools/material_card.py` uses the Python 3.11+ standard library only:
@@ -190,5 +248,7 @@ When choosing data:
   peer-reviewed datasets) over vendor sheets.
 - Record uncertainty where the source gives it.
 - Mark values with no source `estimate`, and SPPARKS fits `calibration`.
-- Put measured LPBF process sets, with melt-pool sizes if reported, in
-  their own `[process.<name>]`.
+- Put measured LPBF and DED process sets, with melt-pool or bead sizes if
+  reported, in their own `[process.<name>]`.
+- For `[flow]`, record the sulfur and oxygen content of the measured sample
+  in `dsigma_dT.composition`, or say that the source does not give it.

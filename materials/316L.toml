@@ -6,9 +6,9 @@ schema_version = 1
 material = "316L"
 designation = { UNS = "S31603", spec = "NIST SRM 316L (Pichler 2020 samples); LPBF powder per ASTM F3184" }
 composition_wt_pct = { Fe = "bal", Cr = "16-18", Ni = "10-14", Mo = "2-3", Mn = "<2", C = "<0.03", note = "UNS S31603 ranges, not a measured heat" }
-version = "1.0.1"
+version = "1.1.0"
 created = 2026-10-17
-modified = 2026-10-17
+modified = 2026-11-14
 status = "draft"
 reviewed_by = ""
 
@@ -23,6 +23,12 @@ version = "1.0.1"
 date = 2026-10-17
 author = "T. Rodgers"
 changes = "solid_front_vel traced to Li & Tan 2017 (KGT for austenitic stainless after Tan & Shin 2015), found while researching the 304L card; values unchanged."
+
+[[changelog]]
+version = "1.1.0"
+date = 2026-11-14
+author = "research agent (Claude)"
+changes = "Added [flow] (liquid surface tension and its temperature coefficient from the NIST SRM 1155a levitation measurements of Leitner 2021 / Pichler 2022, liquid density from Pichler 2020, stainless-steel viscosity from Mills 2004) and six laser DED process sets (Ancalmo 2025, Fillingim 2024, Shang 2025). No existing value changed."
 
 [references.pichler2020]
 citation = "P. Pichler, B.J. Simonds, J.W. Sowards, G. Pottlacher, Measurements of thermophysical properties of solid and liquid NIST SRM 316L stainless steel, J. Mater. Sci. 55 (2020) 4081-4093"
@@ -45,6 +51,44 @@ url = "https://utw10945.utweb.utexas.edu/sites/default/files/2017/Manuscripts/3D
 citation = "W. Tan, Y.C. Shin, Multi-scale modeling of solidification and microstructure development in laser keyhole welding process for austenitic stainless steel, Comput. Mater. Sci. 98 (2015) 446-458"
 doi = "10.1016/j.commatsci.2014.10.063"
 
+[references.leitner2021]
+citation = "T. Leitner, Thermophysical property measurement of industrial metals and alloys using electromagnetic levitation, doctoral thesis, Graz University of Technology (May 2021)"
+url = "https://www.tugraz.at/fileadmin/user_upload/Institute/IEP/Thermophysics_Group/Files/Diss-LeitnerThomas.pdf"
+
+[references.pichler2022]
+citation = "P. Pichler, T. Leitner, E. Kaschnitz, J. Rattenberger, G. Pottlacher, Surface Tension and Thermal Conductivity of NIST SRM 1155a (AISI 316L Stainless Steel), Int. J. Thermophys. 43 (2022) 66"
+doi = "10.1007/s10765-022-02991-5"
+
+[references.mills2004]
+citation = "K.C. Mills, Y. Su, Z. Li, R.F. Brooks, Equations for the Calculation of the Thermo-physical Properties of Stainless Steel, ISIJ Int. 44 (2004) 1661-1668"
+doi = "10.2355/isijinternational.44.1661"
+url = "https://www.jstage.jst.go.jp/article/isijinternational1989/44/10/44_10_1661/_pdf"
+
+[references.ozawa2014]
+citation = "S. Ozawa, K. Morohoshi, T. Hibiya, Influence of Oxygen Partial Pressure on Surface Tension of Molten Type 304 and 316 Stainless Steels Measured by Oscillating Droplet Method Using Electromagnetic Levitation, ISIJ Int. 54 (2014) 2097-2103"
+doi = "10.2355/isijinternational.54.2097"
+url = "https://www.jstage.jst.go.jp/article/isijinternational/54/9/54_2097/_pdf"
+
+[references.sahoo1988]
+citation = "P. Sahoo, T. DebRoy, M.J. McNallan, Surface tension of binary metal-surface active solute systems under conditions relevant to welding metallurgy, Metall. Trans. B 19 (1988) 483-491"
+doi = "10.1007/BF02657748"
+url = "https://modeling.matse.psu.edu/research_files/papers/1988MTB_Sahoo_Sur.pdf"
+
+[references.ancalmo2025]
+citation = "C. Ancalmo, S.P. Narra, Dataset of process parameters, melt track geometry, powder catchment, and particle stream measurements for the laser beam directed energy deposition of AISI 316L, Data in Brief 62 (2025) 111887"
+doi = "10.1016/j.dib.2025.111887"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC12351335/"
+
+[references.fillingim2024]
+citation = "K.B. Fillingim, R. Kannan, L. Heinrich, K. Saleeby, P. Nandwana, T. Feldhausen, Process parameter translation strategies for variable directed energy deposition spot size using 316L, copper, and Inconel 625, Heliyon 10 (2024) e37658"
+doi = "10.1016/j.heliyon.2024.e37658"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC11422052/"
+
+[references.shang2025]
+citation = "X. Shang, E. Li, A. Talbot, H. Wen, T. Lyu, J. Zhang, Y. Zou, Accurate inverse process optimization framework in laser directed energy deposition, Addit. Manuf. 102 (2025) 104736; read as the preprint arXiv:2407.17338"
+doi = "10.1016/j.addma.2025.104736"
+url = "https://arxiv.org/abs/2407.17338"
+
 [thermal]
 density = { value = 7900, unit = "kg/m^3", ref = "pichler2020", note = "room-temperature solid; the conduction solver uses one dense density" }
 solidus = { value = 1675, unit = "K", ref = "pichler2020" }
@@ -61,6 +105,15 @@ T_ref = { value = 1000, unit = "K", ref = "estimate", note = "between preheat an
 
 [powder]
 conductivity = { value = 0.3, unit = "W/(m K)", ref = "estimate", note = "loose powder in Ar, order of magnitude; source not recorded" }
+
+[flow]
+# Liquid-state properties for the conduction source's melt-pool flow (flow lbm).
+# Recorded only: pass them in the deck (docs/MATERIAL_CARDS.md, Flow).
+surface_tension = { value = 1.586, unit = "N/m", ref = ["leitner2021", "pichler2022"], uncertainty = 0.008, uncertainty_type = "2sigma", T_range = [1708, 1708], note = "at the liquidus 1708 K; electromagnetic levitation, oscillating drop, 15 samples of NIST SRM 1155a (the heat of pichler2020). Read from Leitner 2021 Table 3.8 (1586 +/- 8 mN/m, k = 2), which presents the data of the then-unpublished Pichler 2022; the journal paper itself was not opened (publisher blocked the download), so check its final numbers. About 7 % below Fukuyama 2019 and 7 % above Ozawa 2014 SUS316 at the liquidus (Leitner Sec. 3.2.1)" }
+dsigma_dT = { value = 3.2e-4, unit = "N/(m K)", ref = ["leitner2021", "pichler2022"], uncertainty = 1.1e-4, uncertainty_type = "2sigma", T_range = [1695, 1857], composition = "NIST SRM 1155a: S 20 ppm (15-17 ppm after levitation), O 30 ppm (information value), Mn 1.59 wt% (1.0-1.4 after)", note = "POSITIVE: +0.32 +/- 0.11 mN/(m K) (Leitner 2021 Table 3.8), so the Marangoni flow runs inward, the reverse of the Ti-6Al-4V-like default. The sign and size of dsigma/dT of steels and Ni alloys depend on dissolved S and O (a few tens of ppm S turn it positive): match the composition entry to your feedstock before using it. Other values, all from sources opened for this card: Ozawa 2014 Eq. 15, SUS316 with 300 ppm S before and 60-70 ppm after levitation, sigma = 1481 + 0.1924 (T - 1692) mN/m over 1630-2140 K (also positive, in both a reducing and an Ar-He atmosphere); Mills 2004 Eq. 23, stainless steel free of S and O, 1840 - 0.4 (T - 1823) mN/m, i.e. -4.0e-4; Mills 2004 Table 4 (soluble O 5 ppm): 1772/1772/1766/1758 mN/m at 1800/1850/1900/1950 K for 10 ppm S, 1729/1735/1736/1733 for 20 ppm, 1699/1708/1712/1713 for 30 ppm, so the sign changes between about 10 and 30 ppm S; Sahoo 1988 Eq. 7, pure iron, 1.943 - 4.3e-4 (T - 1809) N/m. The -4.3e-4 used in an earlier 316L run is that pure-iron coefficient, right only for a steel with almost no S or O. The linear fit covers 150 K above the liquidus; Leitner notes it may flatten or turn over at higher temperature (the boomerang shape Ozawa 2014 saw for 304)" }
+viscosity = { T = [1773, 1800, 1900], value = [8.07e-3, 7.54e-3, 5.98e-3], unit = "Pa s", extrapolation = "clamp", ref = "mills2004", note = "dynamic viscosity, Mills 2004 Table 3(b); the table follows Eq. 28, ln eta(mPa s) = -2.396 + 7950/T, which is R.F. Brooks's oscillation viscometry on one stainless steel (25.6Cr-6.5Ni-4Mo) applied by Mills to all stainless steels on the assumption that Fe, Cr and Ni have similar viscosities. Not a measurement on 316L. Mills warns that inclusions in commercial steels raise it. Kinematic: with the liquid density below, nu = 1.10e-6 m^2/s at 1800 K (7.54e-3 / 6875) and 8.8e-7 at 1900 K" }
+density_liquid = { value = 6936, T_ref = 1708, slope = -0.661, unit = "kg/m^3", slope_unit = "kg/(m^3 K)", ref = "pichler2020", T_range = [1708, 2900], note = "Pichler 2020 Table 3, D(T) = 8065 - 0.661 T from ohmic pulse heating of SRM 1155a, evaluated at the liquidus. Leitner 2021 Table 3.8 confirms it by levitation: 6983 +/- 127 at 1708 K (+0.7 %), slope -0.55 +/- 2.47 over 1715-1789 K. Mills 2004 Eq. 6 gives a slope of -0.86 for stainless steels" }
+thermal_expansion = { value = 9.5e-5, unit = "1/K", ref = "pichler2020", note = "volumetric, derived for this card as -slope/density of density_liquid at the liquidus (0.661 / 6936); 1.26e-4 from the Mills 2004 slope" }
 
 [microstructure]
 # V(dT) polynomial in undercooling dT = liquidus - T, highest power first; nucleation values are SPPARKS calibrations.
@@ -97,3 +150,80 @@ spot = { value = 50e-6, unit = "m", convention = "1/e radius", ref = "calibratio
 source_depth = { value = 75e-6, unit = "m", ref = "calibration" }
 preheat = { value = 573, unit = "K", ref = "calibration" }
 convection = { h = 25, T_inf = 300, unit = "W/(m^2 K)", atmosphere = "Ar", ref = "estimate" }
+
+# Laser DED (blown powder) process sets from published experiments. Extra DED
+# records (powder_feed, capture_efficiency, beam_diameter) are recorded only.
+
+[process.ded_ancalmo2025_700W]
+method = "laser DED, blown powder"
+machine = "TRUMPF TruLaser Cell 3000, TruDisk 6001 disk laser, 1030 nm CW, defocused Gaussian beam; three-jet coaxial SO12 nozzle at 12 mm standoff"
+note = "single 60 mm track on a 152.4 x 152.4 x 6.35 mm 316L plate in ambient air (24-26 C), Ar shield 10 L/min; track 18 of the dataset: 67-80 um (D10-D90) nitrogen-atomised Hoganas powder, Ar carrier 6 L/min. The three Ancalmo sets hold a normalised enthalpy of 3.3, chosen so the melt pool is about as wide as the spot. The paper gives the spot as the 1/e intensity diameter (1.5 mm); the radius is recorded. No preheat."
+power = { value = 700, unit = "W", ref = "ancalmo2025" }
+speed = { value = 7.5e-3, unit = "m/s", ref = "ancalmo2025" }
+spot = { value = 0.75e-3, unit = "m", convention = "1/e radius", ref = "ancalmo2025", note = "half the stated 1/e intensity diameter; the authors did not calibrate the spot diameter themselves" }
+absorptivity = { value = 0.32, unit = "1", ref = "ancalmo2025", note = "calibrated by the authors between a heat-conduction model and no-powder tracks (their companion paper, J. Manuf. Process. 137 (2025) 207, not read); quoted in the data article" }
+powder_feed = { value = 1.66e-4, unit = "kg/s", ref = "ancalmo2025", note = "9.98 +/- 0.83 g/min measured at the nozzle" }
+capture_efficiency = { value = 0.252, unit = "1", ref = "ancalmo2025", uncertainty = 0.020, note = "powder catchment efficiency from the track volume, 25.2 +/- 2.0 %; the range reflects the feed-rate variation" }
+preheat = { value = 298, unit = "K", ref = "ancalmo2025", note = "ambient chamber, 24-26 C; two minutes idle between tracks" }
+validation = { track_width = 1.65e-3, track_height = 0.59e-3, unit = "m", ref = "ancalmo2025", note = "optical profilometry over the centre 40 mm (Table 3): average width, height 0.59 +/- 0.10 mm, added cross-section 0.705 mm^2. No sections, so no melt depth" }
+
+[process.ded_ancalmo2025_1500W]
+method = "laser DED, blown powder"
+machine = "TRUMPF TruLaser Cell 3000, TruDisk 6001 disk laser, 1030 nm CW, defocused Gaussian beam; three-jet coaxial SO12 nozzle at 12 mm standoff"
+note = "as ded_ancalmo2025_700W; track 23 (67-80 um powder, Ar carrier 6 L/min), 1/e intensity diameter 2.5 mm"
+power = { value = 1500, unit = "W", ref = "ancalmo2025" }
+speed = { value = 7.5e-3, unit = "m/s", ref = "ancalmo2025" }
+spot = { value = 1.25e-3, unit = "m", convention = "1/e radius", ref = "ancalmo2025", note = "half the stated 1/e intensity diameter" }
+absorptivity = { value = 0.32, unit = "1", ref = "ancalmo2025", note = "see ded_ancalmo2025_700W" }
+powder_feed = { value = 1.66e-4, unit = "kg/s", ref = "ancalmo2025", note = "9.98 +/- 0.83 g/min" }
+capture_efficiency = { value = 0.536, unit = "1", ref = "ancalmo2025", uncertainty = 0.042 }
+preheat = { value = 298, unit = "K", ref = "ancalmo2025", note = "ambient chamber, 24-26 C" }
+validation = { track_width = 2.65e-3, track_height = 0.80e-3, unit = "m", ref = "ancalmo2025", note = "Table 3: height 0.80 +/- 0.11 mm, added cross-section 1.501 mm^2" }
+
+[process.ded_ancalmo2025_2500W]
+method = "laser DED, blown powder"
+machine = "TRUMPF TruLaser Cell 3000, TruDisk 6001 disk laser, 1030 nm CW, defocused Gaussian beam; three-jet coaxial SO12 nozzle at 12 mm standoff"
+note = "as ded_ancalmo2025_700W; track 28 (67-80 um powder, Ar carrier 6 L/min), 1/e intensity diameter 3.5 mm"
+power = { value = 2500, unit = "W", ref = "ancalmo2025" }
+speed = { value = 7.5e-3, unit = "m/s", ref = "ancalmo2025" }
+spot = { value = 1.75e-3, unit = "m", convention = "1/e radius", ref = "ancalmo2025", note = "half the stated 1/e intensity diameter" }
+absorptivity = { value = 0.32, unit = "1", ref = "ancalmo2025", note = "see ded_ancalmo2025_700W" }
+powder_feed = { value = 1.66e-4, unit = "kg/s", ref = "ancalmo2025", note = "9.98 +/- 0.83 g/min" }
+capture_efficiency = { value = 0.741, unit = "1", ref = "ancalmo2025", uncertainty = 0.058 }
+preheat = { value = 298, unit = "K", ref = "ancalmo2025", note = "ambient chamber, 24-26 C" }
+validation = { track_width = 3.58e-3, track_height = 0.84e-3, unit = "m", ref = "ancalmo2025", note = "Table 3: height 0.84 +/- 0.12 mm, added cross-section 2.075 mm^2" }
+
+[process.ded_fillingim2024_367W]
+method = "laser DED, blown powder"
+machine = "Okuma MU-8000V Laser EX hybrid, intermediate nozzle (1.5-3.5 mm spots)"
+note = "multi-layer wall (at least 19 x 38 x 38 mm) on a 316L substrate 152.4 mm in diameter and 50.8 mm thick; Oerlikon Metco 316L powder -106+45 um; Ar nozzle gas 10 L/min, He carrier 4 L/min. Smallest of five spot sizes run at a constant areal energy density of 38.1 J/mm^2 (Table 1, set 5); the nearest published set to the 150-300 W, 0.6 mm decks. Preheat, absorptivity and beam profile not reported."
+power = { value = 367, unit = "W", ref = "fillingim2024" }
+speed = { value = 6.43e-3, unit = "m/s", ref = "fillingim2024", note = "386 mm/min" }
+hatch = { value = 0.49e-3, unit = "m", ref = "fillingim2024", note = "stepover, set to 60 % of the single-bead width" }
+layer_thickness = { value = 0.42e-3, unit = "m", ref = "fillingim2024", note = "layer height, half the 0.85 mm single-layer pad height" }
+beam_diameter = { value = 1.5e-3, unit = "m", profile = "unstated", ref = "fillingim2024", note = "spot size with no stated convention or profile, so no spot record: give the source size in the deck" }
+powder_feed = { value = 8.5e-5, unit = "kg/s", ref = "fillingim2024", note = "5.1 g/min" }
+capture_efficiency = { value = 0.13, unit = "1", ref = "fillingim2024", note = "whole wall: substrate mass gain 243 g over hopper loss 1828 g (Table 5)" }
+validation = { track_width = 0.82e-3, unit = "m", ref = "fillingim2024", note = "single-bead width, micrometer, mean of three points (Table 2); wall porosity 0.001 %" }
+
+[process.ded_fillingim2024_2000W]
+method = "laser DED, blown powder"
+machine = "Okuma MU-8000V Laser EX hybrid, intermediate nozzle (1.5-3.5 mm spots)"
+note = "as ded_fillingim2024_367W; the baseline set (Table 1, set 1). Intermediate sets: 3.0 mm 1469 W 771 mm/min 10.3 g/min; 2.5 mm 1020 W 643 mm/min 8.6 g/min; 2.0 mm 653 W 514 mm/min 6.9 g/min."
+power = { value = 2000, unit = "W", ref = "fillingim2024" }
+speed = { value = 15e-3, unit = "m/s", ref = "fillingim2024", note = "900 mm/min" }
+hatch = { value = 1.65e-3, unit = "m", ref = "fillingim2024", note = "stepover, 60 % of the single-bead width" }
+layer_thickness = { value = 0.76e-3, unit = "m", ref = "fillingim2024" }
+beam_diameter = { value = 3.5e-3, unit = "m", profile = "unstated", ref = "fillingim2024", note = "spot size with no stated convention or profile" }
+powder_feed = { value = 2.0e-4, unit = "kg/s", ref = "fillingim2024", note = "12 g/min" }
+capture_efficiency = { value = 0.67, unit = "1", ref = "fillingim2024", note = "whole wall: 296 g gained over 441 g fed (Table 5)" }
+validation = { track_width = 2.76e-3, unit = "m", ref = "fillingim2024", note = "single-bead width (Table 2); wall porosity 0.049 %" }
+
+[process.ded_shang2025_357W]
+method = "laser DED, blown powder"
+machine = "in-house 3-axis L-DED, IPG 1 kW fibre laser at 1070 nm, Fraunhofer COAX14 v5 coaxial nozzle 7.5 mm above the work, GTV PF 2/2 feeder, Ar purge"
+note = "10 x 10 x 5 mm cube on a 12.7 mm 316L plate, EOS 316L powder 15-45 um; optimum 1-3 of the paper's Table 3 (finest resolution 0.392 mm, density 99.978 %). Hatch is given only as 0.5 of the melt-pool width and the layer thickness is not stated, so neither is recorded. The paper's 444 single tracks span 280-640 W, 4-12 mm/s and 0.7-2.8 g/min; their sections are in github.com/xshang93/AIDED, with widths and depths in pixels and no scale that I could find. Read as the arXiv preprint, not the journal version."
+power = { value = 357, unit = "W", ref = "shang2025" }
+speed = { value = 11.58e-3, unit = "m/s", ref = "shang2025" }
+beam_diameter = { value = 1.0e-3, unit = "m", profile = "unstated", ref = "shang2025", note = "nominal beam size, no convention or profile given" }
+powder_feed = { value = 1.97e-5, unit = "kg/s", ref = "shang2025", note = "1.18 g/min" }

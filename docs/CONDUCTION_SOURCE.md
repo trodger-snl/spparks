@@ -202,6 +202,19 @@ in `processors`.
   frozen by the reset (a very slow `solid_front_vel` can hold it off
   indefinitely).
 
+- **`carry yes`** (2026-11-14): a rebuild for a new plane keeps the field.
+  The old grid first integrates to the call's t (the next layer's plane is
+  set when the previous layer is done, so that interval is the dwell, laser
+  off), then `carry_field` copies T into the cells the grids share (x/y
+  and the lower z faces are unchanged; it errors otherwise) with H from
+  each cell's material; the new top cells start at T0. A new `laser_path`
+  still resets. The first cut skipped the integration, so every layer
+  started on the field as the previous one solidified (no dwell cooling);
+  caught by timing the dwell (`in.rectangle.ded` layer 1: run to 0.26 s vs
+  2.25 s gave the same max T). Fixed: layer 1 then cools from 1459 to
+  310 K over the 2 s dwell, 96 RKL2 super-steps x 128 stages, 3.1 s wall
+  (0.39 M cells, mixed, gfx1151). Decks without `carry`: bit-identical.
+
 ## Material (examples: 316L)
 
 The 316L values below are also in the material card `materials/316L.toml`

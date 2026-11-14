@@ -61,7 +61,8 @@ am/surge/   additive/texture and its Kokkos twin additive/texture/kk,
   moser:      Moser analytic heat source, incl. laser fluctuations
   conduction: nonlinear finite-volume conduction temperature source (kk),
               incl. a DED thin wall (in.thin_wall.ded) and the same wall
-              graded from 316L to IN625 (in.thin_wall.ded.graded)
+              graded from 316L to IN625 (in.thin_wall.ded.graded), and a
+              20-layer 1 x 1 x 4 mm Ti-6Al-4V DED pillar (in.rectangle.ded)
   hdf5:       HDF5 thermal sources (stale_layer, unstructured_am) and
               a staged build through dump/set hdf5 (staged_build)
   gp700_moser: box-per-layer GP700 build (run_layers.sh) and its analysis

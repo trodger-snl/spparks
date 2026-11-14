@@ -163,6 +163,11 @@ void ConductionTemperatureSource::setup_temperature_source(
     else if (a == "layer_thickness") cfg.layer_thickness = num(++i);
     else if (a == "packing") cfg.packing = num(++i);
     else if (a == "sts") cfg.sts_smax = (int) num(++i);
+    else if (a == "carry") {
+      const std::string v = args.at(++i);
+      if (v != "yes" && v != "no") error->all(FLERR,"setup_temperature_source conduction: carry is yes or no");
+      cfg.carry = v == "yes";
+    }
     else if (a == "far") cfg.far = num(++i);
     else if (a == "init") {
       if (i + 1 < args.size() && args[i+1] == "d6") { i++; cfg.init_d6 = true; }

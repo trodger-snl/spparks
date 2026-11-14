@@ -35,7 +35,7 @@ setup_temperature_source conduction card overrides keyword values ...
 
 <LI>zero or more keyword/value pairs may be appended 
 
-<LI>keyword = <I>k_table</I> or <I>cp_table</I> or <I>latent</I> or <I>k_powder</I> or <I>convection</I> or <I>emissivity</I> or <I>margin</I> or <I>plate</I> or <I>stretch</I> or <I>max_cell</I> or <I>part</I> or <I>layer_thickness</I> or <I>packing</I> or <I>plate_top</I> or <I>plate_material</I> or <I>plate_growth</I> or <I>composition</I> or <I>far_bc</I> or <I>sts</I> or <I>init</I> or <I>far</I> or <I>ded</I> 
+<LI>keyword = <I>k_table</I> or <I>cp_table</I> or <I>latent</I> or <I>k_powder</I> or <I>convection</I> or <I>emissivity</I> or <I>margin</I> or <I>plate</I> or <I>stretch</I> or <I>max_cell</I> or <I>part</I> or <I>layer_thickness</I> or <I>packing</I> or <I>plate_top</I> or <I>plate_material</I> or <I>plate_growth</I> or <I>composition</I> or <I>far_bc</I> or <I>sts</I> or <I>carry</I> or <I>init</I> or <I>far</I> or <I>ded</I> 
 
 <PRE>  <I>k_table</I> values = n T1 k1 ... Tn kn
     dense conductivity k(T), piecewise linear, held at the end values (K, W/(m K))
@@ -77,6 +77,8 @@ setup_temperature_source conduction card overrides keyword values ...
     outer faces of the thermal domain held at T0, or insulated
   <I>sts</I> value = s
     RKL2 stages per laser-off super-step, 0 = explicit steps only, or >= 2
+  <I>carry</I> value = <I>yes</I> or <I>no</I>
+    a new layer's grid keeps the field of the old one (<I>yes</I>) or starts at T0 (<I>no</I>)
   <I>init</I> value = <I>d6</I> or <I>grid</I> file
     the run's first grid takes each site's temperature from <I>d6</I>, or every cell's from a <A HREF = "dump.html">dump conduction</A> file, instead of T0
   <I>far</I> value = R
@@ -269,6 +271,14 @@ maximum temperature is below the solidus, and no site is liquid.  With
 <I>laser_path file</I> the next layer then starts after the path's recoat
 time.  Otherwise the field is reset to T0, the rest of the run is
 skipped, and the next <I>laser_path</I> and <A HREF = "run.html">run</A> is the next layer.
+A new layer's laser plane rebuilds the grid up to it.  By default the
+rebuilt field starts at T0; with <I>carry yes</I> every cell the new grid
+shares with the old one (all but the new top cells) keeps its
+temperature, so heat builds up from layer to layer as in a real build
+(e.g. a DED pillar, examples/am/surge/conduction/in.rectangle.ded).
+<I>carry</I> acts only on the rebuilds within a run (a <I>laser_path file</I>
+with several layers): a new <I>laser_path</I> command still resets the
+field to T0.
 </P>
 <P>Solver details, validation against Moser, and the material discussion
 are in docs/CONDUCTION_SOURCE.md in the source tree.
@@ -303,7 +313,7 @@ layer thickness when <I>ded</I> is given.
 k/100, convection h = 0 (T_inf = 300), emissivity = 0, margin = 0, plate
 = 0, stretch = 1.25, max_cell = none, part = whole domain dense,
 layer_thickness = 0, packing = 1, plate_top = box bottom, plate_material
-= none, plate_growth = 0, composition = none (mix pool when given), far_bc = fixed, sts = 32, init T0, far = 0 (off), ded off (when on: radius = 2 sx, T_birth
+= none, plate_growth = 0, composition = none (mix pool when given), far_bc = fixed, sts = 32, carry = no, init T0, far = 0 (off), ded off (when on: radius = 2 sx, T_birth
 = T0, depth = the rise of the laser plane since the previous layer,
 unlimited for the first).  With a material card loaded, none of these material
 defaults (latent, k_powder, convection, emissivity, layer_thickness) is

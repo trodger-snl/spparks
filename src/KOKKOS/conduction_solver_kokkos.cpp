@@ -109,8 +109,17 @@ void ConductionSolverKokkos::advance(double t,
   dx = dx_in;
   const double zl_now = src->get_scan_laser_plane_z();
   if (!built || nall != built_nall || zl_now != built_zl) {
+    // carry: a new laser plane only adds cells on top (same box, same x/y
+    // and lower z faces), so the old field maps cell for cell
+    const bool carry = src->config().carry && built && nall == built_nall;
+    // the old grid first runs to t: the layer's plane is set when the
+    // previous one is done, so [t_fd, t] is its dwell (the laser is off)
+    if (carry && t > t_fd) integrate(t);
+    auto Told = T;
+    const auto fx0 = gfx, fy0 = gfy, fz0 = gfz;
     build(d_xyz, d_af, d_mat, nlocal, nall, ts, tl);
     reset_field(src->ambient());
+    if (carry) carry_field(Told, fx0, fy0, fz0);
     if (!seeded) {
       // grid first (margins and all), then d6 (the sites, exact) if both are given
       if (!src->config().init_grid.empty()) seed_from_grid(src->config().init_grid, t);
@@ -133,33 +142,40 @@ void ConductionSolverKokkos::advance(double t,
   // far: the box is done; the field stays as it was
   if (src->take_freeze()) t_fd = t;
 
-  if (t > t_fd) {
-    const int n = (int) std::ceil((t - t_fd) / dt_fd - 1e-9);
-    // Laser off for the whole interval, or (far) on but farther than far from
-    // the box throughout: RKL2 super-steps of at most s_max stages, when that
-    // is fewer stage evaluations than n explicit steps.
-    const int smax = src->config().sts_smax;
-    double xl, yl;
-    const bool off = src->laser_window(t_fd, t, xl, yl) == 0.0;
-    const bool far = !off && src->config().far > 0.0 && src->next_near(t_fd) >= t;
-    bool sts = smax >= 2 && n > 2 && (off || far);
-    int m = 0, s = 0;
-    if (sts) {
-      const double tau_max = dt_fd * (smax * smax + smax - 2) / 4.0;
-      m = (int) std::ceil((t - t_fd) / tau_max - 1e-9);
-      const double r = (t - t_fd) / m / dt_fd;
-      s = std::max(2, (int) std::ceil((-1.0 + std::sqrt(9.0 + 16.0 * r)) / 2.0 - 1e-9));
-      sts = (long) m * s < n;
-    }
-    if (sts) {
-      const double tau = (t - t_fd) / m;
-      for (int k = 0; k < m; k++) sts_step(tau, s, t_fd + k * tau);
-    } else {
-      const double h = (t - t_fd) / n;
-      for (int k = 0; k < n; k++) step(h, t_fd + k * h);
-    }
-    t_fd = t;
+  if (t > t_fd) integrate(t);
+}
+
+/* ----------------------------------------------------------------------
+   Advance the field from t_fd to t (> t_fd) on the current grid.
+------------------------------------------------------------------------- */
+
+void ConductionSolverKokkos::integrate(double t)
+{
+  const int n = (int) std::ceil((t - t_fd) / dt_fd - 1e-9);
+  // Laser off for the whole interval, or (far) on but farther than far from
+  // the box throughout: RKL2 super-steps of at most s_max stages, when that
+  // is fewer stage evaluations than n explicit steps.
+  const int smax = src->config().sts_smax;
+  double xl, yl;
+  const bool off = src->laser_window(t_fd, t, xl, yl) == 0.0;
+  const bool far = !off && src->config().far > 0.0 && src->next_near(t_fd) >= t;
+  bool sts = smax >= 2 && n > 2 && (off || far);
+  int m = 0, s = 0;
+  if (sts) {
+    const double tau_max = dt_fd * (smax * smax + smax - 2) / 4.0;
+    m = (int) std::ceil((t - t_fd) / tau_max - 1e-9);
+    const double r = (t - t_fd) / m / dt_fd;
+    s = std::max(2, (int) std::ceil((-1.0 + std::sqrt(9.0 + 16.0 * r)) / 2.0 - 1e-9));
+    sts = (long) m * s < n;
   }
+  if (sts) {
+    const double tau = (t - t_fd) / m;
+    for (int k = 0; k < m; k++) sts_step(tau, s, t_fd + k * tau);
+  } else {
+    const double h = (t - t_fd) / n;
+    for (int k = 0; k < n; k++) step(h, t_fd + k * h);
+  }
+  t_fd = t;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -586,6 +602,41 @@ void ConductionSolverKokkos::remat(Kokkos::View<unsigned char*> d_mat, int nloca
     H_.data()[o] = tab(m, i) + (u - i) * ((double) tab(m, i+1) - tab(m, i));
   });
   exchange();   // halo materials
+}
+
+/* ----------------------------------------------------------------------
+   carry yes: the rebuilt grid takes the old grid's T in the cells they
+   share (H from each cell's material at that T); the new top cells stay
+   at the reset value. Errors if the grids do not share their cells.
+------------------------------------------------------------------------- */
+
+void ConductionSolverKokkos::carry_field(Kokkos::View<KK_FLOAT***> Told,
+                                         const std::vector<double> &fx0,
+                                         const std::vector<double> &fy0,
+                                         const std::vector<double> &fz0)
+{
+  const int nzo = (int) Told.extent(2);
+  bool same = fx0 == gfx && fy0 == gfy && (int) fz0.size() <= (int) gfz.size() &&
+              (int) Told.extent(0) == (int) T.extent(0) && (int) Told.extent(1) == (int) T.extent(1);
+  for (size_t k = 0; same && k < fz0.size(); k++) same = fz0[k] == gfz[k];
+  if (!same) error->one(FLERR,"conduction: carry needs the new grid to extend the old one upward");
+  auto H_ = H; auto T_ = T; auto Tn_ = Tn; auto M_ = M;
+  auto tab = Htab;
+  const double T0 = Htab_T0, dTt = Htab_dT;
+  const int n = (int) tab.extent(1);
+  Kokkos::parallel_for("ConductionCarry",
+    Kokkos::MDRangePolicy<Kokkos::Rank<3>>({0, 0, 0},
+      {(long) T.extent(0), (long) T.extent(1), (long) nzo}),
+    KOKKOS_LAMBDA(const int i, const int j, const int k) {
+      const double v = Told(i, j, k);
+      const double u = (v - T0) / dTt;
+      const int c = u < 0.0 ? 0 : (u > n - 2 ? n - 2 : (int) u);
+      const int m = M_(i, j, k);
+      H_(i, j, k) = tab(m, c) + (u - c) * ((double) tab(m, c+1) - tab(m, c));
+      T_(i, j, k) = v;
+      Tn_(i, j, k) = v;
+    });
+  exchange();
 }
 
 void ConductionSolverKokkos::reset_field(double Tr)

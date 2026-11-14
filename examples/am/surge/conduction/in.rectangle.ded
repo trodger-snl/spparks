@@ -1,0 +1,69 @@
+# A 1 x 1 x 4 mm Ti-6Al-4V pillar by directed energy deposition (conduction
+# keyword ded) on a Ti-6Al-4V plate. The lattice box is the pillar's
+# footprint (50 x 50 sites at 20 um) over 25 sites of substrate; the 200
+# sites above it are bead (i2 = 0), unborn until the laser passes. The path
+# (rectangle_ded.path) lays 20 layers of 0.2 mm, two tracks 0.4 mm apart,
+# rotated 90 deg per layer; each layer starts 2 s after the previous one has
+# solidified (recoat 2). carry yes keeps
+# the field across the layers' grid rebuilds, so heat builds up in the
+# pillar; without it each layer starts at T0.
+# Process values are DED-typical, not a calibrated set: 150 W at 0.35
+# absorbed, 10 mm/s, 0.6 mm 1/e^2 spot. The substrate is i2 = 3 with zero
+# quaternions, i.e. a random orientation per site (kk), so the columnar
+# grains compete up from a fine polycrystal. Nucleation density 1e11 /m^3
+# (in.thin_wall's 1e14 nucleates nearly every 20 um site); the other
+# nucleation values are in.thin_wall's, nuclei volume scaled to the site.
+# All 20 layers are done at t = 44.6 s; the pillar sits at 310 K when layer 2
+# starts and 724 K when layer 20 starts, and 153 sites at the base of layer 1
+# stay unfused (mostly the footprint edges, on the cold plate). Columnar
+# grains: 109 per cross-section at layer 1, 14 at z = 3.1 mm. Mixed
+# precision HIP (build-fp32): 15 min on one gfx1151, 2.1 GB.
+app_style        additive/texture/kk 1000000 20e-6 auto 1
+seed             56789
+dimension        3
+lattice          sc/26n 1.0
+region           box block 0 50 0 50 0 225
+boundary         n n n
+create_box       box
+create_sites     box
+set site range 1 1000000
+region           substrate block 0 50 0 50 0 24.5
+set i2 value 3 region substrate
+region           bead block 0 50 0 50 24.5 225
+set i2 value 0 region bead
+# outside the box: the plate, 5 mm each side and 5 mm deep
+region           plate block -300 350 -300 350 -300 24.5
+sector           yes
+sweep            color
+diag_style       array d6 sum d6 max
+temperature      0.0
+misorientation_target random_rotation
+# Ti-6Al-4V (materials/Ti6Al4V.toml)
+liquidus         1928
+solidus          1878
+solid_front_vel  4 1.03e-6 1.06e-7 0 0
+nucleation_density      1e11
+critical_undercooling   5
+undercooling_deviation  3
+mean_nuclei_volume      5.4e-14
+nuclei_volume_deviation 1.0e-15
+smooth_greedy_multiproposal on
+smooth_orientation copy
+nuclei_smooth off
+
+# Q lambda k alpha T0 cp sx sy sz: k, alpha, cp as the card linearises them
+# (rho = 4417.5); sx = sy = 0.3 mm / sqrt(2), the 1/e^2 radius 0.3 mm.
+# Tables, latent, powder k and emissivity from materials/Ti6Al4V.toml.
+setup_temperature_source conduction 150.0 0.35 10.176 3.6783478882642184e-06 300.0 626.25 &
+    212.1e-6 212.1e-6 60.0e-6 &
+    k_table 8 300 6.9 600 10.5 900 14.1 1268 18.5 1269 17.3 1600 22.6 1878 27 1928 29.2 &
+    cp_table 8 300 558 600 633 900 708 1268 800 1269 708 1600 754 1878 793 1928 930 &
+    latent 2.9e5 k_powder 0.177 emissivity 0.39 convection 25 300 &
+    margin 5e-3 5e-3 5e-3 5e-3 plate 5e-3 part plate far_bc fixed &
+    ded sts 128 carry yes
+
+laser_path file rectangle_ded.path speed 0.01 scale 20e-6 jump_time 0.05 recoat 2.0
+stats            1.0
+dump             1 hdf5 5.0 rectangle_ded.h5 site i1 i2 d1 d2 d3 d4 d6 d8 d9
+# the run ends (skips to its stop time) once the last layer has solidified
+run              60.0

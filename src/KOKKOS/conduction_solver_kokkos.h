@@ -126,6 +126,7 @@ class ConductionSolverKokkos : protected Pointers {
   void build(Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz, Kokkos::View<int*> d_af,
              Kokkos::View<unsigned char*> d_mat, int nlocal, int nall, double ts, double tl);
   double H_at(int m, double Tr) const;   // material m's H(Tr) - Href
+  void integrate(double t);
   void step(double h, double t0);
   void sts_step(double tau, int s, double t0);
 
@@ -148,6 +149,8 @@ class ConductionSolverKokkos : protected Pointers {
   void exchange();
   void reset_field(double Tr);
   void remat(Kokkos::View<unsigned char*> d_mat, int nlocal);
+  void carry_field(Kokkos::View<KK_FLOAT***> Told, const std::vector<double> &fx0,
+                   const std::vector<double> &fy0, const std::vector<double> &fz0);
   void seed_from_sites(Kokkos::View<double*> d_T, int nlocal);
   void seed_from_grid(const std::string &file, double t);
   // Write T for all nall sites into d_T; return the max over owned sites.

@@ -67,6 +67,7 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
     double layer_thickness = 0.0;      // powder depth outside the box
     double packing = 1.0;              // powder mass fraction of dense (1 = dense)
     int    far_bc = FAR_FIXED;
+    bool   carry = false;               // a layer's grid rebuild keeps the field (else T0)
     int    sts_smax = 32;               // RKL2 stages per laser-off super-step; 0 = explicit
     bool   init_d6 = false;             // init d6: the run's first grid takes in-box T from d6
     std::string init_grid;              // init grid FILE: ... and every cell's T from a dump conduction file

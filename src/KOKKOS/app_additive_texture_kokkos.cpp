@@ -2618,7 +2618,7 @@ void AppAdditiveTextureKokkos::activate_powder_sites() {
 
   bigint powder_me = powder_activated, global_powder_activated = 0;  // a layer can pass 2^31
   MPI_Allreduce(&powder_me, &global_powder_activated, 1, MPI_SPK_BIGINT, MPI_SUM, world);
-  if (domain->me == 0 && global_powder_activated > 0) {
+  if (domain->me == 0 && screen && global_powder_activated > 0) {
     fprintf(screen, "Powder activation at t=%.6e s: activated " BIGINT_FORMAT " sites (meltpool top at z=%.3f)\n",
             time, global_powder_activated, global_max_molten_z);
   }

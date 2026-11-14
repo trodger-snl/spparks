@@ -1809,7 +1809,7 @@ void AppAdditiveTexture::activate_powder_sites() {
   MPI_Allreduce(&powder_me, &global_powder_activated, 1, MPI_SPK_BIGINT, MPI_SUM, world);
 
   // Report activation (rank 0 only)
-  if (domain->me == 0 && global_powder_activated > 0) {
+  if (domain->me == 0 && screen && global_powder_activated > 0) {
     fprintf(screen, "Powder activation at t=%.6e s: activated " BIGINT_FORMAT " sites (meltpool top at z=%.3f)\n",
             time, global_powder_activated, global_max_molten_z);
   }

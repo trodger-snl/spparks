@@ -35,7 +35,7 @@ setup_temperature_source conduction card overrides keyword values ...
 
 <LI>zero or more keyword/value pairs may be appended 
 
-<LI>keyword = <I>k_table</I> or <I>cp_table</I> or <I>latent</I> or <I>k_powder</I> or <I>convection</I> or <I>emissivity</I> or <I>margin</I> or <I>plate</I> or <I>stretch</I> or <I>max_cell</I> or <I>part</I> or <I>layer_thickness</I> or <I>packing</I> or <I>plate_top</I> or <I>plate_material</I> or <I>plate_growth</I> or <I>composition</I> or <I>far_bc</I> or <I>sts</I> or <I>carry</I> or <I>init</I> or <I>far</I> or <I>ded</I> 
+<LI>keyword = <I>k_table</I> or <I>cp_table</I> or <I>latent</I> or <I>k_powder</I> or <I>convection</I> or <I>emissivity</I> or <I>margin</I> or <I>plate</I> or <I>stretch</I> or <I>max_cell</I> or <I>part</I> or <I>layer_thickness</I> or <I>packing</I> or <I>plate_top</I> or <I>plate_material</I> or <I>plate_growth</I> or <I>composition</I> or <I>far_bc</I> or <I>sts</I> or <I>carry</I> or <I>flow</I> or <I>init</I> or <I>far</I> or <I>ded</I> 
 
 <PRE>  <I>k_table</I> values = n T1 k1 ... Tn kn
     dense conductivity k(T), piecewise linear, held at the end values (K, W/(m K))
@@ -72,7 +72,16 @@ setup_temperature_source conduction card overrides keyword values ...
   <I>composition</I> values = n x1 file1 ... xn filen <B>bins b</B> <B>mix m</B>
     n >= 2 material cards at increasing compositions x1 < ... < xn;
     each site's composition is d11; b bins over x1..xn (default 21, 2..254);
-    m = <I>pool</I> (default) or <I>none</I>: the melt pool mixes compositions, or not
+    m = <I>pool</I> (default), <I>flow</I> or <I>none</I>: the melt pool is well mixed,
+    the melt-pool flow carries the composition (<I>flow</I> keyword), or it does not change
+  <I>flow</I> values = <I>lbm</I> <B>dsigma_dT s</B> <B>beta b</B> <B>viscosity nu</B> <B>mushy C</B> <B>u_ref u</B> <B>smagorinsky cs</B>
+    melt-pool flow (lattice Boltzmann) on the liquid cells of the lattice box; one process
+    s = surface tension's temperature coefficient (N/m/K, default -2.6e-4)
+    b = volumetric thermal expansion of the liquid (1/K, default 1.7e-4)
+    nu = kinematic viscosity (m^2/s, default 8.5e-7)
+    C = mushy-zone drag constant (1/s, default 1e4)
+    u = expected flow speed (m/s, default 1), sets the first flow step
+    cs = Smagorinsky constant (default 0.17, 0 = off)
   <I>far_bc</I> value = <I>fixed</I> or <I>adiabatic</I>
     outer faces of the thermal domain held at T0, or insulated
   <I>sts</I> value = s
@@ -185,6 +194,38 @@ all liquid in the domain is one pool).  With <I>mix none</I> x does not
 change.  The solid_front_vel law and the
 nucleation values are the same for every x.  Example:
 examples/am/surge/conduction/in.thin_wall.ded.graded.
+</P>
+<P><B>Flow.</B>  <I>flow lbm</I> adds the flow of the melt pool: a D3Q19 lattice
+Boltzmann solver on the cells of the lattice box (they are the sites,
+cubes of the lattice spacing), run only over the liquid.  A dense cell
+above its material's solidus is fluid; solid and powder cells are
+no-slip walls; gas (and, with <I>ded</I>, unborn) cells above the liquid are
+a flat free surface.  The surface does not move: no bead shape, keyhole
+or recoil pressure.  The flow is driven by the thermal Marangoni stress
+dsigma/dT grad(T) on the surface cells and by buoyancy, and damped in
+the mushy zone by a Carman-Kozeny drag C (1-fl)^2/(fl^3+0.001), fl the
+liquid fraction between solidus and liquidus.  The defaults are
+Ti-6Al-4V-like; give the alloy's own.  The viscosity of liquid metals
+is so low that the solver adds a Smagorinsky eddy viscosity for
+stability; it is a stabiliser, not a validated turbulence model.
+</P>
+<P>Before each thermal step the flow advances by the same time, in an even
+number of flow steps chosen so that the fastest cell moves about a
+tenth of a cell per step (the step shortens by itself when the flow is
+faster than <I>u_ref</I>; the run stops with an error if it runs away), and
+the enthalpy is carried with the velocity by a flux-limited upwind
+scheme.  With <I>composition ... mix flow</I> the composition d11 is carried
+the same way, so mixing in the pool is whatever the flow does instead
+of the instant mixing of <I>mix pool</I>; the total of d11 is conserved to
+about 0.01 percent (the scheme keeps a uniform composition exactly
+uniform in the slightly compressible lattice Boltzmann velocity, at
+that price).  While any cell is liquid the laser-off super-steps
+(<I>sts</I>) are replaced by plain steps.  <A HREF = "dump.html">dump conduction</A> also
+writes the velocity (ux, uy, uz, m/s).  The flow solver and the carrying
+scheme are checked against analytical solutions by
+tools/melt_flow_check.cpp (build target melt_flow_check).  Costs about
+half again the run time of a conduction-only run.  Examples:
+examples/am/surge/conduction/in.thin_wall.ded.graded.flow.
 </P>
 <P><B>Density.</B>  One density, rho = k/(alpha*cp), is used for every phase.
 Give the dense value and make the model layer the consolidated layer
@@ -313,7 +354,7 @@ layer thickness when <I>ded</I> is given.
 k/100, convection h = 0 (T_inf = 300), emissivity = 0, margin = 0, plate
 = 0, stretch = 1.25, max_cell = none, part = whole domain dense,
 layer_thickness = 0, packing = 1, plate_top = box bottom, plate_material
-= none, plate_growth = 0, composition = none (mix pool when given), far_bc = fixed, sts = 32, carry = no, init T0, far = 0 (off), ded off (when on: radius = 2 sx, T_birth
+= none, plate_growth = 0, composition = none (mix pool when given), far_bc = fixed, sts = 32, carry = no, flow off, init T0, far = 0 (off), ded off (when on: radius = 2 sx, T_birth
 = T0, depth = the rise of the laser plane since the previous layer,
 unlimited for the first).  With a material card loaded, none of these material
 defaults (latent, k_powder, convection, emissivity, layer_thickness) is

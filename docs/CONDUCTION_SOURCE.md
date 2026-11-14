@@ -215,6 +215,51 @@ in `processors`.
   310 K over the 2 s dwell, 96 RKL2 super-steps x 128 stages, 3.1 s wall
   (0.39 M cells, mixed, gfx1151). Decks without `carry`: bit-identical.
 
+## Melt-pool flow (2026-11-14)
+
+`flow lbm` and `composition ... mix flow`. Plan and rationale: flow is
+needed to track composition through the pool; a fixed flat surface is
+enough for mixing; one rank first.
+
+- `src/KOKKOS/melt_flow_kokkos.h`: `MeltFlow<R>`, header-only, no SPPARKS
+  dependencies. D3Q19, TRT (Lambda 3/16) + Guo forcing + Smagorinsky,
+  buoyancy, Marangoni force on surface cells, Carman-Kozeny drag, half-way
+  bounce-back, specular free-slip top; f stored as f - w. `run(h)` is the
+  SI driver: even step count, step adapted to the measured speed (cap
+  doubles above 0.15 lattice, halves below 0.03, f rescaled).
+  `melt_advect`: three 1-D van Leer sweeps, `q - d(uq) + q d(u)`.
+- `tools/melt_flow_check.cpp` (target `melt_flow_check`, not in the default
+  build): 79 checks, double + single, pass on HIP and OpenMP. Poiseuille
+  1e-13; Taylor-Green rate 0.15%, error ratio 4.10; thermocapillary return
+  flow 0.19% below the top cell, ratio 3.9; buoyant slot 2e-14;
+  hydrostatic, Darcy, mass; uniform scalar 2e-16; step/Gaussian/cube
+  conserved and bounded; diffused Gaussian width 0.4%; a 3-D Ti-6Al-4V
+  pool through `run` (1.44 m/s, lattice 0.09, same flow from a 4x too
+  coarse start).
+- What the checks found: (1) bounce-back conserves a staggered momentum,
+  so an abrupt force leaves an undamped checkerboard flipping each step;
+  `ux/uy/uz` are two-step means and callers take an even number of steps.
+  (2) The surface stress is a force on the top cell, which lags the
+  profile by ~tau/(8 mu), first order; below it second order. (3) On host
+  backends `create_mirror_view(v)` is `v`: keep "before" copies apart.
+- Coupling (`ConductionSolverKokkos::flow_step`, before each explicit
+  stage): map the box's cells to the flow (fluid = dense above its
+  material's solidus; gas/unborn = surface; else wall), window = this and
+  the last step's fluid cells + 2, `run(h)`, carry absolute H (H + the
+  material's Href), then X under `mix flow`; the stage inverts the carried
+  H. `comp_out` writes X to d11/`d_mat` per advance; `remat` follows.
+  No RKL2 while liquid. The flow is rebuilt (at rest) with the grid.
+- Results (FP64 unless noted): flow off bit-identical on the regression
+  decks; zero forcing gives u = 0 and T within 0.32 K. 316L track (340 W,
+  1.2 m/s, 5 um): 2.4 m/s outward, pool 29 vs 25 cells wide, peak 2751 vs
+  2814 K, mixed within 0.43 K. Graded wall `mix flow`: top layer 0.99 vs
+  0.87 well-mixed, central plume, sum of d11 -0.015%. DED pillar's first
+  track (Ti-6Al-4V, 10 mm/s, 20 um, mixed): 1.0 m/s, peak 2972 vs 3479 K.
+- Limits: one rank; flat surface; thermal Marangoni only (no solutal);
+  one density and one set of flow constants for every composition, not in
+  the cards; melted LOOSE cells carried as dense; d11's sum conserved to
+  O(Mach^2) only.
+
 ## Material (examples: 316L)
 
 The 316L values below are also in the material card `materials/316L.toml`

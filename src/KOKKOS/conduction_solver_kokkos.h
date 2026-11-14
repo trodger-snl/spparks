@@ -129,6 +129,13 @@ class ConductionSolverKokkos : protected Pointers {
   double flow_cap_seen = 0.0;
   Kokkos::View<KK_FLOAT***> fq, ftmp;
   Kokkos::View<KK_FLOAT***> fX;      // mix flow: composition of the block's cells
+  Kokkos::View<KK_FLOAT***> fX2;     // its advection scratch
+  // feed surface: fborn marks new cells (unborn, or born and not melted yet); the
+  // reservoir holds fed composition not yet put into the pool's top
+  // (in units of x * cells); xpool, xfeed: last pool mean and fed x
+  Kokkos::View<unsigned char***> fborn;
+  double feed_res = 0.0, xpool = 0.0, xfeed = 0.0, feed_xl = 0.0, feed_yl = 0.0;
+  bool has_pool = false;
   Kokkos::View<int*> site_blk;       // mix flow: a site's block cell (flat), -1 = none
   Kokkos::View<double*> tsm, Hrefm;
   Kokkos::View<int*> site_cell;   // offset of the site's cell in T, -1 = above grid
@@ -167,7 +174,7 @@ class ConductionSolverKokkos : protected Pointers {
   void reset_field(double Tr);
   void remat(Kokkos::View<unsigned char*> d_mat, int nlocal);
   // flow lbm: h seconds of flow on the pool, then the enthalpy carried with it
-  void flow_step(double h);
+  void flow_step(double h, bool laser_on, double xl, double yl);
   // mix flow: the cells' composition back to the sites (d11 and the bin)
   void comp_out(Kokkos::View<double*> d_comp, Kokkos::View<unsigned char*> d_mat, int nlocal);
   void carry_field(Kokkos::View<KK_FLOAT***> Told, const std::vector<double> &fx0,

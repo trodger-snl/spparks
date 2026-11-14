@@ -535,6 +535,12 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
 
   // flow lbm: a fresh flow over the lattice box's cells (the pool is solid
   // whenever the grid is rebuilt for a new layer)
+  if (flow && fborn.extent(0) && domain->me == 0 && std::fabs(feed_res) > 1e-6) {
+    char msg[160];
+    snprintf(msg, sizeof(msg), "conduction: feed surface: %g (x * cells) fed but not yet in a pool\n", feed_res);
+    if (screen) fputs(msg, screen);
+    if (logfile) fputs(msg, logfile);
+  }
   flow.reset();
   fwin_on = false;
   if (cfg.flow.on) {
@@ -568,6 +574,18 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
         hX(bi, bj, bk) = (KK_FLOAT) hc(s);
       }
       Kokkos::deep_copy(fX, hX); Kokkos::deep_copy(site_blk, hb);
+      fX2 = Kokkos::View<KK_FLOAT***>("cond_fX2", bn[0], bn[1], bn[2]);
+      fborn = Kokkos::View<unsigned char***>();
+      has_pool = false;
+      if (cfg.comp_feed_surface) {
+        fborn = Kokkos::View<unsigned char***>("cond_fborn", bn[0], bn[1], bn[2]);
+        auto hf = Kokkos::create_mirror_view(fborn);
+        for (int i = 0; i < bn[0]; i++)
+          for (int j = 0; j < bn[1]; j++)
+            for (int k = 0; k < bn[2]; k++)
+              hf(i, j, k) = (hP(i + fb0[0], j + fb0[1], k + fb0[2]) & UNBORN) ? 1 : 0;
+        Kokkos::deep_copy(fborn, hf);
+      }
     }
   }
 
@@ -936,36 +954,57 @@ void ConductionSolverKokkos::step(double h, double t0)
   c.h = h;
   const double frac = src->laser_window(t0, t0 + h, c.xl, c.yl);
   c.Pq = 0.25 * frac * src->absorbed_power();   // P/4 * prod(d erf)
-  if (flow) flow_step(h);
+  if (flow) flow_step(h, frac > 0.0, c.xl, c.yl);
   stage(c, H, H, H);
 }
 
-/* ----------------------------------------------------------------------
-   flow lbm, before each explicit thermal step: the flow sees this step's T
-   and phases, runs h seconds, and the enthalpy moves with it. T is not
-   updated here: the stage that follows conducts with the old T and then
-   inverts the carried H (a splitting error of first order in h).
-   Fluid: a dense cell above its material's solidus. Gas and unborn cells
-   are the free surface; powder and solid are walls.
-   ponytail: a melted LOOSE cell (packing < 1) is carried as if dense.
-------------------------------------------------------------------------- */
-
 namespace {
-// bounding box of cells as a sum-reducible value: += joins two boxes
-struct FlowBox {
+// What one pass over the flow's cells gathers, as a sum-reducible value:
+// += joins the fluid cells' bounding boxes and adds the sums.
+struct FlowAcc {
   int lo[3], hi[3];
-  KOKKOS_INLINE_FUNCTION FlowBox() { for (int d = 0; d < 3; d++) { lo[d] = INT_MAX; hi[d] = -1; } }
-  KOKKOS_INLINE_FUNCTION FlowBox &operator+=(const FlowBox &o) {
+  double sx, nfl;        // sum of X and count over fluid cells
+  double exc, fsum, nb;  // feed surface: born cells' (fed x - pool x), fed x, count
+  double sw;             // feed surface: sum of the footprint weight over surface cells
+  KOKKOS_INLINE_FUNCTION FlowAcc() : sx(0), nfl(0), exc(0), fsum(0), nb(0), sw(0) {
+    for (int d = 0; d < 3; d++) { lo[d] = INT_MAX; hi[d] = -1; }
+  }
+  KOKKOS_INLINE_FUNCTION FlowAcc &operator+=(const FlowAcc &o) {
     for (int d = 0; d < 3; d++) {
       if (o.lo[d] < lo[d]) lo[d] = o.lo[d];
       if (o.hi[d] > hi[d]) hi[d] = o.hi[d];
     }
+    sx += o.sx; nfl += o.nfl; exc += o.exc; fsum += o.fsum; nb += o.nb; sw += o.sw;
     return *this;
   }
 };
 }
 
-void ConductionSolverKokkos::flow_step(double h)
+/* ----------------------------------------------------------------------
+   flow lbm, before each explicit thermal step: the flow sees this step's T
+   and phases, runs h seconds, and the enthalpy (and, mix flow, the
+   composition X) moves with it. T is not updated here: the stage that
+   follows conducts with the old T and then inverts the carried H (a
+   splitting error of first order in h).
+   Fluid: a dense cell above its material's solidus. Gas and unborn cells
+   are the free surface; powder and solid are walls.
+
+   feed surface: blown powder lands on the pool, it is not a slab under it.
+   A new cell (unborn, then born powder) takes the pool's mean X instead of
+   its fed x when it first melts (one that never melts keeps its fed x); the difference goes to a reservoir, which drains
+   into the liquid cells of the new layer (within the birth depth of the
+   source plane) under the footprint exp(-r^2 / r_birth^2) about the laser,
+   no cell passing the fed x. What does not fit waits; what is left when
+   the grid is rebuilt is reported. (With no pool yet a born cell keeps
+   its fed x. A one-cell skin instead of the layer's depth could not take
+   the feed: a 6-cell layer left 9.5% of it in the reservoir.)
+
+   Launches per call: one pass over the box, the flow's steps (each a
+   reduction, so synchronised), three sweeps, one write-back.
+   ponytail: a melted LOOSE cell (packing < 1) is carried as if dense.
+------------------------------------------------------------------------- */
+
+void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, double yl)
 {
   auto &F = *flow;
   const int bx = F.nx, by = F.ny, bz = F.nz;
@@ -973,9 +1012,19 @@ void ConductionSolverKokkos::flow_step(double h)
   auto P_ = P; auto M_ = M; auto T_ = T; auto H_ = H;
   auto ty = F.type; auto fT = F.T; auto ffl = F.fl;
   auto ts_ = tsm; auto tl_ = tlm; auto Hr = Hrefm;
-  FlowBox box;
+  auto q = fq; auto X = fX; auto born = fborn;
+  auto fxlo_ = fxlo, fxhi_ = fxhi, fylo_ = fylo, fyhi_ = fyhi, fzlo_ = fzlo, fzhi_ = fzhi;
+  // feed surface reaches one layer (the birth depth) below the source plane
+  const double zfeed = zsrc - birth_depth;
+  const bool comp = fX.extent(0) > 0, feed = fborn.extent(0) > 0;
+  if (laser_on) { feed_xl = xl; feed_yl = yl; }
+  const double lx = feed_xl, ly = feed_yl;
+  const double rf = src->config().ded_radius, irf2 = rf > 0.0 ? 1.0 / (rf * rf) : 0.0;
+  const bool pool = has_pool;
+  const KK_FLOAT xp = (KK_FLOAT) xpool;
+  FlowAcc acc;
   Kokkos::parallel_reduce("FlowCells", bx * by * bz,
-    KOKKOS_LAMBDA(const int n, FlowBox &b) {
+    KOKKOS_LAMBDA(const int n, FlowAcc &a) {
       const int i = n % bx, j = (n / bx) % by, k = n / (bx * by);
       const unsigned char p = P_(i + o0, j + o1, k + o2);
       const int m = M_(i + o0, j + o1, k + o2);
@@ -987,13 +1036,35 @@ void ConductionSolverKokkos::flow_step(double h)
                                                       : MeltFlow<KK_FLOAT>::WALL;
       fT(i, j, k) = (KK_FLOAT) Tv;
       ffl(i, j, k) = (KK_FLOAT) (f < 0.0 ? 0.0 : f > 1.0 ? 1.0 : f);
-      if (fluid) {
-        FlowBox c;
-        c.lo[0] = c.hi[0] = i; c.lo[1] = c.hi[1] = j; c.lo[2] = c.hi[2] = k;
-        b += c;
+      // the absolute enthalpy (a cell's H is relative to its material's H(T0))
+      q(i, j, k) = (KK_FLOAT) (H_(i + o0, j + o1, k + o2) + Hr(m));
+      if (feed) {
+        // new: unborn, or born powder that has not melted yet
+        if (p & UNBORN) born(i, j, k) = 1;
+        else if (fluid && born(i, j, k)) {
+          const double xf = X(i, j, k);
+          a.fsum += xf; a.nb += 1.0;
+          if (pool) { a.exc += xf - (double) xp; X(i, j, k) = xp; }
+          born(i, j, k) = 0;
+        }
       }
-    }, box);
-  const int *lo = box.lo, *hi = box.hi;
+      if (!fluid) return;
+      FlowAcc c;
+      c.lo[0] = c.hi[0] = i; c.lo[1] = c.hi[1] = j; c.lo[2] = c.hi[2] = k;
+      if (comp) { c.sx = X(i, j, k); c.nfl = 1.0; }
+      if (feed && 0.5 * (fzlo_(k + o2) + fzhi_(k + o2)) > zfeed) {
+        const double dxl = 0.5 * (fxlo_(i + o0) + fxhi_(i + o0)) - lx;
+        const double dyl = 0.5 * (fylo_(j + o1) + fyhi_(j + o1)) - ly;
+        c.sw = Kokkos::exp(-(dxl * dxl + dyl * dyl) * irf2);
+      }
+      a += c;
+    }, acc);
+  const int *lo = acc.lo, *hi = acc.hi;
+  if (feed) {
+    feed_res += acc.exc;
+    if (acc.nb > 0.0) xfeed = acc.fsum / acc.nb;
+  }
+  if (acc.nfl > 0.0) { xpool = acc.sx / acc.nfl; has_pool = true; }
   // this step's fluid cells and two around them, joined with the last
   // step's window (cells that just froze are reset in both copies of f)
   const bool any = hi[0] >= 0;
@@ -1030,22 +1101,39 @@ void ConductionSolverKokkos::flow_step(double h)
   }
   if (!any) return;
 
-  // carry the absolute enthalpy (a cell's H is relative to its material's H(T0))
-  auto q = fq;
-  Kokkos::parallel_for("FlowHin",
-    Kokkos::MDRangePolicy<Kokkos::Rank<3>>({w[0], w[1], w[2]}, {w[3], w[4], w[5]}),
-    KOKKOS_LAMBDA(const int i, const int j, const int k) {
-      q(i, j, k) = (KK_FLOAT) (H_(i + o0, j + o1, k + o2) + Hr(M_(i + o0, j + o1, k + o2)));
-    });
-  melt_advect(F, fq, ftmp, (double) n, w, w + 3);
-  Kokkos::parallel_for("FlowHout",
-    Kokkos::MDRangePolicy<Kokkos::Rank<3>>({w[0], w[1], w[2]}, {w[3], w[4], w[5]}),
-    KOKKOS_LAMBDA(const int i, const int j, const int k) {
-      if (ty(i, j, k) != MeltFlow<KK_FLOAT>::FLUID) return;
-      H_(i + o0, j + o1, k + o2) = (KK_FLOAT) (q(i, j, k) - Hr(M_(i + o0, j + o1, k + o2)));
-    });
-  if (fX.extent(0)) melt_advect(F, fX, ftmp, (double) n, w, w + 3);
-  Kokkos::fence();   // as in MeltFlow::run
+  // the sweeps leave the carried fields in ftmp, fX2; one pass writes them
+  // back and (feed surface) drains the reservoir into the surface cells
+  melt_advect(F, fq, ftmp, fX, fX2, (double) n, w, w + 3, false);
+  auto qt = ftmp; auto Xt = fX2;
+  const double share = feed && acc.sw > 0.0 ? feed_res / acc.sw : 0.0;
+  const double xf_ = xfeed;
+  // the cell's part of the write-back; returns what the reservoir gave it
+  auto out = KOKKOS_LAMBDA(const int i, const int j, const int k) -> double {
+      if (comp) X(i, j, k) = Xt(i, j, k);
+      if (ty(i, j, k) != MeltFlow<KK_FLOAT>::FLUID) return 0.0;
+      H_(i + o0, j + o1, k + o2) = (KK_FLOAT) (qt(i, j, k) - Hr(M_(i + o0, j + o1, k + o2)));
+      if (share == 0.0 || 0.5 * (fzlo_(k + o2) + fzhi_(k + o2)) <= zfeed) return 0.0;
+      const double dxl = 0.5 * (fxlo_(i + o0) + fxhi_(i + o0)) - lx;
+      const double dyl = 0.5 * (fylo_(j + o1) + fyhi_(j + o1)) - ly;
+      const double want = share * Kokkos::exp(-(dxl * dxl + dyl * dyl) * irf2);
+      const double x = Xt(i, j, k), room = xf_ - x;
+      // toward the fed x, never past it
+      const double d = want > 0.0 ? (room > 0.0 ? (want < room ? want : room) : 0.0)
+                                  : (room < 0.0 ? (want > room ? want : room) : 0.0);
+      X(i, j, k) = (KK_FLOAT) (x + d);
+      return d;
+    };
+  const Kokkos::MDRangePolicy<Kokkos::Rank<3>> win({w[0], w[1], w[2]}, {w[3], w[4], w[5]});
+  if (share == 0.0)
+    Kokkos::parallel_for("FlowOut", win, KOKKOS_LAMBDA(const int i, const int j, const int k) { out(i, j, k); });
+  else {
+    // the sum is only needed while the reservoir drains
+    double put = 0.0;
+    Kokkos::parallel_reduce("FlowOutFeed", win,
+      KOKKOS_LAMBDA(const int i, const int j, const int k, double &s) { s += out(i, j, k); }, put);
+    feed_res -= put;
+  }
+  Kokkos::fence();
 }
 
 /* ----------------------------------------------------------------------

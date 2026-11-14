@@ -56,11 +56,12 @@ keyword = {k_table} or {cp_table} or {latent} or {k_powder} or {convection} or {
     material card of the baseplate: the dense material of {i2} = 6 sites and of the cells below {plate_top}
   {plate_growth} value = d
     {i2} = 6 may reach d above {plate_top} (m)
-  {composition} values = n x1 file1 ... xn filen [bins b] [mix m]
+  {composition} values = n x1 file1 ... xn filen [bins b] [mix m] [feed f]
     n >= 2 material cards at increasing compositions x1 < ... < xn;
     each site's composition is d11; b bins over x1..xn (default 21, 2..254);
     m = {pool} (default), {flow} or {none}: the melt pool is well mixed,
     the melt-pool flow carries the composition ({flow} keyword), or it does not change
+    f = {slab} (default) or {surface}: how new material enters under {mix flow} with {ded}
   {flow} values = {lbm} [dsigma_dT s] [beta b] [viscosity nu] [mushy C] [u_ref u] [smagorinsky cs]
     melt-pool flow (lattice Boltzmann) on the liquid cells of the lattice box; one process
     s = surface tension's temperature coefficient (N/m/K, default -2.6e-4)
@@ -205,7 +206,20 @@ the same way, so mixing in the pool is whatever the flow does instead
 of the instant mixing of {mix pool}; the total of d11 is conserved to
 about 0.01 percent (the scheme keeps a uniform composition exactly
 uniform in the slightly compressible lattice Boltzmann velocity, at
-that price).  While any cell is liquid the laser-off super-steps
+that price).
+
+New material: under {ded} each layer's sites carry the composition fed
+for that layer (d11, set before the run).  With {feed slab} a new cell
+simply melts with that composition, as a layer already in place.  With
+{feed surface} (needs {mix flow} and {ded}) it enters the way blown
+powder does, from above into the pool: a new cell takes the pool's
+mean composition when it first melts, and the composition it would
+have brought is added to the liquid of the new layer (down to one
+layer thickness below the laser plane) under the laser's footprint
+exp(-r^2/R^2), R the {ded} birth radius, no cell going past the fed
+composition.  Any amount that has found no liquid yet is carried over
+and reported when the next layer starts.  The surface itself stays
+flat and fixed in both.  While any cell is liquid the laser-off super-steps
 ({sts}) are replaced by plain steps.  "dump conduction"_dump.html also
 writes the velocity (ux, uy, uz, m/s).  The flow solver and the carrying
 scheme are checked against analytical solutions by

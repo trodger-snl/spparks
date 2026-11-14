@@ -259,6 +259,19 @@ struct MeltFlow {
     std::swap(f, fn);
   }
 
+  // the largest |u|^2 of the last step (lattice units)
+  R max_u2(const int lo[3], const int hi[3]) const {
+    auto px_ = px; auto py_ = py; auto pz_ = pz;
+    R m2 = 0;
+    Kokkos::parallel_reduce("FlowMax",
+      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
+      KOKKOS_LAMBDA(const int i, const int j, const int k, R &mx) {
+        const R v = px_(i, j, k) * px_(i, j, k) + py_(i, j, k) * py_(i, j, k) + pz_(i, j, k) * pz_(i, j, k);
+        if (v > mx) mx = v;
+      }, Kokkos::Max<R>(m2));
+    return m2;
+  }
+
   /* --------------------------------------------------------------------
      SI driver. run(h) advances the flow by h seconds in an even number of
      steps (so u, the two-step mean, is clean), setting the lattice
@@ -283,6 +296,7 @@ struct MeltFlow {
     int nmax = 256;
   } ph;
   double dt = 0.0, u_cap = 0.0, umax = 0.0;   // step (s), cap and last max speed (m/s)
+  long ncall = 0;
 
   int run(double h, const int lo[3], const int hi[3]) {
     if (u_cap == 0.0) u_cap = ph.u_ref;
@@ -300,18 +314,13 @@ struct MeltFlow {
     p.buoy[2] = ph.beta_g * dt * dt / ph.dx;
     p.Tref = ph.Tref;
     p.darcy = ph.darcy * dt;
-    // fence per step: on HIP (gfx1151) unsynchronised launches pile up
-    // host memory that is never returned (measured: about half the growth)
+    // A fence per step: inside spparks on HIP (gfx1151) host memory grows
+    // during long runs; fenced plain launches grow least (measured, 3-layer
+    // pillar: 1.1 GB; unfenced 1.8; every step a reduction 2.0; no flow 0.6).
     for (int s = 0; s < n; s++) { step(lo, hi); Kokkos::fence(); }
-    auto px_ = px; auto py_ = py; auto pz_ = pz;
-    R m2 = 0;
-    Kokkos::parallel_reduce("FlowMax",
-      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
-      KOKKOS_LAMBDA(const int i, const int j, const int k, R &mx) {
-        const R v = px_(i, j, k) * px_(i, j, k) + py_(i, j, k) * py_(i, j, k) + pz_(i, j, k) * pz_(i, j, k);
-        if (v > mx) mx = v;
-      }, Kokkos::Max<R>(m2));
-    umax = std::sqrt((double) m2) * ph.dx / dt;
+    // the speed is measured every 16th call (a reduction; it can at most
+    // double in that time at the accelerations a pool has)
+    if (ncall++ % 16 == 0) umax = std::sqrt((double) max_u2(lo, hi)) * ph.dx / dt;
     return n;
   }
 
@@ -379,20 +388,30 @@ struct MeltFlow {
    that far, and tmp is only valid inside the window.
 ------------------------------------------------------------------------- */
 
+// Two fields at once (q2/tmp2 may be empty views: one field). With
+// copy_back false the result is left in tmp/tmp2 (inside the window) and
+// q/q2 hold the state after the y sweep: the caller reads tmp and saves a
+// launch.
 template <class R>
 void melt_advect(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> tmp,
-                 double cfl, const int lo[3], const int hi[3])
+                 Kokkos::View<R***> q2, Kokkos::View<R***> tmp2,
+                 double cfl, const int lo[3], const int hi[3], bool copy_back)
 {
+  const bool two = q2.extent(0) > 0;
   auto ty = m.type;
   const int n[3] = {m.nx, m.ny, m.nz};
   const R c = R(cfl);
-  for (int d = 0; d < 4; d++) {
+  for (int d = 0; d < (copy_back ? 4 : 3); d++) {
     // sweeps 0..2 along x, y, z (q -> tmp -> q -> tmp), then tmp -> q
     auto src = (d & 1) ? tmp : q, dst = (d & 1) ? q : tmp;
+    auto src2 = (d & 1) ? tmp2 : q2, dst2 = (d & 1) ? q2 : tmp2;
     if (d == 3) {
       Kokkos::parallel_for("FlowAdvectCopy",
         Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
-        KOKKOS_LAMBDA(const int i, const int j, const int k) { dst(i, j, k) = src(i, j, k); });
+        KOKKOS_LAMBDA(const int i, const int j, const int k) {
+          dst(i, j, k) = src(i, j, k);
+          if (two) dst2(i, j, k) = src2(i, j, k);
+        });
       break;
     }
     auto u = d == 0 ? m.ux : d == 1 ? m.uy : m.uz;
@@ -401,8 +420,11 @@ void melt_advect(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> 
     Kokkos::parallel_for("FlowAdvect",
       Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
-        const R q0 = src(i, j, k);
-        if (ty(i, j, k) != MeltFlow<R>::FLUID) { dst(i, j, k) = q0; return; }
+        if (ty(i, j, k) != MeltFlow<R>::FLUID) {
+          dst(i, j, k) = src(i, j, k);
+          if (two) dst2(i, j, k) = src2(i, j, k);
+          return;
+        }
         const int x[3] = {i, j, k};
         // the cell s along the sweep axis: index in range, or -1 (none)
         auto at = [&](int s, int &ii, int &jj, int &kk) -> bool {
@@ -414,7 +436,7 @@ void melt_advect(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> 
         };
         // flux through the face between cells s and s + 1 (s = -1 or 0),
         // and that face's velocity; zero unless both are fluid
-        auto face = [&](int s, R &uf) -> R {
+        auto face = [&](const Kokkos::View<R***> &src, int s, R &uf) -> R {
           int ia, ja, ka, ib, jb, kb;
           uf = R(0);
           if (!at(s, ia, ja, ka) || !at(s + 1, ib, jb, kb)) return R(0);
@@ -432,10 +454,23 @@ void melt_advect(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> 
           return uf * (qu + R(0.5) * phi * (R(1) - Kokkos::abs(uf)) * (qd - qu));
         };
         R ul, uh;
-        const R fl = face(-1, ul), fh = face(0, uh);
+        const R q0 = src(i, j, k);
+        const R fl = face(src, -1, ul), fh = face(src, 0, uh);
         dst(i, j, k) = q0 - (fh - fl) + q0 * (uh - ul);
+        if (two) {
+          const R p0 = src2(i, j, k);
+          const R gl = face(src2, -1, ul), gh = face(src2, 0, uh);
+          dst2(i, j, k) = p0 - (gh - gl) + p0 * (uh - ul);
+        }
       });
   }
+}
+
+template <class R>
+void melt_advect(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> tmp,
+                 double cfl, const int lo[3], const int hi[3])
+{
+  melt_advect(m, q, tmp, Kokkos::View<R***>(), Kokkos::View<R***>(), cfl, lo, hi, true);
 }
 
 }

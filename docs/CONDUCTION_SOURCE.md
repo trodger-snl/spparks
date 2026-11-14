@@ -260,6 +260,23 @@ enough for mixing; one rank first.
   <= 3012 K (3400 without); 1717 unfused sites, all in the first site
   plane above the substrate (153 without: the flow's pool is shallower on
   the cold plate); grains per section 51/35/21/17/20/36 at z 30..220.
+- `composition ... feed surface` (2026-11-14): a new cell takes the pool's
+  mean X when it first melts; fed x minus that goes to a reservoir
+  (`feed_res`) drained into the liquid cells within the birth depth of the
+  source plane under exp(-r^2/r_birth^2), capped at the fed x. Two designs
+  failed first: a one-cell skin could not take a 6-cell layer's feed (9.5%
+  left in the reservoir); handing over at birth lost the feed of cells
+  that never melt (2%). Graded wall: reservoir drains to zero, sum of d11
+  51334 vs 51300 fed (+0.07%), layer means 0.13/0.50/0.71/0.77/0.99/1.00
+  (slab: 0.20/0.50/0.70/0.77/0.98/0.99): close to slab here, as the feed
+  zone is the layer itself; less spread inside a layer.
+- Kernel fusion (2026-11-14): the box pass also loads H; the two carried
+  fields share the sweeps; one write-back (11 launches per thermal step
+  vs 18). It did NOT reduce the memory growth below. Measured 3-layer
+  pillar peaks (GB, no flow 0.60): unfenced 1.76; fenced 1.13; fused with
+  every flow step a reduction 2.03 (and slower); fused, fenced, plain
+  steps, speed measured every 16th call 1.19. Reductions make it worse,
+  fences help, launch count does not matter.
 - OPEN: host memory grows with the number of kernel launches on HIP
   (gfx1151). The conduction-only pillar ends at 2.1 GB; with flow (about
   5x the launches per thermal step) it reached 12.6 GB. Not a leak in

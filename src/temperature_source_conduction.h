@@ -106,6 +106,9 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
     // mix flow (needs flow lbm): x is carried by the melt-pool flow instead
     // (comp_mix stays true: x changes during the run)
     bool comp_flow = false;
+    // feed surface (mix flow + ded): new material enters at the pool's top
+    // instead of as a slab of fed composition (see flow_step)
+    bool comp_feed_surface = false;
     double plate_growth = 0.0;          // i2 = 6 reaches plate_top + this (m)
     // ded: no powder bed. Non-part cells are gas; i2 = 0/1 cells are unborn
     // (gas) until the laser axis passes within ded_radius, then powder at T_birth.

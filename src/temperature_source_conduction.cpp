@@ -20,11 +20,69 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <stdexcept>
 
 using namespace SPPARKS_NS;
 
 ConductionTemperatureSource::ConductionTemperatureSource(SPPARKS *spk) :
   MoserTemperatureSource(spk) {}
+
+namespace {
+
+using Material = ConductionTemperatureSource::Config::Material;
+
+// A card's dense properties; what the card lacks is an error (no defaults).
+Material card_material(const std::string &path, MPI_Comm world)
+{
+  const MaterialCard c = MaterialCard::load(path, "", world);
+  auto need = [&](std::optional<double> v, const char *key) {
+    if (!v) throw std::runtime_error(path + ": " + key + " is not in the card");
+    return *v;
+  };
+  auto tab = [&](const MaterialCard::Table &t, std::optional<double> lin, const char *key,
+                 std::vector<double> &T, std::vector<double> &v) {
+    if (!t.T.empty()) { T = t.T; v = t.v; }
+    else { T = {0.0}; v = {need(lin, key)}; }
+  };
+  Material m;
+  tab(c.k, c.k_lin, "thermal.conductivity", m.k_T, m.k_v);
+  tab(c.cp, c.cp_lin, "thermal.heat_capacity", m.cp_T, m.cp_v);
+  m.rho = need(c.density, "thermal.density");
+  m.latent = need(c.latent, "thermal.latent_fusion");
+  m.ts = need(c.solidus, "thermal.solidus");
+  m.tl = need(c.liquidus, "thermal.liquidus");
+  m.name = c.material;
+  if (m.tl < m.ts) throw std::runtime_error(path + ": liquidus is below the solidus");
+  return m;
+}
+
+// (1-w) a + w b: scalars linearly, tables on the union of both T grids.
+Material blend(const Material &a, const Material &b, double w)
+{
+  auto at = [](const std::vector<double> &T, const std::vector<double> &v, double t) {
+    return MaterialCard::table_at({T, v}, t);
+  };
+  auto table = [&](const std::vector<double> &Ta, const std::vector<double> &va,
+                   const std::vector<double> &Tb, const std::vector<double> &vb,
+                   std::vector<double> &T, std::vector<double> &v) {
+    T = Ta; T.insert(T.end(), Tb.begin(), Tb.end());
+    std::sort(T.begin(), T.end());
+    T.erase(std::unique(T.begin(), T.end()), T.end());
+    v.resize(T.size());
+    for (size_t i = 0; i < T.size(); i++)
+      v[i] = (1.0 - w) * at(Ta, va, T[i]) + w * at(Tb, vb, T[i]);
+  };
+  Material m;
+  table(a.k_T, a.k_v, b.k_T, b.k_v, m.k_T, m.k_v);
+  table(a.cp_T, a.cp_v, b.cp_T, b.cp_v, m.cp_T, m.cp_v);
+  m.rho = (1.0 - w) * a.rho + w * b.rho;
+  m.latent = (1.0 - w) * a.latent + w * b.latent;
+  m.ts = (1.0 - w) * a.ts + w * b.ts;
+  m.tl = (1.0 - w) * a.tl + w * b.tl;
+  return m;
+}
+
+}
 
 /* ----------------------------------------------------------------------
    Keywords are stripped; the remaining tokens are Moser's STANDARD form.
@@ -58,6 +116,9 @@ void ConductionTemperatureSource::setup_temperature_source(
   std::vector<std::string> moser_args;
   double k_powder = -1.0;
   std::string plate_card;
+  std::vector<double> comp_x;
+  std::vector<std::string> comp_cards;
+  int comp_bins = 21;
   for (size_t i = 0; i < args.size(); i++) {
     const std::string &a = args[i];
     if (a == "keyhole")
@@ -81,6 +142,17 @@ void ConductionTemperatureSource::setup_temperature_source(
     else if (a == "plate_material") {
       if (++i >= args.size()) error->all(FLERR,"setup_temperature_source conduction: plate_material needs a card file");
       plate_card = args[i];
+    }
+    else if (a == "composition") {
+      const int n = (int) num(++i);
+      if (n < 2) error->all(FLERR,"setup_temperature_source conduction: composition needs n >= 2 nodes");
+      comp_x.clear(); comp_cards.clear();
+      for (int j = 0; j < n; j++) {
+        comp_x.push_back(num(++i));
+        if (++i >= args.size()) error->all(FLERR,"setup_temperature_source conduction: composition needs x card pairs");
+        comp_cards.push_back(args[i]);
+      }
+      if (i + 1 < args.size() && args[i+1] == "bins") { i++; comp_bins = (int) num(++i); }
     }
     else if (a == "plate_growth") cfg.plate_growth = num(++i);
     else if (a == "layer_thickness") cfg.layer_thickness = num(++i);
@@ -156,31 +228,36 @@ void ConductionTemperatureSource::setup_temperature_source(
       error->all(FLERR,"setup_temperature_source conduction: plate_material needs plate_top (the plate surface)");
     if (cfg.plate_growth < 0.0)
       error->all(FLERR,"setup_temperature_source conduction: plate_growth must be >= 0");
-    auto &pm = cfg.plate_mat;
     try {
-      const MaterialCard c = MaterialCard::load(plate_card, "", world);
-      auto need = [&](std::optional<double> v, const char *key) {
-        if (!v) throw std::runtime_error("plate_material " + plate_card + ": " + key + " is not in the card");
-        return *v;
-      };
-      auto tab = [&](const MaterialCard::Table &t, std::optional<double> lin, const char *key,
-                     std::vector<double> &T, std::vector<double> &v) {
-        if (!t.T.empty()) { T = t.T; v = t.v; }
-        else { T = {0.0}; v = {need(lin, key)}; }
-      };
-      tab(c.k, c.k_lin, "thermal.conductivity", pm.k_T, pm.k_v);
-      tab(c.cp, c.cp_lin, "thermal.heat_capacity", pm.cp_T, pm.cp_v);
-      pm.rho = need(c.density, "thermal.density");
-      pm.latent = need(c.latent, "thermal.latent_fusion");
-      pm.ts = need(c.solidus, "thermal.solidus");
-      pm.tl = need(c.liquidus, "thermal.liquidus");
-      pm.name = c.material;
+      static_cast<Config::Material &>(cfg.plate_mat) = card_material(plate_card, world);
     } catch (const std::exception &e) {
-      error->all(FLERR, e.what());
+      error->all(FLERR, ("setup_temperature_source conduction: plate_material " + std::string(e.what())).c_str());
     }
-    if (pm.tl < pm.ts)
-      error->all(FLERR,"setup_temperature_source conduction: plate_material liquidus is below its solidus");
-    pm.on = true;
+    cfg.plate_mat.on = true;
+  }
+  cfg.comp.clear();
+  if (!comp_x.empty()) {
+    for (size_t j = 1; j < comp_x.size(); j++)
+      if (comp_x[j] <= comp_x[j-1])
+        error->all(FLERR,"setup_temperature_source conduction: composition x must increase");
+    // a byte per cell holds the material: the bins and the plate
+    if (comp_bins < 2 || comp_bins > 255 - 1)
+      error->all(FLERR,"setup_temperature_source conduction: composition bins must be 2..254");
+    std::vector<Material> nodes;
+    try {
+      for (const std::string &f : comp_cards) nodes.push_back(card_material(f, world));
+    } catch (const std::exception &e) {
+      error->all(FLERR, ("setup_temperature_source conduction: composition " + std::string(e.what())).c_str());
+    }
+    cfg.comp_x0 = comp_x.front(); cfg.comp_x1 = comp_x.back();
+    for (int b = 0; b < comp_bins; b++) {
+      const double x = cfg.comp_x0 + (cfg.comp_x1 - cfg.comp_x0) * b / (comp_bins - 1);
+      size_t j = 1;
+      while (j + 1 < comp_x.size() && comp_x[j] < x) j++;
+      const double w = std::min(1.0, std::max(0.0, (x - comp_x[j-1]) / (comp_x[j] - comp_x[j-1])));
+      cfg.comp.push_back(blend(nodes[j-1], nodes[j], w));
+      cfg.comp.back().name = nodes[0].name + "-" + nodes.back().name + " x=" + MaterialCard::num(x);
+    }
   }
   configured = true;
   print_source_info();
@@ -213,6 +290,12 @@ void ConductionTemperatureSource::print_source_info() const
               << pm.k_T.size() << "-point k table, " << pm.cp_T.size() << "-point cp table, latent="
               << pm.latent << " J/kg, solidus " << pm.ts << " K, liquidus " << pm.tl << " K"
               << std::endl;
+  if (!cfg.comp.empty()) {
+    const auto &a = cfg.comp.front(), &b = cfg.comp.back();
+    std::cout << "conduction: composition " << cfg.comp.size() << " bins, x " << cfg.comp_x0
+              << ".." << cfg.comp_x1 << " (d11): solidus " << a.ts << ".." << b.ts << " K, liquidus "
+              << a.tl << ".." << b.tl << " K, rho " << a.rho << ".." << b.rho << std::endl;
+  }
   if (cfg.ded)
     std::cout << "conduction: ded, birth radius " << cfg.ded_radius << " m, T_birth "
               << cfg.T_birth << " K, depth "
@@ -223,6 +306,28 @@ void ConductionTemperatureSource::print_source_info() const
 double ConductionTemperatureSource::plate_surface() const
 {
   return cfg.plate_top + cfg.plate_growth;
+}
+
+std::vector<ConductionTemperatureSource::Config::Material>
+ConductionTemperatureSource::materials(double ts, double tl) const
+{
+  std::vector<Config::Material> m = cfg.comp;
+  if (m.empty()) {
+    Config::Material p;
+    p.k_T = cfg.k_T; p.k_v = cfg.k_v; p.cp_T = cfg.cp_T; p.cp_v = cfg.cp_v;
+    p.rho = rho; p.latent = cfg.latent; p.ts = ts; p.tl = tl;
+    m.push_back(p);
+  }
+  if (cfg.plate_mat.on) m.push_back(cfg.plate_mat);
+  return m;
+}
+
+int ConductionTemperatureSource::comp_bin(double x) const
+{
+  if (cfg.comp.empty()) return 0;
+  const int n = (int) cfg.comp.size();
+  const double u = (x - cfg.comp_x0) / (cfg.comp_x1 - cfg.comp_x0) * (n - 1);
+  return std::max(0, std::min(n - 1, (int) std::lround(u)));
 }
 
 void ConductionTemperatureSource::reset_history_and_start(double t_start,
@@ -364,15 +469,13 @@ void ConductionTemperatureSource::laser_samples(double t0, double t1, double ds,
    1 K spacing to 6000 K; the solver extrapolates beyond with the end slopes.
 ------------------------------------------------------------------------- */
 
-void ConductionTemperatureSource::enthalpy_table(double ts, double tl,
+void ConductionTemperatureSource::enthalpy_table(const Config::Material &m,
                                                  double &T_lo, double &dT,
-                                                 std::vector<double> &H, bool plate) const
+                                                 std::vector<double> &H)
 {
-  const auto &pm = cfg.plate_mat;
-  const double rho_m = plate ? pm.rho : rho;
-  const double latent = plate ? pm.latent : cfg.latent;
+  const double rho_m = m.rho, latent = m.latent, ts = m.ts, tl = m.tl;
   auto cp_at = [&](double T) {
-    const auto &Tt = plate ? pm.cp_T : cfg.cp_T, &v = plate ? pm.cp_v : cfg.cp_v;
+    const auto &Tt = m.cp_T, &v = m.cp_v;
     if (T <= Tt.front()) return v.front();
     if (T >= Tt.back()) return v.back();
     const size_t j = std::upper_bound(Tt.begin(), Tt.end(), T) - Tt.begin();

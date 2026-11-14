@@ -108,8 +108,8 @@ AppAdditiveTexture::AppAdditiveTexture(SPPARKS *spk, int narg, char **arg) :
     
     // Integer arrays (iarray): 0=spin, 1=active_flag
     // Double arrays (darray):  0=q0, 1=qx, 2=qy, 3=qz,
-    //   4=mobility_out, 5=T, 6=solid_d, 7=G, 8=V
-    ndouble = 10;
+    //   4=mobility_out, 5=T, 6=solid_d, 7=G, 8=V, 9=spath, 10=comp
+    ndouble = 11;
     allow_app_update = 1;
     app_update_only = 1; //Skip solid-state growth for now.
     ninteger = 2;
@@ -503,6 +503,7 @@ void AppAdditiveTexture::grow_app()
   G = darray[7];
   V = darray[8];
   spath = darray[9];
+  comp = darray[10];
 }
 
 

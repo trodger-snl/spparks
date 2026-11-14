@@ -47,12 +47,16 @@ class ConductionSolverKokkos : protected Pointers {
 
   // Advance the field to t; then sample() writes T for all nall sites into
   // d_T and returns the max T over owned sites (the fused-max convention).
-  // d_T: the sites' temperatures (d6), read once by `init d6` at the first build
+  // d_T: the sites' temperatures (d6), read once by `init d6` at the first build.
+  // d_mat: each site's material (ConductionTemperatureSource::materials), read
+  // at each grid build; i2 = 6 sites take the plate whatever it says.
   void advance(double t, Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz,
-               Kokkos::View<int*> d_af, Kokkos::View<double*> d_T, int nlocal, int nall,
+               Kokkos::View<int*> d_af, Kokkos::View<double*> d_T,
+               Kokkos::View<unsigned char*> d_mat, int nlocal, int nall,
                double dx, double ts, double tl);
 
-  // LOOSE: flag bit, see packing. PLATE: flag bit, the plate material.
+  // LOOSE: flag bit, see packing. PLATE: flag bit, an i2 = 6 site's cell or
+  // a cell below plate_top (the material byte M says which material).
   // UNBORN: flag bit on POWDER under ded, gas until the laser deposits it
   enum Phase { GAS = 0, POWDER = 1, DENSE = 3, LOOSE = 4, PLATE = 8, UNBORN = 16 };
 
@@ -70,7 +74,7 @@ class ConductionSolverKokkos : protected Pointers {
   double built_zl = 0.0;
   double t_fd = 0.0;
   double dt_fd = 0.0;
-  double dx = 0.0, tl = 0.0;
+  double dx = 0.0;
 
   // local grid: owned x cells 1..nxo, y cells 1..nyo (0 and n+1 are halo),
   // z cells 0..nz-1
@@ -90,6 +94,7 @@ class ConductionSolverKokkos : protected Pointers {
   Kokkos::View<KK_FLOAT***> H, T, Tn;
   Kokkos::View<KK_FLOAT***> Ya, Yb, L0;   // RKL2 stage buffers (allocated on demand)
   Kokkos::View<unsigned char***> P, Pn;
+  Kokkos::View<unsigned char***> M;   // material index per cell (static between builds)
   // per local cell: width and lower/upper face per axis (halo included)
   Kokkos::View<double*> wx, wy, wz, fxlo, fxhi, fylo, fyhi, fzlo, fzhi;
   Kokkos::View<KK_FLOAT*> Ex, Ey, Ez;   // per-axis Gaussian integrals, per sub-step
@@ -98,14 +103,17 @@ class ConductionSolverKokkos : protected Pointers {
   std::vector<double> h_samp;
   double zsrc = 0.0;                  // source plane: laser plane, capped at the top face
   double birth_depth = 1e300;         // ded: cells born within this of zsrc
-  double Hbirth = 0.0;                // ded: H(T_birth) - Href
-  Kokkos::View<KK_FLOAT*> Htab, Htab2;   // H(T) - Href, part and plate
-  Kokkos::View<double*> kT, kV, kT2, kV2;
-  // KK_FLOAT copies for the stencil (aliases under FP64): FP32 then reads
-  // floats instead of converting doubles at FP64 rate
-  Kokkos::View<KK_FLOAT*> kTr, kVr, kT2r, kV2r, wxr, wyr, wzr;
-  // so the stencil multiplies: k-table slopes, 1/width, 1/(H(i+1) - H(i))
-  Kokkos::View<KK_FLOAT*> kSr, kS2r, iwx, iwy, iwz, iHtab, iHtab2;
+  // Per material m (row m): H(T) - Href, its k(T) table (kN(m) points) and
+  // 1/(H(i+1) - H(i)) and the k-table slopes, so the stencil multiplies;
+  // H(T_birth) - Href (ded) and the liquidus at which its powder turns dense.
+  using Tab2 = Kokkos::View<KK_FLOAT**, Kokkos::LayoutRight>;
+  Tab2 Htab, iHtab, kTr, kVr, kSr;
+  Kokkos::View<int*> kN;
+  Kokkos::View<KK_FLOAT*> Hbirth;
+  Kokkos::View<double*> tlm;
+  std::vector<KK_FLOAT> hHtab;   // host copy of Htab, row-major
+  // KK_FLOAT copies for the stencil (aliases under FP64)
+  Kokkos::View<KK_FLOAT*> wxr, wyr, wzr, iwx, iwy, iwz;
   double Htab_T0 = 0.0, Htab_dT = 1.0;
   Kokkos::View<int*> site_cell;   // offset of the site's cell in T, -1 = above grid
 
@@ -116,8 +124,8 @@ class ConductionSolverKokkos : protected Pointers {
   bool stage_host = false;
 
   void build(Kokkos::View<double*[3], Kokkos::LayoutRight> d_xyz, Kokkos::View<int*> d_af,
-             int nlocal, int nall, double ts);
-  double H_at(Kokkos::View<KK_FLOAT*> tab, double Tr) const;
+             Kokkos::View<unsigned char*> d_mat, int nlocal, int nall, double ts, double tl);
+  double H_at(int m, double Tr) const;   // material m's H(Tr) - Href
   void step(double h, double t0);
   void sts_step(double tau, int s, double t0);
 

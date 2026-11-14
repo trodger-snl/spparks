@@ -12,7 +12,8 @@ Examples in `examples/am/surge/conduction/`: `in.single_track`; `in.thin_wall`
 (four layers, one `laser_path` per layer, ported from am/finitediff's
 ThinWall); `in.large_rectangle` (am/finitediff's LargerRectangle raster path
 through `laser_path file`); `in.thin_wall.ded` (`in.thin_wall` as directed
-energy deposition, see *DED*).
+energy deposition, see *DED*); `in.thin_wall.ded.graded` (that wall graded
+from 316L to IN625, see *Composition*).
 
 ## Syntax
 
@@ -235,6 +236,41 @@ layer below by up to ~10 µm (two sites) and ~30 % in area; a source
 calibrated against measured pools on powder absorbs it. `packing` with a
 deeper powder layer is for single-layer tests only: the microstructure
 model does not shrink melted powder, so a build would grow 1/φ per layer.
+
+## Materials per cell and composition (2026-11-14)
+
+Each cell carries a material byte `M` beside its phase byte `P`; every
+material table is a row of a 2D view: H(T) and 1/ΔH on the shared 1 K
+grid, the k(T) table (`kN(m)` points, padded) and its slopes, H(T_birth),
+the liquidus. `ConductionTemperatureSource::materials(ts, tl)` lists them:
+the part (or the composition bins), then the plate. The `PLATE` phase bit
+stays (i2 = 6 semantics); `M` alone picks the tables. The halo exchange
+packs `P | M << 8` into the phase double. Under FP32 each row is stored
+relative to its own H(T0), as the part and plate tables were.
+
+`composition n x1 card1 ... [bins b]` fills the bins from cards at nodes
+(linear in x, tables on the union T grid). The kk app maps each site's d11
+to a bin at init (`setup_composition`, `d_mat`), passes it to the solver for
+the lattice cells, and `PlateRule::tl_at(i, z)` returns the bin's liquidus.
+Static within a run: no pool mixing yet.
+
+Checks (gfx1151, FP64):
+- `in.single_track.plate`, `in.thin_wall.ded`, `in.single_track.card`:
+  `dump conduction` T/phase and `dump hdf5` d6 bit-identical to SURGE
+  51788775, np 1; `in.single_track.plate` also at np 2.
+- Mixed precision (`build-fp32`), same two decks vs 51788775 mixed: max
+  |ΔT| 0.003 K (plate) and 0.019 K (DED), phase and spins identical; not
+  bitwise (the restructured stencil contracts differently under
+  fast-math). Composition x = 0 vs none: bit-identical in mixed too.
+- `in.single_track.plate` + `composition 2 0 Ti6Al4V 1 Ti6Al4V`, all sites
+  x = 0 and all x = 1: bit-identical to the run without composition.
+- `in.thin_wall.ded.graded` (layers x = 0.25..1, 316L → IN625) vs the same
+  deck at x = 0: wall width at mid-layer 12/14/16/16 sites vs 12/12/14/14
+  (IN625 melts 85 K lower); every solid site keeps its layer's x.
+
+Next: pool mixing (x averaged over each melt pool at solidification, i.e.
+dilution), x set at powder birth from a feed schedule, and a composition
+database file in place of cards at nodes.
 
 ## Validation (2026-10-16, gfx1151 + OpenMP backend)
 

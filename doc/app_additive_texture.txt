@@ -356,8 +356,8 @@ site melts, so it adds no per-step work.
 
 [Site state:]
 
-Both styles have 2 integer and 10 double per-site values, addressed as
-i1, i2 and d1 ... d10 by the "set"_set.html, "dump"_dump.html, and
+Both styles have 2 integer and 11 double per-site values, addressed as
+i1, i2 and d1 ... d11 by the "set"_set.html, "dump"_dump.html, and
 "diag_style"_diag_style.html commands:
 
 i1      = spin (grain ID)
@@ -369,7 +369,8 @@ d6      = T (temperature, K)
 d7      = solid_d (front distance while liquid; smoothing-pass countdown after)
 d8      = G (thermal gradient magnitude at solidification)
 d9      = V (solidification rate at solidification)
-d10     = path length from the grain origin, lattice units ({misorientation_grain_walk path}) :pre
+d10     = path length from the grain origin, lattice units ({misorientation_grain_walk path})
+d11     = composition (conduction {composition}: the site's material; otherwise unused) :pre
 
 Substrate vs. powder layers and the per-site initial state are set
 with the "set"_set.html command before the run.  Sites with i2 = 1 or

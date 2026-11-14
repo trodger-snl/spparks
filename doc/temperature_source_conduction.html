@@ -35,7 +35,7 @@ setup_temperature_source conduction card overrides keyword values ...
 
 <LI>zero or more keyword/value pairs may be appended 
 
-<LI>keyword = <I>k_table</I> or <I>cp_table</I> or <I>latent</I> or <I>k_powder</I> or <I>convection</I> or <I>emissivity</I> or <I>margin</I> or <I>plate</I> or <I>stretch</I> or <I>max_cell</I> or <I>part</I> or <I>layer_thickness</I> or <I>packing</I> or <I>plate_top</I> or <I>plate_material</I> or <I>plate_growth</I> or <I>far_bc</I> or <I>sts</I> or <I>init</I> or <I>far</I> or <I>ded</I> 
+<LI>keyword = <I>k_table</I> or <I>cp_table</I> or <I>latent</I> or <I>k_powder</I> or <I>convection</I> or <I>emissivity</I> or <I>margin</I> or <I>plate</I> or <I>stretch</I> or <I>max_cell</I> or <I>part</I> or <I>layer_thickness</I> or <I>packing</I> or <I>plate_top</I> or <I>plate_material</I> or <I>plate_growth</I> or <I>composition</I> or <I>far_bc</I> or <I>sts</I> or <I>init</I> or <I>far</I> or <I>ded</I> 
 
 <PRE>  <I>k_table</I> values = n T1 k1 ... Tn kn
     dense conductivity k(T), piecewise linear, held at the end values (K, W/(m K))
@@ -69,6 +69,9 @@ setup_temperature_source conduction card overrides keyword values ...
     material card of the baseplate: the dense material of <I>i2</I> = 6 sites and of the cells below <I>plate_top</I>
   <I>plate_growth</I> value = d
     <I>i2</I> = 6 may reach d above <I>plate_top</I> (m)
+  <I>composition</I> values = n x1 file1 ... xn filen <B>bins b</B>
+    n >= 2 material cards at increasing compositions x1 < ... < xn;
+    each site's composition is d11; b bins over x1..xn (default 21, 2..254)
   <I>far_bc</I> value = <I>fixed</I> or <I>adiabatic</I>
     outer faces of the thermal domain held at T0, or insulated
   <I>sts</I> value = s
@@ -157,6 +160,25 @@ they solidify to <I>i2</I> = 3.  Both use the same solid_front_vel law.
 Fast-forward and the end of a layer wait for the lower of the two
 liquidus and solidus temperatures.  A
 cell's material is fixed when the grid is built (once per layer).
+</P>
+<P><B>Composition.</B>  <I>composition</I> makes the part's material a function of
+each site's composition x, the per-site value d11 (for a graded build,
+the mass fraction of the second powder).  The density, conductivity,
+specific heat, latent heat, solidus and liquidus come from the cards
+at the nodes x1 ... xn: b bins evenly spaced over x1..xn are each
+interpolated linearly between the two cards around them (tables on the
+union of both cards' temperatures), and a site takes the nearest bin.
+x outside x1..xn takes the end bin.  The positional k, alpha and cp
+then only set the source (and the default <I>k_powder</I>); emissivity,
+convection and <I>k_powder</I> stay one value for every x.  A lattice cell
+takes its site's x; a part cell outside the box takes x1.  In the
+microstructure model a site melts at its own bin's liquidus
+(additive/texture/kk); fast-forward and the end of a layer wait for the
+lowest liquidus and solidus of all bins.  x is read from d11 at the
+start of each run and does not change during it: the melt pool does not
+mix compositions (no dilution) yet.  The solid_front_vel law and the
+nucleation values are the same for every x.  Example:
+examples/am/surge/conduction/in.thin_wall.ded.graded.
 </P>
 <P><B>Density.</B>  One density, rho = k/(alpha*cp), is used for every phase.
 Give the dense value and make the model layer the consolidated layer
@@ -277,7 +299,7 @@ layer thickness when <I>ded</I> is given.
 k/100, convection h = 0 (T_inf = 300), emissivity = 0, margin = 0, plate
 = 0, stretch = 1.25, max_cell = none, part = whole domain dense,
 layer_thickness = 0, packing = 1, plate_top = box bottom, plate_material
-= none, plate_growth = 0, far_bc = fixed, sts = 32, init T0, far = 0 (off), ded off (when on: radius = 2 sx, T_birth
+= none, plate_growth = 0, composition = none, far_bc = fixed, sts = 32, init T0, far = 0 (off), ded off (when on: radius = 2 sx, T_birth
 = T0, depth = the rise of the laser plane since the previous layer,
 unlimited for the first).  With a material card loaded, none of these material
 defaults (latent, k_powder, convection, emissivity, layer_thickness) is

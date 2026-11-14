@@ -71,14 +71,23 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
     bool   init_d6 = false;             // init d6: the run's first grid takes in-box T from d6
     std::string init_grid;              // init grid FILE: ... and every cell's T from a dump conduction file
     double far = 0.0;                   // m; laser farther than this from the box is far (0 = off)
-    // plate_material: the dense material of i2 = 6 sites and of the cells
-    // below plate_top outside the box. Same keys as the part above.
-    struct Plate {
-      bool on = false;
+    // One material's dense properties: k(T) and cp(T) tables, density,
+    // latent heat released over [ts, tl].
+    struct Material {
       std::vector<double> k_T, k_v, cp_T, cp_v;
       double rho = 0.0, latent = 0.0, ts = 0.0, tl = 0.0;
       std::string name;
-    } plate_mat;
+    };
+    // plate_material: the dense material of i2 = 6 sites and of the cells
+    // below plate_top outside the box.
+    struct Plate : Material { bool on = false; } plate_mat;
+    // composition: the part's material varies with the site's composition
+    // x (d11). comp holds bins at x uniform over [comp_x0, comp_x1], each
+    // interpolated linearly between the cards at their nodes; a site takes
+    // the nearest bin. Empty: one part material (the keywords above).
+    // ponytail: cards at nodes stand in for a composition database file.
+    std::vector<Material> comp;
+    double comp_x0 = 0.0, comp_x1 = 1.0;
     double plate_growth = 0.0;          // i2 = 6 reaches plate_top + this (m)
     // ded: no powder bed. Non-part cells are gas; i2 = 0/1 cells are unborn
     // (gas) until the laser axis passes within ded_radius, then powder at T_birth.
@@ -118,11 +127,18 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
   void request_reset(double T_reset);
   bool take_reset(double &T_reset);
 
-  // Enthalpy table H(T) on a uniform T grid (J/m^3), built from cp(T),
-  // density and latent heat released linearly over [ts, tl]; the plate
-  // material's when plate is true.
-  void enthalpy_table(double ts, double tl, double &T_lo, double &dT,
-                      std::vector<double> &H, bool plate = false) const;
+  // The solver's materials, index = a cell's material byte: the part
+  // (ts, tl: the app's), or the composition bins, then the plate if on.
+  std::vector<Config::Material> materials(double ts, double tl) const;
+  int plate_index() const { return cfg.plate_mat.on ? ncomp() : -1; }
+  int ncomp() const { return cfg.comp.empty() ? 1 : (int) cfg.comp.size(); }
+  // composition x -> its bin (0 without composition)
+  int comp_bin(double x) const;
+
+  // Enthalpy table H(T) on a uniform T grid (J/m^3), built from m's cp(T),
+  // density and latent heat released linearly over [ts, tl].
+  static void enthalpy_table(const Config::Material &m, double &T_lo, double &dT,
+                             std::vector<double> &H);
 
   // Sites solidifying below this z (m) return to i2 = 6 (plate_mat.on only).
   double plate_surface() const;

@@ -57,16 +57,22 @@ struct KeyedRNG {
     return ((mix(s += 0x9E3779B97F4A7C15ULL) >> 11) + 0.5) * (1.0 / 9007199254740992.0);
   }
 };
-// Where the baseplate is (conduction plate_material): below zplate (m) a site
-// melts and freezes at the plate's liquidus and solidifies back to i2 = 6.
-// Without a plate (on = false) every site takes tl and solidifies to 3.
-// A flag, not an infinite zplate: the build uses -ffast-math.
+// Where each site melts (conduction plate_material and composition): below
+// zplate (m) a site melts and freezes at the plate's liquidus and solidifies
+// back to i2 = 6. Elsewhere it takes tl, or under composition its material's
+// liquidus tlm(mat(i)), and solidifies to 3. A flag, not an infinite zplate:
+// the build uses -ffast-math.
 struct PlateRule {
   bool on;
   double zplate, dx, tl, tl_plate;
+  double tl_lo = 0.0;                     // lowest liquidus of all: a quick reject
+  Kokkos::View<const double*> tlm;        // composition: liquidus per material; empty = tl
+  Kokkos::View<const unsigned char*> mat; // composition: each site's material
   KOKKOS_INLINE_FUNCTION bool in(double z) const { return on && z * dx < zplate; }
-  KOKKOS_INLINE_FUNCTION double tl_at(double z) const { return in(z) ? tl_plate : tl; }
-  KOKKOS_INLINE_FUNCTION double tl_min() const { return on && tl_plate < tl ? tl_plate : tl; }
+  KOKKOS_INLINE_FUNCTION double tl_at(int i, double z) const {
+    return in(z) ? tl_plate : tlm.extent(0) ? tlm(mat(i)) : tl;
+  }
+  KOKKOS_INLINE_FUNCTION double tl_min() const { return tl_lo; }
   KOKKOS_INLINE_FUNCTION int solid(double z) const { return in(z) ? 6 : 3; }
 };
 
@@ -86,7 +92,7 @@ struct ActiveAppend {
     const double s = sd(i);
     // i2 == 5 (void) never enters the list, so it never melts or solidifies.
     // tl_min first: a cold site skips the z load (this runs over every site).
-    if (a != 5 && (a == 2 || (T >= pr.tl_min() && T >= pr.tl_at(xyz(i, 2))) ||
+    if (a != 5 && (a == 2 || (T >= pr.tl_min() && T >= pr.tl_at(i, xyz(i, 2))) ||
         (s > -nrefine - 1 && s < 0.0) || ((a == 3 || a == 6) && s == -nrefine - 2)))
       sites(Kokkos::atomic_fetch_add(&count(), 1)) = i;
   }
@@ -282,6 +288,9 @@ class AppAdditiveTextureKokkos : public QuaternionKokkos<AppAdditiveTexture> {
   Kokkos::View<double*> d_G;        // Gradient magnitude
   Kokkos::View<double*> d_V;        // Solidification velocity
   Kokkos::View<double*> d_spath;    // inheritance path length (d10)
+  // composition (conduction): each site's material from d11, its liquidus
+  Kokkos::View<unsigned char*> d_mat;
+  Kokkos::View<double*> d_tlm;
   Kokkos::View<double*> d_mobility_out; // 1 once a site has been smoothed (d5), as on the CPU
 
   // Phase state arrays (device views - simple Views are race-safe for these kernels)
@@ -290,6 +299,7 @@ class AppAdditiveTextureKokkos : public QuaternionKokkos<AppAdditiveTexture> {
   // and smoothing kernels (multicolour Gauss-Seidel; see the .cpp).
   void shuffled_colors(int order[8], int kernel);
   PlateRule plate_rule() const;   // z in lattice units, as in d_xyz
+  void setup_composition();
   // This step's RNG key (KeyedRNG): the deck seed, the step and the rank.
   uint64_t rng_key() const;
   Kokkos::View<int*> d_nuclei;    // this step's nuclei, in site order (particle_flipper_kernel)

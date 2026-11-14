@@ -159,6 +159,7 @@ class AppAdditiveTexture : public AppPottsQuaternion, public AdditiveParams {
   double *G; //Temperature gradient at solidification
   double *V; //Solidification rate at solidification.
   double *spath; // d10: inheritance path length from the grain origin, lattice units (grain walk 'path' mode)
+  double *comp;  // d11: composition (feedstock mass fraction); conduction `composition` reads it
 	int nrefine;
 	// Physical and simulation parameters
 	double dt;

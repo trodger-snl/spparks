@@ -310,6 +310,8 @@ void AppAdditiveTextureKokkos::init_app()
       thermal->update_temperatures(time);
   }
 
+  setup_composition();
+
   // i2 = 6 (plate) only means something to the conduction source's plate
   int n6 = 0, any6;
   for (int i = 0; i < nlocal; i++) if (active_flag[i] == 6) n6 = 1;
@@ -389,12 +391,17 @@ void AppAdditiveTextureKokkos::refresh_thermal_host()
   thermal_host_.dx = dx;
   thermal_host_.tl = tl;
   thermal_host_.ts = ts;
-  // fast-forward and layer end wait for the lower-melting material
-  if (ConductionTemperatureSource *c = thermal->conduction_source())
+  // fast-forward and layer end wait for the lowest-melting material
+  if (ConductionTemperatureSource *c = thermal->conduction_source()) {
     if (c->config().plate_mat.on) {
-      thermal_host_.tl = std::min(tl, c->config().plate_mat.tl);
-      thermal_host_.ts = std::min(ts, c->config().plate_mat.ts);
+      thermal_host_.tl = std::min(thermal_host_.tl, c->config().plate_mat.tl);
+      thermal_host_.ts = std::min(thermal_host_.ts, c->config().plate_mat.ts);
     }
+    for (const auto &m : c->config().comp) {
+      thermal_host_.tl = std::min(thermal_host_.tl, m.tl);
+      thermal_host_.ts = std::min(thermal_host_.ts, m.ts);
+    }
+  }
   if (!thermal_host_.any_liquid)
     thermal_host_.any_liquid = [this]() {
       auto af = d_active_flag;
@@ -1248,7 +1255,7 @@ int AppAdditiveTextureKokkos::melting_kernel(Kokkos::View<int*> d_active_sites, 
       int active_flag_i = d_active_flag_local(i);
 
       // Check if site should melt: T >= liquidus && not already liquid
-      if (T_i >= pr.tl_at(k_xyz_d(i, 2)) && active_flag_i != 2) {
+      if (T_i >= pr.tl_at(i, k_xyz_d(i, 2)) && active_flag_i != 2) {
         KeyedRNG generator(key_local, i, RNG_MELT);
 
         // Wall guard: only a melting face site writes (atomics, rare)
@@ -1373,7 +1380,7 @@ int AppAdditiveTextureKokkos::nucleation_kernel(Kokkos::View<int*> d_active_site
       int spin_i = d_spin_local(i);
 
       // Check if site is liquid and below liquidus (undercooled)
-      const double tl_i = pr.tl_at(k_xyz_d(i, 2));
+      const double tl_i = pr.tl_at(i, k_xyz_d(i, 2));
       if (active_flag_i == 2 && T_i < tl_i) {
         // Check if this spin can nucleate
         if (d_nucleation_flags_local(spin_i) == 1) {
@@ -1539,7 +1546,7 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
       double G_i = d_G_local(i);
       double V_i = d_V_local(i);
 
-      const double Tcool_seed = pr.tl_at(k_xyz_d(i, 2)) - d_T_local(i);
+      const double Tcool_seed = pr.tl_at(i, k_xyz_d(i, 2)) - d_T_local(i);
 
       // Grow the nucleus as the CPU app's nucleation_particle_flipper does:
       // claim round(V/dx^3) liquid sites besides the seed, shell by shell
@@ -1663,11 +1670,40 @@ int AppAdditiveTextureKokkos::particle_flipper_kernel(Kokkos::View<int*> d_activ
 PlateRule AppAdditiveTextureKokkos::plate_rule() const
 {
   PlateRule r{false, 0.0, dx, tl, tl};
-  if (ConductionTemperatureSource *c = thermal->conduction_source())
+  r.tl_lo = tl;
+  if (ConductionTemperatureSource *c = thermal->conduction_source()) {
     if (c->config().plate_mat.on) {
       r.on = true; r.zplate = c->plate_surface(); r.tl_plate = c->config().plate_mat.tl;
+      r.tl_lo = std::min(r.tl_lo, r.tl_plate);
     }
+    if (!c->config().comp.empty()) {
+      r.tlm = d_tlm; r.mat = d_mat;
+      for (const auto &m : c->config().comp) r.tl_lo = std::min(r.tl_lo, m.tl);
+    }
+  }
   return r;
+}
+
+/* ----------------------------------------------------------------------
+   Each site's conduction material from its composition (d11): the nearest
+   bin, 0 without composition. Read at init: composition is static in a run.
+------------------------------------------------------------------------- */
+
+void AppAdditiveTextureKokkos::setup_composition()
+{
+  const int nall = nlocal + nghost;
+  d_mat = Kokkos::View<unsigned char*>("site_material", nall);
+  d_tlm = Kokkos::View<double*>();
+  ConductionTemperatureSource *c = thermal->conduction_source();
+  if (!c || c->config().comp.empty()) return;
+  auto hm = Kokkos::create_mirror_view(d_mat);
+  for (int i = 0; i < nall; i++) hm(i) = (unsigned char) c->comp_bin(comp[i]);
+  Kokkos::deep_copy(d_mat, hm);
+  const auto &cm = c->config().comp;
+  d_tlm = Kokkos::View<double*>("material_tl", cm.size());
+  auto ht = Kokkos::create_mirror_view(d_tlm);
+  for (size_t m = 0; m < cm.size(); m++) ht(m) = cm[m].tl;
+  Kokkos::deep_copy(d_tlm, ht);
 }
 
 // This step's KeyedRNG key: the deck seed, the rank and the step. A site's
@@ -1780,7 +1816,7 @@ int AppAdditiveTextureKokkos::solidification_kernel(Kokkos::View<int*> d_active_
       int active_flag_i = d_active_flag_local(i);
 
       // Check if site is liquid and below liquidus
-      const double tl_i = pr.tl_at(k_xyz_d(i, 2));
+      const double tl_i = pr.tl_at(i, k_xyz_d(i, 2));
       if (active_flag_i == 2 && T_i < tl_i) {
         double Tcool = tl_i - T_i;
         double solid_d_i = d_solid_d_local(i);
@@ -2220,7 +2256,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
       if (!cond) cond = std::make_unique<ConductionSolverKokkos>(spk, csrc);
       thermal->set_moser_device_filler([this](double t) -> double {
         ensure_device_xyz();
-        cond->advance(t, d_xyz, d_active_flag, d_temp, nlocal, nlocal + nghost, dx, ts, tl);
+        cond->advance(t, d_xyz, d_active_flag, d_temp, d_mat, nlocal, nlocal + nghost, dx, ts, tl);
         // the sample also builds the active-front list (no BuildActiveList scan)
         fill_maxT_local = cond->sample(d_temp, nlocal, nlocal + nghost, active_append());
         device_active_list_fresh = true;
@@ -2363,7 +2399,7 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
         // of every melt/nucleate/solidify/smooth kernel.
         const bool active = af != 5 && (
             (af == 2) ||
-            (d_T_act(i) >= pr.tl_at(k_xyz_d(i, 2))) ||
+            (d_T_act(i) >= pr.tl_at(i, k_xyz_d(i, 2))) ||
             (sd > -nrefine_act - 1 && sd < 0.0) ||
             (is_solid(af) && sd == -nrefine_act - 2));
         if (active) {

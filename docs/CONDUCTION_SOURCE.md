@@ -348,6 +348,27 @@ enough for mixing; one rank first (several ranks: see the end of this section).
   Not yet run on HIP (the host-staged exchange path).
   ponytail: 19 populations sent where 5 cross a face; an exchange per flow
   step (deeper halos would trade them for wider windows).
+- Pool-only storage (2026-11-14). The flow's fields (`FlowWin`: a view
+  plus the block index of its first cell) and the solver's carried fields
+  (`fq`, `ftmp`, `fXw`, `fX2`) hold only a window of the block, `fW`, kept
+  in box cells so it is the same on every rank; each rank holds its part.
+  `flow_step` reduces the fluid cells' bounding box over ranks; when this
+  step's and the last step's cells (+2) do not fit, the window moves to
+  them plus a margin of a quarter of their size (4 cells at least):
+  `FlowWin::move` allocates, copies what both windows hold and leaves the
+  rest 0, which is the state a cell outside the step window has anyway.
+  `FlowFill` then writes type, T, liquid fraction, H and X of the held
+  cells (before, a pass over the whole box did). Only `fX` and `fborn`
+  (5 bytes per cell, mixed precision) still cover the block; a held cell
+  costs 229 bytes. `flow_exchange` sends the held lines and skips layers
+  outside the window. Whether a field is exchanged must not depend on a
+  rank's own held size (a rank away from the pool holds none): that hung
+  the first 4-rank run. Check (OpenMP, FP64, as above): bit for bit the
+  dense results on 1 and 4 ranks, with and without `feed surface` (d11,
+  i1, i2, d6, and T and u of dump conduction); peak host memory of the
+  one-rank run 625 MB against 805 MB. Not yet run on HIP.
+  ponytail: a move reallocates every field; keep one larger allocation and
+  shift inside it if moves ever show in a profile.
 - Limits: flat surface; thermal Marangoni only (no solutal);
   one density and one set of flow constants for every composition, not in
   the cards; melted LOOSE cells carried as dense.

@@ -46,11 +46,11 @@ void poiseuille()
   m.p.periodic[0] = m.p.periodic[1] = true;
   m.p.nu = 1.0 / 6.0;
   m.p.accel[0] = 1e-6;
-  auto ht = Kokkos::create_mirror_view(m.type);
+  auto ht = Kokkos::create_mirror_view(m.type.v);
   ht(0, 0, 0) = ht(0, 0, nz - 1) = MeltFlow<R>::WALL;
-  Kokkos::deep_copy(m.type, ht);
+  Kokkos::deep_copy(m.type.v, ht);
   for (int s = 0; s < 60000; s++) m.step();
-  auto u = host(m.ux);
+  auto u = host(m.ux.v);
   const double z0 = 0.5, z1 = nz - 1.5, umax = m.p.accel[0] * (z1 - z0) * (z1 - z0) / (8.0 * m.p.nu);
   double err = 0.0;
   for (int k = 1; k < nz - 1; k++)
@@ -79,7 +79,7 @@ double taylor_green(int N, double &rate_err)
   for (int s = 0; s < nstep; s++) m.step();
   // u is the mean of the last two steps
   const double t = nstep - 0.5, A = 0.5 * U * (std::exp(-rate * nstep) + std::exp(-rate * (nstep - 1)));
-  auto u = host(m.ux); auto v = host(m.uy);
+  auto u = host(m.ux.v); auto v = host(m.uy.v);
   double e2 = 0.0, dot = 0.0, nrm = 0.0;
   for (int i = 0; i < N; i++)
     for (int j = 0; j < N; j++) {
@@ -107,12 +107,12 @@ void thermocapillary(int nz, double &interior, double &top, double &flux)
   m.p.periodic[1] = true;
   m.p.nu = 1.0 / 6.0;
   m.p.marangoni = -1e-6;
-  auto hT = Kokkos::create_mirror_view(m.T);
+  auto hT = Kokkos::create_mirror_view(m.T.v);
   for (int i = 0; i < nx; i++)
     for (int k = 0; k < nz; k++) hT(i, 0, k) = R(i);
-  Kokkos::deep_copy(m.T, hT);
+  Kokkos::deep_copy(m.T.v, hT);
   for (int s = 0; s < 140 * nz * nz; s++) m.step();
-  auto u = host(m.ux);
+  auto u = host(m.ux.v);
   const double tau = m.p.marangoni, h = nz, us = tau * h / (4.0 * m.p.nu);
   interior = flux = 0.0;
   for (int k = 0; k < nz; k++) {
@@ -133,11 +133,11 @@ void buoyant_slot()
   m.p.periodic[1] = m.p.periodic[2] = true;
   m.p.nu = 1.0 / 6.0;
   m.p.buoy[2] = 1e-5;
-  auto hT = Kokkos::create_mirror_view(m.T);
+  auto hT = Kokkos::create_mirror_view(m.T.v);
   for (int i = 0; i < nx; i++) hT(i, 0, 0) = R((i + 0.5) / nx - 0.5);
-  Kokkos::deep_copy(m.T, hT);
+  Kokkos::deep_copy(m.T.v, hT);
   for (int s = 0; s < 40000; s++) m.step();
-  auto w = host(m.uz);
+  auto w = host(m.uz.v);
   const double amp = m.p.buoy[2] * nx * nx / (48.0 * m.p.nu), wmax = amp * 2.0 / (3.0 * std::sqrt(3.0));
   double err = 0.0, flux = 0.0;
   for (int i = 0; i < nx; i++) {
@@ -157,14 +157,14 @@ void hydrostatic()
   const int n = 16;
   m.resize(n, n, n);
   m.p.buoy[2] = 1e-4;
-  auto hT = Kokkos::create_mirror_view(m.T);
+  auto hT = Kokkos::create_mirror_view(m.T.v);
   for (int i = 0; i < n; i++)
     for (int j = 0; j < n; j++)
       for (int k = 0; k < n; k++) hT(i, j, k) = R(k);
-  Kokkos::deep_copy(m.T, hT);
+  Kokkos::deep_copy(m.T.v, hT);
   // the force starts abruptly: the checkerboard it leaves must cancel in u
   for (int s = 0; s < 30001; s++) m.step();
-  auto u = host(m.ux); auto v = host(m.uy); auto w = host(m.uz);
+  auto u = host(m.ux.v); auto v = host(m.uy.v); auto w = host(m.uz.v);
   double umax = 0.0;
   for (int i = 0; i < n; i++)
     for (int j = 0; j < n; j++)
@@ -172,7 +172,7 @@ void hydrostatic()
         umax = std::max({umax, std::fabs((double) u(i, j, k)), std::fabs((double) v(i, j, k)),
                          std::fabs((double) w(i, j, k))});
   check("5 hydrostatic: max |u| (lattice)", umax, pick<R>(1e-8, 1e-5));
-  auto pw = host(m.pz);
+  auto pw = host(m.pz.v);
   check("5 hydrostatic: the checkerboard is there (one step's |w|)", std::fabs((double) pw(3, 3, 3)), 1e-5, false);
 }
 
@@ -186,9 +186,9 @@ void darcy()
   m.p.accel[0] = 1e-6;
   m.p.darcy = 0.01;
   const double fl = 0.5, D = m.p.darcy * (1 - fl) * (1 - fl) / (fl * fl * fl + 1e-3);
-  Kokkos::deep_copy(m.fl, R(fl));
+  Kokkos::deep_copy(m.fl.v, R(fl));
   for (int s = 0; s < 5000; s++) m.step();
-  auto u = host(m.ux);
+  auto u = host(m.ux.v);
   check("6 Darcy: |u D / a - 1|", u(1, 2, 3) * D / m.p.accel[0] - 1.0, pick<R>(1e-3, 5e-3));
 }
 
@@ -201,7 +201,7 @@ void block()
   m.resize(nx, ny, nz);
   m.p.periodic[0] = m.p.periodic[1] = true;
   m.p.accel[0] = 1e-5;
-  auto ht = Kokkos::create_mirror_view(m.type);
+  auto ht = Kokkos::create_mirror_view(m.type.v);
   int nfluid = 0;
   for (int i = 0; i < nx; i++)
     for (int j = 0; j < ny; j++)
@@ -210,9 +210,9 @@ void block()
         ht(i, j, k) = wall ? MeltFlow<R>::WALL : MeltFlow<R>::FLUID;
         nfluid += !wall;
       }
-  Kokkos::deep_copy(m.type, ht);
+  Kokkos::deep_copy(m.type.v, ht);
   for (int s = 0; s < 5000; s++) m.step();
-  auto u = host(m.ux);
+  auto u = host(m.ux.v);
   double usolid = 0.0, ufluid = 0.0;
   for (int i = 0; i < nx; i++)
     for (int j = 0; j < ny; j++)
@@ -237,12 +237,12 @@ void pool_stability()
   m.p.nu = 0.005;
   m.p.smag = 0.17;
   m.p.marangoni = -3.17e-5;
-  auto hT = Kokkos::create_mirror_view(m.T);
+  auto hT = Kokkos::create_mirror_view(m.T.v);
   for (int i = 0; i < nx; i++)
     for (int k = 0; k < nz; k++) hT(i, 0, k) = R(20.0 * i);
-  Kokkos::deep_copy(m.T, hT);
+  Kokkos::deep_copy(m.T.v, hT);
   for (int s = 0; s < 100000; s++) m.step();
-  auto u = host(m.ux); auto w = host(m.uz);
+  auto u = host(m.ux.v); auto w = host(m.uz.v);
   double umax = 0.0;
   bool finite = true;
   for (int i = 0; i < nx; i++)
@@ -268,9 +268,9 @@ double pool_si(double u_ref)
   m.resize(nx, nx, nz);
   m.ph.dx = 20e-6; m.ph.nu = 8.5e-7; m.ph.dsdT_rho = -2.6e-4 / 4100.0;
   m.ph.beta_g = 1e-5 * 9.81; m.ph.Tref = 1928.0; m.ph.darcy = 1e4; m.ph.u_ref = u_ref;
-  auto ht = Kokkos::create_mirror_view(m.type);
-  auto hT = Kokkos::create_mirror_view(m.T);
-  auto hf = Kokkos::create_mirror_view(m.fl);
+  auto ht = Kokkos::create_mirror_view(m.type.v);
+  auto hT = Kokkos::create_mirror_view(m.T.v);
+  auto hf = Kokkos::create_mirror_view(m.fl.v);
   for (int i = 0; i < nx; i++)
     for (int j = 0; j < nx; j++)
       for (int k = 0; k < nz; k++) {
@@ -280,7 +280,7 @@ double pool_si(double u_ref)
         hT(i, j, k) = R(1928.0 + 1200.0 * std::exp(-(x * x + y * y) / (12.0 * 12.0) - d * d / (8.0 * 8.0)));
         hf(i, j, k) = R(std::min(1.0, std::max(0.05, 4.0 * (1.0 - e))));   // mushy near the wall
       }
-  Kokkos::deep_copy(m.type, ht); Kokkos::deep_copy(m.T, hT); Kokkos::deep_copy(m.fl, hf);
+  Kokkos::deep_copy(m.type.v, ht); Kokkos::deep_copy(m.T.v, hT); Kokkos::deep_copy(m.fl.v, hf);
   const int lo[3] = {0, 0, 0}, hi[3] = {nx, nx, nz};
   double lat_max = 0.0, u_late = 0.0;
   int nmax = 0, bad = 0;
@@ -291,7 +291,7 @@ double pool_si(double u_ref)
     if (s >= 200) lat_max = std::max(lat_max, m.umax * m.dt / m.ph.dx);
     if (s >= 3000) u_late = std::max(u_late, m.umax);
   }
-  auto u = host(m.ux);
+  auto u = host(m.ux.v);
   // surface flow at half the pool radius on +x: outward means u > 0
   const double us = bad ? NAN : u(42, 32, nz - 1) * m.ph.dx / m.dt;
   if (u_ref != 1.0) {
@@ -340,7 +340,7 @@ void advect_uniform()
     m.step(); m.step(lo, hi, false);
     advect_all(m, q, tmp);
   }
-  auto h = host(q); auto u = host(m.ux); auto v = host(m.uy);
+  auto h = host(q); auto u = host(m.ux.v); auto v = host(m.uy.v);
   double err = 0.0;
   for (int i = 0; i < N; i++)
     for (int j = 0; j < N; j++) {
@@ -472,7 +472,7 @@ void advect_conserve()
   m.p.periodic[0] = m.p.periodic[1] = true;
   m.p.accel[0] = 2e-5; m.p.accel[2] = -1e-5;
   m.p.nu = 0.02;
-  auto ht = Kokkos::create_mirror_view(m.type);
+  auto ht = Kokkos::create_mirror_view(m.type.v);
   for (int i = 0; i < nx; i++)
     for (int j = 0; j < ny; j++)
       for (int k = 0; k < nz; k++) {
@@ -480,7 +480,7 @@ void advect_conserve()
         const bool gas = k >= 15 || (i < 16 && k >= 12);
         ht(i, j, k) = wall ? MeltFlow<R>::WALL : gas ? MeltFlow<R>::GAS : MeltFlow<R>::FLUID;
       }
-  Kokkos::deep_copy(m.type, ht);
+  Kokkos::deep_copy(m.type.v, ht);
   Kokkos::View<R***> q("q", nx, ny, nz), tmp("tmp", nx, ny, nz), q2("q2", nx, ny, nz), tmp2("tmp2", nx, ny, nz);
   auto hq = Kokkos::create_mirror_view(q);
   for (int i = 0; i < nx; i++)
@@ -491,7 +491,7 @@ void advect_conserve()
   const int lo[3] = {0, 0, 0}, hi[3] = {nx, ny, nz};
   // sum of (1 + rho) q over the fluid, and its size
   auto total = [&](double &sum) {
-    auto h = host(q); auto r = host(m.rho);
+    auto h = host(q); auto r = host(m.rho.v);
     sum = 0.0;
     for (int i = 0; i < nx; i++)
       for (int j = 0; j < ny; j++)
@@ -502,13 +502,13 @@ void advect_conserve()
   double s0, s1, ferr = 0.0;
   total(s0);
   for (int s = 0; s < 1500; s++) {
-    // a copy of its own: on a host backend host() is m.rho itself
-    auto r0 = Kokkos::create_mirror(m.rho);
-    if (s % 500 == 499) Kokkos::deep_copy(r0, m.rho);
+    // a copy of its own: on a host backend host() is m.rho.v itself
+    auto r0 = Kokkos::create_mirror(m.rho.v);
+    if (s % 500 == 499) Kokkos::deep_copy(r0, m.rho.v);
     m.step(); m.step(lo, hi, false);
     if (s % 500 == 499) {
       // the six faces against rho's change over the two steps
-      auto r1 = host(m.rho); auto G = host(m.flux);
+      auto r1 = host(m.rho.v); auto G = host(m.flux.v);
       for (int i = 0; i < nx; i++)
         for (int j = 0; j < ny; j++)
           for (int k = 0; k < nz; k++) {
@@ -533,7 +533,7 @@ void advect_conserve()
     melt_advect(m, q, tmp, q2, tmp2, lo, hi, true);
   }
   total(s1);
-  auto h = host(q); auto h2 = host(q2); auto u = host(m.ux);
+  auto h = host(q); auto h2 = host(q2); auto u = host(m.ux.v);
   int nfluid = 0;
   double qlo = 1e300, qhi = -1e300, uni = 0.0, umax = 0.0, moved = 0.0;
   for (int i = 0; i < nx; i++)

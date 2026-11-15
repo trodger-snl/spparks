@@ -556,18 +556,21 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
     fb0[2] = az.nlo;
     const int bn[3] = {ob[0] + fh[0] + fh[1], ob[1] + fh[2] + fh[3], gz_top - glo[2] + 1};
     flow = std::make_unique<MeltFlow<KK_FLOAT>>();
-    flow->resize(bn[0], bn[1], bn[2]);
+    flow->resize(bn[0], bn[1], bn[2], false);   // no cells held until there is a pool
+    fg0[0] = lo[0] - glo[0] - fh[0]; fg0[1] = lo[1] - glo[1] - fh[2]; fg0[2] = 0;
+    for (int d = 0; d < 6; d++) fW[d] = 0;
     // ponytail: all 19 populations of the layer go over; 5 cross each face
-    if (multi) flow->halo = [this] { flow_exchange(flow->f, fhR, 1, 3); };
+    if (multi) flow->halo = [this] { flow_exchange(flow->f.v, fhR, 1, 3, flow->wlo, flow->whi); };
     auto &ph = flow->ph;
     ph.dx = dx; ph.nu = cfg.flow.viscosity; ph.smag = cfg.flow.smag;
     // ponytail: one density for the Marangoni acceleration, whatever the composition
     ph.dsdT_rho = cfg.flow.dsigma_dT / src->density();
     ph.beta_g = cfg.flow.beta * 9.81; ph.Tref = tl;
     ph.darcy = cfg.flow.mushy; ph.u_ref = cfg.flow.u_ref;
-    fq = Kokkos::View<KK_FLOAT***>("cond_fq", bn[0], bn[1], bn[2]);
-    ftmp = Kokkos::View<KK_FLOAT***>("cond_ftmp", bn[0], bn[1], bn[2]);
+    fq = Kokkos::View<KK_FLOAT***>("cond_fq", 0, 0, 0);
+    ftmp = Kokkos::View<KK_FLOAT***>("cond_ftmp", 0, 0, 0);
     fX = Kokkos::View<KK_FLOAT***>();
+    fXw = fX2 = Kokkos::View<KK_FLOAT***>();
     if (cfg.comp_flow && !cfg.comp.empty()) {
       // each cell starts at its site's composition
       fX = Kokkos::View<KK_FLOAT***>("cond_fX", bn[0], bn[1], bn[2]);
@@ -582,7 +585,8 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
         hX(bi, bj, bk) = (KK_FLOAT) hc(s);
       }
       Kokkos::deep_copy(fX, hX); Kokkos::deep_copy(site_blk, hb);
-      fX2 = Kokkos::View<KK_FLOAT***>("cond_fX2", bn[0], bn[1], bn[2]);
+      fXw = Kokkos::View<KK_FLOAT***>("cond_fXw", 0, 0, 0);
+      fX2 = Kokkos::View<KK_FLOAT***>("cond_fX2", 0, 0, 0);
       fborn = Kokkos::View<unsigned char***>();
       has_pool = false;
       if (cfg.comp_feed_surface) {
@@ -794,14 +798,19 @@ void ConductionSolverKokkos::write_grid(const std::string &file, double time, bo
         // flow lbm: the velocity (m/s) of every cell, 0 outside the pool
         const double sc = flow->dt > 0.0 ? dx / flow->dt : 0.0;
         const char *nm[3] = {"ux", "uy", "uz"};
-        Kokkos::View<KK_FLOAT***> uv[3] = {flow->ux, flow->uy, flow->uz};
+        Kokkos::View<KK_FLOAT***> uv[3] = {flow->ux.v, flow->uy.v, flow->uz.v};
+        // the cells the flow holds (its window), less the halo
+        const int *wl = flow->wlo, *wh = flow->whi;
+        const int i0 = std::max(wl[0], fh[0]), i1 = std::min(wh[0], flow->nx - fh[1]);
+        const int j0 = std::max(wl[1], fh[2]), j1 = std::min(wh[1], flow->ny - fh[3]);
         for (int d = 0; d < 3; d++) {
           auto hu = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), uv[d]);
           std::vector<float> ub(tb.size(), 0.0f);
-          for (int k = 0; k < flow->nz; k++)
-            for (int j = fh[2]; j < flow->ny - fh[3]; j++)
-              for (int i = fh[0]; i < flow->nx - fh[1]; i++)
-                ub[((size_t) (k + fb0[2]) * nyo + j + fb0[1] - 1) * nxo + i + fb0[0] - 1] = (float) (sc * hu(i, j, k));
+          for (int k = wl[2]; k < wh[2]; k++)
+            for (int j = j0; j < j1; j++)
+              for (int i = i0; i < i1; i++)
+                ub[((size_t) (k + fb0[2]) * nyo + j + fb0[1] - 1) * nxo + i + fb0[0] - 1] =
+                  (float) (sc * hu(i - wl[0], j - wl[1], k - wl[2]));
           h5::write_slab(h5::open(f, nm[d]), off, cnt, ub.data());
         }
       }
@@ -1021,9 +1030,8 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
   const int bx = F.nx, by = F.ny, bz = F.nz;
   const int o0 = fb0[0], o1 = fb0[1], o2 = fb0[2];
   auto P_ = P; auto M_ = M; auto T_ = T; auto H_ = H;
-  auto ty = F.type; auto fT = F.T; auto ffl = F.fl;
   auto ts_ = tsm; auto tl_ = tlm; auto Hr = Hrefm;
-  auto q = fq; auto X = fX; auto born = fborn;
+  auto X = fX; auto born = fborn;
   auto fxlo_ = fxlo, fxhi_ = fxhi, fylo_ = fylo, fyhi_ = fyhi, fzlo_ = fzlo, fzhi_ = fzhi;
   // feed surface reaches one layer (the birth depth) below the source plane
   const double zfeed = zsrc - birth_depth;
@@ -1050,12 +1058,6 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
       const double f = (Tv - ts_(m)) / (tl_(m) - ts_(m));
       const bool gas = (p & 3) == GAS || (p & UNBORN);
       const bool fluid = !gas && (p & 3) == DENSE && f > 0.0;
-      ty(i, j, k) = gas ? MeltFlow<KK_FLOAT>::GAS : fluid ? MeltFlow<KK_FLOAT>::FLUID
-                                                      : MeltFlow<KK_FLOAT>::WALL;
-      fT(i, j, k) = (KK_FLOAT) Tv;
-      ffl(i, j, k) = (KK_FLOAT) (f < 0.0 ? 0.0 : f > 1.0 ? 1.0 : f);
-      // the absolute enthalpy (a cell's H is relative to its material's H(T0))
-      q(i, j, k) = (KK_FLOAT) (H_(i + o0, j + o1, k + o2) + Hr(m));
       if (feed) {
         // new: unborn, or born powder that has not melted yet
         if (p & UNBORN) born(i, j, k) = 1;
@@ -1084,6 +1086,16 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
   MPI_Allreduce(MPI_IN_PLACE, gs, 7, MPI_DOUBLE, MPI_SUM, world);
   acc.sx = gs[0]; acc.nfl = gs[1]; acc.exc = gs[2]; acc.fsum = gs[3]; acc.nb = gs[4]; acc.sw = gs[5];
   const bool gany = gs[6] > 0.0;
+  // the fluid cells of all ranks and two around them, in box cells
+  int gb[6];
+  for (int d = 0; d < 3; d++) {
+    gb[d] = any ? lo[d] + fg0[d] - 2 : INT_MAX; gb[3+d] = any ? -(hi[d] + fg0[d] + 3) : INT_MAX;
+  }
+  MPI_Allreduce(MPI_IN_PLACE, gb, 6, MPI_INT, MPI_MIN, world);
+  for (int d = 0; d < 3; d++) {
+    if (gany) gb[3+d] = -gb[3+d];
+    else gb[d] = gb[3+d] = 0;
+  }
   if (feed) {
     feed_res += acc.exc;
     if (acc.nb > 0.0) xfeed = acc.fsum / acc.nb;
@@ -1104,11 +1116,61 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
   const bool was = fwin_on;
   fwin_on = gany; fwin_loc = any;
   for (int d = 0; d < 6; d++) fwin[d] = cur[d];
-  if (!gany && !was) return;
+  if (!gany && !was) { for (int d = 0; d < 6; d++) fG[d] = gb[d]; return; }
+
+  // The fields must hold this step's cells and the last step's (gb, fG).
+  // When they do not, the held window fW moves: those cells and a margin,
+  // so it moves seldom (each move allocates and copies the fields).
+  bool fits = true;
+  int need[6];
+  for (int d = 0; d < 3; d++) {
+    need[d] = !gany ? fG[d] : !was ? gb[d] : std::min(gb[d], fG[d]);
+    need[3+d] = !gany ? fG[3+d] : !was ? gb[3+d] : std::max(gb[3+d], fG[3+d]);
+    fits = fits && need[d] >= fW[d] && need[3+d] <= fW[3+d];
+  }
+  for (int d = 0; d < 6; d++) fG[d] = gb[d];
+  if (!fits) {
+    int wl[3], wh[3];
+    const int bn[3] = {bx, by, bz};
+    for (int d = 0; d < 3; d++) {
+      const int pad = std::max(4, (need[3+d] - need[d]) / 4);
+      fW[d] = need[d] - pad; fW[3+d] = need[3+d] + pad;
+      wl[d] = std::min(bn[d], std::max(0, fW[d] - fg0[d]));
+      wh[d] = std::max(wl[d], std::min(bn[d], fW[3+d] - fg0[d]));
+    }
+    F.window(wl, wh);
+    fq.move(wl, wh); ftmp.move(wl, wh);
+    if (comp) { fXw.move(wl, wh); fX2.move(wl, wh); }
+  }
+  // this step's type, T, liquid fraction and carried fields of this rank's
+  // held cells
+  {
+    auto ty = F.type; auto fT = F.T; auto ffl = F.fl; auto q = fq; auto Xw = fXw;
+    Kokkos::parallel_for("FlowFill",
+      Kokkos::MDRangePolicy<Kokkos::Rank<3>>(
+        {std::max(F.wlo[0], olo[0]), std::max(F.wlo[1], olo[1]), F.wlo[2]},
+        {std::max(std::max(F.wlo[0], olo[0]), std::min(F.whi[0], ohi[0])),
+         std::max(std::max(F.wlo[1], olo[1]), std::min(F.whi[1], ohi[1])), F.whi[2]}),
+      KOKKOS_LAMBDA(const int i, const int j, const int k) {
+        const unsigned char p = P_(i + o0, j + o1, k + o2);
+        const int m = M_(i + o0, j + o1, k + o2);
+        const double Tv = T_(i + o0, j + o1, k + o2);
+        const double f = (Tv - ts_(m)) / (tl_(m) - ts_(m));
+        const bool gas = (p & 3) == GAS || (p & UNBORN);
+        const bool fluid = !gas && (p & 3) == DENSE && f > 0.0;
+        ty(i, j, k) = gas ? MeltFlow<KK_FLOAT>::GAS : fluid ? MeltFlow<KK_FLOAT>::FLUID
+                                                        : MeltFlow<KK_FLOAT>::WALL;
+        fT(i, j, k) = (KK_FLOAT) Tv;
+        ffl(i, j, k) = (KK_FLOAT) (f < 0.0 ? 0.0 : f > 1.0 ? 1.0 : f);
+        // the absolute enthalpy (a cell's H is relative to its material's H(T0))
+        q(i, j, k) = (KK_FLOAT) (H_(i + o0, j + o1, k + o2) + Hr(m));
+        if (comp) Xw(i, j, k) = X(i, j, k);
+      });
+  }
 
   if (multi) {
-    flow_exchange(as4(F.type), fhC, 2, 3);
-    flow_exchange(as4(F.T), fhR, 1, 3);
+    flow_exchange(as4(F.type.v), fhC, 2, 3, F.wlo, F.whi);
+    flow_exchange(as4(F.T.v), fhR, 1, 3, F.wlo, F.whi);
   }
   const int n = F.run(h, w, w + 3);
   MPI_Allreduce(MPI_IN_PLACE, &F.umax, 1, MPI_DOUBLE, MPI_MAX, world);
@@ -1132,18 +1194,19 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
 
   // the sweeps leave the carried fields in ftmp, fX2; one pass writes them
   // back and (feed surface) drains the reservoir into the surface cells
-  std::function<void(int, Kokkos::View<KK_FLOAT***>, Kokkos::View<KK_FLOAT***>)> halo;
+  using W3 = MeltFlow<KK_FLOAT>::W3;
+  std::function<void(int, W3, W3)> halo;
   if (multi) {
-    flow_exchange(F.flux, fhR, 1, 3);
+    flow_exchange(F.flux.v, fhR, 1, 3, F.wlo, F.whi);
     // z is not split; the x sweep's result crosses in y before the y sweep
-    halo = [&](int d, Kokkos::View<KK_FLOAT***> a, Kokkos::View<KK_FLOAT***> b) {
+    halo = [&](int d, W3 a, W3 b) {
       if (d > 1) return;
-      flow_exchange(as4(a), fhR, 2, 1 << d);
-      if (b.extent(0)) flow_exchange(as4(b), fhR, 2, 1 << d);
+      flow_exchange(as4(a.v), fhR, 2, 1 << d, F.wlo, F.whi);
+      if (comp) flow_exchange(as4(b.v), fhR, 2, 1 << d, F.wlo, F.whi);   // not by b's size: a rank may hold no cells
     };
   }
-  melt_advect(F, fq, ftmp, fX, fX2, w, w + 3, false, halo);
-  auto qt = ftmp; auto Xt = fX2;
+  melt_advect(F, fq, ftmp, comp ? fXw : W3(), fX2, w, w + 3, false, halo);
+  auto qt = ftmp; auto Xt = fX2; auto ty = F.type;
   const double share = feed && acc.sw > 0.0 ? feed_res / acc.sw : 0.0;
   const double xf_ = xfeed;
   // the cell's part of the write-back; returns what the reservoir gave it
@@ -1179,17 +1242,24 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
 /* ---------------------------------------------------------------------- */
 
 template <class S>
-void ConductionSolverKokkos::flow_exchange(Kokkos::View<S****> v, FlowHalo<S> &b, int w, int dirs)
+void ConductionSolverKokkos::flow_exchange(Kokkos::View<S****> v, FlowHalo<S> &b, int w, int dirs,
+                                           const int *vlo, const int *vhi)
 {
-  const int n[3] = {(int) v.extent(0), (int) v.extent(1), (int) v.extent(2)};
-  const int nc = (int) v.extent(3), nz_ = n[2];
+  // v holds the block's cells [vlo, vhi) (all of them if not given). Rank
+  // neighbours hold the same lines and layers: the window is the same box
+  // cells on every rank.
+  const int n[3] = {flow->nx, flow->ny, flow->nz}, zero[3] = {0, 0, 0};
+  if (!vlo) { vlo = zero; vhi = n; }
+  const int nc = (int) v.extent(3), nz_ = vhi[2] - vlo[2];
   for (int dir = 0; dir < 2; dir++) {
     const int lo_n = nbr[2*dir], hi_n = nbr[2*dir+1];
     if (!(dirs & (1 << dir)) || (lo_n < 0 && hi_n < 0)) continue;
     // layers along dir: owned hl .. nd - hr - 1; a line spans the other
     // axis, halo included
-    const int hl = fh[2*dir], hr = fh[2*dir+1], nd = n[dir], na = n[1-dir];
+    const int hl = fh[2*dir], hr = fh[2*dir+1], nd = n[dir], na = vhi[1-dir] - vlo[1-dir];
     const int np = w * na * nz_ * nc;   // values per side
+    if (np <= 0) continue;
+    const int dlo = vlo[dir], dhi = vhi[dir];   // a, k below count from the held cells' first
     if ((int) b.s.extent(0) < 2 * np) {
       b.s = Kokkos::View<S*>("cond_flow_sbuf", 2 * np);
       b.r = Kokkos::View<S*>("cond_flow_rbuf", 2 * np);
@@ -1204,7 +1274,8 @@ void ConductionSolverKokkos::flow_exchange(Kokkos::View<S****> v, FlowHalo<S> &b
       const int c = p % nc, k = (p / nc) % nz_, a = (p / (nc * nz_)) % na, l = p / (nc * nz_ * na);
       for (int side = 0; side < 2; side++) {
         const int e = side ? nd - hr - w + l : hl + l;
-        sb(side * np + p) = dir == 0 ? v(e, a, k, c) : v(a, e, k, c);
+        if (e < dlo || e >= dhi) continue;
+        sb(side * np + p) = dir == 0 ? v(e - dlo, a, k, c) : v(a, e - dlo, k, c);
       }
     });
     Kokkos::DefaultExecutionSpace exec;
@@ -1232,8 +1303,9 @@ void ConductionSolverKokkos::flow_exchange(Kokkos::View<S****> v, FlowHalo<S> &b
       for (int side = 0; side < 2; side++) {
         if (!(side ? has_hi : has_lo)) continue;
         const int e = side ? nd - hr + l : hl - w + l;
-        if (dir == 0) v(e, a, k, c) = rb(side * np + p);
-        else v(a, e, k, c) = rb(side * np + p);
+        if (e < dlo || e >= dhi) continue;
+        if (dir == 0) v(e - dlo, a, k, c) = rb(side * np + p);
+        else v(a, e - dlo, k, c) = rb(side * np + p);
       }
     });
   }

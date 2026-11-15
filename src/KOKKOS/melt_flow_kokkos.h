@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <type_traits>
 #include <utility>
 
 namespace SPPARKS_NS {
@@ -84,6 +85,50 @@ namespace SPPARKS_NS {
    in both copies of f.
 ------------------------------------------------------------------------- */
 
+/* ----------------------------------------------------------------------
+   A cell field held over a window of the block only: v covers the cells
+   [o, o + extent) and is read by block index. Made from a plain view it is
+   the whole block.
+------------------------------------------------------------------------- */
+
+template <class V>
+struct FlowWin {
+  V v;
+  int o0 = 0, o1 = 0, o2 = 0;
+  FlowWin() = default;
+  FlowWin(const V &v_) : v(v_) {}
+  template <class... Q>
+  KOKKOS_INLINE_FUNCTION auto &operator()(int i, int j, int k, Q... q) const {
+    return v(i - o0, j - o1, k - o2, q...);
+  }
+  // hold the cells [lo, hi) instead: a cell in both windows keeps its
+  // value, a new one is 0
+  void move(const int lo[3], const int hi[3]) {
+    int n[3], a[3], b[3];
+    const int o[3] = {o0, o1, o2};
+    bool both = true;
+    for (int d = 0; d < 3; d++) {
+      n[d] = hi[d] > lo[d] ? hi[d] - lo[d] : 0;
+      a[d] = lo[d] > o[d] ? lo[d] : o[d];
+      b[d] = std::min(lo[d] + n[d], o[d] + (int) v.extent(d));
+      both = both && b[d] > a[d];
+    }
+    FlowWin old = *this, nw;
+    const int nc = V::rank() == 4 ? (int) v.extent(3) : 1;
+    if constexpr (V::rank() == 4) nw.v = V(v.label(), n[0], n[1], n[2], nc);
+    else nw.v = V(v.label(), n[0], n[1], n[2]);
+    nw.o0 = lo[0]; nw.o1 = lo[1]; nw.o2 = lo[2];
+    if (both)
+      Kokkos::parallel_for("FlowWinMove",
+        Kokkos::MDRangePolicy<Kokkos::Rank<3>>({a[0], a[1], a[2]}, {b[0], b[1], b[2]}),
+        KOKKOS_LAMBDA(const int i, const int j, const int k) {
+          if constexpr (V::rank() == 4) { for (int q = 0; q < nc; q++) nw(i, j, k, q) = old(i, j, k, q); }
+          else nw(i, j, k) = old(i, j, k);
+        });
+    *this = nw;
+  }
+};
+
 template <class R>
 struct MeltFlow {
   enum Type : unsigned char { FLUID = 0, WALL = 1, GAS = 2 };
@@ -100,29 +145,49 @@ struct MeltFlow {
   } p;
 
   int nx = 0, ny = 0, nz = 0;
-  Kokkos::View<R****> f, fn;                 // (x, y, z, q): f - w
-  Kokkos::View<unsigned char***> type;
-  Kokkos::View<R***> T, fl;                  // temperature, liquid fraction
-  Kokkos::View<R***> ux, uy, uz, rho;        // output: two-step mean u, rho - 1
-  Kokkos::View<R***> px, py, pz;             // the last step's u
-  Kokkos::View<R****> flux;                  // (x, y, z, face): mass out, see above
+  using W3 = FlowWin<Kokkos::View<R***>>;
+  using W4 = FlowWin<Kokkos::View<R****>>;
+  W4 f, fn;                                  // (x, y, z, q): f - w
+  FlowWin<Kokkos::View<unsigned char***>> type;
+  W3 T, fl;                                  // temperature, liquid fraction
+  W3 ux, uy, uz, rho;                        // output: two-step mean u, rho - 1
+  W3 px, py, pz;                             // the last step's u
+  W4 flux;                                   // (x, y, z, face): mass out, see above
+  int wlo[3] = {0, 0, 0}, whi[3] = {0, 0, 0};   // the cells the fields hold
 
-  void resize(int nx_, int ny_, int nz_) {
+  // A block of nx_ x ny_ x nz_ cells. all: the fields hold every cell;
+  // else none yet, and window() says which.
+  void resize(int nx_, int ny_, int nz_, bool all = true) {
     nx = nx_; ny = ny_; nz = nz_;
-    f = Kokkos::View<R****>("flow_f", nx, ny, nz, 19);
-    fn = Kokkos::View<R****>("flow_fn", nx, ny, nz, 19);
-    type = Kokkos::View<unsigned char***>("flow_type", nx, ny, nz);
-    T = Kokkos::View<R***>("flow_T", nx, ny, nz);
-    fl = Kokkos::View<R***>("flow_fl", nx, ny, nz);
-    ux = Kokkos::View<R***>("flow_ux", nx, ny, nz);
-    uy = Kokkos::View<R***>("flow_uy", nx, ny, nz);
-    uz = Kokkos::View<R***>("flow_uz", nx, ny, nz);
-    rho = Kokkos::View<R***>("flow_rho", nx, ny, nz);
-    px = Kokkos::View<R***>("flow_px", nx, ny, nz);
-    py = Kokkos::View<R***>("flow_py", nx, ny, nz);
-    pz = Kokkos::View<R***>("flow_pz", nx, ny, nz);
-    flux = Kokkos::View<R****>("flow_flux", nx, ny, nz, 6);
-    Kokkos::deep_copy(fl, R(1));
+    const int a = all ? nx : 0, b = all ? ny : 0, c = all ? nz : 0;
+    f = Kokkos::View<R****>("flow_f", a, b, c, 19);
+    fn = Kokkos::View<R****>("flow_fn", a, b, c, 19);
+    type = Kokkos::View<unsigned char***>("flow_type", a, b, c);
+    T = Kokkos::View<R***>("flow_T", a, b, c);
+    fl = Kokkos::View<R***>("flow_fl", a, b, c);
+    ux = Kokkos::View<R***>("flow_ux", a, b, c);
+    uy = Kokkos::View<R***>("flow_uy", a, b, c);
+    uz = Kokkos::View<R***>("flow_uz", a, b, c);
+    rho = Kokkos::View<R***>("flow_rho", a, b, c);
+    px = Kokkos::View<R***>("flow_px", a, b, c);
+    py = Kokkos::View<R***>("flow_py", a, b, c);
+    pz = Kokkos::View<R***>("flow_pz", a, b, c);
+    flux = Kokkos::View<R****>("flow_flux", a, b, c, 6);
+    Kokkos::deep_copy(fl.v, R(1));
+    for (int d = 0; d < 3; d++) wlo[d] = 0;
+    whi[0] = a; whi[1] = b; whi[2] = c;
+  }
+
+  // The fields now hold the cells [lo, hi) only (see FlowWin::move). Every
+  // cell a kernel reads must be inside: the windows passed to step() and
+  // melt_advect() and, around FLUID cells, two more cells (or the block's
+  // edge). A cell outside has no flow state: it must have been non-FLUID
+  // for the last two steps, as one outside step()'s window.
+  void window(const int lo[3], const int hi[3]) {
+    f.move(lo, hi); fn.move(lo, hi); type.move(lo, hi); T.move(lo, hi); fl.move(lo, hi);
+    ux.move(lo, hi); uy.move(lo, hi); uz.move(lo, hi); rho.move(lo, hi);
+    px.move(lo, hi); py.move(lo, hi); pz.move(lo, hi); flux.move(lo, hi);
+    for (int d = 0; d < 3; d++) { wlo[d] = lo[d]; whi[d] = hi[d] > lo[d] ? hi[d] : lo[d]; }
   }
 
   // The 19 velocities: rest, then opposite pairs (q odd, q + 1).
@@ -466,17 +531,22 @@ struct MeltFlow {
    deep along d; m.flux and m.type must be current in the halo already.
 ------------------------------------------------------------------------- */
 
+// The carried fields are FlowWin (a plain view converts: the whole block);
+// R is taken from m alone.
+template <class R>
+using FlowField = std::type_identity_t<FlowWin<Kokkos::View<R***>>>;
+
 // Two fields at once (q2/tmp2 may be empty views: one field). With
 // copy_back false the result is left in tmp/tmp2 (inside the window) and
 // q/q2 hold the state after the y sweep: the caller reads tmp and saves a
 // launch.
 template <class R>
-void melt_advect(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> tmp,
-                 Kokkos::View<R***> q2, Kokkos::View<R***> tmp2,
+void melt_advect(const MeltFlow<R> &m, FlowField<R> q, FlowField<R> tmp,
+                 FlowField<R> q2, FlowField<R> tmp2,
                  const int lo[3], const int hi[3], bool copy_back,
-                 const std::function<void(int, Kokkos::View<R***>, Kokkos::View<R***>)> &halo = {})
+                 const std::function<void(int, FlowField<R>, FlowField<R>)> &halo = {})
 {
-  const bool two = q2.extent(0) > 0;
+  const bool two = q2.v.extent(0) > 0;
   auto ty = m.type; auto G = m.flux; auto rho = m.rho;
   const int n0 = m.nx, n1 = m.ny, n2 = m.nz;
   const bool p0 = m.p.periodic[0], p1 = m.p.periodic[1], p2 = m.p.periodic[2];
@@ -519,7 +589,7 @@ void melt_advect(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> 
           return G(ia, ja, ka, 2 * e + 1) - G(ib, jb, kb, 2 * e);
         };
         // that face's value of src along d, less this cell's: limited upwind
-        auto face = [&](const Kokkos::View<R***> &src, int s, R uf) -> R {
+        auto face = [&](const typename MeltFlow<R>::W3 &src, int s, R uf) -> R {
           if (uf == R(0)) return R(0);
           int ia, ja, ka, ib, jb, kb;
           at(d, s, ia, ja, ka); at(d, s + 1, ib, jb, kb);
@@ -545,10 +615,10 @@ void melt_advect(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> 
 }
 
 template <class R>
-void melt_advect(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> tmp,
+void melt_advect(const MeltFlow<R> &m, FlowField<R> q, FlowField<R> tmp,
                  const int lo[3], const int hi[3])
 {
-  melt_advect(m, q, tmp, Kokkos::View<R***>(), Kokkos::View<R***>(), lo, hi, true);
+  melt_advect(m, q, tmp, FlowField<R>(), FlowField<R>(), lo, hi, true);
 }
 
 }

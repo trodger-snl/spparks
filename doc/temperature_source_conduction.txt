@@ -228,8 +228,11 @@ its neighbours in x and y (every process needs 2 or more sites along a
 split axis); without {feed surface} the result is the same, bit for bit
 in double precision, as on one process.  The flow solver and the carrying
 scheme are checked against analytical solutions by
-tools/melt_flow_check.cpp (build target melt_flow_check).  Costs about
-half again the run time of a conduction-only run.  Examples:
+tools/melt_flow_check.cpp (build target melt_flow_check).  The flow's
+memory follows the pool: about 230 bytes per cell (single precision
+kernels) of a block around the liquid, not of the whole box.  Costs
+from half again to nearly three times the run time of a {mix pool} run
+(the larger on a 20-layer wall whose pool stays liquid for long).  Examples:
 examples/am/surge/conduction/in.thin_wall.ded.graded.flow.
 
 [Density.]  One density, rho = k/(alpha*cp), is used for every phase.

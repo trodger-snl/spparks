@@ -3,18 +3,16 @@
 #
 # Model caveats specific to this material (read before using the card):
 # - Pure metal: one melting point. solidus is set 10 K below liquidus by choice, see its note.
-# - NO PROCESS SET. LPBF of pure niobium is published (griemsmann2021, candela2023), but the
-#   one paper with parameter tables could not be opened and the other gives no power or
-#   speed; see the comment at the end of the file.
+# - Two LPBF process sets (griemsmann2021, read in full). No DED set for pure Nb was found.
 # - Not on the card (no source opened): powder.conductivity, the thermal conductivity above
 #   2200 K and of the liquid (the table is held at its last value) and every
 #   [microstructure] record. A conduction deck must give k_powder itself, and init_app needs
 #   solid_front_vel and the nucleation values from the deck.
-# - The liquid properties in [flow], the liquid heat capacity and the emissivity were read
+# - The surface tension and viscosity in [flow], the liquid heat capacity and the emissivity were read
 #   from abstracts only; the solid heat capacity and latent heat rest on the 1973 NIST-JANAF
 #   review.
 # - Printability, as the sources state it: niobium prints crack-free and dense in LPBF
-#   (more than 99.9 % relative density, griemsmann2021 abstract; above 99.8 %, candela2023
+#   (more than 99.9 % relative density, griemsmann2021; above 99.8 %, candela2023
 #   abstract). Oxygen pickup embrittles it: the title of a 2023 paper not opened here
 #   (Mater. Sci. Eng. A 866, 144691) names oxygen-assisted embrittlement of LPBF niobium.
 
@@ -23,7 +21,7 @@ schema_version = 1
 material = "Nb"
 designation = { spec = "commercially pure Nb; LPBF powder of candela2023: Taniobis AMtrinsic spherical, D10 18 um, D90 63 um" }
 composition_wt_pct = { Nb = "bal", note = "pure element; no measured powder or sample chemistry was available to this card" }
-version = "1.0.0"
+version = "1.1.0"
 created = 2026-11-14
 modified = 2026-11-14
 status = "draft"
@@ -34,6 +32,12 @@ version = "1.0.0"
 date = 2026-11-14
 author = "research agent (Claude)"
 changes = "Initial card: Ho 1972 conductivity, NIST-JANAF heat capacity and heat of fusion, electrostatic-levitation liquid density, heat capacity, emissivity, surface tension and viscosity (Paradis 2001, 2002, abstracts), flat-surface absorptivity from tabulated optical constants. No process set, powder conductivity or microstructure records."
+
+[[changelog]]
+version = "1.1.0"
+date = 2026-11-14
+author = "Claude, from PDFs supplied by the user"
+changes = "griemsmann2021 and leitner2019 read in full: powder size distribution and two LPBF process sets added; liquid density and expansion replaced by the pulse-heating fit of leitner2019 (7690 at melting, was 7950 from the paradis2001 abstract)."
 
 [references.ho1972]
 citation = "C.Y. Ho, R.W. Powell, P.E. Liley, Thermal Conductivity of the Elements, J. Phys. Chem. Ref. Data 1 (1972) 279-421; niobium table read from the NIST reprint (scanned page, checked by eye)"
@@ -66,8 +70,12 @@ doi = "10.1038/s41597-023-02898-2"
 url = "https://github.com/polyanskiy/refractiveindex.info-database"
 
 [references.griemsmann2021]
-citation = "T. Griemsmann, A. Abel, C. Hoff, J. Hermsdorf, M. Weinmann, S. Kaierle, Laser-based powder bed fusion of niobium with different build-up rates, Int. J. Adv. Manuf. Technol. 114 (2021) 305-317; abstract only (open access, but the publisher blocked the download)"
+citation = "T. Griemsmann, A. Abel, C. Hoff, J. Hermsdorf, M. Weinmann, S. Kaierle, Laser-based powder bed fusion of niobium with different build-up rates, Int. J. Adv. Manuf. Technol. 114 (2021) 305-317; read in full"
 doi = "10.1007/s00170-021-06645-y"
+
+[references.leitner2019]
+citation = "M. Leitner, G. Pottlacher, Density of Liquid Niobium and Tungsten and the Estimation of Critical Point Data, Metall. Mater. Trans. A 50 (2019) 3646-3653; read in full"
+doi = "10.1007/s11661-019-05262-5"
 
 [references.candela2023]
 citation = "S. Candela et al., Laser powder bed fusion of pure niobium for particle accelerator applications, Proc. 14th Int. Particle Accelerator Conf. IPAC2023, Venice (2023) THPM021; read in full (4 pages)"
@@ -96,22 +104,48 @@ absorptivity = { value = 0.17, unit = "1", surface = "flat solid", ref = ["golov
 # Recorded only: pass them in the deck (docs/MATERIAL_CARDS.md, Flow).
 surface_tension = { value = 1.937, unit = "N/m", ref = "paradis2002", T_range = [2742, 2742], note = "at the melting point 2742 K of the paper: vacuum electrostatic levitation, oscillating drop, sigma = 1.937e3 - 0.199 (T - Tm) mN/m over 2320-2915 K (undercooled and superheated liquid). From the abstract; uncertainties, sample purity and oxygen content are not in it." }
 dsigma_dT = { value = -1.99e-4, unit = "N/(m K)", ref = "paradis2002", T_range = [2320, 2915], composition = "not given in the abstract (purity and oxygen content of the levitated Nb sample unknown to this card)", note = "NEGATIVE, flow outward. Measured from 420 K below to 170 K above the melting point; a melt pool runs well above that. Nb dissolves oxygen readily; no data on how oxygen changes the coefficient was found." }
-viscosity = { T = [2320, 2742, 2915], value = [6.87e-3, 4.50e-3, 3.53e-3], unit = "Pa s", extrapolation = "clamp", ref = "paradis2002", note = "dynamic viscosity, evaluated for this card from the linear fit of the abstract, eta = 4.50 - 5.62e-3 (T - Tm) mPa s over 2320-2915 K (oscillating-drop damping, vacuum electrostatic levitation). The same group later re-measured the viscosity of several refractory metals with an improved procedure (Meas. Sci. Technol. 23 (2012) 025305 and J. Chem. Thermodyn. 65 (2013) 1; for W, Ta and Mo the cards use the 2013 values), and the Tolias 2017 review on the W card says its 2005 tungsten viscosity had been affected by sample-positioning forces. Whether niobium was re-measured in the 2012 paper was not checked (not opened): treat 4.5 mPa s as provisional. A published C103 model uses 5.2 mPa s for Nb (C103 card). Kinematic: nu = 5.7e-7 m^2/s at the melting point with the liquid density below (4.50e-3 / 7950)." }
-density_liquid = { value = 7950, T_ref = 2742, slope = -0.23, unit = "kg/m^3", slope_unit = "kg/(m^3 K)", ref = "paradis2001", T_range = [2340, 2900], note = "vacuum electrostatic levitation, rho = 7.95e3 - 0.23 (T - Tm) kg/m^3 over 2340-2900 K, Tm = 2742 K. From the abstract; uncertainties are not in it. Pulse-heating densities of liquid Nb exist (Leitner and Pottlacher, Metall. Mater. Trans. A 50 (2019) 3646, open access but the download was blocked) and should be compared." }
-thermal_expansion = { value = 2.89e-5, unit = "1/K", ref = "paradis2001", note = "volumetric; the value stated in the abstract, equal to -slope/density of density_liquid (0.23 / 7950)" }
+viscosity = { T = [2320, 2742, 2915], value = [6.87e-3, 4.50e-3, 3.53e-3], unit = "Pa s", extrapolation = "clamp", ref = "paradis2002", note = "dynamic viscosity, evaluated for this card from the linear fit of the abstract, eta = 4.50 - 5.62e-3 (T - Tm) mPa s over 2320-2915 K (oscillating-drop damping, vacuum electrostatic levitation). The same group later re-measured the viscosity of several refractory metals with an improved procedure (Meas. Sci. Technol. 23 (2012) 025305 and J. Chem. Thermodyn. 65 (2013) 1; for W, Ta and Mo the cards use the 2013 values), and the Tolias 2017 review on the W card says its 2005 tungsten viscosity had been affected by sample-positioning forces. Whether niobium was re-measured in the 2012 paper was not checked (not opened): treat 4.5 mPa s as provisional. A published C103 model uses 5.2 mPa s for Nb (C103 card). Kinematic: nu = 5.9e-7 m^2/s at the melting point with the liquid density below (4.50e-3 / 7690)." }
+density_liquid = { value = 7690, T_ref = 2745, slope = -0.304, unit = "kg/m^3", slope_unit = "kg/(m^3 K)", ref = "leitner2019", T_range = [2745, 5847], uncertainty = [7600, 7780], uncertainty_type = "bounds", note = "ohmic pulse-heating of 99.9 wt% Nb wire, radial expansion by shadow imaging, nine experiments: rho = (8.52 +- 0.09)e3 - (0.304 +- 0.019) T kg/m^3 (Table II, k = 2), 7.69e3 +- 0.09e3 at the melting point 2745 K. Relative uncertainty 1.3 % at melting to 2.2 % at 5847 K. Chosen over the levitation fit of paradis2001 (abstract only: 7.95e3 - 0.23 (T - Tm) over 2340-2900 K, 3.4 % higher at melting) because it was read in full, states its uncertainty and reaches melt-pool temperatures. The paper says the later levitation value of Ishikawa 2005 (Meas. Sci. Technol. 16, 443; not opened) is 0.5 % above its own, with a 28 % steeper slope. Its Table III solid values just below melting are 7.8e3 to 7.9e3: about 2 % volume change on melting." }
+thermal_expansion = { value = 3.95e-5, unit = "1/K", ref = "leitner2019", note = "DERIVED: volumetric, -slope/density of density_liquid at the melting point (0.304 / 7690). The paradis2001 abstract states 2.89e-5." }
 
 # No [microstructure] section: no dendrite-tip or front-velocity law for niobium was found
 # in a source that could be opened, and another metal's kinetics are not copied.
 
-# No [process.*] sets. What the sources that could be read say about LPBF of pure Nb:
-# - candela2023 (read in full): EOS M100, 200 W maximum, 30 um layers, Ar with O2 below
-#   0.15 %, Taniobis AMtrinsic powder (D10 18 um, D90 63 um); hatch spacing, power and speed
-#   were varied but the values are not printed. Maximum density above 98.7 % in the body,
-#   above 99.8 % in the abstract.
-# - griemsmann2021 (abstract only): parameter sets at different volume build-up rates from
-#   an empirical density model in power, speed and hatch; crack-free, more than 99.9 %
-#   relative density; UTS up to 525 MPa. The paper is open access and holds the tables:
-#   add a set from it once someone can open it.
+[powder]
+psd = { D10 = 22.37e-6, D50 = 39.42e-6, D90 = 65.97e-6, unit = "m", method = "laser light scattering", ref = "griemsmann2021", note = "EIGA gas-atomised spherical Nb (Taniobis AMtrinsic), sieve fraction 10-63 um, oxygen 556 ppm, tap density 5.56 g/cm^3 (0.65 of dense), Hall flow 12 s. candela2023 used the same product: D10 18, D90 63 um." }
+
+# LPBF, TruPrint 1000 (170 W maximum, 1070 nm, 30 um focus), 20 um layers, 5 mm cubes, Ar
+# with O2 below 200 ppm, 4 mm chess fields, zigzag, 90 deg rotation per layer, no contours.
+# Table 2 of griemsmann2021 lists 18 combinations above 99.9 % (110-170 W, 250-1250 mm/s,
+# 65-85 um hatch, 105-400 J/mm^3); two are recorded: the densest and the fastest.
+# The paper's Eq. 5 is a fitted density(P, v, h) surface over 90-170 W, 250-1500 mm/s,
+# 20-100 um: a validation target for a porosity prediction.
+
+[process.lpbf_griemsmann2021_130W]
+outcome = { relative_density = 0.9997, cracking = "none", ref = "griemsmann2021", note = "cross-section image analysis; the paper calls the parts homogeneous and crack-free" }
+method = "LPBF"
+machine = "Trumpf TruPrint 1000"
+note = "parameter combination 10 of Table 2, the densest: 173 J/mm^3, build-up rate 0.75 mm^3/s. As built: UTS 475 +- 11 MPa, yield 309 +- 11 MPa, elongation 16.6 +- 0.8 %, 149 +- 8 HV0.1; the strength, about twice wrought Nb, is put down to oxygen."
+power = { value = 130, unit = "W", ref = "griemsmann2021" }
+speed = { value = 0.5, unit = "m/s", ref = "griemsmann2021" }
+hatch = { value = 75e-6, unit = "m", ref = "griemsmann2021" }
+layer_thickness = { value = 20e-6, unit = "m", ref = "griemsmann2021" }
+beam_diameter = { value = 30e-6, unit = "m", profile = "unstated", ref = "griemsmann2021", note = "focus diameter on the working level; convention not given" }
+
+[process.lpbf_griemsmann2021_170W]
+outcome = { relative_density = 0.9994, cracking = "none", ref = "griemsmann2021", note = "cross-section image analysis" }
+method = "LPBF"
+machine = "Trumpf TruPrint 1000"
+note = "parameter combination 4 of Table 2, the highest build-up rate (1.63 mm^3/s) and lowest energy (105 J/mm^3) among those above 99.9 %. One tensile specimen: UTS 444 MPa, yield 324 MPa, elongation 8.3 %."
+power = { value = 170, unit = "W", ref = "griemsmann2021" }
+speed = { value = 1.25, unit = "m/s", ref = "griemsmann2021" }
+hatch = { value = 65e-6, unit = "m", ref = "griemsmann2021" }
+layer_thickness = { value = 20e-6, unit = "m", ref = "griemsmann2021" }
+beam_diameter = { value = 30e-6, unit = "m", profile = "unstated", ref = "griemsmann2021", note = "focus diameter on the working level; convention not given" }
+
+# Other LPBF sources for Nb:
+# - candela2023 (read in full): EOS M100, 200 W maximum, 30 um layers; power, speed and hatch
+#   were varied but the values are not printed. Density above 98.7 % in the body.
 # - A Nb-1Zr parameter study with printed tables exists (LA-UR-26-28754, OSTI 17427277:
 #   270 W, 650-790 mm/s, 0.1 mm hatch, 0.03 mm layer, EOS M290), but its powder turned out
 #   to hold 0.9 wt% iron and the builds cracked, so it is not recorded as a set here.

@@ -370,14 +370,15 @@ void ThermalManager::laser_path_cmd(int narg, char **arg)
 
 /* ----------------------------------------------------------------------
    laser_path file F speed V [scale S] [shift DX DY DZ] [jump_speed V]
-     [jump_time T] [recoat T] [layers N] [t0 T]
+     [jump_time T] [recoat T] [pause_below Tk] [layers N] [t0 T]
    Waypoint file, one row per point: x y z p [v] (whitespace or commas,
    '#' comments). Each row is a move from the previous point at power
    fraction p (0 = laser off) and speed v (default V). Off moves take v
    seconds if given, else jump_time if given, else distance / jump_speed
    (default V). A change of z starts a new layer at that point; layers run
    one after another, each once the previous one has cooled below the
-   solidus with no liquid left, plus recoat seconds. The first layer starts
+   solidus with no liquid left, plus recoat seconds, or (pause_below, instead
+   of recoat) below Tk. The first layer starts
    at t0 (default: the current time). Coordinates are file units * scale +
    shift (m).
 ------------------------------------------------------------------------- */
@@ -390,7 +391,7 @@ void ThermalManager::laser_path_file(int narg, char **arg)
     error->all(FLERR,"laser_path file: requires the moser or conduction source");
   const double v = atof(arg[2]);
   double scale = 1.0, shift[3] = {0.0, 0.0, 0.0}, jump_speed = v, jump_time = 0.0;
-  double recoat = 0.0, t0 = host_->time;
+  double recoat = 0.0, below = 0.0, t0 = host_->time;
   int nlayers = 0;
   for (int i = 3; i < narg; ) {
     auto need = [&](int n) {
@@ -405,14 +406,17 @@ void ThermalManager::laser_path_file(int narg, char **arg)
     else if (strcmp(arg[i],"jump_speed") == 0) { need(1); jump_speed = atof(arg[i+1]); i += 2; }
     else if (strcmp(arg[i],"jump_time") == 0) { need(1); jump_time = atof(arg[i+1]); i += 2; }
     else if (strcmp(arg[i],"recoat") == 0) { need(1); recoat = atof(arg[i+1]); i += 2; }
+    else if (strcmp(arg[i],"pause_below") == 0) { need(1); below = atof(arg[i+1]); i += 2; }
     else if (strcmp(arg[i],"layers") == 0) { need(1); nlayers = atoi(arg[i+1]); i += 2; }
     else if (strcmp(arg[i],"t0") == 0) { need(1); t0 = atof(arg[i+1]); i += 2; }
     else error->all(FLERR,"laser_path file: unknown keyword (expected scale, shift, "
-                    "jump_speed, jump_time, recoat, layers or t0)");
+                    "jump_speed, jump_time, recoat, pause_below, layers or t0)");
   }
   if (v <= 0.0 || scale <= 0.0 || jump_speed <= 0.0 || jump_time < 0.0 ||
-      recoat < 0.0 || nlayers < 0)
+      recoat < 0.0 || below < 0.0 || nlayers < 0)
     error->all(FLERR,"laser_path file: speeds and scale must be > 0, times >= 0");
+  if (recoat > 0.0 && below > 0.0)
+    error->all(FLERR,"laser_path file: recoat and pause_below are mutually exclusive");
 
   // Rank 0 reads rows of 5 values (v = 0 when absent) and broadcasts them.
   std::vector<double> rows;
@@ -470,6 +474,7 @@ void ThermalManager::laser_path_file(int narg, char **arg)
   laser_pause_constant = laser_pause_below = laser_reset_temperature = 0.0;
   pending_moser_passes = 0;
   path_recoat = recoat;
+  path_below = below;
   laser_path_set = true;
   scan_layer_active = false;   // Rosenthal state; file paths are Moser-only
   if (domain->me == 0) {
@@ -478,7 +483,9 @@ void ThermalManager::laser_path_file(int narg, char **arg)
     std::cout << "laser_path file " << arg[0] << ": " << path_layers.size()
               << " layers, " << nseg << " emitting segments, z "
               << path_layers.front().z << " .. " << path_layers.back().z
-              << " m, recoat " << recoat << " s" << std::endl;
+              << " m, recoat " << recoat << " s";
+    if (below > 0.0) std::cout << ", pause_below " << below << " K";
+    std::cout << std::endl;
   }
   start_path_layer(0, t0);
 }
@@ -1073,7 +1080,8 @@ ThermalManager::moser_advance(double current_time, double stoptime,
     if ((cond || more_layers) && !dynamic_fire && pending_moser_passes == 0 &&
         current_time >= moser->get_last_pass_end_time() &&
         (!cond || cond->next_laser_on(current_time) == std::numeric_limits<double>::max()) &&
-        gmax < host_->ts && current_time < stoptime &&
+        gmax < host_->ts && (path_below <= 0.0 || gmax < path_below) &&
+        current_time < stoptime &&
         !(host_->any_liquid && host_->any_liquid())) {
       if (more_layers) {
         const double t_next = current_time + path_recoat;

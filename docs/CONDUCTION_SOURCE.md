@@ -31,7 +31,7 @@ thermal field to that temperature (phases are kept).
 ### Path files (`laser_path file`, Moser and conduction)
 
 ```
-laser_path file F speed V [scale S] [shift DX DY DZ] [jump_speed V] [jump_time T] [recoat T] [layers N]
+laser_path file F speed V [scale S] [shift DX DY DZ] [jump_speed V] [jump_time T] [recoat T] [pause_below Tk] [layers N]
 ```
 
 `F` has one waypoint per row, `x y z p [v]` (whitespace or commas, `#`
@@ -42,7 +42,10 @@ Coordinates are file units × `scale` + `shift` (m), so a path in lattice
 units takes `scale dx`. A change of z starts a new layer at that point;
 `layers N` keeps the first N. Each layer starts once the previous one is
 finished (below, *Layers*) plus `recoat` seconds (default 0), all within one
-`run`. `pause`, `pause_below` and `reset_temperature` do not apply.
+`run`. `pause_below Tk` (2026-11-14) makes "finished" also need max T < Tk:
+an interlayer temperature instead of a fixed dwell (DED with `carry yes`);
+not together with `recoat`.
+`pause` and `reset_temperature` do not apply.
 
 `tools/laser_path_convert.py` writes the format from am/finitediff path
 files (`fd`) and from G-code (`gcode`: G0/G1 X Y Z with E or S marking the

@@ -52,7 +52,7 @@ laser_path file F speed V keyword value ...
 
 <LI>zero or more keyword/value pairs may be appended 
 
-<LI>keyword = <I>scale</I> or <I>shift</I> or <I>jump_speed</I> or <I>jump_time</I> or <I>recoat</I> or <I>layers</I> or <I>t0</I> 
+<LI>keyword = <I>scale</I> or <I>shift</I> or <I>jump_speed</I> or <I>jump_time</I> or <I>recoat</I> or <I>pause_below</I> or <I>layers</I> or <I>t0</I> 
 
 <PRE>  <I>scale</I> value = S
     S = factor applied to the file coordinates (default 1), > 0
@@ -64,6 +64,8 @@ laser_path file F speed V keyword value ...
     Tj = fixed duration (s) of laser-off moves without their own v (default 0 = use jump_speed)
   <I>recoat</I> value = Tr
     Tr = extra time (s) between the end of one layer and the start of the next (default 0)
+  <I>pause_below</I> value = Tk
+    Tk = the next layer waits until the maximum site temperature is below Tk (K) (default 0 = the solidus)
   <I>layers</I> value = N
     N = use only the first N layers of the file (default 0 = all)
   <I>t0</I> value = T
@@ -184,8 +186,14 @@ has finished emitting, the global peak temperature is below the
 solidus and no site is liquid, plus <I>recoat</I> seconds; simulation time
 jumps over the recoat interval.  For the Moser source each layer starts
 with a fresh thermal history; for the conduction source, see its page.
-<I>pause</I>, <I>pause_below</I> and <I>reset_temperature</I> are not available in
-this form.
+With <I>pause_below Tk</I> the layer also waits until the peak temperature
+of the sites is below Tk: an interlayer temperature instead of a fixed
+dwell, e.g. for a directed energy deposition wall that keeps its heat
+(<I>ded ... carry yes</I> of the conduction source).  The run simulates the
+cooling, so the wait is as long as the part takes to cool; a Tk the
+part never reaches (at or below its surroundings) holds the layer to
+the end of the run.  <I>recoat</I> and <I>pause_below</I> are mutually exclusive.
+<I>pause</I> and <I>reset_temperature</I> are not available in this form.
 </P>
 <P>An example path file and deck are in examples/am/surge/conduction
 (large_rectangle.path, in.large_rectangle).
@@ -220,6 +228,6 @@ the <A HREF = "temperature_source_hdf5.html">HDF5 sources</A>.
 <P>repeats = 1, no hatch offset, no serpentine, no pause (passes
 back-to-back), fast-forward threshold = liquidus.  File form: scale =
 1, shift = 0 0 0, jump_speed = V, jump_time = 0 (use jump_speed),
-recoat = 0, layers = all, t0 = the current time.
+recoat = 0, pause_below = the solidus, layers = all, t0 = the current time.
 </P>
 </HTML>

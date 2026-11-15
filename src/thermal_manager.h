@@ -227,6 +227,7 @@ class ThermalManager : protected Pointers {
   std::vector<PathLayer> path_layers;
   size_t path_layer = 0;
   double path_recoat = 0.0;
+  double path_below = 0.0;     // next layer only once max(T) < this (K); 0 = the solidus
   void laser_path_file(int narg, char **arg);
   void start_path_layer(size_t k, double t_start);
 

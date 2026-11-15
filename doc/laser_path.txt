@@ -38,7 +38,7 @@ file form: :l
 F = waypoint file (see below) :l
 V = default emitting speed (m/s), > 0, or {card} :l
 zero or more keyword/value pairs may be appended :l
-keyword = {scale} or {shift} or {jump_speed} or {jump_time} or {recoat} or {layers} or {t0} :l
+keyword = {scale} or {shift} or {jump_speed} or {jump_time} or {recoat} or {pause_below} or {layers} or {t0} :l
   {scale} value = S
     S = factor applied to the file coordinates (default 1), > 0
   {shift} values = DX DY DZ
@@ -49,6 +49,8 @@ keyword = {scale} or {shift} or {jump_speed} or {jump_time} or {recoat} or {laye
     Tj = fixed duration (s) of laser-off moves without their own v (default 0 = use jump_speed)
   {recoat} value = Tr
     Tr = extra time (s) between the end of one layer and the start of the next (default 0)
+  {pause_below} value = Tk
+    Tk = the next layer waits until the maximum site temperature is below Tk (K) (default 0 = the solidus)
   {layers} value = N
     N = use only the first N layers of the file (default 0 = all)
   {t0} value = T
@@ -168,8 +170,14 @@ has finished emitting, the global peak temperature is below the
 solidus and no site is liquid, plus {recoat} seconds; simulation time
 jumps over the recoat interval.  For the Moser source each layer starts
 with a fresh thermal history; for the conduction source, see its page.
-{pause}, {pause_below} and {reset_temperature} are not available in
-this form.
+With {pause_below Tk} the layer also waits until the peak temperature
+of the sites is below Tk: an interlayer temperature instead of a fixed
+dwell, e.g. for a directed energy deposition wall that keeps its heat
+({ded ... carry yes} of the conduction source).  The run simulates the
+cooling, so the wait is as long as the part takes to cool; a Tk the
+part never reaches (at or below its surroundings) holds the layer to
+the end of the run.  {recoat} and {pause_below} are mutually exclusive.
+{pause} and {reset_temperature} are not available in this form.
 
 An example path file and deck are in examples/am/surge/conduction
 (large_rectangle.path, in.large_rectangle).
@@ -204,4 +212,4 @@ the "HDF5 sources"_temperature_source_hdf5.html.
 repeats = 1, no hatch offset, no serpentine, no pause (passes
 back-to-back), fast-forward threshold = liquidus.  File form: scale =
 1, shift = 0 0 0, jump_speed = V, jump_time = 0 (use jump_speed),
-recoat = 0, layers = all, t0 = the current time.
+recoat = 0, pause_below = the solidus, layers = all, t0 = the current time.

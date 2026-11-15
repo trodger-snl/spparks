@@ -127,7 +127,8 @@ the table below exactly; it never converts units.
 | `thermal.conductivity` (table), `thermal.linear.conductivity`, `powder.conductivity` | `W/(m K)` |
 | `thermal.heat_capacity` (table), `thermal.linear.heat_capacity` | `J/(kg K)` |
 | `thermal.emissivity`, `powder.packing`, `optical.absorptivity` | `1` |
-| `powder.psd` (`{ D10, D50, D90 }`, recorded only) | `m` |
+| `thermal.emissivity_table` (table against T, recorded only) | `1` |
+| `powder.psd` (any of `D10`, `D50`, `D90`, increasing; recorded only) | `m` |
 | `flow.surface_tension` | `N/m` |
 | `flow.dsigma_dT` | `N/(m K)` |
 | `flow.viscosity` (dynamic; scalar or table) | `Pa s` |
@@ -146,6 +147,7 @@ the table below exactly; it never converts units.
 | `process.<set>.powder_feed` (DED, recorded only) | `kg/s` |
 | `process.<set>.capture_efficiency` (DED, recorded only) | `1` |
 | `process.<set>.beam_diameter` (recorded only) | `m`, with `profile` |
+| `process.<set>.outcome` (recorded only) | none: `{ relative_density, cracking, ref }` |
 
 **Front velocity.**
 - `solid_front_vel` is what SPPARKS evaluates, in undercooling
@@ -176,6 +178,38 @@ the table below exactly; it never converts units.
 - `spot.convention` is `1/e radius` (Moser's sx), `1/e2 radius`,
   `1/e2 diameter`, `D4sigma` or `FWHM`.
 - `source_depth` is Moser's sz, a calibration rather than a beam property.
+- `outcome = { relative_density, cracking, ref }` records what the build
+  came out as: `relative_density` is a fraction in (0, 1] (the note says how
+  it was measured), `cracking` is `none`, `cracked` or `not reported`. Either
+  may be left out, not both.
+- A single track melted on bare plate is named
+  `<source>_single_track_<power>W`, carries `method = "... single track on
+  bare plate (no powder)"` and has no `layer_thickness`.
+
+**Absorptivity.** `optical.absorptivity` and a set's `absorptivity` may carry
+`surface`: `flat solid` (the default), `powder bed`, `liquid` or
+`in process` (an effective value measured or calibrated during melting).
+When no calorimetric measurement exists the value may be 1 - R at normal
+incidence from tabulated n and k at the laser wavelength: mark the note
+`DERIVED`, name the data, and say that it is a flat, clean, room-temperature
+value and a lower limit for a powder bed or a keyhole.
+
+**Emissivity.** SPPARKS reads the scalar `thermal.emissivity`. A measured
+temperature dependence goes in `thermal.emissivity_table` next to it.
+
+**Pure metals and congruent melters.** A pure element has one melting point,
+but the apps need `solidus < liquidus`. Record the melting point as
+`liquidus` with its source and set `solidus` a few K below with
+`ref = "estimate"` and a note starting `MODELLING CHOICE` that gives the gap
+and why (W, Ta, Nb, Mo use 10 K; Bi2Te3 uses 5 K).
+
+**Tables that stop short of melting.** If a conductivity or heat-capacity
+table ends below the liquidus, or has no liquid value, its note says the
+table is HELD at its last value and that this is not a measurement.
+
+**How a source was read.** Each `citation` ends with how it was read: "read
+in full", "abstract only", "data table read from <archive>" or "text
+searched". A value taken from an abstract says so in its note.
 
 **DED process sets.** Laser directed energy deposition (blown powder, LENS)
 sets are named `ded_<source>_<power>` and carry `method = "laser DED, ..."`.

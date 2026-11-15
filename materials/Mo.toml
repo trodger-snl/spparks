@@ -103,7 +103,7 @@ emissivity = { value = 0.29, unit = "1", ref = "paradis2002", T_range = [2050, 2
 T_ref = { value = 1600, unit = "K", ref = "estimate", note = "between preheat and the melting point, about 0.55 Tm as on the other cards; k = 96.0, cp = 338.4 there" }
 
 [optical]
-absorptivity = { value = 0.30, unit = "1", ref = ["ordal1988", "refractiveindex_info"], uncertainty = [0.28, 0.30], uncertainty_type = "bounds", note = "DERIVED for this card, not a measurement under the laser: 1 - R at normal incidence on a flat, clean surface at room temperature, from n and k at 1.07 um in the refractiveindex.info data files (Ordal n = 2.28, k = 4.45 gives 0.298; the Kirillova 1971 single-crystal file gives 0.297; the Querry 1987 file gives 0.276, the lower bound; the Werner 2009 electron-energy-loss file gives 0.08 and is not trusted in the infrared). An oxidised, rough or molten surface and a powder bed absorb more; no measurement on Mo at 1.07 um was found." }
+absorptivity = { value = 0.30, unit = "1", surface = "flat solid", ref = ["ordal1988", "refractiveindex_info"], uncertainty = [0.28, 0.30], uncertainty_type = "bounds", note = "DERIVED for this card, not a measurement under the laser: 1 - R at normal incidence on a flat, clean surface at room temperature, from n and k at 1.07 um in the refractiveindex.info data files (Ordal n = 2.28, k = 4.45 gives 0.298; the Kirillova 1971 single-crystal file gives 0.297; the Querry 1987 file gives 0.276, the lower bound; the Werner 2009 electron-energy-loss file gives 0.08 and is not trusted in the infrared). An oxidised, rough or molten surface and a powder bed absorb more; no measurement on Mo at 1.07 um was found." }
 
 [flow]
 # Liquid-state properties for the conduction source's melt-pool flow (flow lbm).
@@ -120,6 +120,7 @@ thermal_expansion = { value = 6.6e-5, unit = "1/K", ref = "paradis2002", note = 
 # Process sets: published LPBF parameters. No laser DED set for pure Mo was found.
 
 [process.lpbf_yan2022_200W]
+outcome = { relative_density = 0.991, cracking = "cracked", ref = "yan2022", note = "Archimedes, best of the series at 0.51 J/mm; longitudinal and transverse cracks" }
 method = "LPBF"
 machine = "EOS M100, IPG 200 W Yb fibre laser at 1064 nm, 40 um focused beam diameter (convention not stated)"
 note = "WEAK SET. 8 x 8 x 8 mm cubes on a steel baseplate, meander scan rotated 67 deg per layer, Ar with O2 below 100 ppm, spherical Mo powder, plate preheat available up to 80 C (the value used is not stated). The power-speed pair recorded is the only one the text prints, as the example for a linear energy of 0.5 J/mm with 20 % track overlap; the same paper gives its design range as 120-170 W and 50-550 mm/s, which 200 W lies outside, and another paper on the same machine says it is software-limited to 170 W (C103 card, orsborn2025). Continuous tracks at 0.44-0.64 J/mm; maximum relative density 99.1 % (Archimedes, against 10.2 g/cm^3) at 0.51 J/mm; longitudinal and transverse cracks. Hatch spacing and layer thickness are not given, so neither is recorded; no melt-pool dimensions."
@@ -127,6 +128,7 @@ power = { value = 200, unit = "W", ref = "yan2022", note = "as printed for the 0
 speed = { value = 0.4, unit = "m/s", ref = "yan2022" }
 
 [process.lpbf_kanies2026_tzm_350W]
+outcome = { relative_density = 0.9987, cracking = "not reported", ref = "kanies2026", note = "optical; TZM, not pure Mo. Most samples cracked from the edge after the plate heater stopped" }
 method = "LPBF"
 machine = "Aconity MIDI+"
 note = "NOT PURE Mo: the alloy TZM (Mo-0.5wt%Ti-0.08wt%Zr as the report gives it; no measured chemistry), recorded here because no card for TZM exists and its thermal properties are close to Mo's. Sample 9 of build 1 of the report's nine-condition design (250-450 W, 500-1000 mm/s): optical relative density 99.87 %, the best of the build. Metallographic cubes on a molybdenum plate 100 mm in diameter, rotational raster, no contours; the build was heated but the temperature is not stated, and the heater stopped for the last 50 layers (about 2 mm), where most samples cracked from the edge. Samples at 250 W showed lack of fusion. Spot size not reported; no melt-pool dimensions."

@@ -103,7 +103,7 @@ heat_capacity = { T = [300, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000, 2
 T_ref = { value = 1800, unit = "K", ref = "estimate", note = "between preheat and the melting point, about 0.55 Tm as on the other cards; k = 63.4, cp = 167.1 there" }
 
 [optical]
-absorptivity = { value = 0.12, unit = "1", ref = ["ordal1988", "refractiveindex_info"], note = "DERIVED for this card, not a measurement under the laser, and the weakest number on the card: 1 - R at normal incidence on a flat, clean surface at room temperature, from n = 0.95, k = 5.34 at 1.07 um in the refractiveindex.info Ordal file (0.117). It is the only infrared data set for Ta in that database (the Werner 2009 electron-energy-loss file gives 0.04 and is not trusted in the infrared). An oxidised, rough or molten surface and a powder bed absorb more; no measurement on Ta at 1.07 um was found. Calibrate lambda against a melt-pool size rather than trusting this." }
+absorptivity = { value = 0.12, unit = "1", surface = "flat solid", ref = ["ordal1988", "refractiveindex_info"], note = "DERIVED for this card, not a measurement under the laser, and the weakest number on the card: 1 - R at normal incidence on a flat, clean surface at room temperature, from n = 0.95, k = 5.34 at 1.07 um in the refractiveindex.info Ordal file (0.117). It is the only infrared data set for Ta in that database (the Werner 2009 electron-energy-loss file gives 0.04 and is not trusted in the infrared). An oxidised, rough or molten surface and a powder bed absorb more; no measurement on Ta at 1.07 um was found. Calibrate lambda against a melt-pool size rather than trusting this." }
 
 [flow]
 # Liquid-state properties for the conduction source's melt-pool flow (flow lbm).
@@ -120,6 +120,7 @@ thermal_expansion = { value = 2.7e-5, unit = "1/K", ref = "paradis2003", note = 
 # Process sets: published LPBF parameters.
 
 [process.lpbf_lian2023_280W]
+outcome = { relative_density = 0.999, cracking = "none", ref = "lian2023", note = "Archimedes; no microcracks seen" }
 method = "LPBF"
 machine = "EOS M290"
 note = "10 x 10 x 10 mm blocks and 40 x 6 x 9 mm bars on a Ti-6Al-4V substrate, 67 deg rotation per layer, Ar with O2 below 100 ppm; spherical powder 5-30 um, 317 ppm O. Sample 6 of Table 3, volume energy density 190 J/mm^3: relative density 99.9 % (Archimedes), no unmelted particles or microcracks seen, pores about 30 um. The series holds 280 W and varies the speed from 390 to 850 mm/s (342 to 157 J/mm^3); at 342 J/mm^3 spatter leaves 100-120 um pores, and oxygen in the part rises with energy density (426 ppm at 157 J/mm^3 to 508 ppm at 310 J/mm^3). Spot size and preheat not reported; no melt-pool dimensions."
@@ -129,6 +130,7 @@ hatch = { value = 70e-6, unit = "m", ref = "lian2023" }
 layer_thickness = { value = 30e-6, unit = "m", ref = "lian2023" }
 
 [process.lpbf_livescu2018_370W]
+outcome = { relative_density = 0.99982, cracking = "not reported", ref = "livescu2018", note = "from 0.018 % area porosity" }
 method = "LPBF"
 machine = "EOSINT M280, 400 W fibre laser"
 note = "Plate 3 of the paper: stripes 0.5 mm wide with 0.08 mm overlap, rotated 67 deg per layer, Ar with less than 0.1 % O2, Tekna ultra-low-oxygen spherical powder; area porosity 0.018 %, 410 ppm O in the plate, strongly textured columnar grains along the build direction. The cube series (Tables 1 and 2) shows the route there: 236 W, 884 mm/s, 0.04 mm layer, 0.05 mm hatch gave 2.85 % porosity; 370 W at 884 mm/s 0.46 %; 370 W at 530 mm/s 0.25 %; a 0.02 mm layer with 0.04 mm hatch at 530-707 mm/s 0.02-0.03 %. Spot size and preheat not reported; no melt-pool dimensions. Tables read from the text layer of the accepted manuscript, which a watermark scrambles in places: check Plate 3 against the published version."

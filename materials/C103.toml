@@ -139,6 +139,7 @@ powder_feed = { value = 6.3e-5, unit = "kg/s", ref = "prabhune2025", note = "0.0
 validation = { track_width = 663e-6, track_height = 212e-6, unit = "m", ref = "prabhune2025", note = "optical micrograph of the single-track cross-section (their Fig. 5a); no melt depth below the substrate surface given" }
 
 [process.ded_thapliyal2025_582W]
+outcome = { relative_density = 0.9987, cracking = "none", ref = "thapliyal2025", note = "X-ray microscopy, as built; no cold cracking" }
 method = "laser DED, blown powder"
 machine = "BeAM Modulo 400, 2 kW fibre laser"
 note = "blocks 25 x 10 x 22 mm on a Nb substrate plate at room temperature, unidirectional scans rotated 90 deg between layers, Ar with O2 below 10 ppm, gas-atomised C103 powder. As built: relative density about 99.87 % by X-ray microscopy, lack-of-fusion pores, no impurity-induced cold cracking; 100 % after HIP. Beam size not stated in the section read (prabhune2025 give 0.7 mm for the same machine); absorptivity and bead dimensions not reported."

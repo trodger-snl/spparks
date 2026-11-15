@@ -24,6 +24,7 @@ REF_LITERALS = {'estimate', 'calibration'}
 UNITS = {
     'thermal.density': 'kg/m^3', 'thermal.solidus': 'K', 'thermal.liquidus': 'K',
     'thermal.latent_fusion': 'J/kg', 'thermal.emissivity': '1',
+    'thermal.emissivity_table': '1',      # emissivity against T (recorded; SPPARKS reads the scalar)
     'thermal.conductivity': 'W/(m K)', 'thermal.heat_capacity': 'J/(kg K)',
     'thermal.linear.conductivity': 'W/(m K)', 'thermal.linear.heat_capacity': 'J/(kg K)',
     'thermal.linear.T_ref': 'K', 'powder.conductivity': 'W/(m K)', 'powder.packing': '1',
@@ -44,6 +45,9 @@ PROCESS_UNITS = {'power': 'W', 'speed': 'm/s', 'hatch': 'm', 'layer_thickness': 
                  'powder_feed': 'kg/s', 'capture_efficiency': '1', 'beam_diameter': 'm'}
 SPOT_CONVENTIONS = {'1/e radius', '1/e2 radius', '1/e2 diameter', 'D4sigma', 'FWHM'}
 UNCERTAINTY_TYPES = {'1sigma', '2sigma', 'bounds', 'relative_1sigma'}
+SURFACES = {'flat solid', 'powder bed', 'liquid', 'in process'}     # what an absorptivity was measured on
+CRACKING = {'none', 'cracked', 'not reported'}
+PSD_KEYS = {'D10', 'D50', 'D90', 'unit', 'method', 'ref', 'note'}
 
 
 def polyval(c, x):
@@ -149,6 +153,17 @@ def lint(card, check_doi=False):
                 if any(b <= a for a, b in zip(T, T[1:])): errs.append(f'{p}: T must increase strictly')
             if parts[-1] == 'spot' and rec.get('convention') not in SPOT_CONVENTIONS:
                 errs.append(f'{p}: convention is one of {sorted(SPOT_CONVENTIONS)}')
+            if parts[-1] == 'absorptivity' and rec.get('surface', 'flat solid') not in SURFACES:
+                errs.append(f'{p}: surface is one of {sorted(SURFACES)}')
+            if sec == 'process' and parts[-1] == 'outcome':
+                d = rec.get('relative_density')
+                if d is None and 'cracking' not in rec: errs.append(f'{p}: relative_density or cracking missing')
+                if d is not None and not 0 < d <= 1: errs.append(f'{p}: relative_density is a fraction in (0, 1]')
+                if rec.get('cracking', 'none') not in CRACKING: errs.append(f'{p}: cracking is one of {sorted(CRACKING)}')
+            if p == 'powder.psd':
+                if set(rec) - PSD_KEYS: errs.append(f'{p}: unknown keys {sorted(set(rec) - PSD_KEYS)}')
+                d = [rec[k] for k in ('D10', 'D50', 'D90') if k in rec]
+                if not d or any(b <= a for a, b in zip(d, d[1:])): errs.append(f'{p}: needs D10 < D50 < D90 (any of them)')
 
     th, mi = card.get('thermal', {}), card.get('microstructure', {})
     if 'solidus' in th and 'liquidus' in th and th['solidus']['value'] >= th['liquidus']['value']:
@@ -193,6 +208,22 @@ def selftest():
     assert any('unit must be' in e for e in lint(bad))
     bad = dict(card, flow=dict(card.get('flow', {}), dsigma_dT={'value': -4.3e-4, 'unit': 'N/m/K', 'ref': 'estimate'}))
     assert any('flow.dsigma_dT: unit must be' in e for e in lint(bad)), lint(bad)
+    # outcome, surface, psd, emissivity_table
+    ps = dict(card['process'])
+    name = next(iter(ps))
+    def with_set(**kw): return dict(card, process=dict(ps, **{name: dict(ps[name], **kw)}))
+    assert lint(with_set(outcome={'relative_density': 0.998, 'cracking': 'none', 'ref': 'estimate'})) == []
+    assert any('relative_density is a fraction' in e for e in lint(with_set(outcome={'relative_density': 99.8, 'ref': 'estimate'})))
+    assert any('cracking is one of' in e for e in lint(with_set(outcome={'cracking': 'some', 'ref': 'estimate'})))
+    ab = {'value': 0.3, 'unit': '1', 'ref': 'estimate'}
+    assert lint(dict(card, optical={'absorptivity': dict(ab, surface='powder bed')})) == []
+    assert any('surface is one of' in e for e in lint(dict(card, optical={'absorptivity': dict(ab, surface='shiny')})))
+    psd = {'D10': 15e-6, 'D90': 45e-6, 'unit': 'm', 'ref': 'estimate'}
+    assert lint(dict(card, powder=dict(card.get('powder', {}), psd=psd))) == []
+    assert any('unknown keys' in e for e in lint(dict(card, powder=dict(card.get('powder', {}), psd=dict(psd, d50=3e-5)))))
+    assert any('D10 < D50' in e for e in lint(dict(card, powder=dict(card.get('powder', {}), psd=dict(psd, D50=5e-5)))))
+    et = {'T': [1000, 2000], 'value': [0.2, 0.3], 'unit': '1', 'ref': 'estimate'}
+    assert lint(dict(card, thermal=dict(card['thermal'], emissivity_table=et))) == []
     poly = {'form': 'polynomial', 'coeffs': [2e-6, 1e-7, 0, 0]}
     assert max_rel_err(fit_poly(lambda x: front_source(poly, x), 0, 50, 3), lambda x: front_source(poly, x), 0, 50) < 1e-9
     src = {'form': 'power_law', 'a': 1e-4, 'n': 2.0}       # a quadratic is fitted exactly

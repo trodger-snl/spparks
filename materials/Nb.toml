@@ -89,7 +89,7 @@ emissivity = { value = 0.23, unit = "1", ref = "paradis2001", T_range = [1500, 2
 T_ref = { value = 1500, unit = "K", ref = "estimate", note = "between preheat and the melting point, about 0.55 Tm as on the other cards; k = 72.1, cp = 323.8 there" }
 
 [optical]
-absorptivity = { value = 0.17, unit = "1", ref = ["golovashkin1969", "refractiveindex_info"], note = "DERIVED for this card, not a measurement under the laser: 1 - R at normal incidence on a flat, clean surface at 293 K, from n = 1.56, k = 5.49 at 1.07 um in the refractiveindex.info Golovashkin file (0.170); it is the only data set for Nb in that database that reaches 1.07 um. An oxidised, rough or molten surface and a powder bed absorb more; no measurement on Nb at 1.07 um was found. A published C103 melt-pool model assumes 0.4 for the alloy (C103 card). Calibrate lambda against a melt-pool size rather than trusting this." }
+absorptivity = { value = 0.17, unit = "1", surface = "flat solid", ref = ["golovashkin1969", "refractiveindex_info"], note = "DERIVED for this card, not a measurement under the laser: 1 - R at normal incidence on a flat, clean surface at 293 K, from n = 1.56, k = 5.49 at 1.07 um in the refractiveindex.info Golovashkin file (0.170); it is the only data set for Nb in that database that reaches 1.07 um. An oxidised, rough or molten surface and a powder bed absorb more; no measurement on Nb at 1.07 um was found. A published C103 melt-pool model assumes 0.4 for the alloy (C103 card). Calibrate lambda against a melt-pool size rather than trusting this." }
 
 [flow]
 # Liquid-state properties for the conduction source's melt-pool flow (flow lbm).

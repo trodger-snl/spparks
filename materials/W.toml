@@ -99,7 +99,7 @@ T_ref = { value = 2000, unit = "K", ref = "estimate", note = "between preheat an
 psd = { D10 = 10e-6, D50 = 15.87e-6, D90 = 24.86e-6, unit = "m", method = "not stated", ref = "li2020", note = "spherical W powder of the lpbf_li2020_300W set. tan2018: Tekna plasma-spheroidised, D50 16.24 um, D90 23.67 um" }
 
 [optical]
-absorptivity = { value = 0.39, unit = "1", ref = ["rakic1998", "ordal1988", "refractiveindex_info"], uncertainty = [0.39, 0.41], uncertainty_type = "bounds", note = "DERIVED for this card, not a measurement under the laser: 1 - R at normal incidence on a flat, clean surface at room temperature, from n and k at 1.07 um in the refractiveindex.info data files (Rakic Lorentz-Drude fit n = 3.03, k = 3.84 gives 0.391; Ordal n = 3.07, k = 3.81 gives 0.395; the Weaver 1975 file gives 0.394; the Werner 2009 electron-energy-loss file gives 0.07 and is not trusted in the infrared). Upper bound 0.41 = the absorptivity tan2018 Table 1 uses for its parameter design, source not given. No value for the liquid was found. Trapp 2017 measured bare and powder-coated W discs by calorimetry at 1070 nm; its abstract gives no numbers for W, only that a 100 um powder layer absorbs about twice as much as the bare polished disc at low power and that the value falls once the track melts fully, then rises again in the keyhole regime. Read its W figures before choosing lambda." }
+absorptivity = { value = 0.39, unit = "1", surface = "flat solid", ref = ["rakic1998", "ordal1988", "refractiveindex_info"], uncertainty = [0.39, 0.41], uncertainty_type = "bounds", note = "DERIVED for this card, not a measurement under the laser: 1 - R at normal incidence on a flat, clean surface at room temperature, from n and k at 1.07 um in the refractiveindex.info data files (Rakic Lorentz-Drude fit n = 3.03, k = 3.84 gives 0.391; Ordal n = 3.07, k = 3.81 gives 0.395; the Weaver 1975 file gives 0.394; the Werner 2009 electron-energy-loss file gives 0.07 and is not trusted in the infrared). Upper bound 0.41 = the absorptivity tan2018 Table 1 uses for its parameter design, source not given. No value for the liquid was found. Trapp 2017 measured bare and powder-coated W discs by calorimetry at 1070 nm; its abstract gives no numbers for W, only that a 100 um powder layer absorbs about twice as much as the bare polished disc at low power and that the value falls once the track melts fully, then rises again in the keyhole regime. Read its W figures before choosing lambda." }
 
 [flow]
 # Liquid-state properties for the conduction source's melt-pool flow (flow lbm).
@@ -116,6 +116,7 @@ thermal_expansion = { value = 4.7e-5, unit = "1/K", ref = "tolias2017", note = "
 # Process sets: published LPBF parameters. No laser DED set for pure W was found.
 
 [process.lpbf_li2020_300W]
+outcome = { relative_density = 0.9831, cracking = "cracked", ref = "li2020", note = "longitudinal and transverse cracks" }
 method = "LPBF"
 machine = "SLM Solutions SLM 280HL"
 note = "10 x 10 x 5 mm blocks on a 316L substrate, Ar with O2 below 300 ppm; the set with the highest relative density of the paper's orthogonal design, 98.31 % (Table 1, laser power 200-300 W, speed 200-400 mm/s, hatch 0.06-0.10 mm). Longitudinal cracks along the track centres and transverse cracks in the sections shown (their Fig. 9, 300 W). Average grain size 9.0 um at 400 mm/s against 12.9 um at 200 mm/s. Spot size and scan rotation not reported; no melt-pool dimensions."
@@ -126,6 +127,7 @@ layer_thickness = { value = 20e-6, unit = "m", ref = "li2020" }
 preheat = { value = 423.15, unit = "K", ref = "li2020", note = "substrate preheat" }
 
 [process.lpbf_tan2018_200W]
+outcome = { relative_density = 0.985, cracking = "cracked", ref = "tan2018", note = "Archimedes; few microcracks at grain boundaries" }
 method = "LPBF"
 machine = "EOS M290"
 note = "zigzag scan rotated 67 deg per layer, Ar with O2 below 0.1 vol %, Tekna plasma-spheroidised powder (D50 16.24 um). The paper's best set, eta3 = 0.667 J/mm: 19.01 +/- 0.02 g/cm^3 by Archimedes, 98.50 % of 19.30, with few microcracks, mostly at grain boundaries along the build direction; window for sound parts 0.5-1.0 J/mm with 200-300 W and 200-400 mm/s. Hatch spacing is not given, so no hatch record. No melt-pool dimensions; the authors design for a track about 200 um wide and a melt depth of 30 um (their Table 1) or 40 um (their text)."

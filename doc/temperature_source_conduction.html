@@ -76,7 +76,7 @@ setup_temperature_source conduction card overrides keyword values ...
     the melt-pool flow carries the composition (<I>flow</I> keyword), or it does not change
     f = <I>slab</I> (default) or <I>surface</I>: how new material enters under <I>mix flow</I> with <I>ded</I>
   <I>flow</I> values = <I>lbm</I> <B>dsigma_dT s</B> <B>beta b</B> <B>viscosity nu</B> <B>mushy C</B> <B>u_ref u</B> <B>smagorinsky cs</B>
-    melt-pool flow (lattice Boltzmann) on the liquid cells of the lattice box; one process
+    melt-pool flow (lattice Boltzmann) on the liquid cells of the lattice box
     s = surface tension's temperature coefficient (N/m/K, default -2.6e-4)
     b = volumetric thermal expansion of the liquid (1/K, default 1.7e-4)
     nu = kinematic viscosity (m^2/s, default 8.5e-7)
@@ -236,7 +236,11 @@ composition.  Any amount that has found no liquid yet is carried over
 and reported when the next layer starts.  The surface itself stays
 flat and fixed in both.  While any cell is liquid the laser-off super-steps
 (<I>sts</I>) are replaced by plain steps.  <A HREF = "dump.html">dump conduction</A> also
-writes the velocity (ux, uy, uz, m/s).  The flow solver and the carrying
+writes the velocity (ux, uy, uz, m/s).  On several processes each one
+steps the flow in its own cells and exchanges two layers of cells with
+its neighbours in x and y (every process needs 2 or more sites along a
+split axis); without <I>feed surface</I> the result is the same, bit for bit
+in double precision, as on one process.  The flow solver and the carrying
 scheme are checked against analytical solutions by
 tools/melt_flow_check.cpp (build target melt_flow_check).  Costs about
 half again the run time of a conduction-only run.  Examples:

@@ -17,15 +17,22 @@
 #include <Kokkos_Core.hpp>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <utility>
 
 namespace SPPARKS_NS {
 
 /* ----------------------------------------------------------------------
-   Melt-pool flow: D3Q19 lattice Boltzmann on a uniform block of cells,
-   one rank. It knows nothing of SPPARKS: the caller fills type, T and fl
+   Melt-pool flow: D3Q19 lattice Boltzmann on a uniform block of cells.
+   It knows nothing of SPPARKS or MPI: the caller fills type, T and fl
    and reads u, so tools/melt_flow_check.cpp drives it against analytical
    solutions. R is the float type of the distributions and the math.
+
+   Several ranks: each rank's block carries halo cells of its neighbours
+   and steps only its own cells (the window). The caller keeps the halo
+   current: type and T before run(), f through the `halo` callback (after
+   every step and rescale), flux before melt_advect, and the carried
+   fields through melt_advect's own callback.
 
    Lattice units throughout (cell 1, step 1, density 1): the caller scales.
      nu        viscosity * dt / dx^2
@@ -346,6 +353,7 @@ struct MeltFlow {
     int nmax = 256;
   } ph;
   double dt = 0.0, u_cap = 0.0, umax = 0.0;   // step (s), cap and last max speed (m/s)
+  std::function<void()> halo;   // several ranks: brings the halo cells' f up to date
   long ncall = 0;
 
   int run(double h, const int lo[3], const int hi[3]) {
@@ -355,7 +363,7 @@ struct MeltFlow {
     const int n = 2 * std::max(1, (int) std::ceil(0.5 * h * u_cap / (0.1 * ph.dx) - 1e-9));
     if (n > ph.nmax) return -1;
     const double dtn = h / n;
-    if (dt > 0.0 && dtn != dt) rescale(dtn / dt, lo, hi);
+    if (dt > 0.0 && dtn != dt) { rescale(dtn / dt, lo, hi); if (halo) halo(); }
     dt = dtn;
     p.nu = ph.nu * dt / (ph.dx * ph.dx);
     p.smag = ph.smag;
@@ -367,9 +375,10 @@ struct MeltFlow {
     // A fence per step: inside spparks on HIP (gfx1151) host memory grows
     // during long runs; fenced plain launches grow least (measured, 3-layer
     // pillar: 1.1 GB; unfenced 1.8; every step a reduction 2.0; no flow 0.6).
-    for (int s = 0; s < n; s++) { step(lo, hi, s == 0); Kokkos::fence(); }
+    for (int s = 0; s < n; s++) { step(lo, hi, s == 0); Kokkos::fence(); if (halo) halo(); }
     // the speed is measured every 16th call (a reduction; it can at most
-    // double in that time at the accelerations a pool has)
+    // double in that time at the accelerations a pool has). Several ranks:
+    // the caller takes the maximum of umax over them after every run().
     if (ncall++ % 16 == 0) umax = std::sqrt((double) max_u2(lo, hi)) * ph.dx / dt;
     return n;
   }
@@ -452,6 +461,9 @@ struct MeltFlow {
    tmp is scratch of q's shape. [lo, hi) must hold every FLUID cell and
    two cells around them (or reach the block's edge): the limiter reads
    that far, and tmp is only valid inside the window.
+   Several ranks: halo(d, a, b) is called before the sweep along d and must
+   bring the halo cells of a (and b, if not empty) up to date two cells
+   deep along d; m.flux and m.type must be current in the halo already.
 ------------------------------------------------------------------------- */
 
 // Two fields at once (q2/tmp2 may be empty views: one field). With
@@ -461,7 +473,8 @@ struct MeltFlow {
 template <class R>
 void melt_advect(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> tmp,
                  Kokkos::View<R***> q2, Kokkos::View<R***> tmp2,
-                 const int lo[3], const int hi[3], bool copy_back)
+                 const int lo[3], const int hi[3], bool copy_back,
+                 const std::function<void(int, Kokkos::View<R***>, Kokkos::View<R***>)> &halo = {})
 {
   const bool two = q2.extent(0) > 0;
   auto ty = m.type; auto G = m.flux; auto rho = m.rho;
@@ -480,6 +493,7 @@ void melt_advect(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> 
         });
       break;
     }
+    if (halo) halo(d, src, src2);
     Kokkos::parallel_for("FlowAdvect",
       Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {

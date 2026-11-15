@@ -219,7 +219,7 @@ in `processors`.
 
 `flow lbm` and `composition ... mix flow`. Plan and rationale: flow is
 needed to track composition through the pool; a fixed flat surface is
-enough for mixing; one rank first.
+enough for mixing; one rank first (several ranks: see the end of this section).
 
 - `src/KOKKOS/melt_flow_kokkos.h`: `MeltFlow<R>`, header-only, no SPPARKS
   dependencies. D3Q19, TRT (Lambda 3/16) + Guo forcing + Smagorinsky,
@@ -329,7 +329,26 @@ enough for mixing; one rank first.
   off by -0.004% (feed slab) and -0.02% (feed surface); before -1.6% and
   -2.7%. Top-layer mean d11 0.72 / 0.72 (before 0.71 / 0.69; mix pool
   0.67). Unfused sites 504 / 507 (before 426 / 428). 294 s per run.
-- Limits: one rank; flat surface; thermal Marangoni only (no solutal);
+- Several ranks (2026-11-14). Each rank's flow block is its own cells of
+  the box plus two halo layers toward each x/y neighbour (`fh`); the step
+  window stays inside the owned cells. `flow_exchange` (one templated
+  pack / MPI / unpack, x then y so corners arrive) moves: type (2 layers)
+  and T (1) before `run()`; all 19 populations (1 layer) after every flow
+  step and rescale, through `MeltFlow::halo`; flux (1) before the sweeps;
+  the carried fields (2 layers, along the sweep's axis only) before the x
+  and the y sweep, through `melt_advect`'s callback; X (1) before
+  `comp_out`, which now writes ghost sites too. Pool sums (mean X, feed
+  reservoir), "any fluid" and the measured max speed are MPI-reduced, so
+  every rank takes the same flow steps; a rank with no fluid has an empty
+  window and only exchanges. Check (OpenMP, FP64, in.thin_wall.ded.graded.flow,
+  pool on the rank boundaries): 1 vs 2 (1x2) vs 4 (2x2) ranks give d11,
+  sum/max d6 and dump conduction's T and u bit for bit; with `feed
+  surface` d11 agrees to 3e-15 (the reduced sums round differently) and
+  its total exactly. One rank is bit-identical to the code before.
+  Not yet run on HIP (the host-staged exchange path).
+  ponytail: 19 populations sent where 5 cross a face; an exchange per flow
+  step (deeper halos would trade them for wider windows).
+- Limits: flat surface; thermal Marangoni only (no solutal);
   one density and one set of flow constants for every composition, not in
   the cards; melted LOOSE cells carried as dense.
 

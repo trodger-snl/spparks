@@ -119,13 +119,24 @@ class ConductionSolverKokkos : protected Pointers {
   // KK_FLOAT copies for the stencil (aliases under FP64)
   Kokkos::View<KK_FLOAT*> wxr, wyr, wzr, iwx, iwy, iwz;
   double Htab_T0 = 0.0, Htab_dT = 1.0;
-  // flow lbm: the flow's block is the lattice box's cells, local cell =
-  // block cell + fb0; fwin is the window of the last step's fluid cells.
+  // flow lbm: the flow's block is this rank's cells of the lattice box plus
+  // fh halo cells (xlo xhi ylo yhi: 2 toward a neighbour rank, else 0);
+  // local cell = block cell + fb0 (the outer halo layer has no local cell).
+  // fwin is the window of this rank's fluid cells at the last step
+  // (fwin_loc: it had any); fwin_on: some rank had fluid.
   // tsm, Hrefm: each material's solidus and the H(T0) its H is relative to.
   std::unique_ptr<MeltFlow<KK_FLOAT>> flow;
   int fb0[3] = {0, 0, 0};
+  int fh[4] = {0, 0, 0, 0};
   int fwin[6] = {0, 0, 0, 0, 0, 0};
-  bool fwin_on = false;
+  bool fwin_on = false, fwin_loc = false;
+  // halo buffers of the flow's fields (hs, hr: host staging, as hsbuf)
+  template <class S> struct FlowHalo {
+    Kokkos::View<S*> s, r;
+    Kokkos::View<S*, MPIStagingSpace> hs, hr;
+  };
+  FlowHalo<KK_FLOAT> fhR;
+  FlowHalo<unsigned char> fhC;
   double flow_cap_seen = 0.0;
   Kokkos::View<KK_FLOAT***> fq, ftmp;
   Kokkos::View<KK_FLOAT***> fX;      // mix flow: composition of the block's cells
@@ -136,7 +147,7 @@ class ConductionSolverKokkos : protected Pointers {
   Kokkos::View<unsigned char***> fborn;
   double feed_res = 0.0, xpool = 0.0, xfeed = 0.0, feed_xl = 0.0, feed_yl = 0.0;
   bool has_pool = false;
-  Kokkos::View<int*> site_blk;       // mix flow: a site's block cell (flat), -1 = none
+  Kokkos::View<int*> site_blk;       // mix flow: a site's block cell (flat; ghosts too), -1 = none
   Kokkos::View<double*> tsm, Hrefm;
   Kokkos::View<int*> site_cell;   // offset of the site's cell in T, -1 = above grid
 
@@ -175,8 +186,12 @@ class ConductionSolverKokkos : protected Pointers {
   void remat(Kokkos::View<unsigned char*> d_mat, int nlocal);
   // flow lbm: h seconds of flow on the pool, then the enthalpy carried with it
   void flow_step(double h, bool laser_on, double xl, double yl);
+  // flow lbm, several ranks: the w owned layers next to each neighbour go
+  // to its halo; dirs: 1 = x, 2 = y, 3 = x then y (corners arrive)
+  template <class S>
+  void flow_exchange(Kokkos::View<S****> v, FlowHalo<S> &b, int w, int dirs);
   // mix flow: the cells' composition back to the sites (d11 and the bin)
-  void comp_out(Kokkos::View<double*> d_comp, Kokkos::View<unsigned char*> d_mat, int nlocal);
+  void comp_out(Kokkos::View<double*> d_comp, Kokkos::View<unsigned char*> d_mat, int nall);
   void carry_field(Kokkos::View<KK_FLOAT***> Told, const std::vector<double> &fx0,
                    const std::vector<double> &fy0, const std::vector<double> &fz0);
   void seed_from_sites(Kokkos::View<double*> d_T, int nlocal);

@@ -5,7 +5,7 @@
 # outward: the pools are wider and shallower, a plume of lower-layer
 # material rises in the middle of each pool, and at this scan speed
 # (1.4 m/s) the mixing is partial: the top layer ends at 0.99 (mix pool:
-# 0.87). One process. ~21 s on one gfx1151 GPU (build-verify), 14 s
+# 0.87). Any process count (same d11). ~21 s on one gfx1151 GPU (build-verify), 14 s
 # without the flow. dump conduction also holds the velocity (ux, uy, uz).
 app_style        additive/texture/kk 1000000 5e-6 5e-6 1
 seed             56789

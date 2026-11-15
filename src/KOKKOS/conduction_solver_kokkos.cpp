@@ -1103,7 +1103,7 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
 
   // the sweeps leave the carried fields in ftmp, fX2; one pass writes them
   // back and (feed surface) drains the reservoir into the surface cells
-  melt_advect(F, fq, ftmp, fX, fX2, (double) n, w, w + 3, false);
+  melt_advect(F, fq, ftmp, fX, fX2, w, w + 3, false);
   auto qt = ftmp; auto Xt = fX2;
   const double share = feed && acc.sw > 0.0 ? feed_res / acc.sw : 0.0;
   const double xf_ = xfeed;

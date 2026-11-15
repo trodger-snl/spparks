@@ -227,9 +227,10 @@ enough for mixing; one rank first.
   bounce-back, specular free-slip top; f stored as f - w. `run(h)` is the
   SI driver: even step count, step adapted to the measured speed (cap
   doubles above 0.15 lattice, halves below 0.03, f rescaled).
-  `melt_advect`: three 1-D van Leer sweeps, `q - d(uq) + q d(u)`.
+  `melt_advect`: three 1-D van Leer sweeps on the flow's own face mass
+  fluxes (`flux`, tallied in `step`), see "Conservative transport" below.
 - `tools/melt_flow_check.cpp` (target `melt_flow_check`, not in the default
-  build): 79 checks, double + single, pass on HIP and OpenMP. Poiseuille
+  build): 93 checks, double + single, pass on HIP and OpenMP. Poiseuille
   1e-13; Taylor-Green rate 0.15%, error ratio 4.10; thermocapillary return
   flow 0.19% below the top cell, ratio 3.9; buoyant slot 2e-14;
   hydrostatic, Darcy, mass; uniform scalar 2e-16; step/Gaussian/cube
@@ -305,10 +306,32 @@ enough for mixing; one rank first.
   retention on (start from the standalone harness and add the app's
   per-step host<->device scalar copies, the team-policy stage kernel, the
   halo exchange); periodic Kokkos finalize is not an option.
+- Conservative transport (2026-11-14). The first `melt_advect` used the
+  mean u of two cells as the face flux and `q - d(uq) + q d(u)`; the last
+  term kept a uniform q uniform but the sum of q drifted wherever the LBM
+  velocity was not divergence-free. Now `step` tallies the mass each cell
+  passes through each of its six faces (`flux(x, y, z, 6)`, +6 floats per
+  cell): an axis population where it arrives; a diagonal one crosses two
+  faces by way of the fluid cell(s) between, half each way if both are
+  fluid. Summed over a cell's faces that is exactly its change of rho, so
+  a sweep `q - (F_hi (qf_hi - q) - F_lo (qf_lo - q)) / m` conserves the sum
+  of (1 + rho) q to round-off and keeps a uniform q uniform. q is per unit
+  mass; a cell that freezes at rho = 1 + d keeps its q, so the sum of d11
+  over sites is conserved to the size of d (not accumulating), not exactly.
+  Two LBM defects came out with it: (1) the specular reflection at the
+  surface tested GAS above the source's column only; at a step in the
+  surface the reflected population was also streamed to the fluid cell
+  above, making mass (check 12 without the fix: 0.9% per cell). It now
+  needs GAS above both cells. (2) Two fluid cells touching only along an
+  edge exchanged populations through the solid corner; that link now
+  bounces back (it has no face route). Both change flow-on results.
+  DED graded wall (300 W, 10 mm/s, 20 um, mixed; 127500 fed): sum of d11
+  off by -0.004% (feed slab) and -0.02% (feed surface); before -1.6% and
+  -2.7%. Top-layer mean d11 0.72 / 0.72 (before 0.71 / 0.69; mix pool
+  0.67). Unfused sites 504 / 507 (before 426 / 428). 294 s per run.
 - Limits: one rank; flat surface; thermal Marangoni only (no solutal);
   one density and one set of flow constants for every composition, not in
-  the cards; melted LOOSE cells carried as dense; d11's sum conserved to
-  O(Mach^2) only.
+  the cards; melted LOOSE cells carried as dense.
 
 ## Material (examples: 316L)
 

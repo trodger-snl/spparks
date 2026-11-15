@@ -214,13 +214,14 @@ stability; it is a stabiliser, not a validated turbulence model.
 number of flow steps chosen so that the fastest cell moves about a
 tenth of a cell per step (the step shortens by itself when the flow is
 faster than <I>u_ref</I>; the run stops with an error if it runs away), and
-the enthalpy is carried with the velocity by a flux-limited upwind
-scheme.  With <I>composition ... mix flow</I> the composition d11 is carried
-the same way, so mixing in the pool is whatever the flow does instead
-of the instant mixing of <I>mix pool</I>; the total of d11 is conserved to
-about 0.01 percent (the scheme keeps a uniform composition exactly
-uniform in the slightly compressible lattice Boltzmann velocity, at
-that price).
+the enthalpy is carried with the flow's own mass fluxes by a
+flux-limited upwind scheme.  With <I>composition ... mix flow</I> the
+composition d11 is carried the same way, so mixing in the pool is
+whatever the flow does instead of the instant mixing of <I>mix pool</I>.  A
+uniform composition stays exactly uniform, and the total of d11 is
+conserved to about 0.01 percent (0.004 percent over a 4-layer graded
+wall; exactly per unit mass, and the lattice Boltzmann liquid is very
+slightly compressible).
 </P>
 <P>New material: under <I>ded</I> each layer's sites carry the composition fed
 for that layer (d11, set before the run).  With <I>feed slab</I> a new cell

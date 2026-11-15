@@ -312,10 +312,10 @@ double pool_si(double u_ref)
 // ---- scalar advection (melt_advect) ----
 
 template <class R>
-void advect_all(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> tmp, double cfl)
+void advect_all(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> tmp)
 {
   const int lo[3] = {0, 0, 0}, hi[3] = {m.nx, m.ny, m.nz};
-  melt_advect(m, q, tmp, cfl, lo, hi);
+  melt_advect(m, q, tmp, lo, hi);
 }
 
 // 8. A uniform field in a real (slightly compressible) LBM flow stays uniform.
@@ -336,8 +336,9 @@ void advect_uniform()
   Kokkos::deep_copy(q, R(0.37));
   double div = 0.0;
   for (int s = 0; s < 100; s++) {
-    m.step(); m.step();
-    advect_all(m, q, tmp, 2.0);
+    const int lo[3] = {0, 0, 0}, hi[3] = {N, N, 1};
+    m.step(); m.step(lo, hi, false);
+    advect_all(m, q, tmp);
   }
   auto h = host(q); auto u = host(m.ux); auto v = host(m.uy);
   double err = 0.0;
@@ -358,7 +359,7 @@ double advect_line(int N, bool step, double &dsum, double &over, double &shift)
   MeltFlow<R> m;
   m.resize(N, 1, 1);
   m.p.periodic[0] = m.p.periodic[1] = m.p.periodic[2] = true;
-  Kokkos::deep_copy(m.ux, R(0.1));
+  m.set_flux(0.1, 0, 0);
   Kokkos::View<R***> q("q", N, 1, 1), tmp("tmp", N, 1, 1);
   // the start profile is kept apart: on a host backend a mirror view is q itself
   std::vector<R> q0(N);
@@ -368,7 +369,7 @@ double advect_line(int N, bool step, double &dsum, double &over, double &shift)
     hq(i, 0, 0) = q0[i] = step ? R(i >= N / 4 && i < N / 2)
                                : R(std::exp(-0.5 * (i - N / 2.0) * (i - N / 2.0) / (sig * sig)));
   Kokkos::deep_copy(q, hq);
-  for (int s = 0; s < 10 * N; s++) advect_all(m, q, tmp, 1.0);
+  for (int s = 0; s < 10 * N; s++) advect_all(m, q, tmp);
   auto h = host(q);
   double s0 = 0, s1 = 0, e2 = 0, n2 = 0, lo = 1e300, hi = -1e300, cr = 0, ci = 0, c0r = 0, c0i = 0;
   for (int i = 0; i < N; i++) {
@@ -391,14 +392,14 @@ void advect_cube()
   const int N = 32;
   m.resize(N, N, N);
   m.p.periodic[0] = m.p.periodic[1] = m.p.periodic[2] = true;
-  Kokkos::deep_copy(m.ux, R(0.08)); Kokkos::deep_copy(m.uy, R(0.06)); Kokkos::deep_copy(m.uz, R(0.04));
+  m.set_flux(0.08, 0.06, 0.04);
   Kokkos::View<R***> q("q", N, N, N), tmp("tmp", N, N, N);
   auto h0 = Kokkos::create_mirror_view(q);
   for (int i = 8; i < 16; i++)
     for (int j = 8; j < 16; j++)
       for (int k = 8; k < 16; k++) h0(i, j, k) = R(1);
   Kokkos::deep_copy(q, h0);
-  for (int s = 0; s < 400; s++) advect_all(m, q, tmp, 1.0);
+  for (int s = 0; s < 400; s++) advect_all(m, q, tmp);
   auto h = host(q);
   // centre of mass per axis from the phase of the first Fourier mode
   // (the box is periodic and the cube ends across its edge in y)
@@ -433,14 +434,14 @@ void advect_diffuse()
   const double al = 0.05, s0 = 6.0, x0 = 60.0, uv = 0.2;
   m.resize(N, 1, 1);
   m.p.periodic[0] = m.p.periodic[1] = m.p.periodic[2] = true;
-  Kokkos::deep_copy(m.ux, R(uv));
+  m.set_flux(uv, 0, 0);
   Kokkos::View<R***> q("q", N, 1, 1), tmp("tmp", N, 1, 1);
   auto h0 = Kokkos::create_mirror_view(q);
   for (int i = 0; i < N; i++) h0(i, 0, 0) = R(std::exp(-0.5 * (i - x0) * (i - x0) / (s0 * s0)));
   Kokkos::deep_copy(q, h0);
   const R a = R(al);
   for (int s = 0; s < nstep; s++) {
-    advect_all(m, q, tmp, 1.0);
+    advect_all(m, q, tmp);
     Kokkos::parallel_for("diffuse", N, KOKKOS_LAMBDA(const int i) {
       tmp(i, 0, 0) = q(i, 0, 0) + a * (q((i + 1) % N, 0, 0) - R(2) * q(i, 0, 0) + q((i + N - 1) % N, 0, 0));
     });
@@ -457,10 +458,108 @@ void advect_diffuse()
   check("11 its centre: |x - (x0 + u t)| (cells)", mean - (x0 + uv * nstep), 0.5);
 }
 
+// 12. Conservation where the pool is awkward: a forced flow round a solid
+//     block under a free surface with a step in it (GAS over half the
+//     length) and a pillar touching the block only along an edge. Checked:
+//     the flow's mass; the face fluxes against each cell's change of rho;
+//     the sum of (1 + rho) q for a two-valued q; a uniform q; q's range.
+template <class R>
+void advect_conserve()
+{
+  MeltFlow<R> m;
+  const int nx = 32, ny = 8, nz = 18;
+  m.resize(nx, ny, nz);
+  m.p.periodic[0] = m.p.periodic[1] = true;
+  m.p.accel[0] = 2e-5; m.p.accel[2] = -1e-5;
+  m.p.nu = 0.02;
+  auto ht = Kokkos::create_mirror_view(m.type);
+  for (int i = 0; i < nx; i++)
+    for (int j = 0; j < ny; j++)
+      for (int k = 0; k < nz; k++) {
+        const bool wall = k == 0 || (i >= 12 && i < 20 && k <= 8) || (i == 20 && j < 4 && k == 9);
+        const bool gas = k >= 15 || (i < 16 && k >= 12);
+        ht(i, j, k) = wall ? MeltFlow<R>::WALL : gas ? MeltFlow<R>::GAS : MeltFlow<R>::FLUID;
+      }
+  Kokkos::deep_copy(m.type, ht);
+  Kokkos::View<R***> q("q", nx, ny, nz), tmp("tmp", nx, ny, nz), q2("q2", nx, ny, nz), tmp2("tmp2", nx, ny, nz);
+  auto hq = Kokkos::create_mirror_view(q);
+  for (int i = 0; i < nx; i++)
+    for (int j = 0; j < ny; j++)
+      for (int k = 0; k < nz; k++) hq(i, j, k) = R(k >= 9);
+  Kokkos::deep_copy(q, hq);
+  Kokkos::deep_copy(q2, R(0.37));
+  const int lo[3] = {0, 0, 0}, hi[3] = {nx, ny, nz};
+  // sum of (1 + rho) q over the fluid, and its size
+  auto total = [&](double &sum) {
+    auto h = host(q); auto r = host(m.rho);
+    sum = 0.0;
+    for (int i = 0; i < nx; i++)
+      for (int j = 0; j < ny; j++)
+        for (int k = 0; k < nz; k++)
+          if (ht(i, j, k) == MeltFlow<R>::FLUID) sum += (1.0 + r(i, j, k)) * h(i, j, k);
+  };
+  for (int s = 0; s < 50; s++) m.step();       // rho settles to the forcing first
+  double s0, s1, ferr = 0.0;
+  total(s0);
+  for (int s = 0; s < 1500; s++) {
+    // a copy of its own: on a host backend host() is m.rho itself
+    auto r0 = Kokkos::create_mirror(m.rho);
+    if (s % 500 == 499) Kokkos::deep_copy(r0, m.rho);
+    m.step(); m.step(lo, hi, false);
+    if (s % 500 == 499) {
+      // the six faces against rho's change over the two steps
+      auto r1 = host(m.rho); auto G = host(m.flux);
+      for (int i = 0; i < nx; i++)
+        for (int j = 0; j < ny; j++)
+          for (int k = 0; k < nz; k++) {
+            if (ht(i, j, k) != MeltFlow<R>::FLUID) continue;
+            const int x[3] = {i, j, k}, n[3] = {nx, ny, nz};
+            double out = 0.0;
+            for (int d = 0; d < 3; d++)
+              for (int sd = 0; sd < 2; sd++) {
+                int y[3] = {i, j, k};
+                y[d] += sd ? 1 : -1;
+                if (d < 2) y[d] = (y[d] + n[d]) % n[d];
+                else if (y[d] < 0 || y[d] >= nz) continue;
+                if (ht(y[0], y[1], y[2]) != MeltFlow<R>::FLUID) {
+                  ferr = std::max(ferr, std::fabs((double) G(x[0], x[1], x[2], 2 * d + sd)));
+                  continue;
+                }
+                out += G(x[0], x[1], x[2], 2 * d + sd) - G(y[0], y[1], y[2], 2 * d + 1 - sd);
+              }
+            ferr = std::max(ferr, std::fabs(out - ((double) r0(i, j, k) - (double) r1(i, j, k))));
+          }
+    }
+    melt_advect(m, q, tmp, q2, tmp2, lo, hi, true);
+  }
+  total(s1);
+  auto h = host(q); auto h2 = host(q2); auto u = host(m.ux);
+  int nfluid = 0;
+  double qlo = 1e300, qhi = -1e300, uni = 0.0, umax = 0.0, moved = 0.0;
+  for (int i = 0; i < nx; i++)
+    for (int j = 0; j < ny; j++)
+      for (int k = 0; k < nz; k++) {
+        if (ht(i, j, k) != MeltFlow<R>::FLUID) continue;
+        nfluid++;
+        qlo = std::min(qlo, (double) h(i, j, k)); qhi = std::max(qhi, (double) h(i, j, k));
+        uni = std::max(uni, std::fabs(h2(i, j, k) - 0.37));
+        umax = std::max(umax, std::fabs((double) u(i, j, k)));
+        moved += std::fabs(h(i, j, k) - (k >= 9));
+      }
+  check("12 stepped surface: |mass change| per fluid cell", m.mass() / nfluid, pick<R>(1e-12, 1e-5));
+  check("12 face fluxes - a cell's loss of rho (max)", ferr, pick<R>(1e-14, 2e-6));
+  check("12 sum of (1 + rho) q: |change| / sum", s1 / s0 - 1.0, pick<R>(1e-12, 1e-5));
+  check("12 uniform q stays: max |q - q0|", uni, pick<R>(1e-13, 1e-5));
+  check("12 q stays in [0, 1]: over/undershoot", std::max(qhi - 1.0, -qlo), pick<R>(1e-12, 1e-5));
+  check("12   (the flow moves: max |u|)", umax, 1e-3, false);
+  check("12   (and carries q: mean |q - q start|)", moved / nfluid, 1e-2, false);
+}
+
 template <class R>
 void advect_suite()
 {
   advect_uniform<R>();
+  advect_conserve<R>();
   double ds, ov, sh, d2, o2, s2;
   advect_line<R>(128, true, ds, ov, sh);
   check("9 step, one pass: |sum change| / sum", ds, pick<R>(1e-12, 1e-5));

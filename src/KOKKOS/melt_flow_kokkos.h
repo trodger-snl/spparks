@@ -45,8 +45,11 @@ namespace SPPARKS_NS {
    block in x, y and below it in z, unless that axis is periodic); GAS
    above a fluid cell is a free surface, flat and free-slip (specular
    reflection), and so is the block's top. GAS beside a fluid cell acts as
-   a wall. Surface cells (GAS or the block's top above) take the Marangoni
-   force. Cells that are not FLUID hold f = w (rest), so a cell that melts
+   a wall; a reflection needs GAS above both cells it joins, so a step in
+   the surface neither makes nor loses mass. Two fluid cells that touch
+   only along an edge (both cells between them are not fluid) do not
+   exchange: that link bounces back. Surface cells (GAS or the block's top
+   above) take the Marangoni force. Cells that are not FLUID hold f = w (rest), so a cell that melts
    starts at rest.
 
    ux, uy, uz are the mean of the last two steps. Bounce-back walls conserve
@@ -57,6 +60,17 @@ namespace SPPARKS_NS {
    reads. The surface force acts on the whole top cell, so that cell's
    velocity lags the true surface profile by about tau / (8 mu) (first
    order in the cell size); the cells below are second order.
+
+   flux(i, j, k, 2 d + s) is the mass (as f - w) that left the cell through
+   its face on axis d, side s (0 low, 1 high), as this cell counted it,
+   summed over the steps since the last step(lo, hi, true). A population
+   on a diagonal link crosses two faces, by way of whichever of the two
+   cells between is fluid (half each way if both are); the cell it leaves
+   counts the first face, the cell it reaches the second, and an axis
+   population is counted where it arrives. So the mass through the face
+   between a and b = a + e_d is flux(a, 2d+1) - flux(b, 2d), and summed
+   over a cell's six faces that is exactly its loss of rho: melt_advect
+   carries scalars with these.
 
    A window passed to step() must hold every FLUID cell and every cell that
    was FLUID at either of the last two steps, so freezing cells are reset
@@ -84,6 +98,7 @@ struct MeltFlow {
   Kokkos::View<R***> T, fl;                  // temperature, liquid fraction
   Kokkos::View<R***> ux, uy, uz, rho;        // output: two-step mean u, rho - 1
   Kokkos::View<R***> px, py, pz;             // the last step's u
+  Kokkos::View<R****> flux;                  // (x, y, z, face): mass out, see above
 
   void resize(int nx_, int ny_, int nz_) {
     nx = nx_; ny = ny_; nz = nz_;
@@ -99,6 +114,7 @@ struct MeltFlow {
     px = Kokkos::View<R***>("flow_px", nx, ny, nz);
     py = Kokkos::View<R***>("flow_py", nx, ny, nz);
     pz = Kokkos::View<R***>("flow_pz", nx, ny, nz);
+    flux = Kokkos::View<R****>("flow_flux", nx, ny, nz, 6);
     Kokkos::deep_copy(fl, R(1));
   }
 
@@ -140,9 +156,10 @@ struct MeltFlow {
 
   // One step over the cells [lo, hi) per axis (the pool window; the whole
   // block by default). Cells outside it are not touched.
+  // first: flux starts again from this step (else it adds to it).
   void step() { const int lo[3] = {0, 0, 0}, hi[3] = {nx, ny, nz}; step(lo, hi); }
-  void step(const int lo[3], const int hi[3]) {
-    auto f_ = f; auto g_ = fn; auto ty = type; auto T_ = T; auto fl_ = fl;
+  void step(const int lo[3], const int hi[3], bool first = true) {
+    auto f_ = f; auto g_ = fn; auto ty = type; auto T_ = T; auto fl_ = fl; auto flux_ = flux;
     auto ux_ = ux; auto uy_ = uy; auto uz_ = uz; auto rho_ = rho;
     auto px_ = px; auto py_ = py; auto pz_ = pz;
     const int nx_ = nx, ny_ = ny, nz_ = nz;
@@ -158,6 +175,7 @@ struct MeltFlow {
           for (int q = 0; q < 19; q++) g_(i, j, k, q) = R(0);
           ux_(i, j, k) = uy_(i, j, k) = uz_(i, j, k) = rho_(i, j, k) = R(0);
           px_(i, j, k) = py_(i, j, k) = pz_(i, j, k) = R(0);
+          for (int g = 0; g < 6; g++) flux_(i, j, k, g) = R(0);
           return;
         }
         // type of a cell, the block's edges included; wraps periodic axes
@@ -167,20 +185,52 @@ struct MeltFlow {
           if (kk < 0 || kk >= nz_) { if (!pz) return kk < 0 ? WALL : GAS; kk = (kk + nz_) % nz_; }
           return ty(ii, jj, kk);
         };
-        // pull: what arrives here along each velocity
-        R fq[19];
-        fq[0] = f_(i, j, k, 0);
+        // pull: what arrives here along each velocity. tq[q] is the type
+        // of the cell it comes from (this cell - c_q); G the mass leaving
+        // by each face (see flux above).
+        R fq[19], G[6] = {0, 0, 0, 0, 0, 0};
+        int tq[19];
+        fq[0] = f_(i, j, k, 0); tq[0] = FLUID;
         for (int q = 1; q < 19; q++) {
           int cx, cy, cz; vel(q, cx, cy, cz);
           int ii = i - cx, jj = j - cy, kk = k - cz;
-          const int t = cell(ii, jj, kk);
-          if (t == FLUID) fq[q] = f_(ii, jj, kk, q);
-          else if (t == GAS && cz == -1) {
-            // off the surface above: it left the cell beside this one going up
-            int i2 = i - cx, j2 = j - cy, k2 = k;
-            fq[q] = cell(i2, j2, k2) == FLUID ? f_(i2, j2, k2, mirz(q)) : f_(i, j, k, opp(q));
-          } else fq[q] = f_(i, j, k, opp(q));
+          tq[q] = cell(ii, jj, kk);
+          if (tq[q] == FLUID) fq[q] = f_(ii, jj, kk, q);
         }
+        // the axis velocities: q = 1 + 2 A + (sign < 0); face 2 A + (side > 0)
+        for (int q = 1; q < 7; q++) {
+          if (tq[q] == FLUID) G[q - 1] -= fq[q];     // came in by the face toward its source
+          else fq[q] = f_(i, j, k, opp(q));          // wall, or the surface above
+        }
+        for (int q = 7; q < 19; q++) {
+          int c[3]; vel(q, c[0], c[1], c[2]);
+          const int A = c[0] != 0 ? 0 : 1, B = c[2] != 0 ? 2 : 1, sA = c[A], sB = c[B];
+          const int o = opp(q);
+          // the two cells between this one and the source: this - sA e_A, this - sB e_B
+          const bool inA = tq[1 + 2 * A + (sA < 0)] == FLUID, inB = tq[1 + 2 * B + (sB < 0)] == FLUID;
+          if (tq[q] == FLUID && (inA || inB)) {
+            const R wv = (inA && inB ? R(0.5) : R(1)) * fq[q];
+            if (inA) G[2 * A + (sA < 0)] -= wv;
+            if (inB) G[2 * B + (sB < 0)] -= wv;
+          } else if (tq[q] == GAS && sB == -1 && B == 2 && tq[6] == GAS && inA) {
+            // off the flat surface above this cell and the one beside it,
+            // which it left going up
+            int i2 = i - c[0], j2 = j - c[1], k2 = k;
+            cell(i2, j2, k2);
+            fq[q] = f_(i2, j2, k2, mirz(q));
+            G[2 * A + (sA < 0)] -= fq[q];
+          } else fq[q] = f_(i, j, k, o);
+          // what leaves along q, first face: by way of this + sA e_A or this + sB e_B
+          if (tq[o] == FLUID) {
+            const bool outA = tq[1 + 2 * A + (sA > 0)] == FLUID, outB = tq[1 + 2 * B + (sB > 0)] == FLUID;
+            if (outA || outB) {
+              const R wv = (outA && outB ? R(0.5) : R(1)) * f_(i, j, k, q);
+              if (outA) G[2 * A + (sA > 0)] += wv;
+              if (outB) G[2 * B + (sB > 0)] += wv;
+            }
+          }
+        }
+        for (int g = 0; g < 6; g++) flux_(i, j, k, g) = first ? G[g] : flux_(i, j, k, g) + G[g];
         R dr = 0, mx = 0, my = 0, mz = 0;
         for (int q = 0; q < 19; q++) {
           int cx, cy, cz; vel(q, cx, cy, cz);
@@ -281,8 +331,8 @@ struct MeltFlow {
      maximum passes 0.15 and halves again below 0.03; f is rescaled when
      the step changes. Returns the number of steps, or -1 if h would take
      more than ph.nmax of them (the flow is running away).
-     After run(): u in m/s is ux * ph.dx / dt, and melt_advect's cfl is the
-     returned step count.
+     After run(): u in m/s is ux * ph.dx / dt; melt_advect then carries the
+     scalars with the fluxes of these steps.
   -------------------------------------------------------------------- */
   struct Phys {
     double dx = 1.0;          // cell (m)
@@ -317,7 +367,7 @@ struct MeltFlow {
     // A fence per step: inside spparks on HIP (gfx1151) host memory grows
     // during long runs; fenced plain launches grow least (measured, 3-layer
     // pillar: 1.1 GB; unfenced 1.8; every step a reduction 2.0; no flow 0.6).
-    for (int s = 0; s < n; s++) { step(lo, hi); Kokkos::fence(); }
+    for (int s = 0; s < n; s++) { step(lo, hi, s == 0); Kokkos::fence(); }
     // the speed is measured every 16th call (a reduction; it can at most
     // double in that time at the accelerations a pool has)
     if (ncall++ % 16 == 0) umax = std::sqrt((double) max_u2(lo, hi)) * ph.dx / dt;
@@ -355,6 +405,18 @@ struct MeltFlow {
       });
   }
 
+  // flux as a uniform flow would leave it: (u, v, w) cells' mass per face
+  // (for driving melt_advect without stepping)
+  void set_flux(double u, double v, double w) {
+    auto fl_ = flux;
+    const R h[3] = {R(0.5 * u), R(0.5 * v), R(0.5 * w)};
+    Kokkos::parallel_for("FlowSetFlux",
+      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({0, 0, 0}, {nx, ny, nz}),
+      KOKKOS_LAMBDA(const int i, const int j, const int k) {
+        for (int g = 0; g < 6; g++) fl_(i, j, k, g) = (g & 1) ? h[g / 2] : -h[g / 2];
+      });
+  }
+
   // sum of rho - 1 over the fluid cells
   double mass() const {
     auto f_ = f; auto ty = type;
@@ -370,17 +432,21 @@ struct MeltFlow {
 };
 
 /* ----------------------------------------------------------------------
-   Carry the cell field q with the flow's u for one step of `cfl` lattice
-   steps (the Courant number is cfl * u; keep it under 1/2). Three 1-D
+   Carry the cell field q (an amount per unit mass: composition, specific
+   enthalpy) with the flow's own mass fluxes, m.flux, as summed since the
+   last step(lo, hi, true): call it once after each run(). Three 1-D
    sweeps, x then y then z, each upwind with the van Leer limiter in
    Lax-Wendroff form, so a sharp front stays sharp and no sweep makes a new
-   maximum or minimum. Flux crosses only the faces between two FLUID cells
-   (face velocity = the mean of the two); other cells keep their q.
+   maximum or minimum. Keep the mass through a face under half a cell's.
 
-   Each sweep is q - d(u q) + q d(u): the last term removes what the
-   velocity's own divergence would add, so a uniform q stays uniform
-   exactly. The price: where u is not divergence-free (LBM's is, to
-   O(Mach^2)) the sum of q is conserved only to that order.
+   With F the mass through a face and qf the limited face value, a sweep is
+   q - (F_hi (qf_hi - q) - F_lo (qf_lo - q)) / m, m the cell's mass after
+   the sweep (after the last one, 1 + rho). That is (m q)' = m q - d(F qf)
+   with m' = m - d(F): the sum of (1 + rho) q over the fluid cells is
+   conserved to round-off, and a uniform q stays uniform exactly, though
+   the flow is slightly compressible. (Before 2026-11 the fluxes were the
+   mean u of the two cells and m was taken as 1: the sum then drifted, 1.6%
+   of the fed composition over a 4-layer DED wall.)
    ponytail: fixed sweep order; alternate it if a directional bias shows.
 
    tmp is scratch of q's shape. [lo, hi) must hold every FLUID cell and
@@ -395,12 +461,12 @@ struct MeltFlow {
 template <class R>
 void melt_advect(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> tmp,
                  Kokkos::View<R***> q2, Kokkos::View<R***> tmp2,
-                 double cfl, const int lo[3], const int hi[3], bool copy_back)
+                 const int lo[3], const int hi[3], bool copy_back)
 {
   const bool two = q2.extent(0) > 0;
-  auto ty = m.type;
-  const int n[3] = {m.nx, m.ny, m.nz};
-  const R c = R(cfl);
+  auto ty = m.type; auto G = m.flux; auto rho = m.rho;
+  const int n0 = m.nx, n1 = m.ny, n2 = m.nz;
+  const bool p0 = m.p.periodic[0], p1 = m.p.periodic[1], p2 = m.p.periodic[2];
   for (int d = 0; d < (copy_back ? 4 : 3); d++) {
     // sweeps 0..2 along x, y, z (q -> tmp -> q -> tmp), then tmp -> q
     auto src = (d & 1) ? tmp : q, dst = (d & 1) ? q : tmp;
@@ -414,9 +480,6 @@ void melt_advect(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> 
         });
       break;
     }
-    auto u = d == 0 ? m.ux : d == 1 ? m.uy : m.uz;
-    const int nd = n[d];
-    const bool per = m.p.periodic[d];
     Kokkos::parallel_for("FlowAdvect",
       Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
@@ -425,52 +488,53 @@ void melt_advect(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> 
           if (two) dst2(i, j, k) = src2(i, j, k);
           return;
         }
-        const int x[3] = {i, j, k};
-        // the cell s along the sweep axis: index in range, or -1 (none)
-        auto at = [&](int s, int &ii, int &jj, int &kk) -> bool {
+        const int x[3] = {i, j, k}, nn[3] = {n0, n1, n2};
+        const bool per[3] = {p0, p1, p2};
+        // the cell s along axis e: its index if it is there and FLUID
+        auto at = [&](int e, int s, int &ii, int &jj, int &kk) -> bool {
           int y[3] = {x[0], x[1], x[2]};
-          y[d] += s;
-          if (y[d] < 0 || y[d] >= nd) { if (!per) return false; y[d] = (y[d] + nd) % nd; }
+          y[e] += s;
+          if (y[e] < 0 || y[e] >= nn[e]) { if (!per[e]) return false; y[e] = (y[e] + nn[e]) % nn[e]; }
           ii = y[0]; jj = y[1]; kk = y[2];
-          return true;
+          return ty(ii, jj, kk) == MeltFlow<R>::FLUID;
         };
-        // flux through the face between cells s and s + 1 (s = -1 or 0),
-        // and that face's velocity; zero unless both are fluid
-        auto face = [&](const Kokkos::View<R***> &src, int s, R &uf) -> R {
+        // mass through the face between cells s and s + 1 along e (s = -1, 0)
+        auto mass = [&](int e, int s) -> R {
           int ia, ja, ka, ib, jb, kb;
-          uf = R(0);
-          if (!at(s, ia, ja, ka) || !at(s + 1, ib, jb, kb)) return R(0);
-          if (ty(ia, ja, ka) != MeltFlow<R>::FLUID || ty(ib, jb, kb) != MeltFlow<R>::FLUID) return R(0);
-          uf = c * R(0.5) * (u(ia, ja, ka) + u(ib, jb, kb));
+          if (!at(e, s, ia, ja, ka) || !at(e, s + 1, ib, jb, kb)) return R(0);
+          return G(ia, ja, ka, 2 * e + 1) - G(ib, jb, kb, 2 * e);
+        };
+        // that face's value of src along d, less this cell's: limited upwind
+        auto face = [&](const Kokkos::View<R***> &src, int s, R uf) -> R {
+          if (uf == R(0)) return R(0);
+          int ia, ja, ka, ib, jb, kb;
+          at(d, s, ia, ja, ka); at(d, s + 1, ib, jb, kb);
           const bool up = uf > R(0);
           const R qu = up ? src(ia, ja, ka) : src(ib, jb, kb);
           const R qd = up ? src(ib, jb, kb) : src(ia, ja, ka);
           int iu, ju, ku;
           R phi = R(0);
-          if (at(up ? s - 1 : s + 2, iu, ju, ku) && qd != qu) {
+          if (at(d, up ? s - 1 : s + 2, iu, ju, ku) && qd != qu) {
             const R r = (qu - src(iu, ju, ku)) / (qd - qu);
             phi = r > R(0) ? R(2) * r / (R(1) + r) : R(0);
           }
-          return uf * (qu + R(0.5) * phi * (R(1) - Kokkos::abs(uf)) * (qd - qu));
+          return qu + R(0.5) * phi * (R(1) - Kokkos::abs(uf)) * (qd - qu) - src(i, j, k);
         };
-        R ul, uh;
-        const R q0 = src(i, j, k);
-        const R fl = face(src, -1, ul), fh = face(src, 0, uh);
-        dst(i, j, k) = q0 - (fh - fl) + q0 * (uh - ul);
-        if (two) {
-          const R p0 = src2(i, j, k);
-          const R gl = face(src2, -1, ul), gh = face(src2, 0, uh);
-          dst2(i, j, k) = p0 - (gh - gl) + p0 * (uh - ul);
-        }
+        // the cell's mass after this sweep: the later sweeps' fluxes still in it
+        R ms = R(1) + rho(i, j, k);
+        for (int e = d + 1; e < 3; e++) ms += mass(e, 0) - mass(e, -1);
+        const R ul = mass(d, -1), uh = mass(d, 0), im = R(1) / ms;
+        dst(i, j, k) = src(i, j, k) - (uh * face(src, 0, uh) - ul * face(src, -1, ul)) * im;
+        if (two) dst2(i, j, k) = src2(i, j, k) - (uh * face(src2, 0, uh) - ul * face(src2, -1, ul)) * im;
       });
   }
 }
 
 template <class R>
 void melt_advect(const MeltFlow<R> &m, Kokkos::View<R***> q, Kokkos::View<R***> tmp,
-                 double cfl, const int lo[3], const int hi[3])
+                 const int lo[3], const int hi[3])
 {
-  melt_advect(m, q, tmp, Kokkos::View<R***>(), Kokkos::View<R***>(), cfl, lo, hi, true);
+  melt_advect(m, q, tmp, Kokkos::View<R***>(), Kokkos::View<R***>(), lo, hi, true);
 }
 
 }

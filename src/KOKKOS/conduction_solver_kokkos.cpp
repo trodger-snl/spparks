@@ -1022,7 +1022,8 @@ struct FlowAcc {
   double sx, nfl;        // sum of X and count over fluid cells
   double exc, fsum, nb;  // feed surface: born cells' (fed x - pool x), fed x, count
   double sw;             // feed surface: sum of the footprint weight over surface cells
-  KOKKOS_INLINE_FUNCTION FlowAcc() : sx(0), nfl(0), exc(0), fsum(0), nb(0), sw(0) {
+  double badh, badx;     // cells whose H or X is not finite
+  KOKKOS_INLINE_FUNCTION FlowAcc() : sx(0), nfl(0), exc(0), fsum(0), nb(0), sw(0), badh(0), badx(0) {
     for (int d = 0; d < 3; d++) { lo[d] = INT_MAX; hi[d] = -1; }
   }
   KOKKOS_INLINE_FUNCTION FlowAcc &operator+=(const FlowAcc &o) {
@@ -1031,6 +1032,7 @@ struct FlowAcc {
       if (o.hi[d] > hi[d]) hi[d] = o.hi[d];
     }
     sx += o.sx; nfl += o.nfl; exc += o.exc; fsum += o.fsum; nb += o.nb; sw += o.sw;
+    badh += o.badh; badx += o.badx;
     return *this;
   }
 };
@@ -1117,6 +1119,9 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
       const double f = (Tv - ts_(m)) / (tl_(m) - ts_(m));
       const bool gas = (p & 3) == GAS || (p & UNBORN);
       const bool fluid = !gas && (p & 3) == DENSE && f > 0.0;
+      // the carried fields must be finite (read as bits: see MeltFlow::bad)
+      if (MeltFlow<KK_FLOAT>::bad(H_(i + o0, j + o1, k + o2))) a.badh += 1.0;
+      if (comp && MeltFlow<KK_FLOAT>::bad(X(i, j, k))) a.badx += 1.0;
       if (feed) {
         // new: unborn, or born powder that has not melted yet
         if (fluid && born(i, j, k)) {   // born was set at the build, from UNBORN
@@ -1140,8 +1145,14 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
   const int *lo = acc.lo, *hi = acc.hi;
   // the pool's sums over all ranks (one rank: unchanged)
   const bool any = hi[0] >= 0;
-  double gs[7] = {acc.sx, acc.nfl, acc.exc, acc.fsum, acc.nb, acc.sw, any ? 1.0 : 0.0};
-  MPI_Allreduce(MPI_IN_PLACE, gs, 7, MPI_DOUBLE, MPI_SUM, world);
+  double gs[9] = {acc.sx, acc.nfl, acc.exc, acc.fsum, acc.nb, acc.sw, any ? 1.0 : 0.0, acc.badh, acc.badx};
+  MPI_Allreduce(MPI_IN_PLACE, gs, 9, MPI_DOUBLE, MPI_SUM, world);
+  if (gs[7] + gs[8] > 0.0) {
+    char msg[200];
+    snprintf(msg, sizeof(msg), "conduction: flow lbm: the enthalpy of %g cells and the composition of %g "
+             "are not finite at t = %g s", gs[7], gs[8], t_fd);
+    error->one(FLERR, msg);
+  }
   acc.sx = gs[0]; acc.nfl = gs[1]; acc.exc = gs[2]; acc.fsum = gs[3]; acc.nb = gs[4]; acc.sw = gs[5];
   const bool gany = gs[6] > 0.0;
   // the fluid cells of all ranks and two around them, in box cells

@@ -137,6 +137,16 @@ SPPARKS::SPPARKS(int narg, char **arg, MPI_Comm communicator)
   // by main, before MPI_Finalize); Kokkos cannot be re-initialized after.
 #ifdef SPK_KOKKOS
   if (!Kokkos::is_initialized()) {
+#ifdef KOKKOS_ENABLE_HIP
+    // ROCm keeps a little host memory for every asynchronous copy it has
+    // issued (the result of each reduction is one) until the process ends:
+    // with many small kernels the host memory grows without bound (a DED
+    // track with flow lbm: 1.3 GB, 0.36 GB with this, 3% slower, same
+    // result; rocm 7.1.1). Waiting on each copy stops it. The user's own
+    // setting, if any, is kept. Before the first HIP call (the device count
+    // below), which is when the runtime reads it.
+    setenv("AMD_SERIALIZE_COPY", "3", 0);
+#endif
     spk_bind_gpu_by_local_rank(communicator, narg, arg);
     Kokkos::initialize(narg, arg);
     std::atexit(spk_kokkos_finalize);

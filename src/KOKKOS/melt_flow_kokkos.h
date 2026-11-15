@@ -17,6 +17,7 @@
 #include <Kokkos_Core.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <type_traits>
 #include <utility>
@@ -417,14 +418,24 @@ struct MeltFlow {
     std::swap(f, fn);
   }
 
-  // the largest |u|^2 of the last step (lattice units)
+  // Is the stored value NaN or infinite? Read as bits: the builds are
+  // -ffast-math, where a floating-point test for NaN is compiled away.
+  KOKKOS_INLINE_FUNCTION static bool bad(const R &x) {
+    if (sizeof(R) == 4) { unsigned int u; memcpy(&u, &x, 4); return (u & 0x7f800000u) == 0x7f800000u; }
+    unsigned long long u; memcpy(&u, &x, 8);
+    return (u & 0x7ff0000000000000ull) == 0x7ff0000000000000ull;
+  }
+
+  // the largest |u|^2 of the last step (lattice units); 1e12 if any is not
+  // finite
   R max_u2(const int lo[3], const int hi[3]) const {
     auto px_ = px; auto py_ = py; auto pz_ = pz;
     R m2 = 0;
     Kokkos::parallel_reduce("FlowMax",
       Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k, R &mx) {
-        const R v = px_(i, j, k) * px_(i, j, k) + py_(i, j, k) * py_(i, j, k) + pz_(i, j, k) * pz_(i, j, k);
+        R v = px_(i, j, k) * px_(i, j, k) + py_(i, j, k) * py_(i, j, k) + pz_(i, j, k) * pz_(i, j, k);
+        if (bad(px_(i, j, k)) || bad(py_(i, j, k)) || bad(pz_(i, j, k))) v = R(1e12);
         if (v > mx) mx = v;
       }, Kokkos::Max<R>(m2));
     return m2;
@@ -438,7 +449,8 @@ struct MeltFlow {
      mapped to 0.1. It starts at ph.u_ref, doubles when the measured
      maximum passes 0.15 and halves again below 0.03; f is rescaled when
      the step changes. Returns the number of steps, or -1 if h would take
-     more than ph.nmax of them (the flow is running away).
+     more than ph.nmax of them or the measured speed is past half a cell
+     per step or not finite (the flow is running away).
      After run(): u in m/s is ux * ph.dx / dt; melt_advect then carries the
      scalars with the fluxes of these steps.
   -------------------------------------------------------------------- */
@@ -480,7 +492,13 @@ struct MeltFlow {
     // the speed is measured every 16th call (a reduction; it can at most
     // double in that time at the accelerations a pool has). Several ranks:
     // the caller takes the maximum of umax over them after every run().
-    if (ncall++ % 16 == 0) umax = std::sqrt((double) max_u2(lo, hi)) * ph.dx / dt;
+    if (ncall++ % 16 == 0) {
+      const double ul = std::sqrt((double) max_u2(lo, hi));
+      umax = ul * ph.dx / dt;
+      // past half a cell per step the flow has blown up (or is not finite):
+      // no step size will bring it back
+      if (ul > 0.5) return -1;
+    }
     return n;
   }
 
@@ -633,12 +651,15 @@ void melt_advect(const MeltFlow<R> &m, FlowField<R> q, FlowField<R> tmp,
           const R qu = up ? src(ia, ja, ka) : src(ib, jb, kb);
           const R qd = up ? src(ib, jb, kb) : src(ia, ja, ka);
           int iu, ju, ku;
-          R phi = R(0);
-          if (at(d, up ? s - 1 : s + 2, iu, ju, ku) && qd != qu) {
-            const R r = (qu - src(iu, ju, ku)) / (qd - qu);
-            phi = r > R(0) ? R(2) * r / (R(1) + r) : R(0);
+          // van Leer: phi (qd - qu) with phi = 2 r / (1 + r), r = a / b, as
+          // 2 a b / (a + b). (Not through r: with b tiny, as in a well-mixed
+          // pool in single precision, r overflows and phi is inf / inf.)
+          R lim = R(0);
+          if (at(d, up ? s - 1 : s + 2, iu, ju, ku)) {
+            const R a = qu - src(iu, ju, ku), b = qd - qu;
+            if (a * b > R(0)) lim = R(2) * a * b / (a + b);
           }
-          return qu + R(0.5) * phi * (R(1) - Kokkos::abs(uf)) * (qd - qu) - src(i, j, k);
+          return qu + R(0.5) * (R(1) - Kokkos::abs(uf)) * lim - src(i, j, k);
         };
         // the cell's mass after this sweep: the later sweeps' fluxes still in it
         R ms = R(1) + rho(i, j, k);

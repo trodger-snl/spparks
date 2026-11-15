@@ -107,7 +107,7 @@ absorptivity = { value = 0.30, unit = "1", surface = "flat solid", ref = ["ordal
 
 [flow]
 # Liquid-state properties for the conduction source's melt-pool flow (flow lbm).
-# Recorded only: pass them in the deck (docs/MATERIAL_CARDS.md, Flow).
+# Read by flow lbm properties cards; else pass them in the deck (docs/MATERIAL_CARDS.md, Flow).
 surface_tension = { value = 2.29, unit = "N/m", ref = "paradis2007", T_range = [2896, 2896], note = "at the melting point: vacuum electrostatic levitation, oscillating drop, sigma = 2.29e3 - 0.26 (T - Tm) mN/m over 2650-3000 K (undercooled and superheated liquid). From the abstract; uncertainties, sample purity and oxygen content are not in it." }
 dsigma_dT = { value = -2.6e-4, unit = "N/(m K)", ref = "paradis2007", T_range = [2650, 3000], composition = "not given in the abstract (purity and oxygen content of the levitated Mo sample unknown to this card)", note = "NEGATIVE, flow outward. Measured from 250 K below to 100 K above the melting point; a melt pool runs well above that. No data on how oxygen changes the coefficient was found." }
 viscosity = { T = [2573, 2700, 2800, 2896, 3000, 3100, 3213], value = [6.7e-3, 5.9e-3, 5.4e-3, 5.0e-3, 4.6e-3, 4.3e-3, 4.0e-3], unit = "Pa s", extrapolation = "clamp", ref = "ishikawa2013", note = "dynamic viscosity, electrostatic levitation, oscillating-drop damping with the group's improved procedure; values as tabulated in the NIST ThermoML file of the paper (smoothed points, 2573-3213 K), which gives no uncertainties. The earlier fit of paradis2007 (abstract), eta = 0.27 exp(73e3 / (R T)) mPa s over 2650-3000 K, gives 5.6e-3 at the melting point. Kinematic: nu = 5.5e-7 m^2/s at the melting point with the liquid density below (5.0e-3 / 9100)." }

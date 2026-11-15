@@ -575,6 +575,63 @@ void advect_suite()
   advect_diffuse<R>();
 }
 
+// 13. Per-cell properties (props). A liquid layer periodic in x and y under
+//     a free surface, T a wave along x plus a ramp in z: Marangoni, buoyancy
+//     and viscosity at once. With sig = T, dens = -1e-7 (T - Tref) under a
+//     buoyancy 1e7 times larger, and visc = 2 on half the viscosity, it must
+//     give the flow of the plain model (but for the Marangoni force's
+//     1 / (1 + dens), 1e-5 here). Then
+//     a wall in the layer: the Marangoni difference must not reach into it.
+template <class R>
+void props_same()
+{
+  const int nx = 32, nz = 8;
+  Kokkos::View<R***> u[2];
+  double wall = 0.0;
+  for (int v = 0; v < 3; v++) {
+    MeltFlow<R> m;
+    m.props = v > 0;
+    m.resize(nx, 4, nz);
+    m.p.periodic[0] = m.p.periodic[1] = true;
+    m.p.nu = v ? 0.05 : 0.1; m.p.marangoni = 2e-6; m.p.buoy[2] = v ? 1.0 : 1e-7; m.p.Tref = 3.0;
+    auto hT = Kokkos::create_mirror_view(m.T.v);
+    auto ht = Kokkos::create_mirror_view(m.type.v);
+    for (int i = 0; i < nx; i++)
+      for (int j = 0; j < 4; j++)
+        for (int k = 0; k < nz; k++) {
+          hT(i, j, k) = R(100.0 * std::sin(2.0 * M_PI * (i + 0.5) / nx) + 10.0 * k);
+          // v = 2: a wall column at i = 8 whose "T" is far off
+          ht(i, j, k) = v == 2 && i == 8 ? MeltFlow<R>::WALL : MeltFlow<R>::FLUID;
+          if (v == 2 && i == 8) hT(i, j, k) = R(1e6);
+        }
+    Kokkos::deep_copy(m.T.v, hT); Kokkos::deep_copy(m.type.v, ht);
+    if (v) {
+      auto hd = Kokkos::create_mirror_view(m.dens.v);
+      for (int i = 0; i < nx; i++)
+        for (int j = 0; j < 4; j++)
+          for (int k = 0; k < nz; k++) hd(i, j, k) = R(-1e-7) * (hT(i, j, k) - R(3.0));
+      Kokkos::deep_copy(m.sig.v, hT); Kokkos::deep_copy(m.dens.v, hd); Kokkos::deep_copy(m.visc.v, R(2));
+    }
+    for (int s = 0; s < 400; s++) m.step();
+    if (v < 2) u[v] = m.ux.v;
+    else {
+      auto h = host(m.ux.v);
+      for (int i = 0; i < nx; i++) wall = std::max(wall, (double) std::fabs(h(i, 0, nz - 1)));
+    }
+  }
+  auto a = host(u[0]), b = host(u[1]);
+  double d = 0.0, top = 0.0;
+  for (int i = 0; i < nx; i++)
+    for (int k = 0; k < nz; k++) {
+      d = std::max(d, (double) std::fabs(a(i, 0, k) - b(i, 0, k)));
+      top = std::max(top, (double) std::fabs(a(i, 0, k)));
+    }
+  check("13 props as the plain model: max |u - u plain| / max |u|", d / top, 1e-4);
+  check("13   (the flow moves: max |u|)", top, 1e-4, false);
+  // one-sided next to the wall: the 1e6 in it would give |u| of order 1
+  check("13 props, wall with sig 1e6: max surface |u| / plain", wall / top, 3.0);
+}
+
 template <class R>
 void suite(const char *name)
 {
@@ -601,6 +658,7 @@ void suite(const char *name)
   darcy<R>();
   block<R>();
   pool_stability<R>();
+  props_same<R>();
   const double u1 = pool_si<R>(1.0), u2 = pool_si<R>(0.25);
   check("pool: speed from u_ref 0.25 / from u_ref 1 - 1", u2 / u1 - 1.0, 0.15);
   advect_suite<R>();

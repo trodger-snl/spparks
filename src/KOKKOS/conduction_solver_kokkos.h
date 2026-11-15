@@ -146,6 +146,8 @@ class ConductionSolverKokkos : protected Pointers {
   MeltFlow<KK_FLOAT>::W3 fq, ftmp;
   Kokkos::View<KK_FLOAT***> fX;      // mix flow: composition of the block's cells
   MeltFlow<KK_FLOAT>::W3 fXw, fX2;   // the window's copy for the sweeps, and its scratch
+  // flow properties cards: the tables of Config::Flow::Props on the device
+  Kokkos::View<double*> fp_sig, fp_r0, fp_r1, fp_eta;
   // feed surface: fborn marks new cells (unborn, or born and not melted yet); the
   // reservoir holds fed composition not yet put into the pool's top
   // (in units of x * cells); xpool, xfeed: last pool mean and fed x

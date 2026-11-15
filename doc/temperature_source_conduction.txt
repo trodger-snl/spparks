@@ -62,7 +62,7 @@ keyword = {k_table} or {cp_table} or {latent} or {k_powder} or {convection} or {
     m = {pool} (default), {flow} or {none}: the melt pool is well mixed,
     the melt-pool flow carries the composition ({flow} keyword), or it does not change
     f = {slab} (default) or {surface}: how new material enters under {mix flow} with {ded}
-  {flow} values = {lbm} [dsigma_dT s] [beta b] [viscosity nu] [mushy C] [u_ref u] [smagorinsky cs]
+  {flow} values = {lbm} [dsigma_dT s] [beta b] [viscosity nu] [mushy C] [u_ref u] [smagorinsky cs] [properties cards|constant] [sigma_table file]
     melt-pool flow (lattice Boltzmann) on the liquid cells of the lattice box
     s = surface tension's temperature coefficient (N/m/K, default -2.6e-4)
     b = volumetric thermal expansion of the liquid (1/K, default 1.7e-4)
@@ -70,6 +70,8 @@ keyword = {k_table} or {cp_table} or {latent} or {k_powder} or {convection} or {
     C = mushy-zone drag constant (1/s, default 1e4)
     u = expected flow speed (m/s, default 1), sets the first flow step
     cs = Smagorinsky constant (default 0.17, 0 = off)
+    properties cards = surface tension, density and viscosity of the liquid by composition, from the composition's cards (default constant: s, b, nu)
+    file = table of surface tension over T and composition, with properties cards (default: from the cards)
   {far_bc} value = {fixed} or {adiabatic}
     outer faces of the thermal domain held at T0, or insulated
   {sts} value = s
@@ -208,6 +210,31 @@ uniform composition stays exactly uniform, and the total of d11 is
 conserved to about 0.01 percent (0.004 percent over a 4-layer graded
 wall; exactly per unit mass, and the lattice Boltzmann liquid is very
 slightly compressible).
+
+Liquid properties by composition: {properties cards} (needs
+{composition ... mix flow}) takes the liquid's surface tension, density
+and viscosity from the \[flow\] sections of the composition's
+"material cards"_material.html instead of {dsigma_dT}, {beta} and
+{viscosity}, for every cell from its own composition and temperature.
+The Marangoni stress is then the surface gradient of the surface
+tension itself, so it has a solutal part, dsigma/dx grad(x), beside the
+thermal one, and each composition has its own dsigma/dT; where two
+liquids of different composition meet at the surface, the flow runs
+toward the one of higher surface tension.  Buoyancy comes from the
+density, so a denser composition sinks and each composition has its own
+thermal expansion.  Between two cards the surface tension and the
+dynamic viscosity are mixed linearly in the mass fraction (the surface
+tension is each card's value and slope at its own temperature; the
+viscosity is each card's value at its liquidus), and the density by
+adding volumes.  A linear mix of surface tensions ignores that the
+component of lower surface tension gathers at the surface:
+{sigma_table file} reads the surface tension from a table of
+tools/surface_tension.py instead (rows T x sigma, T outer and x inner,
+both uniform; x is d11; linear beyond the table's T range, held beyond
+its x range).  The liquid's inertia stays that of one density (a
+Boussinesq model): with a large density difference between the end
+members the speeds are approximate.  The gradient of the surface
+tension is taken between liquid cells only.
 
 New material: under {ded} each layer's sites carry the composition fed
 for that layer (d11, set before the run).  With {feed slab} a new cell

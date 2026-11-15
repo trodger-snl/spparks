@@ -235,7 +235,11 @@ and IN625 cards quote a calorimetric measurement in a comment).
 
 **Flow.** `[flow]` holds the liquid-state properties of the conduction
 source's melt-pool flow (`flow lbm`, doc/temperature_source_conduction.txt).
-SPPARKS does not read the section yet, so pass the values in the deck:
+`flow lbm properties cards` (with `composition ... mix flow`) reads
+`surface_tension` (with `T_range[0]` as its temperature), `dsigma_dT`,
+`density_liquid` and `viscosity` of every composition card and makes the
+surface tension, density and viscosity of the liquid follow the composition
+and the temperature. Without it, pass the values in the deck:
 
 | `flow lbm` keyword | From the card |
 |---|---|
@@ -293,7 +297,9 @@ When choosing data:
 tension depends on temperature and on the composition x (d11), and its
 gradient has a solutal part, dσ/dx. `tools/surface_tension.py` (Python 3.11+
 standard library) computes a table σ(T, x) between two end-member alloys from
-literature constants. SPPARKS does not read the table yet. Nothing in it is
+literature constants. `flow lbm properties cards sigma_table FILE` reads the
+table (uniform T and x grids; x is taken as d11) in place of the cards'
+linear mix. Nothing in it is
 fitted to the cards: where it misses a card's measured value, that is the
 state of the model.
 

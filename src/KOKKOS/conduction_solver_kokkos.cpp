@@ -556,6 +556,7 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
     fb0[2] = az.nlo;
     const int bn[3] = {ob[0] + fh[0] + fh[1], ob[1] + fh[2] + fh[3], gz_top - glo[2] + 1};
     flow = std::make_unique<MeltFlow<KK_FLOAT>>();
+    flow->props = cfg.flow.props.n > 0;
     flow->resize(bn[0], bn[1], bn[2], false);   // no cells held until there is a pool
     fg0[0] = lo[0] - glo[0] - fh[0]; fg0[1] = lo[1] - glo[1] - fh[2]; fg0[2] = 0;
     for (int d = 0; d < 6; d++) fW[d] = 0;
@@ -567,6 +568,21 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
     ph.dsdT_rho = cfg.flow.dsigma_dT / src->density();
     ph.beta_g = cfg.flow.beta * 9.81; ph.Tref = tl;
     ph.darcy = cfg.flow.mushy; ph.u_ref = cfg.flow.u_ref;
+    if (flow->props) {
+      // sig in N/m, dens = rho / rho0 - 1, visc = nu / nu0 (see MeltFlow):
+      // rho0, nu0 are the first card's liquid at Tr
+      const auto &pr = cfg.flow.props;
+      ph.nu = pr.eta[0] / pr.r0[0];
+      ph.dsdT_rho = 1.0 / pr.r0[0];
+      ph.beta_g = 9.81;
+      auto dev = [](const char *nm, const std::vector<double> &v) {
+        Kokkos::View<double*> d(nm, v.size());
+        Kokkos::deep_copy(d, Kokkos::View<const double*, Kokkos::HostSpace>(v.data(), v.size()));
+        return d;
+      };
+      fp_sig = dev("cond_fp_sig", pr.sig); fp_r0 = dev("cond_fp_r0", pr.r0);
+      fp_r1 = dev("cond_fp_r1", pr.r1); fp_eta = dev("cond_fp_eta", pr.eta);
+    }
     fq = Kokkos::View<KK_FLOAT***>("cond_fq", 0, 0, 0);
     ftmp = Kokkos::View<KK_FLOAT***>("cond_ftmp", 0, 0, 0);
     fX = Kokkos::View<KK_FLOAT***>();
@@ -1146,6 +1162,18 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
   // held cells
   {
     auto ty = F.type; auto fT = F.T; auto ffl = F.fl; auto q = fq; auto Xw = fXw;
+    // properties cards: the cell's surface tension (less the table's first
+    // value: single precision keeps the differences), density and viscosity
+    const bool props = F.props;
+    auto sg = F.sig; auto dn = F.dens; auto vs = F.visc;
+    auto ts = fp_sig; auto r0 = fp_r0; auto r1 = fp_r1; auto et = fp_eta;
+    const auto &pr = src->config().flow.props;
+    const int pn = pr.n, pnx = pr.nx, pnT = pr.nT;
+    const double pT0 = pr.T0, pidT = 1.0 / pr.dT, px0 = pr.x0, pidx = 1.0 / pr.dx, pTr = pr.Tr;
+    const double cx0 = src->config().comp_x0;
+    const double cidx = props ? (pn - 1) / (src->config().comp_x1 - cx0) : 0.0;
+    const double rho0 = props ? pr.r0[0] : 1.0, nu0 = props ? pr.eta[0] / pr.r0[0] : 1.0;
+    const double sig0 = props ? pr.sig[0] : 0.0;
     Kokkos::parallel_for("FlowFill",
       Kokkos::MDRangePolicy<Kokkos::Rank<3>>(
         {std::max(F.wlo[0], olo[0]), std::max(F.wlo[1], olo[1]), F.wlo[2]},
@@ -1165,12 +1193,35 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
         // the absolute enthalpy (a cell's H is relative to its material's H(T0))
         q(i, j, k) = (KK_FLOAT) (H_(i + o0, j + o1, k + o2) + Hr(m));
         if (comp) Xw(i, j, k) = X(i, j, k);
+        if (!props) return;
+        const double x = X(i, j, k);
+        // position in a uniform table of n points, held at its ends
+        auto pos = [](double u, int n, int &a) {
+          u = u < 0.0 ? 0.0 : u > n - 1.0 ? n - 1.0 : u;
+          a = (int) u; if (a > n - 2) a = n - 2;
+          return u - a;
+        };
+        int a;
+        const double w = pos((x - cx0) * cidx, pn, a);
+        const double rho = (1.0 - w) * (r0(a) + r1(a) * (Tv - pTr)) + w * (r0(a+1) + r1(a+1) * (Tv - pTr));
+        dn(i, j, k) = (KK_FLOAT) (rho / rho0 - 1.0);
+        vs(i, j, k) = (KK_FLOAT) (((1.0 - w) * et(a) + w * et(a+1)) / rho / nu0);
+        // sigma: linear in x, linear in T and beyond the table's T range
+        int b;
+        const double wx = pos((x - px0) * pidx, pnx, b);
+        double uT = (Tv - pT0) * pidT;
+        int c = (int) Kokkos::floor(uT);
+        c = c < 0 ? 0 : c > pnT - 2 ? pnT - 2 : c;
+        uT -= c;
+        const double s0 = (1.0 - wx) * ts(c * pnx + b) + wx * ts(c * pnx + b + 1);
+        const double s1 = (1.0 - wx) * ts((c + 1) * pnx + b) + wx * ts((c + 1) * pnx + b + 1);
+        sg(i, j, k) = (KK_FLOAT) ((1.0 - uT) * s0 + uT * s1 - sig0);
       });
   }
 
   if (multi) {
     flow_exchange(as4(F.type.v), fhC, 2, 3, F.wlo, F.whi);
-    flow_exchange(as4(F.T.v), fhR, 1, 3, F.wlo, F.whi);
+    flow_exchange(as4(F.props ? F.sig.v : F.T.v), fhR, 1, 3, F.wlo, F.whi);   // what the Marangoni force reads
   }
   const int n = F.run(h, w, w + 3);
   MPI_Allreduce(MPI_IN_PLACE, &F.umax, 1, MPI_DOUBLE, MPI_MAX, world);

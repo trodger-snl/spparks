@@ -372,9 +372,23 @@ enough for mixing; one rank first (several ranks: see the end of this section).
   one-rank run 625 MB against 805 MB. Not yet run on HIP.
   ponytail: a move reallocates every field; keep one larger allocation and
   shift inside it if moves ever show in a profile.
-- Limits: flat surface; thermal Marangoni only (no solutal);
-  one density and one set of flow constants for every composition, not in
-  the cards; melted LOOSE cells carried as dense.
+- Properties by composition (2026-11-14): `flow lbm properties cards
+  [sigma_table F]`. `flow_props` (temperature_source_conduction.cpp) makes
+  tables from the composition cards' `[flow]` (now read by MaterialCard):
+  sigma(T, x) (cards: linear mix, 2 T points; or the file), rho = r0(x) +
+  r1(x) (T - Tr) with volumes adding, eta(x). `FlowFill` writes three more
+  window fields per thermal step, `MeltFlow::sig` (N/m, less the table's
+  first value), `dens` (rho/rho0 - 1) and `visc` (nu/nu0), rho0 and nu0 the
+  first card's. The kernel (`props`): Marangoni = difference of sig between
+  FLUID cells (one-sided at walls: the solid's x is not the liquid's)
+  / (1 + dens); buoyancy = -g dens; tau from nu0 visc. So solutal Marangoni,
+  solutal buoyancy, and dsigma/dT, expansion, viscosity per composition.
+  sig replaces T in the halo exchange. Inertia is still rho0's (Boussinesq).
+  melt_flow_check 13 checks the kernel against the plain model.
+- Limits: flat surface; without `properties cards` one set of flow
+  constants for every composition; with it the inertia is still one
+  density's and eta has no T dependence; melted LOOSE cells carried as
+  dense.
 
 ## Material (examples: 316L)
 

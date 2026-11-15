@@ -40,6 +40,11 @@ struct MaterialCard {
   opt k_lin, cp_lin, T_ref;
   opt k_powder, packing, absorptivity;
 
+  // [flow]: the liquid (flow lbm, properties cards)
+  opt sigma, sigma_T, dsigma_dT;            // surface tension (N/m) at sigma_T (K), its slope
+  opt rho_liq, rho_liq_T, rho_liq_slope;    // kg/m^3 at rho_liq_T (K), kg/(m^3 K)
+  Table visc;                               // dynamic viscosity (Pa s); a scalar is one point
+
   // [microstructure]
   std::vector<double> front;   // solid_front_vel coefficients, highest power first,
   opt front_a, front_n;        // or the power law a * dT^n (front empty)

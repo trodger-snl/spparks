@@ -175,6 +175,26 @@ MaterialCard MaterialCard::parse(const std::string &text, const std::string &pat
   c.packing  = rd.scalar("powder.packing", "1");
   c.absorptivity = rd.scalar("optical.absorptivity", "1");
 
+  if (const toml::table *rec = record(root, "flow.surface_tension", "N/m")) {
+    const std::string where = "flow.surface_tension";
+    c.sigma = number(*rec, "value", where);
+    c.sigma_T = numbers(*rec, "T_range", where)[0];
+    rd.note(where, num(*c.sigma) + " at " + num(*c.sigma_T) + " K", "N/m", *rec);
+  }
+  c.dsigma_dT = rd.scalar("flow.dsigma_dT", "N/(m K)");
+  if (const toml::table *rec = record(root, "flow.density_liquid", "kg/m^3")) {
+    const std::string where = "flow.density_liquid";
+    c.rho_liq = number(*rec, "value", where);
+    c.rho_liq_T = number(*rec, "T_ref", where);
+    c.rho_liq_slope = number(*rec, "slope", where);
+    rd.note(where, num(*c.rho_liq) + " at " + num(*c.rho_liq_T) + " K, slope " + num(*c.rho_liq_slope),
+            "kg/m^3", *rec);
+  }
+  if (const toml::table *rec = root.at_path("flow.viscosity").as_table()) {
+    if (rec->contains("T")) c.visc = rd.table("flow.viscosity", "Pa s");
+    else c.visc = {{0.0}, {*rd.scalar("flow.viscosity", "Pa s")}};
+  }
+
   if (const toml::table *rec = record(root, "microstructure.solid_front_vel", "m/s")) {
     if ((*rec)["dT_unit"].value<std::string>() != std::optional<std::string>("K"))
       fail("microstructure.solid_front_vel", "dT_unit must be \"K\"");

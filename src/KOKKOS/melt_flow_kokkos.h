@@ -43,6 +43,18 @@ namespace SPPARKS_NS {
                surface cells only: dsigma/dT * dt^2 / (rho dx^3)
      darcy     a = -darcy (1 - fl)^2 / (fl^3 + 1e-3) u (mushy drag), * dt
 
+   props (set before resize()): the liquid's properties vary from cell to
+   cell, and the caller fills three more fields:
+     sig   surface tension. The Marangoni acceleration is marangoni * (sig's
+           difference per cell) / (1 + dens), so it holds the thermal and
+           the solutal part; the difference is taken between FLUID cells
+           only (one-sided next to a wall: the solid's composition is not
+           the liquid's). marangoni = dt^2 / (rho0 dx^3) for sig in N/m.
+     dens  rho / rho0 - 1. Buoyancy is a = -buoy * dens (buoy z = g dt^2 /
+           dx), instead of buoy * (T - Tref). The inertia stays that of
+           rho0 (Boussinesq).
+     visc  the cell's viscosity is nu * visc.
+
    Collision: two relaxation times with Lambda = 3/16 (a bounce-back wall
    then sits half-way between the cells whatever nu is), Guo forcing, and
    an optional Smagorinsky eddy viscosity (smag = its constant, 0 = off).
@@ -153,6 +165,8 @@ struct MeltFlow {
   W3 ux, uy, uz, rho;                        // output: two-step mean u, rho - 1
   W3 px, py, pz;                             // the last step's u
   W4 flux;                                   // (x, y, z, face): mass out, see above
+  bool props = false;                        // per-cell liquid properties (see above)
+  W3 sig, dens, visc;
   int wlo[3] = {0, 0, 0}, whi[3] = {0, 0, 0};   // the cells the fields hold
 
   // A block of nx_ x ny_ x nz_ cells. all: the fields hold every cell;
@@ -173,6 +187,12 @@ struct MeltFlow {
     py = Kokkos::View<R***>("flow_py", a, b, c);
     pz = Kokkos::View<R***>("flow_pz", a, b, c);
     flux = Kokkos::View<R****>("flow_flux", a, b, c, 6);
+    if (props) {
+      sig = Kokkos::View<R***>("flow_sig", a, b, c);
+      dens = Kokkos::View<R***>("flow_dens", a, b, c);
+      visc = Kokkos::View<R***>("flow_visc", a, b, c);
+      Kokkos::deep_copy(visc.v, R(1));
+    }
     Kokkos::deep_copy(fl.v, R(1));
     for (int d = 0; d < 3; d++) wlo[d] = 0;
     whi[0] = a; whi[1] = b; whi[2] = c;
@@ -187,6 +207,7 @@ struct MeltFlow {
     f.move(lo, hi); fn.move(lo, hi); type.move(lo, hi); T.move(lo, hi); fl.move(lo, hi);
     ux.move(lo, hi); uy.move(lo, hi); uz.move(lo, hi); rho.move(lo, hi);
     px.move(lo, hi); py.move(lo, hi); pz.move(lo, hi); flux.move(lo, hi);
+    if (props) { sig.move(lo, hi); dens.move(lo, hi); visc.move(lo, hi); }
     for (int d = 0; d < 3; d++) { wlo[d] = lo[d]; whi[d] = hi[d] > lo[d] ? hi[d] : lo[d]; }
   }
 
@@ -236,10 +257,14 @@ struct MeltFlow {
     auto px_ = px; auto py_ = py; auto pz_ = pz;
     const int nx_ = nx, ny_ = ny, nz_ = nz;
     const bool px = p.periodic[0], py = p.periodic[1], pz = p.periodic[2];
-    const R tau0 = R(3.0 * p.nu + 0.5), smag2 = R(18.0 * 1.4142135623730951 * p.smag * p.smag);
+    const R tau00 = R(3.0 * p.nu + 0.5), smag2 = R(18.0 * 1.4142135623730951 * p.smag * p.smag);
     const R a0x = R(p.accel[0]), a0y = R(p.accel[1]), a0z = R(p.accel[2]);
     const R bx = R(p.buoy[0]), by = R(p.buoy[1]), bz = R(p.buoy[2]), Tref = R(p.Tref);
     const R mar = R(p.marangoni), darcy = R(p.darcy);
+    // props: the Marangoni force follows sig, not T
+    const bool hp = props;
+    auto S_ = hp ? sig : T; auto dn_ = dens; auto vs_ = visc;
+    const R nu3 = R(3.0 * p.nu);
     Kokkos::parallel_for("FlowStep",
       Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
@@ -311,7 +336,7 @@ struct MeltFlow {
         const R r = R(1) + dr, ir = R(1) / r;
 
         // acceleration: uniform + buoyancy + Marangoni (surface cells)
-        const R dT = T_(i, j, k) - Tref;
+        const R dT = hp ? -dn_(i, j, k) : T_(i, j, k) - Tref;
         R ax = a0x + bx * dT, ay = a0y + by * dT, az = a0z + bz * dT;
         if (mar != R(0)) {
           int ii = i, jj = j, kk = k + 1;
@@ -325,9 +350,14 @@ struct MeltFlow {
               R w = R(2);
               if (a[d] < 0) { if (per) a[d] += nd; else { a[d] = 0; w -= R(1); } }
               if (b[d] >= nd) { if (per) b[d] -= nd; else { b[d] = nd - 1; w -= R(1); } }
-              return w > R(0) ? (T_(b[0], b[1], b[2]) - T_(a[0], a[1], a[2])) / w : R(0);
+              if (hp) {
+                if (ty(a[0], a[1], a[2]) != FLUID) { a[d] = d == 0 ? i : j; w -= R(1); }
+                if (ty(b[0], b[1], b[2]) != FLUID) { b[d] = d == 0 ? i : j; w -= R(1); }
+              }
+              return w > R(0) ? (S_(b[0], b[1], b[2]) - S_(a[0], a[1], a[2])) / w : R(0);
             };
-            ax += mar * grad(0); ay += mar * grad(1);
+            const R ms = hp ? mar / (R(1) + dn_(i, j, k)) : mar;
+            ax += ms * grad(0); ay += ms * grad(1);
           }
         }
         // mushy drag, implicit: u = (m / rho + a / 2) / (1 + D / 2)
@@ -350,6 +380,7 @@ struct MeltFlow {
           feq[q] = wgt(q) * (dr + r * (R(3) * cu + R(4.5) * cu * cu - R(1.5) * usq));
           src[q] = wgt(q) * r * (R(3) * (ca - ua) + R(9) * cu * ca);
         }
+        const R tau0 = hp ? nu3 * vs_(i, j, k) + R(0.5) : tau00;
         R tau = tau0;
         if (smag2 != R(0)) {
           // eddy viscosity from the non-equilibrium stress

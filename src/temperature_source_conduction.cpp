@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -54,6 +55,87 @@ Material card_material(const std::string &path, MPI_Comm world)
   m.name = c.material;
   if (m.tl < m.ts) throw std::runtime_error(path + ": liquidus is below the solidus");
   return m;
+}
+
+/* ----------------------------------------------------------------------
+   flow properties cards: the liquid's surface tension, density and
+   viscosity over the composition, from the [flow] sections of the cards at
+   the nodes x. Between two nodes, w the mass fraction of the second:
+     sigma  (1-w) a + w b, each linear in T (a mix of the pure values: no
+            surface segregation; a sigma_table replaces it)
+     rho    1 / ((1-w) / rho_a + w / rho_b): volumes add; kept as a line in
+            T through Tr and Tr + 1000 K
+     eta    (1-w) a + w b, each card's value at its own liquidus
+   ponytail: eta has no T dependence here; add a T axis if it matters.
+   sigma_table: rows "T x sigma ..." (tools/surface_tension.py table), T
+   outer, x inner, both uniform; x is d11. Every rank reads the file.
+------------------------------------------------------------------------- */
+
+void flow_props(const std::vector<double> &xs, const std::vector<std::string> &cards,
+                const std::string &sigma_file, MPI_Comm world,
+                ConductionTemperatureSource::Config::Flow::Props &p)
+{
+  p = {};
+  std::vector<MaterialCard> c;
+  for (const std::string &f : cards) {
+    c.push_back(MaterialCard::load(f, "", world));
+    const MaterialCard &m = c.back();
+    if (!m.sigma || !m.dsigma_dT || !m.rho_liq || m.visc.T.empty() || !m.liquidus)
+      throw std::runtime_error(f + ": [flow] needs surface_tension, dsigma_dT, density_liquid and viscosity");
+  }
+  // node pair and weight at x
+  auto at = [&](double x, size_t &j) {
+    j = 1;
+    while (j + 1 < xs.size() && xs[j] < x) j++;
+    return std::min(1.0, std::max(0.0, (x - xs[j-1]) / (xs[j] - xs[j-1])));
+  };
+  auto rho = [&](const MaterialCard &m, double T) { return *m.rho_liq + *m.rho_liq_slope * (T - *m.rho_liq_T); };
+  p.n = 65;
+  p.Tr = *c[0].rho_liq_T;
+  p.r0.resize(p.n); p.r1.resize(p.n); p.eta.resize(p.n);
+  for (int i = 0; i < p.n; i++) {
+    size_t j;
+    const double w = at(xs.front() + (xs.back() - xs.front()) * i / (p.n - 1), j);
+    const MaterialCard &a = c[j-1], &b = c[j];
+    auto mix = [&](double T) { return 1.0 / ((1.0 - w) / rho(a, T) + w / rho(b, T)); };
+    p.r0[i] = mix(p.Tr);
+    p.r1[i] = (mix(p.Tr + 1000.0) - p.r0[i]) / 1000.0;
+    p.eta[i] = (1.0 - w) * MaterialCard::table_at(a.visc, *a.liquidus) + w * MaterialCard::table_at(b.visc, *b.liquidus);
+  }
+  if (sigma_file.empty()) {
+    p.nT = 2; p.nx = p.n; p.T0 = p.Tr; p.dT = 1000.0;
+    p.x0 = xs.front(); p.dx = (xs.back() - xs.front()) / (p.n - 1);
+    p.sig.resize(2 * p.n);
+    for (int t = 0; t < 2; t++)
+      for (int i = 0; i < p.n; i++) {
+        size_t j;
+        const double w = at(p.x0 + p.dx * i, j), T = p.T0 + p.dT * t;
+        auto s = [&](const MaterialCard &m) { return *m.sigma + *m.dsigma_dT * (T - *m.sigma_T); };
+        p.sig[t * p.n + i] = (1.0 - w) * s(c[j-1]) + w * s(c[j]);
+      }
+    return;
+  }
+  FILE *fp = fopen(sigma_file.c_str(), "r");
+  if (!fp) throw std::runtime_error("cannot open sigma_table " + sigma_file);
+  std::vector<double> T, x;
+  char line[1024];
+  while (fgets(line, sizeof(line), fp)) {
+    double t, xv, s;
+    if (line[0] == '#' || sscanf(line, "%lf %lf %lf", &t, &xv, &s) != 3) continue;
+    T.push_back(t); x.push_back(xv); p.sig.push_back(s);
+  }
+  fclose(fp);
+  const size_t nrow = T.size();
+  size_t nx = 1;
+  while (nx < nrow && T[nx] == T[0]) nx++;
+  if (nx < 2 || nrow % nx || nrow / nx < 2)
+    throw std::runtime_error(sigma_file + ": needs rows T x sigma, T outer and x inner, 2 or more of each");
+  p.nx = (int) nx; p.nT = (int) (nrow / nx);
+  p.T0 = T[0]; p.dT = T[nx] - T[0]; p.x0 = x[0]; p.dx = x[1] - x[0];
+  for (size_t r = 0; r < nrow; r++)
+    if (std::fabs(T[r] - (p.T0 + p.dT * (r / nx))) > 1e-6 * std::fabs(p.dT) ||
+        std::fabs(x[r] - (p.x0 + p.dx * (r % nx))) > 1e-6 * std::fabs(p.dx) || p.dT <= 0.0 || p.dx <= 0.0)
+      throw std::runtime_error(sigma_file + ": T and x must be uniform grids, T outer and x inner");
 }
 
 // (1-w) a + w b: scalars linearly, tables on the union of both T grids.
@@ -175,6 +257,15 @@ void ConductionTemperatureSource::setup_temperature_source(
       cfg.flow.on = true;
       while (i + 2 < args.size()) {
         const std::string &k = args[i+1];
+        if (k == "properties") {
+          const std::string &v = args[i+2];
+          if (v != "cards" && v != "constant")
+            error->all(FLERR,"setup_temperature_source conduction: flow properties is cards or constant");
+          cfg.flow.cards = v == "cards";
+          i += 2;
+          continue;
+        }
+        if (k == "sigma_table") { cfg.flow.sigma_file = args[i+2]; i += 2; continue; }
         double *v = k == "dsigma_dT" ? &cfg.flow.dsigma_dT : k == "beta" ? &cfg.flow.beta
                   : k == "viscosity" ? &cfg.flow.viscosity : k == "mushy" ? &cfg.flow.mushy
                   : k == "u_ref" ? &cfg.flow.u_ref : k == "smagorinsky" ? &cfg.flow.smag : nullptr;
@@ -286,6 +377,15 @@ void ConductionTemperatureSource::setup_temperature_source(
     if (cfg.comp_flow && !cfg.flow.on)
       error->all(FLERR,"setup_temperature_source conduction: composition mix flow needs flow lbm");
     cfg.comp_x0 = comp_x.front(); cfg.comp_x1 = comp_x.back();
+    if (cfg.flow.cards) {
+      if (!cfg.comp_flow)
+        error->all(FLERR,"setup_temperature_source conduction: flow properties cards needs composition ... mix flow");
+      try {
+        flow_props(comp_x, comp_cards, cfg.flow.sigma_file, world, cfg.flow.props);
+      } catch (const std::exception &e) {
+        error->all(FLERR, ("setup_temperature_source conduction: flow properties cards: " + std::string(e.what())).c_str());
+      }
+    }
     for (int b = 0; b < comp_bins; b++) {
       const double x = cfg.comp_x0 + (cfg.comp_x1 - cfg.comp_x0) * b / (comp_bins - 1);
       size_t j = 1;
@@ -295,6 +395,9 @@ void ConductionTemperatureSource::setup_temperature_source(
       cfg.comp.back().name = nodes[0].name + "-" + nodes.back().name + " x=" + MaterialCard::num(x);
     }
   }
+  if (cfg.flow.on && (cfg.flow.cards || !cfg.flow.sigma_file.empty()) && cfg.flow.props.n == 0)
+    error->all(FLERR,"setup_temperature_source conduction: flow properties cards and sigma_table "
+               "need composition ... mix flow (and sigma_table needs properties cards)");
   configured = true;
   print_source_info();
 }
@@ -334,7 +437,19 @@ void ConductionTemperatureSource::print_source_info() const
               << (cfg.comp_flow ? ", mix flow" : cfg.comp_mix ? ", mix pool" : ", mix none")
               << (cfg.comp_feed_surface ? ", feed surface" : "") << std::endl;
   }
-  if (cfg.flow.on)
+  if (cfg.flow.on && cfg.flow.props.n) {
+    const auto &p = cfg.flow.props;
+    auto sg = [&](int t, int i) { return p.sig[(size_t) t * p.nx + i]; };
+    std::cout << "conduction: flow lbm, properties cards: at " << p.Tr << " K, x "
+              << cfg.comp_x0 << " / " << cfg.comp_x1 << ": liquid density " << p.r0.front() << " / "
+              << p.r0.back() << " kg/m^3, viscosity " << p.eta.front() << " / " << p.eta.back()
+              << " Pa s; surface tension "
+              << (cfg.flow.sigma_file.empty() ? "from the cards" : "from " + cfg.flow.sigma_file)
+              << ", at " << p.T0 << " K " << sg(0, 0) << " / " << sg(0, p.nx - 1)
+              << " N/m, dsigma/dT " << (sg(1, 0) - sg(0, 0)) / p.dT << " / "
+              << (sg(1, p.nx - 1) - sg(0, p.nx - 1)) / p.dT << " N/m/K; mushy " << cfg.flow.mushy
+              << " 1/s, u_ref " << cfg.flow.u_ref << " m/s, smagorinsky " << cfg.flow.smag << std::endl;
+  } else if (cfg.flow.on)
     std::cout << "conduction: flow lbm, dsigma/dT " << cfg.flow.dsigma_dT << " N/m/K, beta "
               << cfg.flow.beta << " 1/K, viscosity " << cfg.flow.viscosity << " m^2/s, mushy "
               << cfg.flow.mushy << " 1/s, u_ref " << cfg.flow.u_ref << " m/s, smagorinsky "

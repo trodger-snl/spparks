@@ -77,6 +77,22 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
       double mushy = 1.0e4;             // 1/s, Carman-Kozeny drag constant
       double u_ref = 1.0;               // m/s, expected speed (sets the first flow step)
       double smag = 0.17;               // Smagorinsky constant, 0 = off
+      // properties cards (needs composition ... mix flow): surface tension,
+      // liquid density and viscosity follow the composition x and T, from
+      // the [flow] sections of the composition's cards; dsigma_dT, beta and
+      // viscosity above are then not used. sigma_file: sigma(T, x) from a
+      // table of tools/surface_tension.py instead of the cards' linear mix.
+      bool cards = false;
+      std::string sigma_file;
+      // Tables made at setup. sig[iT * nx + ix] (N/m) on uniform grids from
+      // (T0, x0), steps (dT, dx); linear beyond the T range, held in x.
+      // rho = r0 + r1 (T - Tr) and the dynamic viscosity eta at n points
+      // uniform in x over [comp_x0, comp_x1].
+      struct Props {
+        int nT = 0, nx = 0, n = 0;
+        double T0 = 0.0, dT = 1.0, x0 = 0.0, dx = 1.0, Tr = 0.0;
+        std::vector<double> sig, r0, r1, eta;
+      } props;
     } flow;
     bool   carry = false;               // a layer's grid rebuild keeps the field (else T0)
     int    sts_smax = 32;               // RKL2 stages per laser-off super-step; 0 = explicit

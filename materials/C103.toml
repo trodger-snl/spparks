@@ -90,7 +90,7 @@ absorptivity = { value = 0.4, unit = "1", ref = "prabhune2025", note = "ASSUMED,
 
 [flow]
 # Liquid-state properties for the conduction source's melt-pool flow (flow lbm).
-# Recorded only: pass them in the deck (docs/MATERIAL_CARDS.md, Flow).
+# Read by flow lbm properties cards; else pass them in the deck (docs/MATERIAL_CARDS.md, Flow).
 # No dsigma_dT: prabhune2025 leave Marangoni flow out of their model and note that no
 # surface-tension gradient has been measured for refractory alloys, nor the effect of
 # surface-active elements on it; pure Nb is -1.99e-4 N/(m K) (Nb card). No density_liquid:

@@ -105,7 +105,7 @@ absorptivity = { value = 0.6, unit = "1", ref = "honda2025", T_range = [423, 673
 
 [flow]
 # Liquid-state properties for the conduction source's melt-pool flow (flow lbm).
-# Recorded only: pass them in the deck (docs/MATERIAL_CARDS.md, Flow).
+# Read by flow lbm properties cards; else pass them in the deck (docs/MATERIAL_CARDS.md, Flow).
 # WEAKLY SOURCED: no primary measurement of dsigma/dT or viscosity of liquid
 # IN718 could be opened for this card. Mills 2002 (the usual source) was not seen.
 surface_tension = { value = 1.54, unit = "N/m", ref = "nishi2024", note = "average surface tension of Alloy 718 by the maximum bubble pressure method, FROM THE ABSTRACT ONLY (the paper is open access but the publisher blocked the download); temperature range and composition not seen. The unreviewed electrostatic-levitator slides of SanSoucie 2018 show 1.77 N/m at 1572 K" }

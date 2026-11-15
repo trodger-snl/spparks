@@ -393,6 +393,66 @@ enough for mixing; one rank first (several ranks: see the end of this section).
   build: not bit for bit, as the strict OpenMP build is). HIP vs OpenMP on
   one rank: d11 within 8e-14. 23 s on one rank, 39 s on four sharing the
   one GPU (OpenMP, 12 threads: about 155 s).
+- Per-step cost (2026-11-15). Profile of a Ti-6Al-4V -> Nb DED track on HIP
+  (mixed, 939k thermal cells, 30k fluid, kokkos-tools space_time_stack):
+  ConductionStep 45%, FlowStep 17%, FlowCells 14%, FlowFill 9%, FlowAdvect
+  8%. Four changes (e48f2504): (1) `dt_fd` with mixing is bound by the
+  composition bins from the lowest to the highest present in the grid, not
+  by all of them, so early layers of a graded build do not take the last
+  layers' step; (2) `FlowFill` writes only the cells the step reads (the
+  fluid cells of all ranks + 2, `need`), not the held window; (3)
+  `MeltFlow::lazy`: a non-fluid cell is cleared only where `FlowFill`
+  marked it (fl = -1: fluid at the last call); (4) the stage stamps
+  `fgx/fgy/fgz` for cells left above the lowest solidus and `FlowCells`
+  scans only that box (`FlowBox`, a small reduction, finds it; `fg_ok`
+  false after anything else touched the field: full scan). (2)-(4) are bit
+  for bit on OpenMP; (1) changes the step. Same track: 184.5 s -> 96.5 s,
+  peak host memory 1.99 -> 1.32 GB. After: ConductionStep 48%, FlowStep
+  14%, FlowAdvect 9%, FlowCells 7%, FlowFill 7%, FlowBox 3.5%.
+- Limiter overflow (b6456158). `melt_advect`'s van Leer limiter went through
+  r = a / b; with b tiny (a well-mixed pool, single precision) r overflowed
+  and phi was inf / inf: NaN in X, then everywhere, and d11 no longer
+  summed to the feed (+18% in one overheated track). Now 2ab / (a + b). The
+  NaN went unnoticed because the builds are -ffast-math (a NaN test is
+  compiled away, on host and device): `MeltFlow::bad` reads the bits;
+  `run()` returns -1 on a non-finite or > 0.5 cell/step speed and
+  `flow_step` stops on a non-finite H or X.
+- Host memory on HIP (rocm 7.1.1). The growth is from asynchronous copies
+  (each reduction's result is one): with `AMD_SERIALIZE_COPY=3` exported the
+  track above peaks at 0.36 GB against 1.32 GB, 3% slower, same result;
+  `AMD_SERIALIZE_KERNEL=3` makes it worse (1.82 GB). spparks.cpp sets the
+  variable before the first HIP call if the user has not; whether that
+  takes effect from inside the process is still to be confirmed (export it
+  in the job script to be sure). It is not a full cure: a run with 40
+  extra reductions per step still grew.
+- Is mesh refinement worth it? (2026-11-15, evaluation only.) Where the
+  thermal cells are: the grid is a tensor product, so the 18 stretched
+  margin cells per side keep the box's resolution along the other two
+  axes. Single track (170 x 50 x 35 box cells): 32% of the 939k thermal
+  cells are in the lattice box; 20-layer wall at its last layer (206 x 86 x
+  253): 45%. Inside the box of a hot single track a grid 2x coarser would
+  be within 5 K (by the second difference of T) in about 90% of the cells,
+  4x coarser in about 80%. Options, with the gain on the whole run
+  estimated from the profile above (conduction 48%):
+  (a) `stretch 1.6` or `2.0` instead of 1.25, no code: 939k -> 598k / 495k
+      cells, measured 13% / 14% faster; the pool melts 1.9% / 4.1% more
+      substrate and peaks 4 / 9 K hotter.
+  (b) margins and plate coarse along all three axes (a second, coarse grid
+      coupled at the box faces): about half the cells at 20 um, about 1.3x
+      on the run; at 5 um the box dominates and the gain falls to 1.1x.
+      One to two weeks (stage kernel, halo, `init grid`, dump).
+  (c) a fine patch that follows the pool inside a coarse box grid, with
+      its own time step: the conduction cost falls to the patch (pool +
+      about 0.5 mm), about 1.7x on the run at 20 um, where the flow then
+      dominates, but about 10x fewer thermal cells at 5 um (122M box cells
+      for the tall wall against about 12M in a patch). A month or two:
+      regridding, conservative transfer, sites take T from two levels,
+      birth and phases on both, the flow window inside the patch.
+  (d) general adaptive refinement (octree or blocks): no more gain than
+      (c) for this problem (one pool), much more code.
+  Recommendation: not at 20 um (the four changes above and (a) give more
+  for less; the flow is the next cost). For 5 um builds (c) is the scheme
+  to build, and it is what makes them fit in memory; skip (b) and (d).
 - Limits: flat surface; without `properties cards` one set of flow
   constants for every composition; with it the inertia is still one
   density's and eta has no T dependence; melted LOOSE cells carried as

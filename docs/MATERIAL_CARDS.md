@@ -252,3 +252,131 @@ When choosing data:
   reported, in their own `[process.<name>]`.
 - For `[flow]`, record the sulfur and oxygen content of the measured sample
   in `dsigma_dT.composition`, or say that the source does not give it.
+
+## Surface tension model (preliminary): `tools/surface_tension.py`
+
+`flow lbm` takes one constant `dsigma_dT`. For a graded build the surface
+tension depends on temperature and on the composition x (d11), and its
+gradient has a solutal part, dσ/dx. `tools/surface_tension.py` (Python 3.11+
+standard library) computes a table σ(T, x) between two end-member alloys from
+literature constants. SPPARKS does not read the table yet. Nothing in it is
+fitted to the cards: where it misses a card's measured value, that is the
+state of the model.
+
+```
+surface_tension.py table materials/316L.toml materials/IN625.toml --S 20 --O 5 -o sigma.txt
+surface_tension.py table materials/Ti6Al4V.toml "Ti=0.677,V=0.323" --T 1900 2900 50 --nx 21
+surface_tension.py point materials/316L.toml --S 20 --T 1708
+surface_tension.py --self-check
+```
+
+- An end member is a card (`composition_wt_pct`: a range counts as its
+  midpoint, `bal` and `>=` entries take the balance, `<` limits count as
+  zero) or element mass fractions on the command line. x is the **mass
+  fraction of the second alloy**; `--S` and `--O` are dissolved sulfur and
+  oxygen in ppm by mass, one value or `A,B` (linear in x).
+- Output: `T x sigma dsigma_dT dsigma_dx`, SI (K, N/m, N/(m K), N/m per unit
+  x), T outer and x inner, `#` header lines. When an end member is a card
+  with `[flow]`, the header compares the model with the card at the card's
+  temperature.
+
+**Equations as implemented.**
+
+1. Metallic part: the Butler equation in the form of Tanaka, Hack, Iida and
+   Hara (Z. Metallkd. 87 (1996) 380, Eq. 1-3 and 8). For every component i
+
+   σ = σ_i + (R T / A_i) ln(x_i^s / x_i^b) + (β G_i^E(T, x^s) − G_i^E(T, x^b)) / A_i,
+
+   with Σ x_i^s = 1, A_i = 1.091 N_A^(1/3) V_i^(2/3), β = 0.83, and G_i^E
+   the **partial** excess Gibbs energy of i in the bulk liquid, evaluated at
+   the surface composition x^s in the first term. σ_i(T) and V_i(T) = M_i /
+   ρ_i(T) are linear fits for the pure liquid elements. G^E is a
+   Redlich-Kister/Muggianu sum over the binaries, G^E = Σ x_i x_j Σ_k L_k
+   (x_i − x_j)^k with L_k = a + b T; a binary without parameters is ideal
+   (listed in the table header). `--ideal` and `--beta` change the two
+   choices. Solver: bisection on σ inside a damped fixed point on x^s.
+2. Sulfur and oxygen: the Langmuir term of Sahoo, DebRoy and McNallan
+   (Metall. Trans. B 19 (1988) 483, Eq. 6) is subtracted,
+
+   σ = σ_metal − R T Γ_s ln(1 + k1 a exp(−ΔH0 / (R T))),
+
+   with a in wt% and the paper's sets for Fe-S, Fe-O (fitted), Ni-S and Cr-O
+   (the paper's estimates). Following McNallan and DebRoy (Metall. Trans. B
+   22 (1991) 557), who use the Fe-S set unchanged for Fe-Ni-Cr, the sulfur
+   activity is a_S = [wt% S] 10^(e [wt% Cr]) with e = −94.2/T + 0.0396.
+   `--s-model mills` uses instead the stainless-steel fit of Mills 2004
+   (Eq. 26: Γ_s R = 0.056 mN/(m K), ln K = 28798/T − 8.5647, a = 0.68 wt% S).
+
+**Choices made for this tool, not taken from a source** (all in
+`surfactant_drop`): the pure-metal term of Sahoo's equation is replaced by
+the Butler value of the alloy; the constants of a mixed solvent are the
+mole-fraction average of ΔH0, ln k1 and Γ_s over the elements that have a
+set; the S and O terms add (no competition for sites); Ni-O borrows the Fe-O
+constants; the oxygen activity is the wt% given. `--O` therefore means
+*soluble* oxygen: Mills 2004 takes about 5 ppm for Al-killed stainless steel,
+whatever the total oxygen. The Mills fit already contains that oxygen, so use
+it with `--O 0`.
+
+**Constants and sources.** Every number sits in the script's `REFS`,
+`ELEMENTS`, `RK` and `SURFACTANT` blocks with a ref and a statement of what
+was opened. In short:
+- Opened and read: Sahoo 1988, McNallan and DebRoy 1991, Zacharia et al.
+  1989, Mills 2004, Tanaka 1996, the Leitner thesis (Fe, Ni), Brillo's 2016
+  book (Al, Ni density), Assael 2006 (Fe, Al density), Reiplinger 2022 (Ti,
+  V), Ozawa 2017 (Ti density), and the MatCalc open Ni database for all
+  Redlich-Kister sets.
+- Second-hand: Cr and Mn (Mills and Su 2006 and Iida and Guthrie, as
+  tabulated by Nakamoto and Tanaka 2020); the Mo surface tension at the
+  melting point. The assessments behind the Redlich-Kister sets were not
+  opened; only Cr-Fe, Cr-Ni, Fe-Ni, Al-Ti and Ti-V were cross-checked
+  against a second listing.
+- Abstract or snippet only: Nb, Zr, the Mo density. **From memory,
+  unverified:** the Mo temperature coefficient.
+- Keene 1993, Mills and Su 2006, Iida and Guthrie, Mills 2002 and Butler
+  1932 were not opened.
+
+**What the self-check shows** (`--self-check` prints the table):
+- Sahoo's Fe-S constants put the sign change of dσ/dT for 90 ppm S at
+  1949 K. Zacharia et al. (and the weld models after them) use ΔH0 =
+  −1.88e5 instead of Sahoo's −1.66e5 kJ/kg mole, which gives 2207 K, their
+  "about 2200 K". The tool uses Sahoo's printed value.
+- Butler against levitation data, no S/O term: Ti-V within +3 to +4 %,
+  Al-Ti −2 to −8 % (the regular solution matters there: the ideal solution
+  is 13 to 16 % low), Ti-6Al-4V −7 %, Fe-Ni ±5 % (two measurements that
+  themselves differ by about 10 %).
+
+**Against the cards (2026-11-14).**
+
+| Case | σ model / card [N/m] | dσ/dT model / card [N/(m K)] |
+|---|---|---|
+| 316L, 1708 K, no S, O | 1.903 / 1.586 | −3.6e-4 / +3.2e-4 |
+| 316L, S 20, O 0 (sahoo) | 1.848 / 1.586 | −1.3e-4 / +3.2e-4 |
+| 316L, S 20, O 0 (mills) | 1.725 / 1.586 | +3.3e-4 / +3.2e-4 |
+| 316L, S 20, O 5 (sahoo) | 1.788 / 1.586 | +1.6e-4 / +3.2e-4 |
+| 316L, S 20, O 30 (sahoo) | 1.609 / 1.586 | +6.8e-4 / +3.2e-4 |
+| IN625, 1623 K, no S, O | 1.885 / 1.779 | −3.5e-4 / −1.8e-4 |
+| IN625, S 20, O 5 (sahoo) | 1.765 / 1.779 | +2.2e-4 / −1.8e-4 |
+| Ti-6Al-4V, 1933 K | 1.392 / 1.493 | −1.7e-4 / −1.9e-4 |
+
+No single setting reproduces both σ and dσ/dT of the 316L card. With the
+card's 20 ppm S the Sahoo term is about a third of the Mills term (0.06
+against 0.18 N/m), the Mills fit gets the slope and misses σ by 9 %, and
+treating all 30 ppm O as dissolved gets σ and doubles the slope. The IN625
+sample's S and O are unknown, so its row tests nothing beyond the clean
+value (6 % high).
+
+**Limits.**
+- Preliminary. Expect ±5 to 10 % in σ for the metallic part and no better
+  than the sign and order of magnitude of dσ/dT once S or O is present.
+- Pure-element fits are extrapolated far outside their range: Al 1000 K
+  above its data in a Ti melt, Mo, Nb and Cr 500 to 1300 K undercooled in a
+  steel or Ni melt.
+- No surfactant term for Ti alloys (the tool stops if asked): no Langmuir
+  constants for O, N or S in liquid Ti were found. Oxygen dissolves in liquid
+  Ti to several at.% and is reported to matter above about 1 at.% (Reiplinger 2022).
+- No ternary interaction parameters; elements other than Al, Cr, Fe, Mn, Mo,
+  Nb, Ni, Ti, V, Zr are refused (Si, C, Sn, Ta are missing).
+- A strongly demixing G^E can have more than one surface state; the solver
+  then fails to converge rather than choosing.
+- Evaporation, and the change of S and O during the process, are outside the
+  model; levitation samples lose S and Mn within minutes (316L card note).

@@ -28,4 +28,7 @@ build and run lines are at the top of check.cpp.
   Needs numpy and scipy.
 * material_card.py: lint material parameter cards and fit front velocities
   (docs/MATERIAL_CARDS.md)
+* surface_tension.py: preliminary sigma(T, x) table for a liquid alloy graded
+  between two end members (Butler equation + Sahoo S/O term), with sourced
+  constants and `--self-check` (docs/MATERIAL_CARDS.md, Surface tension model)
 * laser_path_convert.py: convert scan paths to the `laser_path file` format

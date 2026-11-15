@@ -1,0 +1,136 @@
+# Material parameter card: molybdenum, Mo (commercially pure).
+# Format: docs/MATERIAL_CARDS.md (schema 1). SI units; every value carries a ref.
+#
+# Model caveats specific to this material (read before using the card):
+# - Pure metal: one melting point. solidus is set 10 K below liquidus by choice, see its note.
+# - Not on the card (no source opened): powder.conductivity, the thermal conductivity of
+#   the liquid (the table is held at the last solid value) and every [microstructure]
+#   record. A conduction deck must give k_powder itself, and init_app needs solid_front_vel
+#   and the nucleation values from the deck.
+# - The liquid properties in [flow], the liquid heat capacity and the emissivity were read
+#   from abstracts only; the solid heat capacity and latent heat rest on the 1978 NIST-JANAF
+#   review.
+# - The process sets are weak: the pure-Mo paper prints one power-speed pair that lies
+#   outside its own stated power range and gives no hatch or layer thickness; the other set
+#   is for the alloy TZM. Neither has a melt-pool size.
+# - Printability, as the opened sources state it: LPBF molybdenum cracks, with longitudinal
+#   cracks along the track centre line and transverse cracks across it, and it balls
+#   (yan2022). yan2022 puts it down to thermal stress in a metal that is brittle below its
+#   ductile-to-brittle transition (375 K in their text) and to oxygen, which their EDS finds
+#   in the built metal; keeping the part hot (support structures, plate preheat) and
+#   lowering oxygen in powder and chamber suppressed cracks. A LANL report (mireles2025)
+#   says Mo and W need a plate preheat of 800-1200 C where 80-200 C is enough for Ta and Nb.
+
+[card]
+schema_version = 1
+material = "Mo"
+designation = { spec = "commercially pure Mo; the lpbf_kanies2026_tzm_350W set is for the alloy TZM" }
+composition_wt_pct = { Mo = "bal", note = "pure element; no measured powder chemistry in the sources read" }
+version = "1.0.0"
+created = 2026-11-14
+modified = 2026-11-14
+status = "draft"
+reviewed_by = ""
+
+[[changelog]]
+version = "1.0.0"
+date = 2026-11-14
+author = "research agent (Claude)"
+changes = "Initial card: Ho 1972 conductivity, NIST-JANAF heat capacity and heat of fusion, electrostatic-levitation liquid density, heat capacity, emissivity and surface tension (Paradis 2002, 2007, abstracts) and viscosity (Ishikawa 2013 via NIST ThermoML), flat-surface absorptivity from tabulated optical constants, one LPBF process set for pure Mo (Yan 2022) and one for TZM (Kanies 2026). No powder conductivity, liquid conductivity or microstructure records."
+
+[references.ho1972]
+citation = "C.Y. Ho, R.W. Powell, P.E. Liley, Thermal Conductivity of the Elements, J. Phys. Chem. Ref. Data 1 (1972) 279-421; molybdenum table read from the NIST reprint (scanned page, checked by eye)"
+doi = "10.1063/1.3253100"
+url = "https://srd.nist.gov/jpcrdreprint/1.3253100.pdf"
+
+[references.nist_webbook]
+citation = "M.W. Chase Jr., NIST-JANAF Thermochemical Tables, 4th ed., J. Phys. Chem. Ref. Data Monograph 9 (1998), as given by the NIST Chemistry WebBook (SRD 69), molybdenum, condensed phase thermochemistry data (Shomate coefficients; data last reviewed March 1978)"
+url = "https://webbook.nist.gov/cgi/cbook.cgi?ID=C7439987&Mask=2"
+
+[references.nist_xcom_tab1]
+citation = "J.H. Hubbell, S.M. Seltzer, Tables of X-Ray Mass Attenuation Coefficients and Mass Energy-Absorption Coefficients, NIST Standard Reference Database 126 (NISTIR 5632), Table 1: material constants for elemental media"
+url = "https://physics.nist.gov/PhysRefData/XrayMassCoef/tab1.html"
+
+[references.paradis2002]
+citation = "P.-F. Paradis, T. Ishikawa, S. Yoda, Noncontact Measurements of Thermophysical Properties of Molybdenum at High Temperatures, Int. J. Thermophys. 23 (2002) 555-569; abstract only"
+doi = "10.1023/A:1015169721771"
+
+[references.paradis2007]
+citation = "P.-F. Paradis, T. Ishikawa, N. Koike, Non-contact measurements of the surface tension and viscosity of molybdenum using an electrostatic levitation furnace, Int. J. Refract. Met. Hard Mater. 25 (2007) 95-100; abstract only"
+doi = "10.1016/j.ijrmhm.2006.02.001"
+
+[references.ishikawa2013]
+citation = "T. Ishikawa, P.-F. Paradis, J.T. Okada, M.V. Kumar, Y. Watanabe, Viscosity of molten Mo, Ta, Os, Re, and W measured by electrostatic levitation, J. Chem. Thermodyn. 65 (2013) 1-6; paper not opened, its data table read from the NIST ThermoML archive"
+doi = "10.1016/j.jct.2013.05.036"
+url = "https://trc.nist.gov/ThermoML/10.1016/j.jct.2013.05.036.html"
+
+[references.ordal1988]
+citation = "M.A. Ordal, R.J. Bell, R.W. Alexander, L.A. Newquist, M.R. Querry, Optical properties of Al, Fe, Ti, Ta, W, and Mo at submillimeter wavelengths, Appl. Opt. 27 (1988) 1203-1209; paper not opened, n and k read from the refractiveindex.info data file Mo/nk/Ordal"
+doi = "10.1364/AO.27.001203"
+
+[references.refractiveindex_info]
+citation = "M.N. Polyanskiy, Refractiveindex.info database of optical constants, Sci. Data 11 (2024) 94; data files read from github.com/polyanskiy/refractiveindex.info-database (master, 2026-11-14)"
+doi = "10.1038/s41597-023-02898-2"
+url = "https://github.com/polyanskiy/refractiveindex.info-database"
+
+[references.yan2022]
+citation = "A. Yan, A.M. Atif, X. Wang, T. Lan, Z. Wang, The Microstructure and Cracking Behaviors of Pure Molybdenum Fabricated by Selective Laser Melting, Materials 15 (2022) 6230; read in full (PMC9505115), figures not seen"
+doi = "10.3390/ma15186230"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC9505115/"
+
+[references.kanies2026]
+citation = "B.A. Kanies, M.J. Brand, N.E. Barta, S.T. Nabil, K.I. Watanabe, C.A. Terrazas, J.P. Carney, F. Medina, Development of Additively Manufactured Refractory Alloys for Nuclear Reactor Applications: Continued Development of Nb1Zr and TZM, Los Alamos National Laboratory report LA-UR-26-28754 (2026); read in full, figures not seen"
+doi = "10.2172/17427277"
+url = "https://www.osti.gov/servlets/purl/17427277"
+
+[references.mireles2025]
+citation = "O.R. Mireles, B.A. Kanies, M.J. Brand, R.A. Montoya, Laser Powder Bed Fusion Additive Manufacture Nb1Zr Development, Los Alamos National Laboratory report LA-UR-25-29781 (2025); text read, its parameter tables are images"
+doi = "10.2172/3001270"
+url = "https://www.osti.gov/servlets/purl/3001270"
+
+[thermal]
+density = { value = 10220, unit = "kg/m^3", ref = "nist_xcom_tab1", T_range = [293, 293], note = "room-temperature solid as listed in the NIST table (10.22 g/cm^3; the table warns that some of its densities are nominal). yan2022 uses 10.2 and kanies2026 10.22 g/cm^3 as the theoretical density. The levitation fit of paradis2002 for the hot solid is 9.49e3 - 0.50 (T - Tm) kg/m^3 over 2170-2890 K. One dense density for the conduction solver." }
+liquidus = { value = 2896, unit = "K", ref = ["nist_webbook", "paradis2002"], note = "melting point of pure Mo, the same in the NIST-JANAF tables and in the levitation papers" }
+solidus = { value = 2886, unit = "K", ref = "estimate", note = "MODELLING CHOICE. A pure metal melts at one temperature, so physically solidus = liquidus. The app divides by tl - ts and the conduction source releases the latent heat linearly over [ts, tl], so a zero gap is degenerate (see the Bi2Te3 card). 10 K is arbitrary." }
+latent_fusion = { value = 3.75e5, unit = "J/kg", ref = "nist_webbook", uncertainty = [3.50e5, 3.75e5], uncertainty_type = "bounds", note = "DERIVED for this card from the NIST-JANAF Shomate fits: H(liquid) - H(solid) at 2896 K = 35.97 kJ/mol, over 95.95 g/mol. Lower bound = 33.6 kJ/mol measured from levitation cooling curves by paradis2002 (abstract). The JANAF review is from 1978, and for tungsten the same tables are 30 % low (W card); no pulse-heating measurement was opened." }
+conductivity = { T = [300, 400, 500, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000, 2200, 2400, 2600, 2800], value = [138, 134, 130, 126, 118, 112, 105, 100, 96.0, 92.9, 90.3, 88.2, 86.6, 85.2, 84.0], unit = "W/(m K)", extrapolation = "clamp", ref = "ho1972", note = "recommended values for well-annealed high-purity molybdenum, stated accurate to +/- 4 % at moderate temperatures and within +/- 15 % as the melting point is approached. The compilation stops at 2800 K and gives no liquid values: the table is HELD at 84.0 through melting and in the liquid, which is not a measurement. For tungsten the conductivity drops by about a quarter on melting (W card); expect a drop here too." }
+heat_capacity = { T = [300, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000, 2200, 2400, 2600, 2800, 2886, 2896], value = [249.5, 261.8, 275.4, 285.6, 296.0, 307.7, 321.6, 338.4, 358.6, 384.4, 408.3, 437.4, 480.4, 538.2, 566.8, 356.4], unit = "J/(kg K)", extrapolation = "clamp", ref = ["nist_webbook", "paradis2002"], note = "solid: evaluated for this card from the NIST-JANAF Shomate coefficients (298-1900 K and 1900-2896 K), converted with 95.95 g/mol; the steep rise above 2400 K is in the tables. Last entry, the liquid at the liquidus: 34.2 J/(mol K) from the levitation cooling curves of paradis2002, C_p = 34.2 + 1.13e-3 (T - Tm) J/(mol K) on the assumption that the liquid's total hemispherical emissivity stays at 0.21 (abstract only). The JANAF liquid value is a constant 37.66 J/(mol K), 392 J/(kg K), a 1978 estimate." }
+emissivity = { value = 0.29, unit = "1", ref = "paradis2002", T_range = [2050, 2890], note = "hemispherical total emissivity of the clean solid in high vacuum (levitated sample) at the melting point, from the fit 0.29 + 9.86e-5 (T - Tm) over 2050-2890 K, which gives 0.21 at 2050 K. The liquid was ASSUMED to be 0.21 by the authors. Abstract only. An oxidised or rough LPBF surface is higher." }
+
+[thermal.linear]
+# Rosenthal/Moser need one k and cp: the tables evaluated at T_ref unless
+# conductivity/heat_capacity are given here.
+T_ref = { value = 1600, unit = "K", ref = "estimate", note = "between preheat and the melting point, about 0.55 Tm as on the other cards; k = 96.0, cp = 338.4 there" }
+
+[optical]
+absorptivity = { value = 0.30, unit = "1", ref = ["ordal1988", "refractiveindex_info"], uncertainty = [0.28, 0.30], uncertainty_type = "bounds", note = "DERIVED for this card, not a measurement under the laser: 1 - R at normal incidence on a flat, clean surface at room temperature, from n and k at 1.07 um in the refractiveindex.info data files (Ordal n = 2.28, k = 4.45 gives 0.298; the Kirillova 1971 single-crystal file gives 0.297; the Querry 1987 file gives 0.276, the lower bound; the Werner 2009 electron-energy-loss file gives 0.08 and is not trusted in the infrared). An oxidised, rough or molten surface and a powder bed absorb more; no measurement on Mo at 1.07 um was found." }
+
+[flow]
+# Liquid-state properties for the conduction source's melt-pool flow (flow lbm).
+# Recorded only: pass them in the deck (docs/MATERIAL_CARDS.md, Flow).
+surface_tension = { value = 2.29, unit = "N/m", ref = "paradis2007", T_range = [2896, 2896], note = "at the melting point: vacuum electrostatic levitation, oscillating drop, sigma = 2.29e3 - 0.26 (T - Tm) mN/m over 2650-3000 K (undercooled and superheated liquid). From the abstract; uncertainties, sample purity and oxygen content are not in it." }
+dsigma_dT = { value = -2.6e-4, unit = "N/(m K)", ref = "paradis2007", T_range = [2650, 3000], composition = "not given in the abstract (purity and oxygen content of the levitated Mo sample unknown to this card)", note = "NEGATIVE, flow outward. Measured from 250 K below to 100 K above the melting point; a melt pool runs well above that. No data on how oxygen changes the coefficient was found." }
+viscosity = { T = [2573, 2700, 2800, 2896, 3000, 3100, 3213], value = [6.7e-3, 5.9e-3, 5.4e-3, 5.0e-3, 4.6e-3, 4.3e-3, 4.0e-3], unit = "Pa s", extrapolation = "clamp", ref = "ishikawa2013", note = "dynamic viscosity, electrostatic levitation, oscillating-drop damping with the group's improved procedure; values as tabulated in the NIST ThermoML file of the paper (smoothed points, 2573-3213 K), which gives no uncertainties. The earlier fit of paradis2007 (abstract), eta = 0.27 exp(73e3 / (R T)) mPa s over 2650-3000 K, gives 5.6e-3 at the melting point. Kinematic: nu = 5.5e-7 m^2/s at the melting point with the liquid density below (5.0e-3 / 9100)." }
+density_liquid = { value = 9100, T_ref = 2896, slope = -0.60, unit = "kg/m^3", slope_unit = "kg/(m^3 K)", ref = "paradis2002", T_range = [2500, 3000], note = "electrostatic levitation, rho = 9.10e3 - 0.60 (T - Tm) kg/m^3 over 2500-3000 K. From the abstract; uncertainties are not in it." }
+thermal_expansion = { value = 6.6e-5, unit = "1/K", ref = "paradis2002", note = "volumetric; the value stated in the abstract, equal to -slope/density of density_liquid (0.60 / 9100)" }
+
+# No [microstructure] section: no dendrite-tip or front-velocity law for molybdenum was
+# found in a source that could be opened, and another metal's kinetics are not copied.
+
+# Process sets: published LPBF parameters. No laser DED set for pure Mo was found.
+
+[process.lpbf_yan2022_200W]
+method = "LPBF"
+machine = "EOS M100, IPG 200 W Yb fibre laser at 1064 nm, 40 um focused beam diameter (convention not stated)"
+note = "WEAK SET. 8 x 8 x 8 mm cubes on a steel baseplate, meander scan rotated 67 deg per layer, Ar with O2 below 100 ppm, spherical Mo powder, plate preheat available up to 80 C (the value used is not stated). The power-speed pair recorded is the only one the text prints, as the example for a linear energy of 0.5 J/mm with 20 % track overlap; the same paper gives its design range as 120-170 W and 50-550 mm/s, which 200 W lies outside, and another paper on the same machine says it is software-limited to 170 W (C103 card, orsborn2025). Continuous tracks at 0.44-0.64 J/mm; maximum relative density 99.1 % (Archimedes, against 10.2 g/cm^3) at 0.51 J/mm; longitudinal and transverse cracks. Hatch spacing and layer thickness are not given, so neither is recorded; no melt-pool dimensions."
+power = { value = 200, unit = "W", ref = "yan2022", note = "as printed for the 0.5 J/mm example; see the set note" }
+speed = { value = 0.4, unit = "m/s", ref = "yan2022" }
+
+[process.lpbf_kanies2026_tzm_350W]
+method = "LPBF"
+machine = "Aconity MIDI+"
+note = "NOT PURE Mo: the alloy TZM (Mo-0.5wt%Ti-0.08wt%Zr as the report gives it; no measured chemistry), recorded here because no card for TZM exists and its thermal properties are close to Mo's. Sample 9 of build 1 of the report's nine-condition design (250-450 W, 500-1000 mm/s): optical relative density 99.87 %, the best of the build. Metallographic cubes on a molybdenum plate 100 mm in diameter, rotational raster, no contours; the build was heated but the temperature is not stated, and the heater stopped for the last 50 layers (about 2 mm), where most samples cracked from the edge. Samples at 250 W showed lack of fusion. Spot size not reported; no melt-pool dimensions."
+power = { value = 350, unit = "W", ref = "kanies2026" }
+speed = { value = 1.0, unit = "m/s", ref = "kanies2026" }
+hatch = { value = 80e-6, unit = "m", ref = "kanies2026" }
+layer_thickness = { value = 40e-6, unit = "m", ref = "kanies2026", note = "build 1; build 2 used 30 um" }

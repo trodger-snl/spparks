@@ -1,0 +1,150 @@
+# Material parameter card: tantalum, Ta (commercially pure).
+# Format: docs/MATERIAL_CARDS.md (schema 1). SI units; every value carries a ref.
+#
+# Model caveats specific to this material (read before using the card):
+# - Pure metal: one melting point. solidus is set 10 K below liquidus by choice, see its note.
+# - Not on the card (no source opened): thermal.emissivity, powder.conductivity, the thermal
+#   conductivity of the liquid (the table is held at the last solid value) and every
+#   [microstructure] record. A conduction deck must give emissivity and k_powder itself, and
+#   init_app needs solid_front_vel and the nucleation values from the deck.
+# - The liquid properties in [flow] and the Paradis latent-heat figures were read from
+#   abstracts only; the heat capacity and latent heat rest on the 1972 NIST-JANAF review.
+# - Printability, as the opened sources state it: tantalum prints dense and without cracks
+#   in LPBF (99.9 %, lian2023; 0.02 % porosity, livescu2018), with strong texture and columnar
+#   grains along the build direction. The problem is interstitial pickup: Ta has a high
+#   affinity for oxygen and nitrogen, the built metal holds more of both than the powder
+#   (lian2023 Table 4), and oxygen raises strength and hardness at the cost of ductility.
+#   Too much energy gives spatter-induced pores (lian2023). In laser DED, low power or a
+#   high feed rate gives lack of fusion and oxygen caused cracking in some samples (hilla2026).
+
+[card]
+schema_version = 1
+material = "Ta"
+designation = { spec = "commercially pure Ta; powders of the process sets: spherical 99.9 % (lian2023), Tekna ultra-low-oxygen spherical (livescu2018)" }
+composition_wt_pct = { Ta = "bal", O = "0.0317", C = "0.0088", note = "measured powder of lian2023 (Table 2; total impurities below 0.1 wt%); built parts 426-508 ppm O and 132-179 ppm N depending on energy density. livescu2018 plate: 410 ppm O" }
+version = "1.0.0"
+created = 2026-11-14
+modified = 2026-11-14
+status = "draft"
+reviewed_by = ""
+
+[[changelog]]
+version = "1.0.0"
+date = 2026-11-14
+author = "research agent (Claude)"
+changes = "Initial card: Ho 1972 conductivity, NIST-JANAF heat capacity and heat of fusion, electrostatic-levitation liquid density, surface tension (Paradis 2003, 2005, abstracts) and viscosity (Ishikawa 2013 via NIST ThermoML), flat-surface absorptivity from tabulated optical constants, two LPBF process sets (Lian 2023, Livescu 2018) and one laser DED set (Hilla 2026). No emissivity, powder conductivity, liquid conductivity or microstructure records."
+
+[references.ho1972]
+citation = "C.Y. Ho, R.W. Powell, P.E. Liley, Thermal Conductivity of the Elements, J. Phys. Chem. Ref. Data 1 (1972) 279-421; tantalum table read from the NIST reprint (scanned page, checked by eye)"
+doi = "10.1063/1.3253100"
+url = "https://srd.nist.gov/jpcrdreprint/1.3253100.pdf"
+
+[references.nist_webbook]
+citation = "M.W. Chase Jr., NIST-JANAF Thermochemical Tables, 4th ed., J. Phys. Chem. Ref. Data Monograph 9 (1998), as given by the NIST Chemistry WebBook (SRD 69), tantalum, condensed phase thermochemistry data (Shomate coefficients; data last reviewed December 1972)"
+url = "https://webbook.nist.gov/cgi/cbook.cgi?ID=C7440257&Mask=2"
+
+[references.nist_xcom_tab1]
+citation = "J.H. Hubbell, S.M. Seltzer, Tables of X-Ray Mass Attenuation Coefficients and Mass Energy-Absorption Coefficients, NIST Standard Reference Database 126 (NISTIR 5632), Table 1: material constants for elemental media"
+url = "https://physics.nist.gov/PhysRefData/XrayMassCoef/tab1.html"
+
+[references.paradis2003]
+citation = "P.-F. Paradis, T. Ishikawa, S. Yoda, Noncontact density measurements of tantalum and rhenium in the liquid and undercooled states, Appl. Phys. Lett. 83 (2003) 4047-4049; abstract only"
+doi = "10.1063/1.1624475"
+
+[references.paradis2005]
+citation = "P.-F. Paradis, T. Ishikawa, S. Yoda, Surface tension and viscosity of liquid and undercooled tantalum measured by a containerless method, J. Appl. Phys. 97 (2005) 053506; abstract only"
+doi = "10.1063/1.1854211"
+
+[references.ishikawa2013]
+citation = "T. Ishikawa, P.-F. Paradis, J.T. Okada, M.V. Kumar, Y. Watanabe, Viscosity of molten Mo, Ta, Os, Re, and W measured by electrostatic levitation, J. Chem. Thermodyn. 65 (2013) 1-6; paper not opened, its data table read from the NIST ThermoML archive"
+doi = "10.1016/j.jct.2013.05.036"
+url = "https://trc.nist.gov/ThermoML/10.1016/j.jct.2013.05.036.html"
+
+[references.ordal1988]
+citation = "M.A. Ordal, R.J. Bell, R.W. Alexander, L.A. Newquist, M.R. Querry, Optical properties of Al, Fe, Ti, Ta, W, and Mo at submillimeter wavelengths, Appl. Opt. 27 (1988) 1203-1209; paper not opened, n and k read from the refractiveindex.info data file Ta/nk/Ordal"
+doi = "10.1364/AO.27.001203"
+
+[references.refractiveindex_info]
+citation = "M.N. Polyanskiy, Refractiveindex.info database of optical constants, Sci. Data 11 (2024) 94; data files read from github.com/polyanskiy/refractiveindex.info-database (master, 2026-11-14)"
+doi = "10.1038/s41597-023-02898-2"
+url = "https://github.com/polyanskiy/refractiveindex.info-database"
+
+[references.lian2023]
+citation = "F. Lian, L. Chen, C. Wu, Z. Zhao, J. Tang, J. Zhu, Selective Laser Melting Additive Manufactured Tantalum: Effect of Microstructure and Impurities on the Strengthening-Toughing Mechanism, Materials 16 (2023) 3161; read in full (PMC10143127)"
+doi = "10.3390/ma16083161"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC10143127/"
+
+[references.livescu2018]
+citation = "V. Livescu, C.M. Knapp, G.T. Gray III, R.M. Martinez, B.M. Morrow, B.G. Ndefru, Additively manufactured tantalum microstructures, Materialia 1 (2018) 15-24; read as the accepted manuscript LA-UR-18-22425 (OSTI)"
+doi = "10.1016/j.mtla.2018.06.007"
+url = "https://www.osti.gov/servlets/purl/1459835"
+
+[references.hilla2026]
+citation = "C. Hilla, G.P. Dinda, T. Ayers, D. McClane, Effect of directed energy deposition process parameter on build quality of tantalum, Prog. Addit. Manuf. 11 (2026) 6793-6803; read in full (OSTI copy), figures not seen"
+doi = "10.1007/s40964-025-01135-z"
+url = "https://www.osti.gov/servlets/purl/3387415"
+
+[references.mohsan2023]
+citation = "A.U.H. Mohsan, D. Wei, Advancements in Additive Manufacturing of Tantalum via the Laser Powder Bed Fusion (PBF-LB/M): A Comprehensive Review, Materials 16 (2023) 6419; text searched for single facts, not read through (PMC10573463)"
+doi = "10.3390/ma16196419"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC10573463/"
+
+[thermal]
+density = { value = 16650, unit = "kg/m^3", ref = "nist_xcom_tab1", T_range = [293, 293], note = "room-temperature solid as listed in the NIST table (16.65 g/cm^3; the table warns that some of its densities are nominal). An LPBF study described in the review mohsan2023 uses 16.6 g/cm^3 as the theoretical density. One dense density for the conduction solver." }
+liquidus = { value = 3290, unit = "K", ref = ["paradis2003", "paradis2005"], uncertainty = [3258, 3293], uncertainty_type = "bounds", note = "melting point of pure Ta as used in the levitation fits of [flow]. The NIST-JANAF tables (nist_webbook, 1972 review) use 3258 K, the lower bound; the ThermoML table of ishikawa2013 has a point at 3293 K." }
+solidus = { value = 3280, unit = "K", ref = "estimate", note = "MODELLING CHOICE. A pure metal melts at one temperature, so physically solidus = liquidus. The app divides by tl - ts and the conduction source releases the latent heat linearly over [ts, tl], so a zero gap is degenerate (see the Bi2Te3 card). 10 K is arbitrary, chosen smaller than the 32 K spread between published melting points (3258-3290 K)." }
+latent_fusion = { value = 2.02e5, unit = "J/kg", ref = "nist_webbook", note = "DERIVED for this card from the NIST-JANAF Shomate fits: H(liquid) - H(solid) at 3258 K = 36.57 kJ/mol, over 180.948 g/mol. A 1972 review; for tungsten the same tables are 30 % below modern measurements (W card), so treat this as uncertain to at least 10 %. No modern measurement was opened." }
+conductivity = { T = [300, 400, 500, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000, 2200, 2400, 2600, 2800, 3000, 3200], value = [57.5, 57.8, 58.2, 58.6, 59.4, 60.2, 61.0, 61.8, 62.6, 63.4, 64.1, 64.8, 65.4, 65.9, 66.4, 66.6, 66.6], unit = "W/(m K)", extrapolation = "clamp", ref = "ho1972", note = "recommended values for well-annealed high-purity tantalum, stated accurate to +/- 5 % at moderate temperatures and +/- 10 % at high temperatures. The compilation stops at 3200 K and gives no liquid values: the table is HELD at 66.6 through melting and in the liquid, which is not a measurement. For tungsten the conductivity drops by about a quarter on melting (W card); expect a drop here too." }
+heat_capacity = { T = [300, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000, 2200, 2400, 2600, 2800, 3000, 3200, 3258, 3290], value = [139.9, 142.8, 148.2, 151.8, 154.6, 158.0, 160.5, 162.9, 167.1, 172.2, 177.9, 184.8, 193.3, 204.3, 218.7, 237.3, 243.6, 231.2], unit = "J/(kg K)", extrapolation = "clamp", ref = "nist_webbook", note = "evaluated for this card from the NIST-JANAF Shomate coefficients (solid 298-1300 K and 1300-3258 K, liquid above), converted with 180.948 g/mol. The last entry is the liquid, a constant 41.84 J/(mol K) in the tables; it is a 1972 estimate, and the corresponding JANAF value for liquid tungsten is 30 % below the measured one (W card). 3258 K is the JANAF melting point; the liquid value is placed at this card's liquidus." }
+
+[thermal.linear]
+# Rosenthal/Moser need one k and cp: the tables evaluated at T_ref unless
+# conductivity/heat_capacity are given here.
+T_ref = { value = 1800, unit = "K", ref = "estimate", note = "between preheat and the melting point, about 0.55 Tm as on the other cards; k = 63.4, cp = 167.1 there" }
+
+[optical]
+absorptivity = { value = 0.12, unit = "1", ref = ["ordal1988", "refractiveindex_info"], note = "DERIVED for this card, not a measurement under the laser, and the weakest number on the card: 1 - R at normal incidence on a flat, clean surface at room temperature, from n = 0.95, k = 5.34 at 1.07 um in the refractiveindex.info Ordal file (0.117). It is the only infrared data set for Ta in that database (the Werner 2009 electron-energy-loss file gives 0.04 and is not trusted in the infrared). An oxidised, rough or molten surface and a powder bed absorb more; no measurement on Ta at 1.07 um was found. Calibrate lambda against a melt-pool size rather than trusting this." }
+
+[flow]
+# Liquid-state properties for the conduction source's melt-pool flow (flow lbm).
+# Recorded only: pass them in the deck (docs/MATERIAL_CARDS.md, Flow).
+surface_tension = { value = 2.15, unit = "N/m", ref = "paradis2005", T_range = [3290, 3290], note = "at the melting point 3290 K: electrostatic levitation with multibeam heating, oscillating drop, sigma = 2.15e3 - 0.21 (T - Tm) mN/m over 2970-3400 K (superheated and undercooled liquid). From the abstract; uncertainties, sample purity and atmosphere are not in it." }
+dsigma_dT = { value = -2.1e-4, unit = "N/(m K)", ref = "paradis2005", T_range = [2970, 3400], composition = "not given in the abstract (purity and oxygen content of the levitated Ta sample unknown to this card)", note = "NEGATIVE, flow outward. Measured from 320 K below to 110 K above the melting point; a melt pool runs well above that. Ta dissolves oxygen readily (see the header); no data on how oxygen changes the coefficient was found." }
+viscosity = { T = [2880, 3000, 3100, 3200, 3293, 3400, 3514], value = [13.4e-3, 11.7e-3, 10.6e-3, 9.6e-3, 8.9e-3, 8.1e-3, 7.4e-3], unit = "Pa s", extrapolation = "clamp", ref = "ishikawa2013", note = "dynamic viscosity, electrostatic levitation, oscillating-drop damping with the group's improved procedure; values as tabulated in the NIST ThermoML file of the paper (smoothed points, 2880-3514 K), which gives no uncertainties. The earlier fit of paradis2005 (abstract), eta = 0.0035 exp(213.3e3 / (R T)) mPa s over 3000-3400 K, gives 8.5e-3 at 3290 K (the abstract prints the activation energy as 213.3 without a unit; kJ/mol is assumed). Kinematic: nu = 5.9e-7 m^2/s at the melting point with the liquid density below (8.9e-3 / 15000)." }
+density_liquid = { value = 15000, T_ref = 3290, slope = -0.41, unit = "kg/m^3", slope_unit = "kg/(m^3 K)", ref = "paradis2003", T_range = [2760, 3580], note = "electrostatic levitation with ultraviolet imaging, rho = 1.50e4 - 0.41 (T - Tm) kg/m^3 over 2760-3580 K, Tm = 3290 K. From the abstract; uncertainties are not in it. Pulse-heating densities of liquid Ta exist (Leitner, Schroer, Pottlacher, Int. J. Thermophys. 39 (2018) 124, open access but the download was blocked) and should be compared." }
+thermal_expansion = { value = 2.7e-5, unit = "1/K", ref = "paradis2003", note = "volumetric; the value stated in the abstract, equal to -slope/density of density_liquid (0.41 / 15000)" }
+
+# No [microstructure] section: no dendrite-tip or front-velocity law for tantalum was found
+# in a source that could be opened, and another metal's kinetics are not copied.
+
+# Process sets: published LPBF parameters.
+
+[process.lpbf_lian2023_280W]
+method = "LPBF"
+machine = "EOS M290"
+note = "10 x 10 x 10 mm blocks and 40 x 6 x 9 mm bars on a Ti-6Al-4V substrate, 67 deg rotation per layer, Ar with O2 below 100 ppm; spherical powder 5-30 um, 317 ppm O. Sample 6 of Table 3, volume energy density 190 J/mm^3: relative density 99.9 % (Archimedes), no unmelted particles or microcracks seen, pores about 30 um. The series holds 280 W and varies the speed from 390 to 850 mm/s (342 to 157 J/mm^3); at 342 J/mm^3 spatter leaves 100-120 um pores, and oxygen in the part rises with energy density (426 ppm at 157 J/mm^3 to 508 ppm at 310 J/mm^3). Spot size and preheat not reported; no melt-pool dimensions."
+power = { value = 280, unit = "W", ref = "lian2023" }
+speed = { value = 0.7, unit = "m/s", ref = "lian2023" }
+hatch = { value = 70e-6, unit = "m", ref = "lian2023" }
+layer_thickness = { value = 30e-6, unit = "m", ref = "lian2023" }
+
+[process.lpbf_livescu2018_370W]
+method = "LPBF"
+machine = "EOSINT M280, 400 W fibre laser"
+note = "Plate 3 of the paper: stripes 0.5 mm wide with 0.08 mm overlap, rotated 67 deg per layer, Ar with less than 0.1 % O2, Tekna ultra-low-oxygen spherical powder; area porosity 0.018 %, 410 ppm O in the plate, strongly textured columnar grains along the build direction. The cube series (Tables 1 and 2) shows the route there: 236 W, 884 mm/s, 0.04 mm layer, 0.05 mm hatch gave 2.85 % porosity; 370 W at 884 mm/s 0.46 %; 370 W at 530 mm/s 0.25 %; a 0.02 mm layer with 0.04 mm hatch at 530-707 mm/s 0.02-0.03 %. Spot size and preheat not reported; no melt-pool dimensions. Tables read from the text layer of the accepted manuscript, which a watermark scrambles in places: check Plate 3 against the published version."
+power = { value = 370, unit = "W", ref = "livescu2018" }
+speed = { value = 0.55, unit = "m/s", ref = "livescu2018" }
+hatch = { value = 40e-6, unit = "m", ref = "livescu2018" }
+layer_thickness = { value = 20e-6, unit = "m", ref = "livescu2018" }
+
+# Laser DED (blown powder). Extra DED records (powder_feed, beam_diameter) are recorded only.
+
+[process.ded_hilla2026_2000W]
+method = "laser DED, blown powder"
+machine = "3 kW diode laser; machine not named in the text read"
+note = "sample 2-10 of the paper's second build: cylinder 5 mm in diameter, 8 layers, Ar shielding. Reported window: at least 2000 W for more than 99 % density and 1600 W for 98 %; lower power or a higher feed rate (build 1 used 9.8-14.9 g/min at 1600-2400 W and 420-540 mm/min) gives lack of fusion and delamination; scan speed between 7 and 9 mm/s had little effect; oxygen picked up when the chamber was opened caused cracking and higher hardness. The density of sample 2-10 itself is not given in the text. Hatch or stepover, absorptivity, preheat and bead dimensions not reported. The conclusions name a minimum feed rate of 8.9 g/min, which contradicts the body (lower feed rates were better)."
+power = { value = 2000, unit = "W", ref = "hilla2026" }
+speed = { value = 8.0e-3, unit = "m/s", ref = "hilla2026", note = "480 mm/min, held constant in build 2" }
+layer_thickness = { value = 1.0e-3, unit = "m", ref = "hilla2026", note = "designed layer height" }
+beam_diameter = { value = 2.0e-3, unit = "m", profile = "unstated", ref = "hilla2026", note = "spot size 2 mm in the methods; the conclusions say 3 mm. No convention or profile given, so no spot record: give the source size in the deck" }
+powder_feed = { value = 1.0e-4, unit = "kg/s", ref = "hilla2026", note = "6 g/min" }

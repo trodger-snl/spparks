@@ -1,0 +1,136 @@
+# Material parameter card: tungsten, W (commercially pure).
+# Format: docs/MATERIAL_CARDS.md (schema 1). SI units; every value carries a ref.
+#
+# Model caveats specific to this material (read before using the card):
+# - Pure metal: one melting point. solidus is set 10 K below liquidus by choice, see its note.
+# - Not on the card (no source opened): thermal.emissivity, powder.conductivity and every
+#   [microstructure] record. A conduction deck must give emissivity and k_powder itself, and
+#   init_app needs solid_front_vel and the nucleation values from the deck.
+# - Printability, as the opened sources state it: LPBF tungsten cracks. li2020 shows
+#   longitudinal cracks along the track centres and transverse cracks across tracks; tan2018
+#   calls microcracks at grain boundaries along the build direction inevitable. The usual explanation
+#   is delayed cracking once the solid cools below the ductile-to-brittle transition; karra2025
+#   adds solidification cracking, with oxide exuding from longitudinal cracks made under argon
+#   and none made in vacuum (their W-O calculation: more than about 15 ppmw O opens a freezing
+#   range). Balling from the high surface tension and viscosity limits density (tan2018).
+
+[card]
+schema_version = 1
+material = "W"
+designation = { spec = "commercially pure W; powders of the process sets: plasma-spheroidised, 99.9 % (tan2018), spherical, purity not stated (li2020)" }
+composition_wt_pct = { W = "bal", note = "pure element. Powder heats of the process sets: tan2018 O 220, C 580, N 470 ppm; li2020 not analysed. Levitation sample of ishikawa2005: 99.95 % wire (Nilaco), arc-melted" }
+version = "1.0.0"
+created = 2026-11-14
+modified = 2026-11-14
+status = "draft"
+reviewed_by = ""
+
+[[changelog]]
+version = "1.0.0"
+date = 2026-11-14
+author = "research agent (Claude)"
+changes = "Initial card: Tolias 2017 recommended expressions (k, cp, latent heat, solid and liquid density), electrostatic-levitation surface tension (Ishikawa 2005) and viscosity (Ishikawa 2013 via NIST ThermoML), flat-surface absorptivity from tabulated optical constants, two LPBF process sets (Li 2020, Tan 2018). No emissivity, powder conductivity or microstructure records."
+
+[references.tolias2017]
+citation = "P. Tolias and the EUROfusion MST1 Team, Analytical expressions for thermophysical properties of solid and liquid tungsten relevant for fusion applications, Nucl. Mater. Energy 13 (2017) 42-57; read in full as arXiv:1703.06302v4"
+doi = "10.1016/j.nme.2017.08.002"
+url = "https://arxiv.org/abs/1703.06302"
+
+[references.ishikawa2005]
+citation = "T. Ishikawa, P.-F. Paradis, R. Fujii, S. Yoda, Thermophysical Properties of Molten Tungsten Measured with an Electrostatic Levitator, Netsu Bussei 19 (2005) 61-66 (in Japanese, English abstract and figure captions); the same data as Paradis et al., Appl. Phys. Lett. 86 (2005) 041901. Read in full (open PDF)"
+doi = "10.2963/jjtp.19.61"
+url = "https://www.jstage.jst.go.jp/article/jjtp/19/2/19_2_61/_pdf"
+
+[references.ishikawa2013]
+citation = "T. Ishikawa, P.-F. Paradis, J.T. Okada, M.V. Kumar, Y. Watanabe, Viscosity of molten Mo, Ta, Os, Re, and W measured by electrostatic levitation, J. Chem. Thermodyn. 65 (2013) 1-6; paper not opened, its data table read from the NIST ThermoML archive"
+doi = "10.1016/j.jct.2013.05.036"
+url = "https://trc.nist.gov/ThermoML/10.1016/j.jct.2013.05.036.html"
+
+[references.nist_xcom_tab1]
+citation = "J.H. Hubbell, S.M. Seltzer, Tables of X-Ray Mass Attenuation Coefficients and Mass Energy-Absorption Coefficients, NIST Standard Reference Database 126 (NISTIR 5632), Table 1: material constants for elemental media"
+url = "https://physics.nist.gov/PhysRefData/XrayMassCoef/tab1.html"
+
+[references.rakic1998]
+citation = "A.D. Rakic, A.B. Djurisic, J.M. Elazar, M.L. Majewski, Optical properties of metallic films for vertical-cavity optoelectronic devices, Appl. Opt. 37 (1998) 5271-5283; paper not opened, n and k read from the refractiveindex.info data file W/nk/Rakic-LD"
+doi = "10.1364/AO.37.005271"
+
+[references.ordal1988]
+citation = "M.A. Ordal, R.J. Bell, R.W. Alexander, L.A. Newquist, M.R. Querry, Optical properties of Al, Fe, Ti, Ta, W, and Mo at submillimeter wavelengths, Appl. Opt. 27 (1988) 1203-1209; paper not opened, n and k read from the refractiveindex.info data file W/nk/Ordal"
+doi = "10.1364/AO.27.001203"
+
+[references.refractiveindex_info]
+citation = "M.N. Polyanskiy, Refractiveindex.info database of optical constants, Sci. Data 11 (2024) 94; data files read from github.com/polyanskiy/refractiveindex.info-database (master, 2026-11-14)"
+doi = "10.1038/s41597-023-02898-2"
+url = "https://github.com/polyanskiy/refractiveindex.info-database"
+
+[references.trapp2017]
+citation = "J. Trapp, A.M. Rubenchik, G. Guss, M.J. Matthews, In situ absorptivity measurements of metallic powders during laser powder-bed fusion additive manufacturing, Appl. Mater. Today 9 (2017) 341-349; abstract only (publisher and OSTI blocked the full text)"
+doi = "10.1016/j.apmt.2017.08.006"
+
+[references.li2020]
+citation = "J. Li, Y. Wu, B. Zhou, Z. Wei, Laser Powder Bed Fusion of Pure Tungsten: Effects of Process Parameters on Morphology, Densification, Microstructure, Materials 14 (2021) 165, published online 31 December 2020; read in full (PMC7796442)"
+doi = "10.3390/ma14010165"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC7796442/"
+
+[references.tan2018]
+citation = "C. Tan, K. Zhou, W. Ma, B. Attard, P. Zhang, T. Kuang, Selective laser melting of high-performance pure tungsten: parameter design, densification behavior and mechanical properties, Sci. Technol. Adv. Mater. 19 (2018) 370-380; read in full (PMC5917440), figures not seen"
+doi = "10.1080/14686996.2018.1455154"
+url = "https://pmc.ncbi.nlm.nih.gov/articles/PMC5917440/"
+
+[references.karra2025]
+citation = "V.S.S.A. Karra, N. Lamprinakos, Y. Chen, G. Guss, A. Rack, S. Van Petegem, T.U. Tumkur, A.D. Rollett, P.C. Pistorius, B.A. Webler, Solidification cracking of laser melted commercial-purity tungsten, Sci. Rep. 15 (2025) 42578; read as the OSTI accepted manuscript"
+doi = "10.1038/s41598-025-24742-w"
+url = "https://www.osti.gov/servlets/purl/3013302"
+
+[thermal]
+density = { value = 19250, unit = "kg/m^3", ref = "tolias2017", T_range = [293, 293], note = "room-temperature solid, the constant of the White-Minges fit Tolias recommends, rho = 19.25 - 2.66207e-4 (T - T0) - 3.0595e-9 (T - T0)^2 - 9.5185e-12 (T - T0)^3 g/cm^3, T0 = 293.15 K, which falls to 17.93 at the melting point. nist_xcom_tab1 lists 19300; tan2018 uses 19300 as the theoretical density. One dense density for the conduction solver." }
+liquidus = { value = 3695, unit = "K", ref = "tolias2017", note = "melting point of pure W, the Tm of every Tolias 2017 expression and of the levitation fits (ishikawa2005). The NIST-JANAF tables (1966 review) use 3680 K." }
+solidus = { value = 3685, unit = "K", ref = "estimate", note = "MODELLING CHOICE. A pure metal melts at one temperature, so physically solidus = liquidus. The app divides by tl - ts and the conduction source releases the latent heat linearly over [ts, tl], so a zero gap is degenerate (see the Bi2Te3 card). 10 K is arbitrary, chosen smaller than the spread of published melting points (3680-3695 K). Commercial-purity W does freeze over a range once it holds oxygen (karra2025), but no measured solidus was found." }
+latent_fusion = { value = 2.845e5, unit = "J/kg", ref = "tolias2017", uncertainty = [2.47e5, 2.99e5], uncertainty_type = "bounds", note = "52.3 kJ/mol, the value Tolias 2017 recommends, over 183.84 g/mol. Bounds = the span of the thirteen measurements in his Table I, 45.4-54.9 kJ/mol; pulse-heating measurements carry about 10 %. tan2018 Table 1 uses 2.20e5 J/kg and the NIST-JANAF tables imply about 35 kJ/mol; Tolias traces the latter to an entropy rule, not a measurement." }
+conductivity = { T = [300, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000, 2200, 2400, 2600, 2800, 3000, 3200, 3400, 3600, 3695, 3696, 4000, 4500, 5000], value = [179.9, 157.4, 137.3, 126.8, 119.5, 114.0, 109.5, 105.9, 102.9, 100.4, 98.3, 96.5, 94.9, 93.5, 92.1, 90.8, 89.4, 87.8, 87.0, 66.6, 72.6, 81.0, 87.4], unit = "W/(m K)", extrapolation = "clamp", ref = "tolias2017", note = "evaluated for this card from the two expressions Tolias 2017 recommends. Solid, 300-3695 K (modified Hust-Lankford fit): k = 149.441 - 45.466e-3 T + 13.193e-6 T^2 - 1.484e-9 T^3 + 3.866e6 / T^2. Liquid, 3695-6000 K (Seydel-Fucke, from the electrical resistivity by Wiedemann-Franz): k = 66.6212 + 0.02086 (T - Tm) - 3.7585e-6 (T - Tm)^2. The 3695/3696 pair is the drop on melting (87.0 to 66.6). Tolias puts the indirect liquid values within roughly 10 %. Held at the 5000 K value above." }
+heat_capacity = { T = [300, 400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000, 2200, 2400, 2600, 2800, 3000, 3200, 3400, 3600, 3695, 3696], value = [131.3, 134.1, 139.4, 144.1, 148.3, 152.4, 156.4, 160.9, 165.9, 171.8, 178.9, 187.5, 197.8, 210.1, 224.8, 239.9, 254.2, 268.5, 275.3, 279.0], unit = "J/(kg K)", extrapolation = "clamp", ref = "tolias2017", note = "evaluated for this card from the Tolias 2017 recommendation, converted with 183.84 g/mol: White-Minges fit cp = 21.868372 + 8.068661e-3 T - 3.756196e-6 T^2 + 1.075862e-9 T^3 + 1.406637e4 / T^2 J/(mol K) for 300-3080 K, Wilthan et al. cp = 2.022 + 1.315e-2 T for 3080-3695 K, and the constant liquid value 51.3 J/(mol K) of Wilthan et al. (pulse heating to 5400 K). The NIST-JANAF liquid value, 35.6 J/(mol K), is outdated according to Tolias. tan2018 uses a single 132 J/(kg K)." }
+
+[thermal.linear]
+# Rosenthal/Moser need one k and cp: the tables evaluated at T_ref unless
+# conductivity/heat_capacity are given here.
+T_ref = { value = 2000, unit = "K", ref = "estimate", note = "between preheat and the melting point, about 0.55 Tm as on the other cards; k = 100.4, cp = 171.8 there" }
+
+[powder]
+psd = { D10 = 10e-6, D50 = 15.87e-6, D90 = 24.86e-6, unit = "m", method = "not stated", ref = "li2020", note = "spherical W powder of the lpbf_li2020_300W set. tan2018: Tekna plasma-spheroidised, D50 16.24 um, D90 23.67 um" }
+
+[optical]
+absorptivity = { value = 0.39, unit = "1", ref = ["rakic1998", "ordal1988", "refractiveindex_info"], uncertainty = [0.39, 0.41], uncertainty_type = "bounds", note = "DERIVED for this card, not a measurement under the laser: 1 - R at normal incidence on a flat, clean surface at room temperature, from n and k at 1.07 um in the refractiveindex.info data files (Rakic Lorentz-Drude fit n = 3.03, k = 3.84 gives 0.391; Ordal n = 3.07, k = 3.81 gives 0.395; the Weaver 1975 file gives 0.394; the Werner 2009 electron-energy-loss file gives 0.07 and is not trusted in the infrared). Upper bound 0.41 = the absorptivity tan2018 Table 1 uses for its parameter design, source not given. No value for the liquid was found. Trapp 2017 measured bare and powder-coated W discs by calorimetry at 1070 nm; its abstract gives no numbers for W, only that a 100 um powder layer absorbs about twice as much as the bare polished disc at low power and that the value falls once the track melts fully, then rises again in the keyhole regime. Read its W figures before choosing lambda." }
+
+[flow]
+# Liquid-state properties for the conduction source's melt-pool flow (flow lbm).
+# Recorded only: pass them in the deck (docs/MATERIAL_CARDS.md, Flow).
+surface_tension = { value = 2.48, unit = "N/m", ref = "ishikawa2005", uncertainty = 0.075, T_range = [3695, 3695], note = "at the melting point: electrostatic levitation in vacuum, oscillating drop, fit gamma = 2.48e3 (+/- 75) - 0.31 (+/- 0.08) (T - Tm) mN/m over 3398-3695 K, i.e. measured only in the undercooled liquid; the paper does not say what the +/- is. Pendant-drop and drop-weight values in Tolias 2017 Table III are 2.30-2.36 N/m, about 7 % lower. Tolias recommends this fit, extrapolated above Tm." }
+dsigma_dT = { value = -3.1e-4, unit = "N/(m K)", ref = "ishikawa2005", uncertainty = 0.8e-4, T_range = [3398, 3695], composition = "W wire of 99.95 % purity (Nilaco), arc-melted to a sphere, levitated in high vacuum; oxygen and other interstitials not reported", note = "NEGATIVE, flow outward. Measured below the melting point only (3398-3695 K); every use in a melt pool is an extrapolation, up to 2000 K above the data. Tolias 2017 checks it by extrapolating to sigma = 0, which gives a critical temperature of about 11700 K against 11850-12470 K from other estimates, and quotes about 25 % uncertainty on the coefficient. No data on the effect of oxygen on liquid W was found." }
+viscosity = { T = [3155, 3200, 3300, 3400, 3500, 3600, 3695], value = [16.7e-3, 15.7e-3, 13.7e-3, 12.0e-3, 10.6e-3, 9.4e-3, 8.5e-3], unit = "Pa s", extrapolation = "clamp", ref = "ishikawa2013", note = "dynamic viscosity, electrostatic levitation, oscillating-drop damping, with the procedure that corrected the positioning-force error of the group's 2005 measurement; values as tabulated in the NIST ThermoML file of the paper (smoothed points; 3695 K is the melting point), which gives no uncertainties. All data are in the undercooled liquid, 3155-3634 K. Tolias 2017 writes the fit as mu = 0.16e-3 exp(3.9713 Tm / T) Pa s (activation energy 122 kJ/mol, +/- 20 %) and recommends extrapolating it above Tm: 6.3e-3 at 4000 K. The table is clamped at 8.5e-3 above Tm, so use the fit for a hot pool. ishikawa2005 gave 6.9e-3 at Tm. Kinematic: nu = 5.2e-7 m^2/s at Tm with the liquid density below (8.5e-3 / 16267)." }
+density_liquid = { value = 16267, T_ref = 3695, slope = -0.7679, unit = "kg/m^3", slope_unit = "kg/(m^3 K)", ref = "tolias2017", T_range = [3695, 6000], note = "Tolias 2017 recommendation (Kaschnitz-Pottlacher-Windholz, pulse heating): rho = 16.267 - 7.679e-4 (T - Tm) - 8.091e-8 (T - Tm)^2 g/cm^3; the quadratic term is dropped here (it adds -81 kg/m^3 at 1000 K above Tm). Electrostatic levitation (ishikawa2005): 16.7e3 (+/- 0.33e3) - 1.08 (+/- 0.08) (T - Tm) over 3125-3707 K, 2.7 % higher with a 40 % steeper slope." }
+thermal_expansion = { value = 4.7e-5, unit = "1/K", ref = "tolias2017", note = "volumetric, derived for this card as -slope/density of density_liquid (0.7679 / 16267). ishikawa2005 gives 6.6e-5 from the levitation data." }
+
+# No [microstructure] section: no dendrite-tip or front-velocity law for tungsten was found
+# in a source that could be opened, and another metal's kinetics are not copied.
+
+# Process sets: published LPBF parameters. No laser DED set for pure W was found.
+
+[process.lpbf_li2020_300W]
+method = "LPBF"
+machine = "SLM Solutions SLM 280HL"
+note = "10 x 10 x 5 mm blocks on a 316L substrate, Ar with O2 below 300 ppm; the set with the highest relative density of the paper's orthogonal design, 98.31 % (Table 1, laser power 200-300 W, speed 200-400 mm/s, hatch 0.06-0.10 mm). Longitudinal cracks along the track centres and transverse cracks in the sections shown (their Fig. 9, 300 W). Average grain size 9.0 um at 400 mm/s against 12.9 um at 200 mm/s. Spot size and scan rotation not reported; no melt-pool dimensions."
+power = { value = 300, unit = "W", ref = "li2020" }
+speed = { value = 0.4, unit = "m/s", ref = "li2020" }
+hatch = { value = 80e-6, unit = "m", ref = "li2020" }
+layer_thickness = { value = 20e-6, unit = "m", ref = "li2020" }
+preheat = { value = 423.15, unit = "K", ref = "li2020", note = "substrate preheat" }
+
+[process.lpbf_tan2018_200W]
+method = "LPBF"
+machine = "EOS M290"
+note = "zigzag scan rotated 67 deg per layer, Ar with O2 below 0.1 vol %, Tekna plasma-spheroidised powder (D50 16.24 um). The paper's best set, eta3 = 0.667 J/mm: 19.01 +/- 0.02 g/cm^3 by Archimedes, 98.50 % of 19.30, with few microcracks, mostly at grain boundaries along the build direction; window for sound parts 0.5-1.0 J/mm with 200-300 W and 200-400 mm/s. Hatch spacing is not given, so no hatch record. No melt-pool dimensions; the authors design for a track about 200 um wide and a melt depth of 30 um (their Table 1) or 40 um (their text)."
+power = { value = 200, unit = "W", ref = "tan2018", note = "INFERRED: the text gives the six linear energies 0.500, 0.625, 0.667, 0.750, 0.833 and 1.000 J/mm and the ranges 200-300 W and 200-400 mm/s; these six are exactly the ratios of 200, 250, 300 W over 200, 300, 400 mm/s, in which 0.667 J/mm is 200 W at 300 mm/s only. The pair itself is printed in a figure I could not see." }
+speed = { value = 0.3, unit = "m/s", ref = "tan2018", note = "inferred with the power, see its note" }
+layer_thickness = { value = 20e-6, unit = "m", ref = "tan2018" }
+spot = { value = 50e-6, unit = "m", convention = "1/e2 radius", ref = "tan2018", note = "the laser beam radius r_b of the Gaussian flux exp(-2 r^2 / r_b^2) in the authors' parameter design (Table 1), not a measured beam profile" }
+preheat = { value = 323, unit = "K", ref = "tan2018", note = "build platform at 50 C" }

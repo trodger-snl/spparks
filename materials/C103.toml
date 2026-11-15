@@ -1,0 +1,150 @@
+# Material parameter card: niobium alloy C-103 (Nb-10Hf-1Ti).
+# Format: docs/MATERIAL_CARDS.md (schema 1). SI units; every value carries a ref.
+#
+# Model caveats specific to this material (read before using the card):
+# - Almost no thermophysical property of C-103 has been measured above 1600 K. The
+#   conductivity and heat capacity tables are a published rule-of-mixtures model
+#   (prabhune2025), checked here against one data-sheet range and one CALPHAD table; the
+#   solidus, liquidus and latent heat are CALPHAD results; the liquid surface tension and
+#   viscosity are those of pure niobium. Each note says so.
+# - The 403 K freezing range (2277-2680 K) is a calculation, probably a non-equilibrium
+#   (Scheil) solidus; see the solidus note. The conduction source spreads the latent heat
+#   over that range.
+# - Not on the card (no source): powder.conductivity, flow.dsigma_dT, flow.density_liquid
+#   and every [microstructure] record. A conduction deck must give k_powder itself, and
+#   init_app needs solid_front_vel and the nucleation values from the deck. miklas2022
+#   holds the inputs of a KGT calculation for C-103 (Gibbs-Thomson coefficient 1.92e-7 K m;
+#   Hf: k = 0.57, m = -4.93 K/wt%; Zr: k = 0.51, m = -9.34; Ti: k = 0.58, m = -14.91;
+#   D = 2.0e-9 m^2/s for each, all CALPHAD or literature values) and fits V against
+#   undercooling with a power law, but does not print the fitted constants.
+# - Printability, as the opened sources state it: C-103 is the easy one of the family. It
+#   prints crack-free to more than 99.8 % density by LPBF (orsborn2025, mireles2020) and no
+#   impurity-induced cold cracking was found in laser DED, only lack-of-fusion pores that
+#   HIP closed (thapliyal2025). It is sensitive to interstitial contamination, oxygen above
+#   all (powder limit 600 ppm O for safe handling, mireles2020), and single tracks at
+#   1.7 m/s balled (miklas2022).
+
+[card]
+schema_version = 1
+material = "C103"
+designation = { spec = "Nb-10Hf-1Ti; composition limits below from the Materion plate and sheet data sheet. UNS number and ASTM specification not looked up for this card" }
+composition_wt_pct = { Nb = "bal", Hf = "9-11", Ti = "0.7-1.3", Zr = "<0.7", Ta = "<0.5", W = "<0.5", O = "<0.0225", N = "<0.015", C = "<0.015", H = "<0.001", note = "limits of materion_c103. Measured cast heat used for the single tracks of miklas2022 (Table 3.1): Hf 9.99, Ti 1.02, Zr 0.78, W 0.02, O 0.01, Nb 88.14. prabhune2025 models 88.3 Nb, 10 Hf, 1 Ti, 0.07 Zr" }
+version = "1.0.0"
+created = 2026-11-14
+modified = 2026-11-14
+status = "draft"
+reviewed_by = ""
+
+[[changelog]]
+version = "1.0.0"
+date = 2026-11-14
+author = "research agent (Claude)"
+changes = "Initial card: Prabhune 2025 melt-pool model properties (k, cp, CALPHAD solidus, liquidus and latent heat, Nb surface tension and viscosity), Materion data sheet (density, emissivity), Miklas 2022 single tracks with measured melt-pool sizes and an LPBF build, two laser DED sets (Prabhune 2025, Thapliyal 2025). No powder conductivity, dsigma/dT, liquid density or microstructure records."
+
+[references.prabhune2025]
+citation = "B. Prabhune, N. Panicker, B. Jordan, B. Lim, K. Snyder, M. Delchini, N.D. See, S. Nag, Y. Plotnikov, Y. Lee, Multi-physics melt pool modeling and process optimization for laser direct energy deposition of Nb-based refractory C103: Defect formation, geometric precision, and process mapping, J. Manuf. Process. 154 (2025) 444-461; read in full (OSTI copy)"
+doi = "10.1016/j.jmapro.2025.09.082"
+url = "https://www.osti.gov/servlets/purl/3002834"
+
+[references.miklas2022]
+citation = "A. Miklas, Additive manufacturing of refractory alloys, M.S. thesis, Colorado School of Mines (2022), released as Kansas City National Security Campus report NSC-614-4923; chapter 3 (C103) read, figures not seen"
+url = "https://www.osti.gov/servlets/purl/1897615"
+
+[references.materion_c103]
+citation = "Materion, Niobium C-103 Alloy Plate and Sheet data sheet (undated; downloaded 2026-11-14). A vendor sheet, typical values"
+url = "https://hkvxni.files.cmp.optimizely.com/download/assets/Niobium+C-103+Plate+and+Sheet+Data+Sheet/091fbfb6300911ef95efb661c407e4bc"
+
+[references.thapliyal2025]
+citation = "S. Thapliyal, J. Ortega-Rojas, S. Dryepondt, B. Jordan, C. Ledford, A. Marquez-Rossy, M. Kirka, Microstructural heterogeneities in additively manufactured refractory alloy C103 and their implications for room and elevated temperature mechanical behavior, Mater. Sci. Eng. A 940 (2025) 148520; processing section read (OSTI accepted manuscript)"
+doi = "10.1016/j.msea.2025.148520"
+url = "https://www.osti.gov/servlets/purl/2573584"
+
+[references.orsborn2025]
+citation = "K.R. Orsborn, K.C. Riffel, E.T. Brizes, O.R. Mireles, A.J. Ramirez, Ultra-high temperature testing and performance of L-PBF C103, Int. J. Refract. Met. Hard Mater. 131 (2025) 107227; processing section read (OSTI accepted manuscript)"
+doi = "10.1016/j.ijrmhm.2025.107227"
+url = "https://www.osti.gov/servlets/purl/2568859"
+
+[references.mireles2020]
+citation = "O.R. Mireles, O. Rodriguez, Y. Gao, N. Philips, Additive Manufacture of Refractory Alloy C103 for Propulsion Applications, AIAA Propulsion and Energy 2020 Forum; methodology section read (NASA NTRS 20205003679)"
+url = "https://ntrs.nasa.gov/api/citations/20205003679/downloads/AM_C103_(AIAA)_26May2020.pdf"
+
+[thermal]
+density = { value = 8850, unit = "kg/m^3", ref = "materion_c103", T_range = [293, 293], note = "room-temperature solid, vendor sheet (8.850 g/cm^3). As-built LPBF: 8833 +/- 7 kg/m^3, 99.80 +/- 0.08 % (orsborn2025). CALPHAD room-temperature value in miklas2022: 8790. prabhune2025 runs its model with a single 8265. One dense density for the conduction solver." }
+liquidus = { value = 2680, unit = "K", ref = "prabhune2025", uncertainty = [2623, 2680], uncertainty_type = "bounds", note = "CALCULATED with Thermo-Calc by prabhune2025 (Table 2), not measured. Lower bound = the melting point on the vendor sheet, 2350 C (materion_c103). miklas2022 says a Thermo-Calc (TCHEA5) liquidus could be validated against experiment but does not print its value." }
+solidus = { value = 2277, unit = "K", ref = "prabhune2025", uncertainty = [2277, 2623], uncertainty_type = "bounds", note = "CALCULATED with Thermo-Calc by prabhune2025 (Table 2), not measured, and doubtful: 403 K below the liquidus. The paper does not say whether it is an equilibrium or a Scheil solidus; miklas2022 gets a non-equilibrium (Scheil) freezing range of 343 K from another database, calls it higher than expected and could not validate it. The equilibrium solidus of a Nb-10Hf-1Ti solid solution should lie much nearer the liquidus (upper bound = the vendor's single melting point). The conduction source releases the latent heat linearly over [ts, tl] and misorientation diffusion normalises undercooling by tl - ts, so this choice changes results: revisit it before production runs." }
+latent_fusion = { value = 2.04e5, unit = "J/kg", ref = "prabhune2025", note = "CALCULATED with Thermo-Calc by prabhune2025 (204338 J/kg, Table 2), not measured. Pure niobium: 2.9e5 to 3.1e5 J/kg (Nb card), and the 88 wt% of Nb alone would contribute 2.5e5, so this looks low. Treat as uncertain by 30 %." }
+conductivity = { T = [300, 600, 1000, 1143, 1573, 2000, 2277, 2680], value = [27.8, 31.5, 36.5, 38.3, 43.7, 49.0, 52.5, 57.5], unit = "W/(m K)", extrapolation = "clamp", ref = ["prabhune2025", "materion_c103"], note = "ESTIMATE by rule of mixtures of the elements, as published and used in the melt-pool model of prabhune2025 (Table 2): k = 0.0125 T + 24 below 2677 K and a constant 57.46 above, evaluated here. The only measured values found are the vendor sheet's 38-45 W/(m K) for 870-1300 C (1143-1573 K), which the model meets at both ends (38.3 and 43.7) if the sheet's range runs with temperature. Nothing measured above 1573 K and nothing for the liquid. miklas2022 found the Thermo-Calc conductivity of C103 unrealistic (50.9 at room temperature) and replaced it with a curve extrapolated from ATI bar-stock measurements that is shown only in a figure." }
+heat_capacity = { T = [300, 543, 1000, 1500, 2000, 2277, 2680], value = [261.5, 261.2, 293.4, 328.6, 363.9, 383.4, 435.0], unit = "J/(kg K)", extrapolation = "clamp", ref = ["prabhune2025", "miklas2022"], note = "ESTIMATE, no measurement. 543 K and above: the rule-of-mixtures model of prabhune2025 (Table 2), cp = 0.0705 T + 222.87 for 543-2747 K and 434.96 in the liquid, evaluated here with the liquid value placed at the liquidus. 300 K: the CALPHAD value of miklas2022 Table 3.3 (261.46), which also gives 416 at the liquidus on the solid side (model: 412) and 428 in the liquid. NOT used: the low-temperature branch printed by prabhune2025, cp = 196.27 + 0.249 T below 543 K, because it does not join the other branch (331 against 261 at 543 K). The vendor sheet gives 343 J/(kg K) at 100 C, 30 % above these values and above pure Nb (272 at 400 K, Nb card); unexplained." }
+emissivity = { value = 0.28, unit = "1", ref = "materion_c103", uncertainty = [0.23, 0.28], uncertainty_type = "bounds", T_range = [1089, 1366], note = "vendor sheet: 0.28 at 816 C and 0.23 at 1093 C; the sheet does not say whether it is total or spectral, hemispherical or normal, nor the surface condition. Nothing near the melting range; clean solid Nb is 0.23 at its melting point (Nb card)." }
+
+[thermal.linear]
+# Rosenthal/Moser need one k and cp: the tables evaluated at T_ref unless
+# conductivity/heat_capacity are given here.
+T_ref = { value = 1500, unit = "K", ref = "estimate", note = "between preheat and the solidus, inside the range of the vendor's measured conductivity; k = 42.8, cp = 328.6 there" }
+
+[powder]
+psd = { D10 = 16.3e-6, D50 = 29.2e-6, D90 = 51.5e-6, unit = "m", method = "laser diffraction (Horiba LA-950V2) in water", ref = "orsborn2025", note = "EIGA-atomised spherical C103 LPBF powder. mireles2020: D10 12.6, D50 33.8, D90 49.1 um, circularity 0.98 (optical image analysis). DED powders of prabhune2025: 70-214 um and 69-190 um" }
+
+[optical]
+absorptivity = { value = 0.4, unit = "1", ref = "prabhune2025", note = "ASSUMED, not measured: prabhune2025 state that the laser absorptivity of C103 is not well established and take 0.4 (their Table A2), a value used for other alloys, at 1030 nm in a blown-powder DED model whose single-track width came out 20 % and height 3 % off the measurement. Flat clean Nb at room temperature absorbs 0.17 at 1.07 um from its optical constants (Nb card). Calibrate lambda against the single tracks of miklas2022 below." }
+
+[flow]
+# Liquid-state properties for the conduction source's melt-pool flow (flow lbm).
+# Recorded only: pass them in the deck (docs/MATERIAL_CARDS.md, Flow).
+# No dsigma_dT: prabhune2025 leave Marangoni flow out of their model and note that no
+# surface-tension gradient has been measured for refractory alloys, nor the effect of
+# surface-active elements on it; pure Nb is -1.99e-4 N/(m K) (Nb card). No density_liquid:
+# the only numbers are CALPHAD, 7940 kg/m^3 for the liquid at the liquidus and 7780 at
+# 3000 K (miklas2022 Table 3.3, whose liquidus temperature is not printed).
+surface_tension = { value = 1.937, unit = "N/m", ref = "prabhune2025", T_range = [2742, 2742], note = "ASSUMED equal to pure niobium at its melting point, as prabhune2025 do in their C103 model (Table 2); the number is the levitation value of the Nb card. No measurement on C103 or any Nb-Hf melt was found. Hf and Ti are both less than 11 wt%, but their effect on the surface is unknown." }
+viscosity = { value = 5.2e-3, unit = "Pa s", ref = "prabhune2025", T_range = [2742, 2742], note = "ASSUMED equal to pure niobium, as prabhune2025 do in their C103 model (Table 2, 0.0052 kg/(m s), source of the Nb value not stated there); the levitation fit on the Nb card gives 4.5e-3 at the Nb melting point. No measurement on C103. Kinematic: nu = 6.5e-7 m^2/s with the CALPHAD liquid density 7940 kg/m^3 of miklas2022." }
+
+# No [microstructure] section: see the header.
+
+# Process sets. LPBF first: bare-plate single tracks with measured melt-pool sections
+# (calibration targets), then a build. For the bare-plate tracks there is no powder layer.
+# Two more LPBF sources print no power or speed: orsborn2025 (EOS M100, 40 um focus,
+# 169.1 J/mm^3, unheated Nb plate, 99.80 % dense) and mireles2020 (Concept Laser M2,
+# 80 um focus, 99.986 % dense as built).
+
+[process.miklas2022_single_track_162W]
+method = "LPBF machine, single track on bare plate (no powder)"
+machine = "KCNSC custom LPBF machine (IPG Photonics AM-RAD) with an IPG YLR-500 fibre laser"
+note = "track 3 of five laser melt tracks on a cast C103 plate (grain size 300 um, ground to 1200 grit), Ar with less than 200 ppm O2; linear energy 324 J/m, conduction mode, primarily epitaxial growth with dendrites near the pool bottom, no surface cracking. The thesis judges this set and track 1 the closest to a good build. The other tracks, measured width/depth in um (Table 3.5): track 1, 162 W at 0.8 m/s, 77/22; track 2, 243 W at 0.2 m/s, 236/215 (keyhole); track 4, 405 W at 1.7 m/s, 110/59 (balling); track 5, 324 W at 1.7 m/s, 91/36 (balling). The author's conduction-only SYSWELD model gave 78/23 for track 3. Preheat and absorptivity not reported."
+power = { value = 162, unit = "W", ref = "miklas2022" }
+speed = { value = 0.5, unit = "m/s", ref = "miklas2022" }
+beam_diameter = { value = 75e-6, unit = "m", profile = "unstated", ref = "miklas2022", note = "beam diameter as tabulated (Table 3.2), no convention or profile given, so no spot record: give the source size in the deck" }
+validation = { melt_pool_width = 91e-6, melt_pool_depth = 28e-6, unit = "m", ref = "miklas2022", note = "cross-section in the steady-state middle of the track, backscatter SEM (Table 3.5); one section" }
+
+[process.lpbf_miklas2022_ati_280W]
+method = "LPBF"
+machine = "LPBF machine at ATI, described only as similar to the KCNSC machine"
+note = "as-built C103 sample from a completed build in Ar, the AM row of the thesis's Tables 3.2 and 3.5; linear energy 311 J/m. Its melt pools were about as wide as single track 3 but twice as deep, and its grain morphology matched that track. Hatch spacing, layer thickness, powder, preheat and density are not given, so the set cannot drive a multi-track deck on its own."
+power = { value = 280, unit = "W", ref = "miklas2022" }
+speed = { value = 0.9, unit = "m/s", ref = "miklas2022" }
+beam_diameter = { value = 100e-6, unit = "m", profile = "unstated", ref = "miklas2022", note = "beam diameter as tabulated, no convention or profile given" }
+validation = { melt_pool_width = 93e-6, melt_pool_depth = 60e-6, unit = "m", ref = "miklas2022", note = "approximated by the author from a cross-section of the build (Table 3.5), so a pool in a multi-layer part, not a single track" }
+
+# Laser DED (blown powder). Extra DED records (powder_feed, beam_diameter) are recorded only.
+
+[process.ded_prabhune2025_466W]
+method = "laser DED, blown powder"
+machine = "BeAM Modulo 400 at ORNL, 2 kW Yb laser at 1030 nm, Ar atmosphere"
+note = "single track and double track, one layer, on a C103 substrate; powder 70-214 um; nozzle offset 3.5 mm (Table 1). The validation is the single track; the double track at the hatch below measured 1090 um wide and 218 um high. The authors' model (absorptivity 0.4 assumed, catchment efficiency 0.17 as a model input, Marangoni flow left out) predicted 800 x 207 um for the single track. Preheat not reported. The paper's second experiment (CCAM, Precitec YC50 head, 0.93 mm beam, 650-1050 W, on Ti-6Al-4V) is tabulated in its Appendix A.1 with speed and feed-rate units that disagree with the text (mm/s against mm/min, g/s against g/min), so it is not recorded."
+power = { value = 466, unit = "W", ref = "prabhune2025" }
+speed = { value = 21.7e-3, unit = "m/s", ref = "prabhune2025", note = "1300 mm/min" }
+hatch = { value = 0.333e-3, unit = "m", ref = "prabhune2025", note = "stepover of the double track" }
+beam_diameter = { value = 0.7e-3, unit = "m", profile = "gaussian", ref = "prabhune2025", note = "laser beam diameter as stated; the authors model the beam as a Gaussian 2P / (pi r^2) exp(-2 r^2 / r^2), which would make 0.35 mm the 1/e2 radius, but they do not say that the stated diameter is the 1/e2 one, so no spot record" }
+powder_feed = { value = 6.3e-5, unit = "kg/s", ref = "prabhune2025", note = "0.063 g/s (3.8 g/min)" }
+validation = { track_width = 663e-6, track_height = 212e-6, unit = "m", ref = "prabhune2025", note = "optical micrograph of the single-track cross-section (their Fig. 5a); no melt depth below the substrate surface given" }
+
+[process.ded_thapliyal2025_582W]
+method = "laser DED, blown powder"
+machine = "BeAM Modulo 400, 2 kW fibre laser"
+note = "blocks 25 x 10 x 22 mm on a Nb substrate plate at room temperature, unidirectional scans rotated 90 deg between layers, Ar with O2 below 10 ppm, gas-atomised C103 powder. As built: relative density about 99.87 % by X-ray microscopy, lack-of-fusion pores, no impurity-induced cold cracking; 100 % after HIP. Beam size not stated in the section read (prabhune2025 give 0.7 mm for the same machine); absorptivity and bead dimensions not reported."
+power = { value = 582, unit = "W", ref = "thapliyal2025" }
+speed = { value = 21.7e-3, unit = "m/s", ref = "thapliyal2025", note = "1300 mm/min" }
+hatch = { value = 395e-6, unit = "m", ref = "thapliyal2025" }
+layer_thickness = { value = 180e-6, unit = "m", ref = "thapliyal2025", note = "layer height" }
+preheat = { value = 293, unit = "K", ref = "thapliyal2025", note = "substrate at room temperature before the first layer; 293 K is this card's reading of room temperature" }
+powder_feed = { value = 6.1e-5, unit = "kg/s", ref = "thapliyal2025", note = "3.66 g/min" }

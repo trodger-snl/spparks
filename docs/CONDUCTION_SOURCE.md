@@ -425,6 +425,22 @@ enough for mixing; one rank first (several ranks: see the end of this section).
   takes effect from inside the process is still to be confirmed (export it
   in the job script to be sure). It is not a full cure: a run with 40
   extra reductions per step still grew.
+- A DED build as a chain of processes, one per layer (2026-11-15; it bounds
+  the host memory, which grows per process and is given back at exit).
+  Process k runs a path file holding layers k and k + 1 with `t0` = layer
+  k's start, and stops half a recoat after layer k's scan (the next layer
+  is in the file only so that the field is carried, not reset, when layer k
+  is done; its start time is printed, "layer 2 of 2 ... starts at t=", and
+  is the next process's `t0`). It ends with `dump hdf5 ... site i1 i2 d1 d2
+  d3 d4 [d11]` and `dump conduction` (`dump_modify last yes` on both, or a
+  delta that lands on the stop time). The next process reads them with `set
+  site|i2|d1..d4 hdf5`, `reset_time` and `init grid`. Checked on OpenMP
+  (in.rectangle.ded, layers 1 and 2 as two processes against one run, at
+  1.25 s after layer 2): i2 equal in all 562500 sites; d6 equal at the
+  median, within 0.02 K for 99% of the sites, 24 K at the worst. Grain ids
+  differ (the keyed random numbers restart with the step count). Not yet
+  tried with `flow lbm` (the flow restarts at rest, as at every new layer;
+  the feed reservoir is not carried and should be empty by then).
 - Is mesh refinement worth it? (2026-11-15, evaluation only.) Where the
   thermal cells are: the grid is a tensor product, so the 18 stretched
   margin cells per side keep the box's resolution along the other two

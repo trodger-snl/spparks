@@ -24,8 +24,7 @@ DumpConductionKokkos::DumpConductionKokkos(SPPARKS *spk, int narg, char **arg) :
   Dump(spk, narg, arg)
 {
   if (narg != 4) error->all(FLERR,"Illegal dump conduction command: dump ID conduction DELTA FILE");
-  if (multifile || multiproc)
-    error->all(FLERR,"Dump conduction cannot use '*' or '%' wildcards");
+  if (multiproc) error->all(FLERR,"Dump conduction cannot use the '%' wildcard");
 }
 
 void DumpConductionKokkos::init_style()
@@ -49,7 +48,10 @@ void DumpConductionKokkos::write(double time)
   ConductionSolverKokkos *c = static_cast<AppAdditiveTextureKokkos *>(app)->conduction();
   // no grid yet (a dump at the run's first step, before any advance): nothing to write
   if (!c || !c->ready()) return;
-  c->write_grid(filename, time, single);
+  // FILE with a '*': a series, the '*' replaced by the dump's count
+  std::string f = filename;
+  if (multifile) f.replace(f.find('*'), 1, std::to_string(idump));
+  c->write_grid(f, time, single);
   firstflag = 0;
   idump++;
 }

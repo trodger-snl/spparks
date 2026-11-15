@@ -146,6 +146,14 @@ class ConductionSolverKokkos : protected Pointers {
   MeltFlow<KK_FLOAT>::W3 fq, ftmp;
   Kokkos::View<KK_FLOAT***> fX;      // mix flow: composition of the block's cells
   MeltFlow<KK_FLOAT>::W3 fXw, fX2;   // the window's copy for the sweeps, and its scratch
+  // Where liquid can be: a step's stage writes its stamp to fgx(i), fgy(j),
+  // fgz(k) for every cell it leaves above the lowest solidus (ts_min), so
+  // the next flow_step looks for fluid only in the box of stamped rows.
+  // fg_ok: the field has not changed since that stage.
+  Kokkos::View<int*> fgx, fgy, fgz;
+  int fstamp = 0;
+  bool fg_ok = false;
+  double ts_min = 0.0;
   // flow properties cards: the tables of Config::Flow::Props on the device
   Kokkos::View<double*> fp_sig, fp_r0, fp_r1, fp_eta;
   // feed surface: fborn marks new cells (unborn, or born and not melted yet); the
@@ -183,6 +191,7 @@ class ConductionSolverKokkos : protected Pointers {
     bool sts = false, store_L0 = false, phase = true, path = false;
     double h = 0.0, mu = 1.0, nu = 0.0, mut = 0.0, gat = 0.0;
     double Pq = 0.0, xl = 0.0, yl = 0.0;
+    int stamp = 0;   // flow lbm: marks the hot cells' rows (fgx, fgy, fgz), 0 = not
   };
   void stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
              Kokkos::View<KK_FLOAT***> Y2, Kokkos::View<KK_FLOAT***> Yout);

@@ -166,6 +166,10 @@ struct MeltFlow {
   W3 px, py, pz;                             // the last step's u
   W4 flux;                                   // (x, y, z, face): mass out, see above
   bool props = false;                        // per-cell liquid properties (see above)
+  // lazy: step() clears a non-FLUID cell only where the caller set fl < 0
+  // (a cell that was FLUID at the last call; the clearing needs two steps).
+  // Else every non-FLUID cell of the window is cleared at every step.
+  bool lazy = false;
   W3 sig, dens, visc;
   int wlo[3] = {0, 0, 0}, whi[3] = {0, 0, 0};   // the cells the fields hold
 
@@ -262,13 +266,14 @@ struct MeltFlow {
     const R bx = R(p.buoy[0]), by = R(p.buoy[1]), bz = R(p.buoy[2]), Tref = R(p.Tref);
     const R mar = R(p.marangoni), darcy = R(p.darcy);
     // props: the Marangoni force follows sig, not T
-    const bool hp = props;
+    const bool hp = props, lazy_ = lazy;
     auto S_ = hp ? sig : T; auto dn_ = dens; auto vs_ = visc;
     const R nu3 = R(3.0 * p.nu);
     Kokkos::parallel_for("FlowStep",
       Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
         if (ty(i, j, k) != FLUID) {
+          if (lazy_ && fl_(i, j, k) >= R(0)) return;
           for (int q = 0; q < 19; q++) g_(i, j, k, q) = R(0);
           ux_(i, j, k) = uy_(i, j, k) = uz_(i, j, k) = rho_(i, j, k) = R(0);
           px_(i, j, k) = py_(i, j, k) = pz_(i, j, k) = R(0);

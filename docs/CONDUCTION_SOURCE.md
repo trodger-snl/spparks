@@ -348,7 +348,7 @@ enough for mixing; one rank first (several ranks: see the end of this section).
   sum/max d6 and dump conduction's T and u bit for bit; with `feed
   surface` d11 agrees to 3e-15 (the reduced sums round differently) and
   its total exactly. One rank is bit-identical to the code before.
-  Not yet run on HIP (the host-staged exchange path).
+  HIP: see *HIP check* below.
   ponytail: 19 populations sent where 5 cross a face; an exchange per flow
   step (deeper halos would trade them for wider windows).
 - Pool-only storage (2026-11-14). The flow's fields (`FlowWin`: a view
@@ -369,7 +369,7 @@ enough for mixing; one rank first (several ranks: see the end of this section).
   the first 4-rank run. Check (OpenMP, FP64, as above): bit for bit the
   dense results on 1 and 4 ranks, with and without `feed surface` (d11,
   i1, i2, d6, and T and u of dump conduction); peak host memory of the
-  one-rank run 625 MB against 805 MB. Not yet run on HIP.
+  one-rank run 625 MB against 805 MB. HIP: see *HIP check* below.
   ponytail: a move reallocates every field; keep one larger allocation and
   shift inside it if moves ever show in a profile.
 - Properties by composition (2026-11-14): `flow lbm properties cards
@@ -385,6 +385,14 @@ enough for mixing; one rank first (several ranks: see the end of this section).
   solutal buoyancy, and dsigma/dT, expansion, viscosity per composition.
   sig replaces T in the halo exchange. Inertia is still rho0's (Boussinesq).
   melt_flow_check 13 checks the kernel against the plain model.
+- HIP check (2026-11-14, gfx1151, build-verify = FP64 Release, the
+  host-staged exchange): melt_flow_check passes in both precisions (13
+  included). in.thin_wall.ded.graded.flow on 1 vs 4 (2x2) ranks, plain,
+  `feed surface` and `properties cards`: d11 within 2e-15, sum/max d6 and
+  i2 equal, dump conduction's u equal and T within 5e-13 (a fast-math
+  build: not bit for bit, as the strict OpenMP build is). HIP vs OpenMP on
+  one rank: d11 within 8e-14. 23 s on one rank, 39 s on four sharing the
+  one GPU (OpenMP, 12 threads: about 155 s).
 - Limits: flat surface; without `properties cards` one set of flow
   constants for every composition; with it the inertia is still one
   density's and eta has no T dependence; melted LOOSE cells carried as

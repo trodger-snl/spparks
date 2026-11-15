@@ -281,7 +281,8 @@ enough for mixing; one rank first (several ranks: see the end of this section).
   every flow step a reduction 2.03 (and slower); fused, fenced, plain
   steps, speed measured every 16th call 1.19. Reductions make it worse,
   fences help, launch count does not matter.
-- OPEN: host memory grows with the number of kernel launches on HIP
+- Host memory on HIP (traced 2026-11-15 to glibc's mmap threshold, see below;
+  the notes here are the earlier search): it grows with the kernel launches
   (gfx1151). The conduction-only pillar ends at 2.1 GB; with flow (about
   5x the launches per thermal step) it reached 12.6 GB. Not a leak in
   MeltFlow (700k launches standalone: flat 180 MB) nor in any reduction
@@ -421,12 +422,38 @@ enough for mixing; one rank first (several ranks: see the end of this section).
   (each reduction's result is one): with `AMD_SERIALIZE_COPY=3` exported the
   track above peaks at 0.36 GB against 1.32 GB, 3% slower, same result;
   `AMD_SERIALIZE_KERNEL=3` makes it worse (1.82 GB). spparks.cpp sets the
-  variable before the first HIP call if the user has not; whether that
-  takes effect from inside the process is still to be confirmed (export it
-  in the job script to be sure). It is not a full cure: a run with 40
-  extra reductions per step still grew.
-- A DED build as a chain of processes, one per layer (2026-11-15; it bounds
-  the host memory, which grows per process and is given back at exit).
+  variable before the first HIP call if the user has not, and that takes
+  effect (0.36 GB with nothing exported).
+- The larger growth (2026-11-15): glibc's mmap threshold. Two 20-layer
+  Ti-6Al-4V -> Nb walls with `AMD_SERIALIZE_COPY=3` still reached 45.8 GB
+  (properties cards) and 29.4 GB (constant properties): flat at 0.4-0.8 GB
+  for the first 13 / 50 minutes, then 1-2 GB a layer with steps of 2-9 GB;
+  one single track of fourteen reached 2.1 GB. Not a leak: malloc_stats at
+  exit shows 2 GB in use. glibc raises its mmap threshold (to as much as 32
+  MB) whenever a large block is freed (a dump's buffer, a grid rebuild);
+  from then on the HIP runtime's short-lived blocks below it come from the
+  heap, which fragments and is not given back. The track: 0.35 GB without
+  its dumps, 1.06 GB with `dump hdf5` alone, 2.1 GB with both dumps, 0.34
+  GB with both and `MALLOC_MMAP_THRESHOLD_=131072` (setting it turns the
+  adjustment off), same run time. Six layers of the first wall: 0.93 GB
+  against about 8. An OpenMP run of four layers does not grow (0.8 GB).
+  spparks.cpp now calls `mallopt(M_MMAP_THRESHOLD, 128 KiB)` in HIP builds
+  unless the variable is set. Not yet run: a whole wall with it.
+- Mirror symmetry and precision (2026-11-15). A track on the centreline is
+  mirror symmetric in y. Double: exactly so, OpenMP (25 ms) and HIP (50 ms,
+  to the float dump), 25% Nb on Ti-6Al-4V. Mixed: 1e-6 of the peak speed
+  from the first step; with one composition it stays there for the whole
+  track, with feed != substrate it jumps to 1e-2..2e-1 after 20-45 ms
+  (HIP and OpenMP alike), in single frames first, as when a cell crosses a
+  threshold a step before its mirror cell (a composition bin, probably;
+  not confirmed). So the flow pattern of a mixed-precision run with a
+  composition step is one of many; `properties cards` raises the
+  asymmetry but is not its cause. Production runs are double.
+- Double against mixed, same track, first 50 ms: HIP 21.0 s against 9.5 s
+  (2.2x; whole track 296 s against 140.5 s); OpenMP, 16 threads, 77.2 s
+  against 70.7 s (build-strict-omp, build-omp-mixed).
+- A DED build as a chain of processes, one per layer (2026-11-15; written
+  to bound the host memory before its growth was traced to glibc, above).
   Process k runs a path file holding layers k and k + 1 with `t0` = layer
   k's start, and stops half a recoat after layer k's scan (the next layer
   is in the file only so that the field is carried, not reset, when layer k

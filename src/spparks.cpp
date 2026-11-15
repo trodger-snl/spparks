@@ -34,6 +34,9 @@
 #ifdef SPK_KOKKOS
 #include <Kokkos_Core.hpp>
 #include <cstdlib>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 #include <cstdio>
 #include <cstring>
 #endif
@@ -146,6 +149,16 @@ SPPARKS::SPPARKS(int narg, char **arg, MPI_Comm communicator)
     // setting, if any, is kept. Before the first HIP call (the device count
     // below), which is when the runtime reads it.
     setenv("AMD_SERIALIZE_COPY", "3", 0);
+#ifdef __GLIBC__
+    // glibc raises its mmap threshold (to as much as 32 MB) each time a
+    // large block is freed, a dump's buffer for one. From then on the HIP
+    // runtime's short-lived blocks below it come from the heap, which
+    // fragments and is never given back: a DED track with one dump hdf5
+    // grew to 2.1 GB (0.34 GB with the threshold fixed), a 20-layer wall to
+    // 46 GB. Setting the threshold turns the adjustment off. An OpenMP run
+    // of the same deck does not grow.
+    if (!getenv("MALLOC_MMAP_THRESHOLD_")) mallopt(M_MMAP_THRESHOLD, 128 * 1024);
+#endif
 #endif
     spk_bind_gpu_by_local_rank(communicator, narg, arg);
     Kokkos::initialize(narg, arg);

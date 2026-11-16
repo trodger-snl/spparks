@@ -808,6 +808,10 @@ struct MeltFlow {
         int kb = k + 1;
         if (k >= z0 && ty(i, j, k) == FLUID) { M += R(1) + rho_(i, j, k); kb = k; }
         h_(i, j) = R(k + 1) + sum;
+        // Liquid hanging over gas (left on a frozen rim when what was under
+        // it drained or froze away) is not a surface one height describes:
+        // it carries no surface force, like a column with solid on top.
+        if (k >= z0 && ty(i, j, k) == GAS) return;
         kt_(i, j) = kt; kb_(i, j) = kb;
         M_(i, j) = (M > R(0.5) ? M : R(0.5)) * (hp ? R(1) + dn_(i, j, kt) : R(1));
       });

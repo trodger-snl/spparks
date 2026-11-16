@@ -1041,7 +1041,7 @@ void fs_inject()
     for (int j = 0; j < ny; j++)
       hd(i, j) = R(1e-3 * std::exp(-((i - 15.5) * (i - 15.5) + (j - 15.5) * (j - 15.5)) / 36.0));
   Kokkos::deep_copy(dm, hd);
-  Kokkos::View<R***> q("q", nx, ny, nz), tmp("tmp", nx, ny, nz);
+  Kokkos::View<R***> q("q", nx, ny, nz), tmp("tmp", nx, ny, nz), qfv("qf", nx, ny, nz);
   Kokkos::deep_copy(q, R(1));
   const int lo[3] = {0, 0, 0}, hi[3] = {nx, ny, nz};
   auto total = [&]() {
@@ -1055,11 +1055,12 @@ void fs_inject()
     return sum;
   };
   const double m0 = m.total_mass(), s0 = total(), qf = 3.0;
+  Kokkos::deep_copy(qfv, R(qf));
   double fed = 0.0, lost = 0.0;
   for (int s = 0; s < 6000; s++) {
     m.surface(lo, hi); m.step();
     melt_advect(m, q, tmp, lo, hi);
-    if (s < 3000) fed += m.inject(lo, hi, dm, q, R(qf));
+    if (s < 3000) fed += m.inject(lo, hi, dm, R(1), q, qfv);
     lost += m.convert(lo, hi, q);
   }
   const auto h = fs_height(m);

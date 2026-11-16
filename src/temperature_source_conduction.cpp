@@ -269,8 +269,9 @@ void ConductionTemperatureSource::setup_temperature_source(
     else if (a == "flow") {
       if (args.at(++i) != "lbm") error->all(FLERR,"setup_temperature_source conduction: flow takes lbm");
       cfg.flow.on = true;
-      while (i + 2 < args.size()) {
+      while (i + 1 < args.size()) {
         const std::string &k = args[i+1];
+        if (k != "free_surface" && i + 2 >= args.size()) break;
         if (k == "properties") {
           const std::string &v = args[i+2];
           if (v != "cards" && v != "constant")
@@ -280,9 +281,18 @@ void ConductionTemperatureSource::setup_temperature_source(
           continue;
         }
         if (k == "sigma_table") { cfg.flow.sigma_file = args[i+2]; i += 2; continue; }
+        if (k == "free_surface") { cfg.flow.fs = true; i += 1; continue; }
+        if (k == "powder") {
+          if (i + 3 >= args.size()) error->all(FLERR,"setup_temperature_source conduction: flow powder needs a rate (kg/s) and a radius (m)");
+          cfg.flow.powder = num(i + 2); cfg.flow.powder_radius = num(i + 3);
+          i += 3;
+          if (i + 2 < args.size() && args[i+1] == "T") { cfg.flow.powder_T = num(i + 2); i += 2; }
+          continue;
+        }
         double *v = k == "dsigma_dT" ? &cfg.flow.dsigma_dT : k == "beta" ? &cfg.flow.beta
                   : k == "viscosity" ? &cfg.flow.viscosity : k == "mushy" ? &cfg.flow.mushy
-                  : k == "u_ref" ? &cfg.flow.u_ref : k == "smagorinsky" ? &cfg.flow.smag : nullptr;
+                  : k == "u_ref" ? &cfg.flow.u_ref : k == "smagorinsky" ? &cfg.flow.smag
+                  : k == "sigma" ? &cfg.flow.sigma : nullptr;
         if (!v) break;
         *v = num(i + 2);
         i += 2;
@@ -409,6 +419,20 @@ void ConductionTemperatureSource::setup_temperature_source(
       cfg.comp.back().name = nodes[0].name + "-" + nodes.back().name + " x=" + MaterialCard::num(x);
     }
   }
+  if (cfg.flow.fs) {
+    int np;
+    MPI_Comm_size(world, &np);
+    if (np > 1) error->all(FLERR,"setup_temperature_source conduction: flow free_surface runs on one rank");
+    if (!cfg.ded) error->all(FLERR,"setup_temperature_source conduction: flow free_surface needs ded");
+    if (cfg.comp_feed_surface)
+      error->all(FLERR,"setup_temperature_source conduction: flow free_surface feeds by powder, not feed surface");
+    if (!cfg.comp.empty() && !cfg.comp_flow)
+      error->all(FLERR,"setup_temperature_source conduction: flow free_surface with composition needs mix flow");
+    if (cfg.far > 0.0) error->all(FLERR,"setup_temperature_source conduction: flow free_surface does not take far");
+    if (cfg.flow.powder < 0.0 || (cfg.flow.powder > 0.0 && cfg.flow.powder_radius <= 0.0) || cfg.flow.sigma <= 0.0)
+      error->all(FLERR,"setup_temperature_source conduction: flow powder needs a rate >= 0 and a radius > 0, sigma > 0");
+    if (cfg.flow.powder_T < 0.0) cfg.flow.powder_T = T0_default;
+  }
   if (cfg.flow.on && (cfg.flow.cards || !cfg.flow.sigma_file.empty()) && cfg.flow.props.n == 0)
     error->all(FLERR,"setup_temperature_source conduction: flow properties cards and sigma_table "
                "need composition ... mix flow (and sigma_table needs properties cards)");
@@ -472,6 +496,11 @@ void ConductionTemperatureSource::print_source_info() const
               << cfg.flow.beta << " 1/K, viscosity " << cfg.flow.viscosity << " m^2/s, mushy "
               << cfg.flow.mushy << " 1/s, u_ref " << cfg.flow.u_ref << " m/s, smagorinsky "
               << cfg.flow.smag << std::endl;
+  if (cfg.flow.fs)
+    std::cout << "conduction: flow lbm free surface"
+              << (cfg.flow.props.n ? "" : ", surface tension " + std::to_string(cfg.flow.sigma) + " N/m")
+              << "; powder " << cfg.flow.powder << " kg/s within " << cfg.flow.powder_radius
+              << " m of the axis at " << cfg.flow.powder_T << " K; no cell is born" << std::endl;
   if (cfg.ded)
     std::cout << "conduction: ded, birth radius " << cfg.ded_radius << " m, T_birth "
               << cfg.T_birth << " K, depth "

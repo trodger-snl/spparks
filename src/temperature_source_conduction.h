@@ -91,6 +91,16 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
       // table of tools/surface_tension.py instead of the cards' linear mix.
       bool cards = false;
       std::string sigma_file;
+      // free_surface (needs ded, one rank): the pool's surface moves
+      // (MeltFlow's fs). The grid reaches the top of the lattice, the laser
+      // lands on each column's surface, and metal is wherever the liquid
+      // went: sites follow it (i2 5 <-> 2). No cell is born; see powder.
+      bool fs = false;
+      double sigma = 1.5;               // N/m at the liquidus, without properties cards
+      // powder (free_surface): mass rate (kg/s) blown onto the surface in a
+      // Gaussian of this 1/e radius about the laser axis, at temperature T
+      // (default T0); only what lands on liquid is caught.
+      double powder = 0.0, powder_radius = 0.0, powder_T = -1.0;
       // Tables made at setup. sig[iT * nx + ix] (N/m) on uniform grids from
       // (T0, x0), steps (dT, dx); linear beyond the T range, held in x.
       // rho = r0 + r1 (T - Tr) and the dynamic viscosity eta at n points

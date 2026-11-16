@@ -863,13 +863,13 @@ struct MeltFlow {
       });
   }
 
-  // Mass arriving on the surface (powder): dm(x, y), in cells of liquid,
-  // goes into the top interface cell of each column that has one (as
-  // surface() found it: call between step() and convert(), which passes on
-  // what overfills a cell). The carried fields mix: q with qf, q2 with the
-  // value q2f holds for that cell. Returns the mass taken; what falls on a
+  // Mass arriving on the surface (powder): scale * dm(x, y), in cells of
+  // liquid, goes into the top interface cell of each column that has one
+  // (as surface() found it: call between step() and convert(), which passes
+  // on what overfills a cell). The carried fields mix with the values qf
+  // and q2f hold for that cell. Returns the mass taken; what falls on a
   // column with no liquid surface is not.
-  double inject(const int lo[3], const int hi[3], Kokkos::View<R**> dm, W3 q = W3(), R qf = R(0),
+  double inject(const int lo[3], const int hi[3], Kokkos::View<R**> dm, R scale, W3 q = W3(), W3 qf = W3(),
                 W3 q2 = W3(), W3 q2f = W3()) {
     auto ty = type; auto ms_ = cmass; auto kt_ = skt;
     const bool one = q.v.extent(0) > 0, two = q2.v.extent(0) > 0;
@@ -878,12 +878,12 @@ struct MeltFlow {
       Kokkos::MDRangePolicy<Kokkos::Rank<2>>({lo[0], lo[1]}, {hi[0], hi[1]}),
       KOKKOS_LAMBDA(const int i, const int j, double &g) {
         const int k = kt_(i, j);
-        const R d = dm(i, j);
+        const R d = scale * dm(i, j);
         if (k < 0 || d <= R(0) || ty(i, j, k) != INTERFACE) return;
         const R m = ms_(i, j, k), mn = m + d;
         // a cell overdrawn by more than arrives takes the feed's values
         const R w = m > R(0) ? d / mn : R(1);
-        if (one) q(i, j, k) += w * (qf - q(i, j, k));
+        if (one) q(i, j, k) += w * (qf(i, j, k) - q(i, j, k));
         if (two) q2(i, j, k) += w * (q2f(i, j, k) - q2(i, j, k));
         ms_(i, j, k) = mn;
         g += d;

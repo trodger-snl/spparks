@@ -62,7 +62,9 @@ class ConductionSolverKokkos : protected Pointers {
   // LOOSE: flag bit, see packing. PLATE: flag bit, an i2 = 6 site's cell or
   // a cell below plate_top (the material byte M says which material).
   // UNBORN: flag bit on POWDER under ded, gas until the laser deposits it
-  enum Phase { GAS = 0, POWDER = 1, DENSE = 3, LOOSE = 4, PLATE = 8, UNBORN = 16 };
+  // PART (free surface): flag bit, the cell also carries the heat of the
+  // interface cell above it; its capacity factor is Cap.
+  enum Phase { GAS = 0, POWDER = 1, DENSE = 3, LOOSE = 4, PLATE = 8, UNBORN = 16, PART = 32 };
 
   bool ready() const { return built; }
   // dump conduction: T and phase of every cell (margins too) and the cell
@@ -166,6 +168,22 @@ class ConductionSolverKokkos : protected Pointers {
   // (in units of x * cells); xpool, xfeed: last pool mean and fed x
   Kokkos::View<unsigned char***> fborn;
   double feed_res = 0.0, xpool = 0.0, xfeed = 0.0, feed_xl = 0.0, feed_yl = 0.0;
+  // flow free_surface. Thermally a cell is metal when it is full: an
+  // interface cell is gas to the stencil, and its heat rides with the full
+  // cell below it (its host: Cap = 1 + the interface cell's mass, PART),
+  // sharing one enthalpy; one with no full cell below does not conduct. So
+  // the stencil's surface is the staircase of full cells, every capacity is
+  // >= 1 (the explicit bound holds), and a film on cold solid freezes with it.
+  // A partial cell that freezes becomes a whole cell or gas; fs_res is the
+  // liquid owed by that rounding and by lost droplets (cells; + = to return),
+  // paid back through the powder feed.
+  Kokkos::View<KK_FLOAT***> Cap;          // T's shape; read where PART is set
+  Kokkos::View<KK_FLOAT**> zsf;           // per local column: the surface the laser lands on
+  Kokkos::View<KK_FLOAT***> fXfed, fqfed; // block: the composition and enthalpy powder brings to a cell
+  Kokkos::View<KK_FLOAT**> fdm;           // block columns: powder per thermal step (cells of liquid)
+  int fvalid[6] = {0, 0, 0, 0, 0, 0};     // block cells whose flow type is current (the window last filled)
+  double fs_res = 0.0, fs_fed = 0.0, fs_got = 0.0, fs_lost = 0.0, fs_round = 0.0, rho_feed = 0.0;
+  bool fs_laser = false;
   bool has_pool = false;
   Kokkos::View<int*> site_blk;       // mix flow: a site's block cell (flat; ghosts too), -1 = none
   Kokkos::View<double*> tsm, Hrefm;
@@ -207,6 +225,11 @@ class ConductionSolverKokkos : protected Pointers {
   void remat(Kokkos::View<unsigned char*> d_mat, int nlocal);
   // flow lbm: h seconds of flow on the pool, then the enthalpy carried with it
   void flow_step(double h, bool laser_on, double xl, double yl);
+  // flow free_surface: each column's surface for the laser; and the sites
+  // follow the metal (i2 5 -> 2 where a cell filled, -> 5 where it emptied)
+  void fs_surface_z();
+  void fs_report();   // the powder and reservoir tallies, at each dump conduction and when the laser goes off
+  void phase_out(Kokkos::View<int*> d_af, int nall);
   // flow lbm, several ranks: the w owned layers next to each neighbour go
   // to its halo; dirs: 1 = x, 2 = y, 3 = x then y (corners arrive)
   template <class S>

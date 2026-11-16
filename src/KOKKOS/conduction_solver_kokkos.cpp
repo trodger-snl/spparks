@@ -147,6 +147,7 @@ void ConductionSolverKokkos::advance(double t,
 
   if (t > t_fd) integrate(t);
   if (fX.extent(0)) comp_out(d_comp, d_mat, nall);
+  if (flow && flow->fs) phase_out(d_af, nall);
 }
 
 /* ----------------------------------------------------------------------
@@ -225,7 +226,8 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
 
   // Grid top: the highest site layer at or below the laser plane.
   zl = src->get_scan_laser_plane_z();
-  const int gz_top = std::min(ghi[2], (int) std::floor(zl / dx + 1e-9));
+  // (free surface: the top of the lattice, the bead rises into the gas)
+  const int gz_top = cfg.flow.fs ? ghi[2] : std::min(ghi[2], (int) std::floor(zl / dx + 1e-9));
   if (gz_top < glo[2])
     error->all(FLERR,"conduction: laser plane is below the lattice");
 
@@ -302,6 +304,14 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   P = Kokkos::View<unsigned char***>("cond_P", NXL, NYL, nz);
   Pn = Kokkos::View<unsigned char***>("cond_Pn", NXL, NYL, nz);
   M = Kokkos::View<unsigned char***>("cond_M", NXL, NYL, nz);
+  Cap = Kokkos::View<KK_FLOAT***>();
+  zsf = Kokkos::View<KK_FLOAT**>();
+  if (cfg.flow.fs) {
+    Cap = Kokkos::View<KK_FLOAT***>("cond_Cap", NXL, NYL, nz);
+    Kokkos::deep_copy(Cap, (KK_FLOAT) 1);
+    zsf = Kokkos::View<KK_FLOAT**>("cond_zsf", NXL, NYL);
+    Kokkos::deep_copy(zsf, (KK_FLOAT) zsrc);
+  }
 
   // Phase: lattice cells from i2; elsewhere plate / layer / part rule.
   auto hP = Kokkos::create_mirror_view(P);
@@ -359,7 +369,8 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
       // never-melted sites are unborn: gas until the laser deposits them.
       const int af = haf(s);
       if (af == 6 && !(plate_on && hx(s, 2) * dx < zplate)) bad6 = 1;
-      const unsigned char unmelted = cfg.ded ? (POWDER | UNBORN) : POWDER;
+      // (free surface: nothing is born, they are gas)
+      const unsigned char unmelted = cfg.flow.fs ? GAS : cfg.ded ? (POWDER | UNBORN) : POWDER;
       hP(i, j, k) = af == 6 ? (DENSE | PLATE)
                   : (af == 2 || af == 3) ? DENSE : (af == 0 || af == 1) ? unmelted : GAS;
       if (af == 6) hM(i, j, k) = iplate;
@@ -381,6 +392,19 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
       if (hP.data()[n] == POWDER) hP.data()[n] = POWDER | LOOSE;
   Kokkos::deep_copy(site_cell, hsc);
   Kokkos::deep_copy(P, hP);
+  if (cfg.flow.fs) {
+    // the laser lands on the metal's top in every column, the margins' too
+    // (fs_surface_z keeps the box's columns current); a column of gas takes
+    // the source plane
+    auto hz = Kokkos::create_mirror_view(zsf);
+    for (int i = 0; i < NXL; i++)
+      for (int j = 0; j < NYL; j++) {
+        int k = nz - 1;
+        while (k >= 0 && (hP(i, j, k) & 3) == GAS) k--;
+        hz(i, j) = (KK_FLOAT) (k >= 0 ? az.hi[k] : zsrc);
+      }
+    Kokkos::deep_copy(zsf, hz);
+  }
   Kokkos::deep_copy(M, hM);
 
   // Property tables, one row per material, all on one T grid
@@ -621,6 +645,7 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
     flow = std::make_unique<MeltFlow<KK_FLOAT>>();
     flow->props = cfg.flow.props.n > 0;
     flow->lazy = true;   // FlowFill marks the cells that froze (fl = -1)
+    flow->fs = cfg.flow.fs;
     flow->resize(bn[0], bn[1], bn[2], false);   // no cells held until there is a pool
     fg0[0] = lo[0] - glo[0] - fh[0]; fg0[1] = lo[1] - glo[1] - fh[2]; fg0[2] = 0;
     for (int d = 0; d < 6; d++) fW[d] = 0;
@@ -632,6 +657,7 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
     ph.dsdT_rho = cfg.flow.dsigma_dT / src->density();
     ph.beta_g = cfg.flow.beta * 9.81; ph.Tref = tl;
     ph.darcy = cfg.flow.mushy; ph.u_ref = cfg.flow.u_ref;
+    ph.sig_rho = cfg.flow.fs ? cfg.flow.sigma / src->density() : 0.0;
     if (flow->props) {
       // sig in N/m, dens = rho / rho0 - 1, visc = nu / nu0 (see MeltFlow):
       // rho0, nu0 are the first card's liquid at Tr
@@ -639,6 +665,11 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
       ph.nu = pr.eta[0] / pr.r0[0];
       ph.dsdT_rho = 1.0 / pr.r0[0];
       ph.beta_g = 9.81;
+      if (cfg.flow.fs) {
+        // sig is stored less the table's first value; the step is bounded by the largest sigma / rho
+        flow->p.sigma = pr.sig[0];
+        ph.sig_rho = *std::max_element(pr.sig.begin(), pr.sig.end()) / *std::min_element(pr.r0.begin(), pr.r0.end());
+      }
       auto dev = [](const char *nm, const std::vector<double> &v) {
         Kokkos::View<double*> d(nm, v.size());
         Kokkos::deep_copy(d, Kokkos::View<const double*, Kokkos::HostSpace>(v.data(), v.size()));
@@ -678,6 +709,39 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
               hf(i, j, k) = (hP(i + fb0[0], j + fb0[1], k + fb0[2]) & UNBORN) ? 1 : 0;
         Kokkos::deep_copy(fborn, hf);
       }
+    }
+    if (cfg.flow.fs) {
+      // what powder brings to each cell: the composition the deck stored on
+      // it (d11 of the gas above the part) and that material's enthalpy at
+      // the feed temperature; the feed's density is that of the mean fed x
+      fXfed = Kokkos::View<KK_FLOAT***>("cond_fXfed", fX.extent(0), fX.extent(1), fX.extent(2));
+      if (fX.extent(0)) Kokkos::deep_copy(fXfed, fX);
+      fqfed = Kokkos::View<KK_FLOAT***>("cond_fqfed", bn[0], bn[1], bn[2]);
+      fdm = Kokkos::View<KK_FLOAT**>("cond_fdm", bn[0], bn[1]);
+      auto hq = Kokkos::create_mirror_view(fqfed);
+      auto hX = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), fX);
+      auto hHr = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), Hrefm);
+      const int nb = src->ncomp();
+      const bool cm = fX.extent(0) > 0;
+      double sx = 0.0, ng = 0.0;
+      for (int i = 0; i < bn[0]; i++)
+        for (int j = 0; j < bn[1]; j++)
+          for (int k = 0; k < bn[2]; k++) {
+            int m = 0;
+            if (cm) {
+              m = (int) std::lround((hX(i, j, k) - cfg.comp_x0) / (cfg.comp_x1 - cfg.comp_x0) * (nb - 1));
+              m = std::max(0, std::min(nb - 1, m));
+              if ((hP(i + fb0[0], j + fb0[1], k + fb0[2]) & 3) == GAS) { sx += hX(i, j, k); ng += 1.0; }
+            }
+            hq(i, j, k) = (KK_FLOAT) (H_at(m, cfg.flow.powder_T) + hHr(m));
+          }
+      Kokkos::deep_copy(fqfed, hq);
+      rho_feed = src->density();
+      if (cm && ng > 0.0) {
+        int m = (int) std::lround((sx / ng - cfg.comp_x0) / (cfg.comp_x1 - cfg.comp_x0) * (nb - 1));
+        rho_feed = cfg.comp[std::max(0, std::min(nb - 1, m))].rho;
+      }
+      for (int d = 0; d < 6; d++) fvalid[d] = 0;
     }
   }
 
@@ -827,6 +891,7 @@ void ConductionSolverKokkos::reset_field(double Tr)
 
 void ConductionSolverKokkos::write_grid(const std::string &file, double time, bool single)
 {
+  if (flow && flow->fs) fs_report();
 #ifndef SPPARKS_HDF5
   (void) file; (void) time; (void) single;
   error->all(FLERR,"dump conduction needs a build with HDF5 (-DSPPARKS_ENABLE_HDF5=ON)");
@@ -871,6 +936,7 @@ void ConductionSolverKokkos::write_grid(const std::string &file, double time, bo
         if (flow)
           for (const char *nm : {"ux", "uy", "uz"})
             h5::create_dataset(f, nm, h5::native<float>(), {NZ, NY, NX});
+        if (flow && flow->fs) h5::create_dataset(f, "fill", h5::native<float>(), {NZ, NY, NX});
       }
       h5::write_slab(h5::open(f, "T"), off, cnt, tb.data());
       h5::write_slab(h5::open(f, "phase"), off, cnt, pb.data());
@@ -892,6 +958,20 @@ void ConductionSolverKokkos::write_grid(const std::string &file, double time, bo
                 ub[((size_t) (k + fb0[2]) * nyo + j + fb0[1] - 1) * nxo + i + fb0[0] - 1] =
                   (float) (sc * hu(i - wl[0], j - wl[1], k - wl[2]));
           h5::write_slab(h5::open(f, nm[d]), off, cnt, ub.data());
+        }
+        if (flow->fs) {
+          // free surface: how full each cell is (1 metal, 0 gas, between in an interface cell)
+          auto he = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), flow->eps.v);
+          auto ht = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), flow->type.v);
+          std::vector<float> ub(tb.size());
+          for (size_t n = 0; n < ub.size(); n++) ub[n] = (pb[n] & 3) != GAS ? 1.0f : 0.0f;
+          for (int k = wl[2]; k < wh[2]; k++)
+            for (int j = j0; j < j1; j++)
+              for (int i = i0; i < i1; i++)
+                if (ht(i - wl[0], j - wl[1], k - wl[2]) == MeltFlow<KK_FLOAT>::INTERFACE)
+                  ub[((size_t) (k + fb0[2]) * nyo + j + fb0[1] - 1) * nxo + i + fb0[0] - 1] =
+                    std::max(0.0f, std::min(1.0f, (float) he(i - wl[0], j - wl[1], k - wl[2])));
+          h5::write_slab(h5::open(f, "fill"), off, cnt, ub.data());
         }
       }
       h5::check(H5Fflush(f, H5F_SCOPE_GLOBAL), "unable to flush " + tmp);
@@ -1055,6 +1135,7 @@ void ConductionSolverKokkos::step(double h, double t0)
   const double frac = src->laser_window(t0, t0 + h, c.xl, c.yl);
   c.Pq = 0.25 * frac * src->absorbed_power();   // P/4 * prod(d erf)
   if (flow) { flow_step(h, frac > 0.0, c.xl, c.yl); c.stamp = ++fstamp; }
+  if (flow && flow->fs && c.Pq > 0.0) fs_surface_z();
   stage(c, H, H, H);
   fg_ok = flow != nullptr;
 }
@@ -1160,6 +1241,17 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
       s1[d] = std::max(s0[d], std::min(s1[d], b.hi[d] + 1 - off[d]));
     }
   }
+  // free surface: interface cells are gas to the stencil (not stamped) and
+  // sit within a cell or two of the hot ones
+  const bool fsm = F.fs;
+  const int pd = fsm ? 3 : 2;      // cells held around the liquid
+  if (fsm && fg_ok && s1[0] > s0[0] && s1[1] > s0[1] && s1[2] > s0[2])
+    for (int d = 0; d < 3; d++) {
+      s0[d] = std::max(d < 2 ? olo[d] : 0, s0[d] - 2);
+      s1[d] = std::min(d < 2 ? ohi[d] : bz, s1[d] + 2);
+    }
+  auto fty = F.type;
+  const int fv0 = fvalid[0], fv1 = fvalid[1], fv2 = fvalid[2], fv3 = fvalid[3], fv4 = fvalid[4], fv5 = fvalid[5];
   const int sx_ = s1[0] - s0[0], sy_ = s1[1] - s0[1], sz_ = s1[2] - s0[2];
   const int bx0 = s0[0], by0 = s0[1], bz0 = s0[2];
   FlowAcc acc;
@@ -1178,7 +1270,9 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
       }
       const double f = (Tv - tsc) / (tlc - tsc);
       const bool gas = (p & 3) == GAS || (p & UNBORN);
-      const bool fluid = !gas && (p & 3) == DENSE && f > 0.0;
+      bool fluid = !gas && (p & 3) == DENSE && f > 0.0;
+      if (fsm && i >= fv0 && i < fv3 && j >= fv1 && j < fv4 && k >= fv2 && k < fv5 &&
+          fty(i, j, k) == MeltFlow<KK_FLOAT>::INTERFACE) fluid = true;
       // the carried fields must be finite (read as bits: see MeltFlow::bad)
       if (MeltFlow<KK_FLOAT>::bad(H_(i + o0, j + o1, k + o2))) a.badh += 1.0;
       if (comp && MeltFlow<KK_FLOAT>::bad(X(i, j, k))) a.badx += 1.0;
@@ -1218,7 +1312,7 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
   // the fluid cells of all ranks and two around them, in box cells
   int gb[6];
   for (int d = 0; d < 3; d++) {
-    gb[d] = any ? lo[d] + fg0[d] - 2 : INT_MAX; gb[3+d] = any ? -(hi[d] + fg0[d] + 3) : INT_MAX;
+    gb[d] = any ? lo[d] + fg0[d] - pd : INT_MAX; gb[3+d] = any ? -(hi[d] + fg0[d] + pd + 1) : INT_MAX;
   }
   MPI_Allreduce(MPI_IN_PLACE, gb, 6, MPI_INT, MPI_MIN, world);
   for (int d = 0; d < 3; d++) {
@@ -1236,7 +1330,7 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
   // none has an empty window and only exchanges).
   int cur[6] = {0, 0, 0, 0, 0, 0}, w[6];
   for (int d = 0; d < 3 && any; d++) {
-    cur[d] = std::max(olo[d], lo[d] - 2); cur[3+d] = std::min(ohi[d], hi[d] + 3);
+    cur[d] = std::max(olo[d], lo[d] - pd); cur[3+d] = std::min(ohi[d], hi[d] + pd + 1);
   }
   for (int d = 0; d < 3; d++) {
     w[d] = !fwin_loc ? cur[d] : !any ? fwin[d] : std::min(cur[d], fwin[d]);
@@ -1258,6 +1352,10 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
     fits = fits && need[d] >= fW[d] && need[3+d] <= fW[3+d];
   }
   for (int d = 0; d < 6; d++) fG[d] = gb[d];
+  // free surface: the cells whose flow type is current are those held when
+  // the last fill ran
+  int ov[6];
+  for (int d = 0; d < 3; d++) { ov[d] = fvalid[d]; ov[3+d] = fvalid[3+d]; }
   if (!fits) {
     int wl[3], wh[3];
     const int bn[3] = {bx, by, bz};
@@ -1280,8 +1378,82 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
     for (int d = 0; d < 3; d++) {
       fl0[d] = std::max(std::max(F.wlo[d], olo[d]), need[d] - fg0[d]);
       fl1[d] = std::max(fl0[d], std::min(std::min(F.whi[d], ohi[d]), need[3+d] - fg0[d]));
+      // free surface: every cell held (the surface is read through the window's depth)
+      if (fsm) { fl0[d] = std::max(F.wlo[d], olo[d]); fl1[d] = std::max(fl0[d], std::min(F.whi[d], ohi[d])); }
     }
     auto ty = F.type; auto fT = F.T; auto ffl = F.fl; auto q = fq; auto Xw = fXw;
+    if (fsm) {
+      /* The thermal side says what is liquid; the flow says where the
+         liquid is. Each cell's new type from its last one (GAS if it was
+         not held) and this step's T: a cell that melts is FLUID (fs_repair
+         then makes it INTERFACE if it touches gas); a liquid cell that
+         freezes is WALL. An INTERFACE cell that freezes stays where it is,
+         held by the mushy drag, while any cell around it is still hot (a
+         film that creeps onto cold solid would else be removed each step: a
+         sink at the pool's rim); once the pool has moved on it becomes a
+         whole cell if at least half full, else gas, the difference going to
+         the reservoir. An interface cell's T and enthalpy are its host's
+         (the full cell below), with which it shared them at the last
+         write-back. */
+      auto t2 = F.type2; auto ep = F.eps;
+      const int z0 = F.wlo[2];
+      const double tsm0 = ts_min;
+      double dres = 0.0;
+      Kokkos::parallel_reduce("FlowFsTypes",
+        Kokkos::MDRangePolicy<Kokkos::Rank<3>>({fl0[0], fl0[1], fl0[2]}, {fl1[0], fl1[1], fl1[2]}),
+        KOKKOS_LAMBDA(const int i, const int j, const int k, double &rs) {
+          using MF = MeltFlow<KK_FLOAT>;
+          auto held = [&](int a, int b, int c) {
+            return a >= ov[0] && a < ov[3] && b >= ov[1] && b < ov[4] && c >= ov[2] && c < ov[5];
+          };
+          const unsigned char p = P_(i + o0, j + o1, k + o2);
+          const int m = M_(i + o0, j + o1, k + o2);
+          const bool metal = (p & 3) != GAS;
+          const int prev = held(i, j, k) ? (int) ty(i, j, k) : metal ? MF::WALL : MF::GAS;
+          // the host: a full cell below (by the last types: nothing here writes them)
+          bool host = false;
+          if (prev == MF::INTERFACE && k > z0) {
+            const int tb = held(i, j, k - 1) ? (int) ty(i, j, k - 1) : MF::WALL;
+            host = tb == MF::FLUID || (tb == MF::WALL && (P_(i + o0, j + o1, k - 1 + o2) & 3) != GAS);
+          }
+          const double Tv = host ? T_(i + o0, j + o1, k - 1 + o2) : T_(i + o0, j + o1, k + o2);
+          const double qa = host ? H_(i + o0, j + o1, k - 1 + o2) + Hr(M_(i + o0, j + o1, k - 1 + o2))
+                                 : H_(i + o0, j + o1, k + o2) + Hr(m);
+          double tsc = ts_(m), tlc = tl_(m);
+          if (cnb > 1 && m < cnb) {
+            const double u = Kokkos::fmin(Kokkos::fmax((X(i, j, k) - ccx0) * cciu, 0.0), cnb - 1.0);
+            const int m0 = u >= cnb - 1.0 ? cnb - 2 : (int) u;
+            const double fr = u - m0;
+            tsc = ts_(m0) + fr * (ts_(m0 + 1) - ts_(m0)); tlc = tl_(m0) + fr * (tl_(m0 + 1) - tl_(m0));
+          }
+          const bool hot = Tv > tsc;
+          int nt;
+          if (prev == MF::INTERFACE) {
+            nt = MF::INTERFACE;
+            bool near = false;     // a liquid cell around it above the lowest solidus
+            if (!hot)
+              for (int c = 1; c < 19 && !near; c++) {
+                int cx, cy, cz; MF::vel(c, cx, cy, cz);
+                const int a = i + cx, b = j + cy, d = k + cz;
+                near = held(a, b, d) && MF::liq(ty(a, b, d)) && T_(a + o0, b + o1, d + o2) > tsm0;
+              }
+            if (!hot && !near) {
+              const double e = ep(i, j, k);
+              if (e >= 0.5) {
+                nt = MF::WALL; rs -= 1.0 - e;
+                P_(i + o0, j + o1, k + o2) = DENSE;
+                H_(i + o0, j + o1, k + o2) = (KK_FLOAT) (qa - Hr(m));
+                T_(i + o0, j + o1, k + o2) = (KK_FLOAT) Tv;
+              } else { nt = MF::GAS; rs += e > 0.0 ? e : 0.0; }
+            }
+          } else if (!metal) nt = MF::GAS;
+          else nt = ((p & 3) == DENSE && hot) ? MF::FLUID : MF::WALL;
+          t2(i, j, k) = (unsigned char) nt;
+          fT(i, j, k) = (KK_FLOAT) Tv;
+          q(i, j, k) = (KK_FLOAT) qa;
+        }, dres);
+      fs_res += dres; fs_round += dres;
+    }
     // properties cards: the cell's surface tension (less the table's first
     // value: single precision keeps the differences), density and viscosity
     const bool props = F.props;
@@ -1294,12 +1466,14 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
     const double cidx = props ? (pn - 1) / (src->config().comp_x1 - cx0) : 0.0;
     const double rho0 = props ? pr.r0[0] : 1.0, nu0 = props ? pr.eta[0] / pr.r0[0] : 1.0;
     const double sig0 = props ? pr.sig[0] : 0.0;
+    auto t2f = F.type2;
     Kokkos::parallel_for("FlowFill",
       Kokkos::MDRangePolicy<Kokkos::Rank<3>>({fl0[0], fl0[1], fl0[2]}, {fl1[0], fl1[1], fl1[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
         const unsigned char p = P_(i + o0, j + o1, k + o2);
         const int m = M_(i + o0, j + o1, k + o2);
-        const double Tv = T_(i + o0, j + o1, k + o2);
+        // (free surface: T, the enthalpy and the type are FlowFsTypes')
+        const double Tv = fsm ? (double) fT(i, j, k) : (double) T_(i + o0, j + o1, k + o2);
         double tsc = ts_(m), tlc = tl_(m);
         if (cnb > 1 && m < cnb) {
           const double u = Kokkos::fmin(Kokkos::fmax((X(i, j, k) - ccx0) * cciu, 0.0), cnb - 1.0);
@@ -1309,14 +1483,24 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
         }
         const double f = (Tv - tsc) / (tlc - tsc);
         const bool gas = (p & 3) == GAS || (p & UNBORN);
-        const bool fluid = !gas && (p & 3) == DENSE && f > 0.0;
-        const bool was = ty(i, j, k) == MeltFlow<KK_FLOAT>::FLUID;
-        ty(i, j, k) = gas ? MeltFlow<KK_FLOAT>::GAS : fluid ? MeltFlow<KK_FLOAT>::FLUID
-                                                        : MeltFlow<KK_FLOAT>::WALL;
-        fT(i, j, k) = (KK_FLOAT) Tv;
-        ffl(i, j, k) = (KK_FLOAT) (!fluid ? (was ? -1.0 : 0.0) : f > 1.0 ? 1.0 : f);
-        // the absolute enthalpy (a cell's H is relative to its material's H(T0))
-        q(i, j, k) = (KK_FLOAT) (H_(i + o0, j + o1, k + o2) + Hr(m));
+        bool fluid = !gas && (p & 3) == DENSE && f > 0.0;
+        bool was = ty(i, j, k) == MeltFlow<KK_FLOAT>::FLUID;
+        if (fsm) {
+          was = MeltFlow<KK_FLOAT>::liq(ty(i, j, k)) && i >= ov[0] && i < ov[3] && j >= ov[1] && j < ov[4] &&
+                k >= ov[2] && k < ov[5];
+          ty(i, j, k) = t2f(i, j, k);
+          fluid = MeltFlow<KK_FLOAT>::liq(ty(i, j, k));
+          // a frozen interface cell waiting to be rounded: held by the drag
+          if (fluid && f < 1e-3) { ffl(i, j, k) = (KK_FLOAT) 1e-3; fluid = false; was = false; }
+        } else {
+          ty(i, j, k) = gas ? MeltFlow<KK_FLOAT>::GAS : fluid ? MeltFlow<KK_FLOAT>::FLUID
+                                                          : MeltFlow<KK_FLOAT>::WALL;
+          fT(i, j, k) = (KK_FLOAT) Tv;
+          // the absolute enthalpy (a cell's H is relative to its material's H(T0))
+          q(i, j, k) = (KK_FLOAT) (H_(i + o0, j + o1, k + o2) + Hr(m));
+        }
+        if (!(fsm && MeltFlow<KK_FLOAT>::liq(ty(i, j, k)) && !fluid))
+          ffl(i, j, k) = (KK_FLOAT) (!fluid ? (was ? -1.0 : 0.0) : f > 1.0 ? 1.0 : f);
         if (comp) Xw(i, j, k) = X(i, j, k);
         if (!props) return;
         const double x = X(i, j, k);
@@ -1348,7 +1532,42 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
     flow_exchange(as4(F.type.v), fhC, 2, 3, F.wlo, F.whi);
     flow_exchange(as4(F.props ? F.sig.v : F.T.v), fhR, 1, 3, F.wlo, F.whi);   // what the Marangoni force reads
   }
+  using W3 = MeltFlow<KK_FLOAT>::W3;
+  double fs_lost_now = 0.0, fs_got_now = 0.0, dmscale = 1.0;
+  if (fsm) {
+    for (int d = 0; d < 3; d++) { fvalid[d] = F.wlo[d]; fvalid[3+d] = F.whi[d]; }
+    F.fs_repair(w, w + 3);
+    // powder: this thermal step's share per column, a Gaussian about the
+    // laser axis. The reservoir is paid back (or drawn) through it, at most
+    // half the feed again.
+    const auto &fc = src->config().flow;
+    const bool feeding = laser_on && fc.powder > 0.0;
+    if (feeding) {
+      const double step = fc.powder / rho_feed * h / (dx * dx * dx);   // cells of liquid per thermal step
+      const double add = std::max(-0.5 * step, std::min(0.5 * step, fs_res));
+      dmscale = 1.0 + add / step;
+      const double a0 = step * dmscale * dx * dx / (M_PI * fc.powder_radius * fc.powder_radius);
+      const double ir2 = 1.0 / (fc.powder_radius * fc.powder_radius);
+      auto dm = fdm;
+      Kokkos::parallel_for("FlowFsPowder",
+        Kokkos::MDRangePolicy<Kokkos::Rank<2>>({F.wlo[0], F.wlo[1]}, {F.whi[0], F.whi[1]}),
+        KOKKOS_LAMBDA(const int i, const int j) {
+          const double ddx = 0.5 * (fxlo_(i + o0) + fxhi_(i + o0)) - xl;
+          const double ddy = 0.5 * (fylo_(j + o1) + fyhi_(j + o1)) - yl;
+          dm(i, j) = (KK_FLOAT) (a0 * Kokkos::exp(-(ddx * ddx + ddy * ddy) * ir2));
+        });
+      fs_fed += step;
+    }
+    // each flow step: carry the fields, feed, convert
+    F.post = [&, feeding]() {
+      melt_advect(F, fq, ftmp, comp ? fXw : W3(), fX2, w, w + 3, true);
+      if (feeding)
+        fs_got_now += F.inject(w, w + 3, fdm, (KK_FLOAT) (F.dt / h), fq, W3(fqfed), comp ? fXw : W3(), W3(fXfed));
+      fs_lost_now += F.convert(w, w + 3, fq, comp ? fXw : W3());
+    };
+  }
   const int n = F.run(h, w, w + 3);
+  F.post = nullptr;
   MPI_Allreduce(MPI_IN_PLACE, &F.umax, 1, MPI_DOUBLE, MPI_MAX, world);
   if (n < 0) {
     char msg[200];
@@ -1366,11 +1585,88 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
     }
     flow_cap_seen = F.u_cap;
   }
+  if (fsm) {
+    // what was caught, less the reservoir's part of it; droplets go to it
+    fs_got += fs_got_now / dmscale;
+    fs_res += fs_lost_now - (fs_got_now - fs_got_now / dmscale);
+    fs_lost += fs_lost_now;
+    if (fs_laser && !laser_on) fs_report();
+    fs_laser = laser_on;
+    /* Write back, in the cells the steps could touch. An interface cell is
+       gas to the stencil; with a full cell below it (its host) the two
+       share one enthalpy and the host's capacity carries both (Cap, PART).
+       A cell that filled becomes metal, of the bin of its composition. */
+    auto ty = F.type; auto ms = F.cmass; auto q = fq; auto Xw = fXw;
+    auto Cap_ = Cap; auto Ht = Htab;
+    const int nHt = (int) Htab.extent(1), nbm = src->ncomp();
+    const double H0 = Htab_T0, dTt = Htab_dT, cx0 = src->config().comp_x0;
+    const double cw = src->config().comp_x1 - cx0;
+    int a[3], b[3];
+    for (int d = 0; d < 3; d++) {
+      a[d] = std::max(std::max(F.wlo[d], olo[d]), w[d] - 1);
+      b[d] = std::max(a[d], std::min(std::min(F.whi[d], ohi[d]), w[3+d] + 1));
+    }
+    const int z0 = F.wlo[2], z1 = F.whi[2];
+    Kokkos::parallel_for("FlowFsOut",
+      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({a[0], a[1], a[2]}, {b[0], b[1], b[2]}),
+      KOKKOS_LAMBDA(const int i, const int j, const int k) {
+        using MF = MeltFlow<KK_FLOAT>;
+        const int li = i + o0, lj = j + o1, lk = k + o2;
+        const int t = ty(i, j, k);
+        if (comp) X(i, j, k) = Xw(i, j, k);
+        // T of an enthalpy relative to material m's reference
+        auto T_of = [&](int m, double Hn) -> double {
+          if (Hn <= Ht(m, 0)) return H0 + (Hn - Ht(m, 0)) / (Ht(m, 1) - Ht(m, 0)) * dTt;
+          if (Hn >= Ht(m, nHt - 1))
+            return H0 + (nHt - 1) * dTt + (Hn - Ht(m, nHt - 1)) / (Ht(m, nHt - 1) - Ht(m, nHt - 2)) * dTt;
+          int lo = 0, hi = nHt - 1;
+          while (hi - lo > 1) { const int mid = (lo + hi) / 2; if (Ht(m, mid) <= Hn) lo = mid; else hi = mid; }
+          const double dH = Ht(m, lo + 1) - Ht(m, lo);
+          return H0 + (lo + (dH > 0.0 ? (Hn - Ht(m, lo)) / dH : 0.0)) * dTt;
+        };
+        auto bin = [&](int m) -> int {
+          if (!comp) return m;
+          const int n = (int) Kokkos::lround((Xw(i, j, k) - cx0) / cw * (nbm - 1));
+          return n < 0 ? 0 : n > nbm - 1 ? nbm - 1 : n;
+        };
+        const unsigned char p = P_(li, lj, lk);
+        if (t == MF::INTERFACE) {
+          bool host = false;
+          if (k > z0) {
+            const int tb = ty(i, j, k - 1);
+            host = tb == MF::FLUID || (tb == MF::WALL && (P_(li, lj, lk - 1) & 3) != GAS);
+          }
+          const double mg = ms(i, j, k) > 0.0 ? (double) ms(i, j, k) : 0.0;
+          const double qv = host ? (mg * q(i, j, k) + q(i, j, k - 1)) / (mg + 1.0) : (double) q(i, j, k);
+          const int m = bin(M_(li, lj, lk));
+          M_(li, lj, lk) = (unsigned char) m;
+          H_(li, lj, lk) = (KK_FLOAT) (qv - Hr(m));
+          T_(li, lj, lk) = (KK_FLOAT) T_of(m, qv - Hr(m));
+          P_(li, lj, lk) = GAS;
+        } else if (t == MF::FLUID || (t == MF::WALL && (p & 3) != GAS)) {
+          const bool guest = k + 1 < z1 && ty(i, j, k + 1) == MF::INTERFACE;
+          double qv = q(i, j, k);
+          int m = M_(li, lj, lk);
+          const bool fresh = t == MF::FLUID && (p & 3) == GAS;    // it filled
+          if (fresh) { m = bin(m); M_(li, lj, lk) = (unsigned char) m; }
+          if (guest) {
+            const double mg = ms(i, j, k + 1) > 0.0 ? (double) ms(i, j, k + 1) : 0.0;
+            qv = (mg * q(i, j, k + 1) + qv) / (mg + 1.0);
+            Cap_(li, lj, lk) = (KK_FLOAT) (1.0 + mg);
+          }
+          const unsigned char base = t == MF::FLUID ? (unsigned char) DENSE : (unsigned char) (p & ~PART);
+          P_(li, lj, lk) = (unsigned char) (guest ? base | PART : base);
+          if (t == MF::FLUID || guest) H_(li, lj, lk) = (KK_FLOAT) (qv - Hr(m));
+          if (fresh) T_(li, lj, lk) = (KK_FLOAT) T_of(m, qv - Hr(m));
+        }
+      });
+    Kokkos::fence();
+    return;
+  }
   if (!gany) return;
 
   // the sweeps leave the carried fields in ftmp, fX2; one pass writes them
   // back and (feed surface) drains the reservoir into the surface cells
-  using W3 = MeltFlow<KK_FLOAT>::W3;
   std::function<void(int, W3, W3)> halo;
   if (multi) {
     flow_exchange(F.flux.v, fhR, 1, 3, F.wlo, F.whi);
@@ -1515,6 +1811,86 @@ void ConductionSolverKokkos::comp_out(Kokkos::View<double*> d_comp,
 }
 
 /* ----------------------------------------------------------------------
+   flow free_surface: the surface the laser lands on, per column of the
+   box: the top of its highest full cell (interface cells are gas here).
+------------------------------------------------------------------------- */
+
+void ConductionSolverKokkos::fs_report()
+{
+  if (domain->me) return;
+  // the metal's enthalpy (J, each material's from its own H(T0)) and volume
+  // (cells): full cells, and interface cells by their mass
+  auto P_ = P; auto M_ = M; auto H_ = H; auto Hr = Hrefm;
+  auto wx_ = wx, wy_ = wy, wz_ = wz;
+  const int nxo_ = nxo, nyo_ = nyo, nz_ = nz;
+  double E = 0.0, V = 0.0;
+  Kokkos::parallel_reduce("ConductionFsEnergy",
+    Kokkos::MDRangePolicy<Kokkos::Rank<3>>({1, 1, 0}, {nxo_ + 1, nyo_ + 1, nz_}),
+    KOKKOS_LAMBDA(const int i, const int j, const int k, double &e, double &v) {
+      if ((P_(i, j, k) & 3) == GAS) return;
+      const double vol = wx_(i) * wy_(j) * wz_(k);
+      e += vol * (H_(i, j, k) + Hr(M_(i, j, k)));
+      v += vol;
+    }, E, V);
+  if (flow->whi[0] > flow->wlo[0]) {
+    auto ty = flow->type; auto ms = flow->cmass;
+    const int o0 = fb0[0], o1 = fb0[1], o2 = fb0[2];
+    const double vc = dx * dx * dx;
+    double Ei = 0.0, Vi = 0.0;
+    Kokkos::parallel_reduce("ConductionFsEnergyI",
+      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({flow->wlo[0], flow->wlo[1], flow->wlo[2]},
+                                             {flow->whi[0], flow->whi[1], flow->whi[2]}),
+      KOKKOS_LAMBDA(const int i, const int j, const int k, double &e, double &v) {
+        if (ty(i, j, k) != MeltFlow<KK_FLOAT>::INTERFACE) return;
+        const double m = ms(i, j, k);
+        e += vc * m * (H_(i + o0, j + o1, k + o2) + Hr(M_(i + o0, j + o1, k + o2)));
+        v += vc * m;
+      }, Ei, Vi);
+    E += Ei; V += Vi;
+  }
+  char msg[320];
+  snprintf(msg, sizeof(msg), "conduction: free surface at t = %g s: powder fed %.6g cells, caught %.6g (%.1f%%); "
+           "droplets lost %.4g, freeze rounding %+.4g, reservoir %+.4g cells; metal %.6f cells, enthalpy %.9g J\n", t_fd,
+           fs_fed, fs_got, fs_fed > 0.0 ? 100.0 * fs_got / fs_fed : 0.0, fs_lost, fs_round, fs_res,
+           V / (dx * dx * dx), E);
+  if (screen) fputs(msg, screen);
+  if (logfile) fputs(msg, logfile);
+}
+
+void ConductionSolverKokkos::fs_surface_z()
+{
+  auto P_ = P; auto zs = zsf; auto zlo = fzlo, zhi = fzhi;
+  const int bx = flow->nx, by = flow->ny, bz = flow->nz;
+  const int o0 = fb0[0], o1 = fb0[1], o2 = fb0[2];
+  Kokkos::parallel_for("ConductionFsSurfaceZ",
+    Kokkos::MDRangePolicy<Kokkos::Rank<2>>({0, 0}, {bx, by}),
+    KOKKOS_LAMBDA(const int i, const int j) {
+      int k = bz - 1;
+      while (k >= 0 && (P_(i + o0, j + o1, k + o2) & 3) == GAS) k--;
+      zs(i + o0, j + o1) = (KK_FLOAT) (k >= 0 ? zhi(k + o2) : zlo(o2));
+    });
+}
+
+/* ----------------------------------------------------------------------
+   flow free_surface: the sites follow the metal. A site whose cell became
+   metal turns liquid (i2 = 2: the app solidifies it as any liquid); one
+   whose cell emptied turns void (i2 = 5).
+------------------------------------------------------------------------- */
+
+void ConductionSolverKokkos::phase_out(Kokkos::View<int*> d_af, int nall)
+{
+  auto sc = site_cell;
+  const unsigned char *Pp = P.data();
+  Kokkos::parallel_for("ConductionPhaseOut", nall, KOKKOS_LAMBDA(const int s) {
+    const int c = sc(s);
+    if (c < 0 || d_af(s) == 6) return;
+    const bool metal = (Pp[c] & 3) != GAS;
+    if (metal && d_af(s) == 5) d_af(s) = 2;
+    else if (!metal && d_af(s) != 5) d_af(s) = 5;
+  });
+}
+
+/* ----------------------------------------------------------------------
    far: the laser's path over [t0, t1] as one source plane,
    S2(i, j) = sum over path samples of w Ex(i) Ey(j), samples at most sx/2
    apart. The stage adds Pq S2(i, j) Ez(k), held over the super-step.
@@ -1630,7 +2006,11 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
   const int nxo_ = nxo, nyo_ = nyo, nz_ = nz;
   const double pack = cfg.packing, ipack = 1.0 / cfg.packing;
   // ded birth: laser on, axis within rb of the cell centre, centre in the band
-  const bool birth = cfg.ded && Pq > 0.0;
+  const bool birth = cfg.ded && Pq > 0.0 && !cfg.flow.fs;
+  // free surface: the laser hangs from each column's surface; a host's capacity
+  const bool fsz = cfg.flow.fs;
+  auto zsf_ = zsf;
+  const KK_FLOAT *capp = Cap.data();
   const double rb2 = cfg.ded_radius * cfg.ded_radius, zb = zs - birth_depth;
   const KK_FLOAT Tb = cfg.T_birth;
 
@@ -1810,9 +2190,17 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
             q += (k == 0) ? far(Az, half*dzc) : face(Az, rzc, c - sk, rz_prev);
             q += (k == nz_ - 1) ? surf(Az) : face(Az, rzc, c + sk, rz_next);
 
-            if (Pq > 0.0) q += R(Pq) * (path ? S2_(i, j) : Ex_(i) * Ey_(j)) * Ez_(k);
+            if (Pq > 0.0) {
+              R Ezc = Ez_(k);
+              if (fsz) {
+                const double zc = zsf_(i, j), zt = fzhi_(k) < zc ? fzhi_(k) : zc;
+                Ezc = zt > fzlo_(k) ? R(Kokkos::erf((zt - zc) / sz) - Kokkos::erf((fzlo_(k) - zc) / sz)) : R(0);
+              }
+              q += R(Pq) * (path ? S2_(i, j) : Ex_(i) * Ey_(j)) * Ezc;
+            }
 
-            const R ivol = iwx_(ic) * iwy_(jc) * iwz_(k) * ((pfull & LOOSE) ? R(ipack) : R(1));
+            const R ivol = iwx_(ic) * iwy_(jc) * iwz_(k) * ((pfull & LOOSE) ? R(ipack) : R(1))
+                         * ((pfull & PART) ? R(1) / capp[c] : R(1));
             R Hn;
             if (!sts) {
               Hn = Hp[c] + R(h) * q * ivol;

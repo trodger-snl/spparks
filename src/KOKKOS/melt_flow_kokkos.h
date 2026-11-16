@@ -96,6 +96,22 @@ namespace SPPARKS_NS {
    A window passed to step() must hold every FLUID cell and every cell that
    was FLUID at either of the last two steps, so freezing cells are reset
    in both copies of f.
+
+   Free surface (fs): the surface moves. Mass is tracked per cell (Koerner
+   et al. 2005, Thuerey 2007): an INTERFACE cell holds distributions like a
+   FLUID cell and a mass between 0 and its density; fill = mass / density.
+   A layer of INTERFACE cells always separates FLUID from GAS. A link from
+   GAS is not reflected but reconstructed from the gas's equilibrium (the
+   gas is a pressure, not a fluid), and a link between liquid cells moves
+   mass: all of the populations' difference, or the mean fill's part of it
+   between two INTERFACE cells. Those are the fluxes of `flux`, so
+   melt_advect carries scalars through partial cells with the same mass.
+   After each step convert() turns a cell whose mass passed its density
+   into FLUID and one whose mass fell below zero into GAS, makes INTERFACE
+   cells of their gas and fluid neighbours, and hands the excess to the
+   interface cells around. The caller calls, per step: step(), melt_advect
+   (if it carries fields), convert(). After setting types by hand call
+   fs_repair() once.
 ------------------------------------------------------------------------- */
 
 /* ----------------------------------------------------------------------
@@ -144,7 +160,9 @@ struct FlowWin {
 
 template <class R>
 struct MeltFlow {
-  enum Type : unsigned char { FLUID = 0, WALL = 1, GAS = 2 };
+  enum Type : unsigned char { FLUID = 0, WALL = 1, GAS = 2, INTERFACE = 3 };
+  // liquid: a cell that holds distributions (INTERFACE only with fs)
+  KOKKOS_INLINE_FUNCTION static bool liq(int t) { return t == FLUID || t == INTERFACE; }
 
   struct Params {
     double nu = 1.0 / 6.0;
@@ -172,6 +190,11 @@ struct MeltFlow {
   // Else every non-FLUID cell of the window is cleared at every step.
   bool lazy = false;
   W3 sig, dens, visc;
+  // fs (set before resize()): the surface moves; see "Free surface" below
+  bool fs = false;
+  W3 cmass, eps;                             // interface cells' mass; fill (1 fluid, 0 gas)
+  FlowWin<Kokkos::View<unsigned char***>> mark, type2;   // convert()'s scratch
+  double fs_kappa = 1e-3;                    // a cell converts when its mass passes the end by this
   int wlo[3] = {0, 0, 0}, whi[3] = {0, 0, 0};   // the cells the fields hold
 
   // A block of nx_ x ny_ x nz_ cells. all: the fields hold every cell;
@@ -198,6 +221,12 @@ struct MeltFlow {
       visc = Kokkos::View<R***>("flow_visc", a, b, c);
       Kokkos::deep_copy(visc.v, R(1));
     }
+    if (fs) {
+      cmass = Kokkos::View<R***>("flow_mass", a, b, c);
+      eps = Kokkos::View<R***>("flow_eps", a, b, c);
+      mark = Kokkos::View<unsigned char***>("flow_mark", a, b, c);
+      type2 = Kokkos::View<unsigned char***>("flow_type2", a, b, c);
+    }
     Kokkos::deep_copy(fl.v, R(1));
     for (int d = 0; d < 3; d++) wlo[d] = 0;
     whi[0] = a; whi[1] = b; whi[2] = c;
@@ -213,6 +242,7 @@ struct MeltFlow {
     ux.move(lo, hi); uy.move(lo, hi); uz.move(lo, hi); rho.move(lo, hi);
     px.move(lo, hi); py.move(lo, hi); pz.move(lo, hi); flux.move(lo, hi);
     if (props) { sig.move(lo, hi); dens.move(lo, hi); visc.move(lo, hi); }
+    if (fs) { cmass.move(lo, hi); eps.move(lo, hi); mark.move(lo, hi); type2.move(lo, hi); }
     for (int d = 0; d < 3; d++) { wlo[d] = lo[d]; whi[d] = hi[d] > lo[d] ? hi[d] : lo[d]; }
   }
 
@@ -267,13 +297,14 @@ struct MeltFlow {
     const R bx = R(p.buoy[0]), by = R(p.buoy[1]), bz = R(p.buoy[2]), Tref = R(p.Tref);
     const R mar = R(p.marangoni), darcy = R(p.darcy);
     // props: the Marangoni force follows sig, not T
-    const bool hp = props, lazy_ = lazy;
+    const bool hp = props, lazy_ = lazy, fs_ = fs;
+    auto ms_ = cmass; auto ep_ = eps;
     auto S_ = hp ? sig : T; auto dn_ = dens; auto vs_ = visc;
     const R nu3 = R(3.0 * p.nu);
     Kokkos::parallel_for("FlowStep",
       Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
-        if (ty(i, j, k) != FLUID) {
+        if (!liq(ty(i, j, k))) {
           if (lazy_ && fl_(i, j, k) >= R(0)) return;
           for (int q = 0; q < 19; q++) g_(i, j, k, q) = R(0);
           ux_(i, j, k) = uy_(i, j, k) = uz_(i, j, k) = rho_(i, j, k) = R(0);
@@ -292,29 +323,59 @@ struct MeltFlow {
         // of the cell it comes from (this cell - c_q); G the mass leaving
         // by each face (see flux above).
         R fq[19], G[6] = {0, 0, 0, 0, 0, 0};
+        R dm = R(0);   // fs: the mass the links brought, less what they took
         int tq[19];
-        fq[0] = f_(i, j, k, 0); tq[0] = FLUID;
+        bool L[19];
+        // ph: the part of a link's populations that is mass exchanged (the
+        // mean fill between two interface cells, else all of it)
+        R ph[19];
+        const bool ifc = ty(i, j, k) == INTERFACE;
+        const R e0 = ifc ? ep_(i, j, k) : R(1);
+        fq[0] = f_(i, j, k, 0); tq[0] = FLUID; L[0] = true; ph[0] = R(1);
         for (int q = 1; q < 19; q++) {
           int cx, cy, cz; vel(q, cx, cy, cz);
           int ii = i - cx, jj = j - cy, kk = k - cz;
           tq[q] = cell(ii, jj, kk);
-          if (tq[q] == FLUID) fq[q] = f_(ii, jj, kk, q);
+          L[q] = liq(tq[q]);
+          ph[q] = R(1);
+          if (L[q]) {
+            fq[q] = f_(ii, jj, kk, q);
+            if (ifc && tq[q] == INTERFACE) ph[q] = R(0.5) * (e0 + ep_(ii, jj, kk));
+          }
         }
+        // fs: what arrives from the gas is the gas's equilibrium at this
+        // cell's velocity, less what left toward it (the pressure boundary)
+        const R ug = px_(i, j, k), vg = py_(i, j, k), wg = pz_(i, j, k);
+        const R usg = ug * ug + vg * vg + wg * wg, drg = R(0);
+        auto rec = [&](int q) -> R {
+          int cx, cy, cz; vel(q, cx, cy, cz);
+          const R cu = cx * ug + cy * vg + cz * wg;
+          return R(2) * wgt(q) * (drg + (R(1) + drg) * (R(4.5) * cu * cu - R(1.5) * usg)) - f_(i, j, k, opp(q));
+        };
         // the axis velocities: q = 1 + 2 A + (sign < 0); face 2 A + (side > 0)
         for (int q = 1; q < 7; q++) {
-          if (tq[q] == FLUID) G[q - 1] -= fq[q];     // came in by the face toward its source
-          else fq[q] = f_(i, j, k, opp(q));          // wall, or the surface above
+          if (L[q]) {
+            G[q - 1] -= ph[q] * fq[q];               // came in by the face toward its source
+            dm += ph[q] * (fq[q] - f_(i, j, k, opp(q)));
+          }
+          else if (fs_ && tq[q] == GAS) fq[q] = rec(q);
+          else fq[q] = f_(i, j, k, opp(q));          // wall, or the flat surface above
         }
         for (int q = 7; q < 19; q++) {
           int c[3]; vel(q, c[0], c[1], c[2]);
           const int A = c[0] != 0 ? 0 : 1, B = c[2] != 0 ? 2 : 1, sA = c[A], sB = c[B];
           const int o = opp(q);
           // the two cells between this one and the source: this - sA e_A, this - sB e_B
-          const bool inA = tq[1 + 2 * A + (sA < 0)] == FLUID, inB = tq[1 + 2 * B + (sB < 0)] == FLUID;
-          if (tq[q] == FLUID && (inA || inB)) {
-            const R wv = (inA && inB ? R(0.5) : R(1)) * fq[q];
+          const int tA = tq[1 + 2 * A + (sA < 0)], tB = tq[1 + 2 * B + (sB < 0)];
+          const bool inA = liq(tA), inB = liq(tB);
+          if (L[q] && (inA || inB)) {
+            const R wv = (inA && inB ? R(0.5) : R(1)) * ph[q] * fq[q];
             if (inA) G[2 * A + (sA < 0)] -= wv;
             if (inB) G[2 * B + (sB < 0)] -= wv;
+            dm += ph[q] * (fq[q] - f_(i, j, k, o));
+          } else if (fs_) {
+            // gas, or liquid that touches this cell only across gas
+            fq[q] = (tq[q] == GAS || (L[q] && (tA == GAS || tB == GAS))) ? rec(q) : f_(i, j, k, o);
           } else if (tq[q] == GAS && sB == -1 && B == 2 && tq[6] == GAS && inA) {
             // off the flat surface above this cell and the one beside it,
             // which it left going up
@@ -324,10 +385,10 @@ struct MeltFlow {
             G[2 * A + (sA < 0)] -= fq[q];
           } else fq[q] = f_(i, j, k, o);
           // what leaves along q, first face: by way of this + sA e_A or this + sB e_B
-          if (tq[o] == FLUID) {
-            const bool outA = tq[1 + 2 * A + (sA > 0)] == FLUID, outB = tq[1 + 2 * B + (sB > 0)] == FLUID;
+          if (L[o]) {
+            const bool outA = liq(tq[1 + 2 * A + (sA > 0)]), outB = liq(tq[1 + 2 * B + (sB > 0)]);
             if (outA || outB) {
-              const R wv = (outA && outB ? R(0.5) : R(1)) * f_(i, j, k, q);
+              const R wv = (outA && outB ? R(0.5) : R(1)) * ph[o] * f_(i, j, k, q);
               if (outA) G[2 * A + (sA > 0)] += wv;
               if (outB) G[2 * B + (sB > 0)] += wv;
             }
@@ -340,11 +401,12 @@ struct MeltFlow {
           dr += fq[q]; mx += cx * fq[q]; my += cy * fq[q]; mz += cz * fq[q];
         }
         const R r = R(1) + dr, ir = R(1) / r;
+        if (fs_) ms_(i, j, k) = ifc ? ms_(i, j, k) + dm : r;
 
         // acceleration: uniform + buoyancy + Marangoni (surface cells)
         const R dT = hp ? -dn_(i, j, k) : T_(i, j, k) - Tref;
         R ax = a0x + bx * dT, ay = a0y + by * dT, az = a0z + bz * dT;
-        if (mar != R(0)) {
+        if (mar != R(0) && !fs_) {
           int ii = i, jj = j, kk = k + 1;
           if (cell(ii, jj, kk) == GAS) {
             // T's difference per cell, one-sided at the block's edges
@@ -507,13 +569,13 @@ struct MeltFlow {
   // The step changes by the factor s: lattice velocities scale by s, the
   // pressure deviation by s^2, the non-equilibrium part (stress) by s.
   void rescale(double s_, const int lo[3], const int hi[3]) {
-    auto f_ = f; auto ty = type;
+    auto f_ = f; auto ty = type; auto ms_ = cmass;
     auto ux_ = ux; auto uy_ = uy; auto uz_ = uz; auto px_ = px; auto py_ = py; auto pz_ = pz;
     const R s = R(s_);
     Kokkos::parallel_for("FlowRescale",
       Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
-        if (ty(i, j, k) != FLUID) return;
+        if (!liq(ty(i, j, k))) return;
         R dr = 0, mx = 0, my = 0, mz = 0;
         for (int q = 0; q < 19; q++) {
           int cx, cy, cz; vel(q, cx, cy, cz);
@@ -522,6 +584,7 @@ struct MeltFlow {
         }
         const R r = R(1) + dr, u = mx / r, v = my / r, w = mz / r;
         const R dr2 = dr * s * s, r2 = R(1) + dr2, u2 = u * s, v2 = v * s, w2 = w * s;
+        if (ty(i, j, k) == INTERFACE) ms_(i, j, k) *= r2 / r;   // the fill stays
         const R usq = u * u + v * v + w * w, usq2 = usq * s * s;
         for (int q = 0; q < 19; q++) {
           int cx, cy, cz; vel(q, cx, cy, cz);
@@ -558,6 +621,210 @@ struct MeltFlow {
         for (int q = 0; q < 19; q++) s += f_(i, j, k, q);
       }, m);
     return m;
+  }
+
+  /* --------------------------------------------------------------------
+     Free surface (see the top of the file).
+  -------------------------------------------------------------------- */
+
+  // the liquid's mass: fluid cells' density and interface cells' mass
+  double total_mass() const {
+    auto f_ = f; auto ty = type; auto ms_ = cmass;
+    double m = 0.0;
+    Kokkos::parallel_reduce("FlowTotalMass",
+      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({wlo[0], wlo[1], wlo[2]}, {whi[0], whi[1], whi[2]}),
+      KOKKOS_LAMBDA(const int i, const int j, const int k, double &s) {
+        if (ty(i, j, k) == INTERFACE) s += ms_(i, j, k);
+        if (ty(i, j, k) != FLUID) return;
+        double r = 1.0;
+        for (int q = 0; q < 19; q++) r += f_(i, j, k, q);
+        s += r;
+      }, m);
+    return m;
+  }
+
+  // The cell this + c_q, if it is in the block and held (wraps periodic
+  // axes). A cell that is not there is no neighbour.
+  struct Nbr {
+    int n[3], lo[3], hi[3];
+    bool per[3];
+    KOKKOS_INLINE_FUNCTION bool operator()(int q, int i, int j, int k, int &ii, int &jj, int &kk) const {
+      int c[3]; vel(q, c[0], c[1], c[2]);
+      int x[3] = {i + c[0], j + c[1], k + c[2]};
+      for (int d = 0; d < 3; d++) {
+        if (x[d] < 0 || x[d] >= n[d]) { if (!per[d]) return false; x[d] = (x[d] + n[d]) % n[d]; }
+        if (x[d] < lo[d] || x[d] >= hi[d]) return false;
+      }
+      ii = x[0]; jj = x[1]; kk = x[2];
+      return true;
+    }
+  };
+  Nbr nbr() const {
+    Nbr b;
+    b.n[0] = nx; b.n[1] = ny; b.n[2] = nz;
+    for (int d = 0; d < 3; d++) { b.lo[d] = wlo[d]; b.hi[d] = whi[d]; b.per[d] = p.periodic[d]; }
+    return b;
+  }
+  // [lo - 1, hi + 1) within the cells held
+  void grown(const int lo[3], const int hi[3], int a[3], int b[3]) const {
+    for (int d = 0; d < 3; d++) { a[d] = std::max(wlo[d], lo[d] - 1); b[d] = std::max(a[d], std::min(whi[d], hi[d] + 1)); }
+  }
+
+  // Types set by hand (or by melting and freezing): a FLUID cell that
+  // touches GAS becomes a full INTERFACE cell; fill follows the types.
+  void fs_repair() { const int lo[3] = {0, 0, 0}, hi[3] = {nx, ny, nz}; fs_repair(lo, hi); }
+  void fs_repair(const int lo[3], const int hi[3]) {
+    auto ty = type; auto ms_ = cmass; auto ep_ = eps; auto rho_ = rho;
+    const Nbr nb = nbr();
+    int a[3], b[3];
+    grown(lo, hi, a, b);
+    // only FLUID cells are written and only GAS cells decide: no race
+    Kokkos::parallel_for("FlowFsRepair",
+      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({a[0], a[1], a[2]}, {b[0], b[1], b[2]}),
+      KOKKOS_LAMBDA(const int i, const int j, const int k) {
+        const int t = ty(i, j, k);
+        if (t == INTERFACE) return;
+        ep_(i, j, k) = t == FLUID ? R(1) : R(0);
+        if (t != FLUID) return;
+        for (int q = 1; q < 19; q++) {
+          int ii, jj, kk;
+          if (nb(q, i, j, k, ii, jj, kk) && ty(ii, jj, kk) == GAS) {
+            ty(i, j, k) = INTERFACE; ms_(i, j, k) = R(1) + rho_(i, j, k);
+            return;
+          }
+        }
+      });
+  }
+
+  // After a step (and melt_advect): filled interface cells become FLUID,
+  // emptied ones GAS, their neighbours INTERFACE; the excess mass goes to
+  // the interface cells around, with its share of the carried fields q, q2
+  // (may be empty). [lo, hi) is step()'s window; cells one beyond it can
+  // become INTERFACE, so the next window must hold them. Returns the mass
+  // that found no interface cell to go to (0 unless a cell is isolated).
+  double convert() { const int lo[3] = {0, 0, 0}, hi[3] = {nx, ny, nz}; return convert(lo, hi); }
+  double convert(const int lo[3], const int hi[3], W3 q = W3(), W3 q2 = W3()) {
+    auto f_ = f; auto ty = type; auto t2 = type2; auto mk = mark; auto ms_ = cmass; auto ep_ = eps;
+    auto rho_ = rho; auto ux_ = ux; auto uy_ = uy; auto uz_ = uz; auto px_ = px; auto py_ = py; auto pz_ = pz;
+    auto fl_ = fl; auto flux_ = flux;
+    const Nbr nb = nbr();
+    const R kap = R(fs_kappa);
+    const bool one = q.v.extent(0) > 0, two = q2.v.extent(0) > 0;
+    enum { FILL = 1, EMPTY = 2 };
+    int a[3], b[3];
+    grown(lo, hi, a, b);
+    const Kokkos::MDRangePolicy<Kokkos::Rank<3>> range({a[0], a[1], a[2]}, {b[0], b[1], b[2]});
+    // 1. mark. A cell does not empty beside one that fills (the filled
+    //    cell would touch gas). Interface cells with neither fluid nor wall
+    //    beside them are a droplet too small for the grid: nothing would
+    //    move its mass and it would hang, falling for ever. It empties into
+    //    its interface neighbours (if it has none the mass is returned).
+    Kokkos::parallel_for("FlowFsMark", range, KOKKOS_LAMBDA(const int i, const int j, const int k) {
+      mk(i, j, k) = 0;
+      if (ty(i, j, k) != INTERFACE) return;
+      const R m = ms_(i, j, k), r = R(1) + rho_(i, j, k);
+      bool nf = false, held = false;
+      for (int c = 1; c < 19; c++) {
+        int ii, jj, kk;
+        if (!nb(c, i, j, k, ii, jj, kk)) { held = true; continue; }   // the block's edge, or not known
+        const int t = ty(ii, jj, kk);
+        if (t == FLUID || t == WALL) held = true;
+        if (t == INTERFACE && ms_(ii, jj, kk) > (R(1) + kap) * (R(1) + rho_(ii, jj, kk))) nf = true;
+      }
+      if (m > (R(1) + kap) * r) mk(i, j, k) = FILL;
+      else if (!nf && (!held || m < -kap * r)) mk(i, j, k) = EMPTY;
+    });
+    // 2. the new types, in type2. A gas cell that becomes interface starts
+    //    at the equilibrium of its liquid neighbours' mean density and
+    //    velocity; an emptied cell is cleared.
+    Kokkos::parallel_for("FlowFsRetype", range, KOKKOS_LAMBDA(const int i, const int j, const int k) {
+      const int t = ty(i, j, k), m = mk(i, j, k);
+      int nt = t;
+      if (t == INTERFACE) nt = m == FILL ? FLUID : m == EMPTY ? GAS : INTERFACE;
+      else if (t == GAS || t == FLUID) {
+        const int want = t == GAS ? FILL : EMPTY;
+        bool hit = false;
+        R dr = 0, u = 0, v = 0, w = 0;
+        int n = 0;
+        for (int c = 1; c < 19; c++) {
+          int ii, jj, kk;
+          if (!nb(c, i, j, k, ii, jj, kk)) continue;
+          const int mn = mk(ii, jj, kk);
+          if (mn == want) hit = true;
+          if (t == GAS && liq(ty(ii, jj, kk)) && mn != EMPTY) {
+            dr += rho_(ii, jj, kk); u += px_(ii, jj, kk); v += py_(ii, jj, kk); w += pz_(ii, jj, kk); n++;
+          }
+        }
+        if (hit) {
+          nt = INTERFACE;
+          if (t == GAS) {
+            const R in = R(1) / n;
+            dr *= in; u *= in; v *= in; w *= in;
+            const R usq = u * u + v * v + w * w;
+            for (int c = 0; c < 19; c++) {
+              int cx, cy, cz; vel(c, cx, cy, cz);
+              const R cu = cx * u + cy * v + cz * w;
+              f_(i, j, k, c) = wgt(c) * (dr + (R(1) + dr) * (R(3) * cu + R(4.5) * cu * cu - R(1.5) * usq));
+            }
+            rho_(i, j, k) = dr; fl_(i, j, k) = R(1);
+            px_(i, j, k) = ux_(i, j, k) = u; py_(i, j, k) = uy_(i, j, k) = v; pz_(i, j, k) = uz_(i, j, k) = w;
+          }
+        }
+      }
+      if (t == INTERFACE && nt == GAS) {
+        for (int c = 0; c < 19; c++) f_(i, j, k, c) = R(0);
+        ux_(i, j, k) = uy_(i, j, k) = uz_(i, j, k) = R(0);
+        px_(i, j, k) = py_(i, j, k) = pz_(i, j, k) = R(0);
+        for (int g = 0; g < 6; g++) flux_(i, j, k, g) = R(0);
+      }
+      t2(i, j, k) = (unsigned char) nt;
+    });
+    // 3. the excess: a converted cell's mass beyond its new state, in equal
+    //    shares to the interface cells around it. Only cells that stay or
+    //    become interface are written, only converted ones read: no race.
+    double lost = 0.0;
+    Kokkos::parallel_reduce("FlowFsExcess", range, KOKKOS_LAMBDA(const int i, const int j, const int k, double &ls) {
+      const int t = ty(i, j, k), nt = t2(i, j, k);
+      // a converted cell's excess and the number of cells that take it
+      auto excess = [&](int ci, int cj, int ck, int &cnt) -> R {
+        cnt = 0;
+        for (int c = 1; c < 19; c++) {
+          int ii, jj, kk;
+          if (nb(c, ci, cj, ck, ii, jj, kk) && t2(ii, jj, kk) == INTERFACE) cnt++;
+        }
+        return ms_(ci, cj, ck) - (mk(ci, cj, ck) == FILL ? R(1) + rho_(ci, cj, ck) : R(0));
+      };
+      if (mk(i, j, k)) {
+        int cnt;
+        const R e = excess(i, j, k, cnt);
+        if (cnt == 0) ls += e;
+      }
+      ty(i, j, k) = (unsigned char) nt;
+      if (nt != INTERFACE) { ep_(i, j, k) = nt == FLUID ? R(1) : R(0); return; }
+      const R r = R(1) + rho_(i, j, k);
+      R m = t == GAS ? R(0) : t == FLUID ? r : ms_(i, j, k);
+      R mq = one && t != GAS ? m * q(i, j, k) : R(0), mq2 = two && t != GAS ? m * q2(i, j, k) : R(0);
+      // the range of what is mixed: the result stays inside it
+      R qa = one && t != GAS ? q(i, j, k) : R(1e30), qb = one && t != GAS ? q(i, j, k) : R(-1e30);
+      R q2a = two && t != GAS ? q2(i, j, k) : R(1e30), q2b = two && t != GAS ? q2(i, j, k) : R(-1e30);
+      for (int c = 1; c < 19; c++) {
+        int ii, jj, kk;
+        if (!nb(c, i, j, k, ii, jj, kk) || !mk(ii, jj, kk)) continue;
+        int cnt;
+        const R sh = excess(ii, jj, kk, cnt) / cnt;    // cnt >= 1: this cell is one of them
+        m += sh;
+        if (one) { const R v = q(ii, jj, kk); mq += sh * v; qa = v < qa ? v : qa; qb = v > qb ? v : qb; }
+        if (two) { const R v = q2(ii, jj, kk); mq2 += sh * v; q2a = v < q2a ? v : q2a; q2b = v > q2b ? v : q2b; }
+      }
+      auto mix = [&](R mqv, R lo_, R hi_) {
+        const R v = m > R(1e-6) ? mqv / m : R(0.5) * (lo_ + hi_);
+        return v < lo_ ? lo_ : v > hi_ ? hi_ : v;
+      };
+      if (one && qb >= qa) q(i, j, k) = mix(mq, qa, qb);
+      if (two && q2b >= q2a) q2(i, j, k) = mix(mq2, q2a, q2b);
+      ms_(i, j, k) = m; ep_(i, j, k) = m / r;
+    }, lost);
+    return lost;
   }
 };
 
@@ -603,7 +870,8 @@ void melt_advect(const MeltFlow<R> &m, FlowField<R> q, FlowField<R> tmp,
                  const std::function<void(int, FlowField<R>, FlowField<R>)> &halo = {})
 {
   const bool two = q2.v.extent(0) > 0;
-  auto ty = m.type; auto G = m.flux; auto rho = m.rho;
+  auto ty = m.type; auto G = m.flux; auto rho = m.rho; auto mass_ = m.cmass;
+  const bool fs = m.fs;
   const int n0 = m.nx, n1 = m.ny, n2 = m.nz;
   const bool p0 = m.p.periodic[0], p1 = m.p.periodic[1], p2 = m.p.periodic[2];
   for (int d = 0; d < (copy_back ? 4 : 3); d++) {
@@ -623,7 +891,7 @@ void melt_advect(const MeltFlow<R> &m, FlowField<R> q, FlowField<R> tmp,
     Kokkos::parallel_for("FlowAdvect",
       Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
-        if (ty(i, j, k) != MeltFlow<R>::FLUID) {
+        if (!MeltFlow<R>::liq(ty(i, j, k))) {
           dst(i, j, k) = src(i, j, k);
           if (two) dst2(i, j, k) = src2(i, j, k);
           return;
@@ -636,7 +904,7 @@ void melt_advect(const MeltFlow<R> &m, FlowField<R> q, FlowField<R> tmp,
           y[e] += s;
           if (y[e] < 0 || y[e] >= nn[e]) { if (!per[e]) return false; y[e] = (y[e] + nn[e]) % nn[e]; }
           ii = y[0]; jj = y[1]; kk = y[2];
-          return ty(ii, jj, kk) == MeltFlow<R>::FLUID;
+          return MeltFlow<R>::liq(ty(ii, jj, kk));
         };
         // mass through the face between cells s and s + 1 along e (s = -1, 0)
         auto mass = [&](int e, int s) -> R {
@@ -657,16 +925,37 @@ void melt_advect(const MeltFlow<R> &m, FlowField<R> q, FlowField<R> tmp,
           // 2 a b / (a + b). (Not through r: with b tiny, as in a well-mixed
           // pool in single precision, r overflows and phi is inf / inf.)
           R lim = R(0);
-          if (at(d, up ? s - 1 : s + 2, iu, ju, ku)) {
+          // first order at a partial cell: it can pass more than half its mass
+          const bool part = ty(ia, ja, ka) == MeltFlow<R>::INTERFACE || ty(ib, jb, kb) == MeltFlow<R>::INTERFACE;
+          if (!part && at(d, up ? s - 1 : s + 2, iu, ju, ku)) {
             const R a = qu - src(iu, ju, ku), b = qd - qu;
             if (a * b > R(0)) lim = R(2) * a * b / (a + b);
           }
           return qu + R(0.5) * (R(1) - Kokkos::abs(uf)) * lim - src(i, j, k);
         };
         // the cell's mass after this sweep: the later sweeps' fluxes still in it
-        R ms = R(1) + rho(i, j, k);
+        R ms = fs ? mass_(i, j, k) : R(1) + rho(i, j, k);
         for (int e = d + 1; e < 3; e++) ms += mass(e, 0) - mass(e, -1);
-        const R ul = mass(d, -1), uh = mass(d, 0), im = R(1) / ms;
+        const R ul = mass(d, -1), uh = mass(d, 0);
+        if (ty(i, j, k) == MeltFlow<R>::INTERFACE) {
+          // a partial cell: what flows in mixes with what is left, and the
+          // result stays between the values mixed (the cell may hold next
+          // to nothing, or less)
+          auto mixin = [&](const typename MeltFlow<R>::W3 &sv) -> R {
+            const R q0 = sv(i, j, k);
+            if (ms <= R(1e-6)) return q0;
+            const R im = R(1) / ms;
+            R v = q0, a = q0, b = q0;
+            int ii, jj, kk;
+            if (ul > R(0) && at(d, -1, ii, jj, kk)) { const R qn = sv(ii, jj, kk); v += ul * (qn - q0) * im; a = qn < a ? qn : a; b = qn > b ? qn : b; }
+            if (uh < R(0) && at(d, 1, ii, jj, kk)) { const R qn = sv(ii, jj, kk); v -= uh * (qn - q0) * im; a = qn < a ? qn : a; b = qn > b ? qn : b; }
+            return v < a ? a : v > b ? b : v;
+          };
+          dst(i, j, k) = mixin(src);
+          if (two) dst2(i, j, k) = mixin(src2);
+          return;
+        }
+        const R im = R(1) / ms;
         dst(i, j, k) = src(i, j, k) - (uh * face(src, 0, uh) - ul * face(src, -1, ul)) * im;
         if (two) dst2(i, j, k) = src2(i, j, k) - (uh * face(src2, 0, uh) - ul * face(src2, -1, ul)) * im;
       });

@@ -12,6 +12,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -632,6 +633,169 @@ void props_same()
   check("13 props, wall with sig 1e6: max surface |u| / plain", wall / top, 3.0);
 }
 
+// ---- Free surface (fs) ------------------------------------------------
+
+// is the interface layer closed: no FLUID cell touches GAS (count of those that do)
+template <class R>
+int fs_open(const MeltFlow<R> &m)
+{
+  auto t = host(m.type.v);
+  int bad = 0;
+  for (int i = 0; i < m.nx; i++)
+    for (int j = 0; j < m.ny; j++)
+      for (int k = 0; k < m.nz; k++) {
+        if (t(i, j, k) != MeltFlow<R>::FLUID) continue;
+        for (int q = 1; q < 19; q++) {
+          int c[3]; MeltFlow<R>::vel(q, c[0], c[1], c[2]);
+          int x[3] = {i + c[0], j + c[1], k + c[2]};
+          const int n[3] = {m.nx, m.ny, m.nz};
+          bool in = true;
+          for (int d = 0; d < 3; d++) {
+            if (x[d] < 0 || x[d] >= n[d]) { if (m.p.periodic[d]) x[d] = (x[d] + n[d]) % n[d]; else in = false; }
+          }
+          if (in && t(x[0], x[1], x[2]) == MeltFlow<R>::GAS) { bad++; break; }
+        }
+      }
+  return bad;
+}
+
+// 14. A flat pool at rest under gravity, the surface half-way through a
+//     cell layer: it stays flat and still, and keeps its mass.
+template <class R>
+void fs_rest()
+{
+  MeltFlow<R> m;
+  const int nx = 12, ny = 6, nz = 16;
+  m.fs = true;
+  m.resize(nx, ny, nz);
+  m.p.periodic[0] = m.p.periodic[1] = true;
+  m.p.accel[2] = -1e-4;
+  m.p.nu = 0.05;
+  auto ht = Kokkos::create_mirror_view(m.type.v);
+  auto hm = Kokkos::create_mirror_view(m.cmass.v);
+  auto he = Kokkos::create_mirror_view(m.eps.v);
+  for (int i = 0; i < nx; i++)
+    for (int j = 0; j < ny; j++)
+      for (int k = 0; k < nz; k++) {
+        ht(i, j, k) = k == 0 ? MeltFlow<R>::WALL : k < 8 ? MeltFlow<R>::FLUID
+                    : k == 8 ? MeltFlow<R>::INTERFACE : MeltFlow<R>::GAS;
+        hm(i, j, k) = he(i, j, k) = k == 8 ? R(0.5) : k < 8 ? R(1) : R(0);
+      }
+  Kokkos::deep_copy(m.type.v, ht); Kokkos::deep_copy(m.cmass.v, hm); Kokkos::deep_copy(m.eps.v, he);
+  const double m0 = m.total_mass();
+  double lost = 0.0;
+  for (int s = 0; s < 30000; s++) { m.step(); lost += m.convert(); }
+  auto u = host(m.ux.v); auto v = host(m.uy.v); auto w = host(m.uz.v);
+  auto e = host(m.eps.v); auto t = host(m.type.v);
+  double umax = 0.0, hlo = 1e300, hhi = -1e300;
+  for (int i = 0; i < nx; i++)
+    for (int j = 0; j < ny; j++) {
+      double h = 0.0;
+      for (int k = 0; k < nz; k++) {
+        h += e(i, j, k);
+        umax = std::max({umax, std::fabs((double) u(i, j, k)), std::fabs((double) v(i, j, k)),
+                         std::fabs((double) w(i, j, k))});
+      }
+      hlo = std::min(hlo, h); hhi = std::max(hhi, h);
+    }
+  check("14 fs at rest: max |u| (lattice)", umax, pick<R>(1e-8, 1e-5));
+  check("14 fs at rest: surface height, max - min (cells)", hhi - hlo, pick<R>(1e-8, 1e-4));
+  check("14 fs at rest: height - 7.5 (cells; the liquid is compressed)", hhi - 7.5, 2e-2);
+  check("14 fs at rest: |mass change| / mass", (m.total_mass() + lost) / m0 - 1.0, pick<R>(1e-12, 1e-5));
+}
+
+// 15, 16. Dam break: a column of liquid collapses along a floor between
+//     walls, with many cells filling and emptying. The liquid's mass, the
+//     closed interface layer, and the carried fields: a uniform one stays
+//     uniform, a two-valued one keeps its total and its range.
+template <class R>
+void fs_dam()
+{
+  MeltFlow<R> m;
+  const int nx = 48, ny = 4, nz = 32;
+  m.fs = true;
+  m.resize(nx, ny, nz);
+  m.p.periodic[1] = true;
+  m.p.accel[2] = -5e-5;
+  m.p.nu = 0.02;
+  m.p.smag = 0.17;
+  auto ht = Kokkos::create_mirror_view(m.type.v);
+  for (int i = 0; i < nx; i++)
+    for (int j = 0; j < ny; j++)
+      for (int k = 0; k < nz; k++)
+        ht(i, j, k) = k == 0 ? MeltFlow<R>::WALL : (i < 16 && k < 24) ? MeltFlow<R>::FLUID : MeltFlow<R>::GAS;
+  Kokkos::deep_copy(m.type.v, ht);
+  m.fs_repair();
+  Kokkos::View<R***> q("q", nx, ny, nz), tmp("tmp", nx, ny, nz), q2("q2", nx, ny, nz), tmp2("tmp2", nx, ny, nz);
+  auto hq = Kokkos::create_mirror_view(q);
+  for (int i = 0; i < nx; i++)
+    for (int j = 0; j < ny; j++)
+      for (int k = 0; k < nz; k++) hq(i, j, k) = R(k >= 12);
+  Kokkos::deep_copy(q, hq);
+  Kokkos::deep_copy(q2, R(0.37));
+  const int lo[3] = {0, 0, 0}, hi[3] = {nx, ny, nz};
+  // sum of mass x q over the liquid; the liquid's extent along x
+  auto total = [&](double &sum, int &reach) {
+    auto h = host(q); auto r = host(m.rho.v); auto ms = host(m.cmass.v); auto t = host(m.type.v);
+    sum = 0.0; reach = 0;
+    for (int i = 0; i < nx; i++)
+      for (int j = 0; j < ny; j++)
+        for (int k = 0; k < nz; k++) {
+          if (t(i, j, k) == MeltFlow<R>::FLUID) sum += (1.0 + r(i, j, k)) * h(i, j, k);
+          if (t(i, j, k) == MeltFlow<R>::INTERFACE) sum += (double) ms(i, j, k) * h(i, j, k);
+          if (MeltFlow<R>::liq(t(i, j, k))) reach = std::max(reach, i);
+        }
+  };
+  const double m0 = m.total_mass();
+  double s0, s1, lost = 0.0, umax = 0.0;
+  int r0, r1, open = 0;
+  total(s0, r0);
+  for (int s = 0; s < 8000; s++) {
+    m.step();
+    melt_advect(m, q, tmp, q2, tmp2, lo, hi, true);
+    lost += m.convert(lo, hi, q, q2);
+    if (s % 50 == 49) open += fs_open(m);
+    if (s % 500 == 499) {
+      umax = std::max(umax, std::sqrt((double) m.max_u2(lo, hi)));
+      if (getenv("FS_DEBUG")) {
+        printf("   step %d: mass %.15g lost %g umax %g\n", s + 1, m.total_mass(), lost, std::sqrt((double) m.max_u2(lo, hi)));
+        auto t = host(m.type.v); auto pz = host(m.pz.v); auto px = host(m.px.v); auto ms = host(m.cmass.v); auto r = host(m.rho.v);
+        int bi = 0, bk = 0; double bu = -1;
+        for (int i = 0; i < nx; i++) for (int k = 0; k < nz; k++) {
+          const double u = std::hypot((double) px(i, 1, k), (double) pz(i, 1, k));
+          if (MeltFlow<R>::liq(t(i, 1, k)) && u > bu) { bu = u; bi = i; bk = k; }
+        }
+        printf("     fastest (%d, %d): u %g %g type %d mass %g rho %g; types around (k down):\n", bi, bk, (double) px(bi, 1, bk), (double) pz(bi, 1, bk), (int) t(bi, 1, bk), (double) ms(bi, 1, bk), (double) r(bi, 1, bk));
+        for (int k = std::min(nz - 1, bk + 2); k >= std::max(0, bk - 2); k--) {
+          printf("       ");
+          for (int i = std::max(0, bi - 3); i <= std::min(nx - 1, bi + 3); i++) printf("%d(%.2f) ", (int) t(i, 1, k), (double) ms(i, 1, k));
+          printf("\n");
+        }
+      }
+    }
+  }
+  total(s1, r1);
+  auto h = host(q); auto h2 = host(q2); auto t = host(m.type.v);
+  double qlo = 1e300, qhi = -1e300, uni = 0.0;
+  for (int i = 0; i < nx; i++)
+    for (int j = 0; j < ny; j++)
+      for (int k = 0; k < nz; k++) {
+        if (!MeltFlow<R>::liq(t(i, j, k))) continue;
+        qlo = std::min(qlo, (double) h(i, j, k)); qhi = std::max(qhi, (double) h(i, j, k));
+        uni = std::max(uni, std::fabs(h2(i, j, k) - 0.37));
+      }
+  check("15 dam break: |mass change| / mass", (m.total_mass() + lost) / m0 - 1.0, pick<R>(1e-12, 1e-5));
+  check("15 dam break: lone droplets' mass / mass", lost / m0, 1e-3);
+  check("15 dam break: FLUID cells touching GAS", open, 0.0);
+  check("15 dam break: max |u| (lattice) <= 0.3", umax, 0.3);
+  check("15   (the front runs: cells along x)", r1 - r0, 16.0, false);
+  // not to round-off: a cell can be overdrawn (pass more mass than it holds),
+  // and its fields are then held between the values mixed
+  check("16 moving surface, sum of mass x q: |change| / sum", s1 / s0 - 1.0, 1e-4);
+  check("16 uniform q stays: max |q - q0|", uni, pick<R>(1e-13, 1e-5));
+  check("16 q stays in [0, 1]: over/undershoot", std::max(qhi - 1.0, -qlo), pick<R>(1e-12, 1e-5));
+}
+
 template <class R>
 void suite(const char *name)
 {
@@ -662,6 +826,8 @@ void suite(const char *name)
   const double u1 = pool_si<R>(1.0), u2 = pool_si<R>(0.25);
   check("pool: speed from u_ref 0.25 / from u_ref 1 - 1", u2 / u1 - 1.0, 0.15);
   advect_suite<R>();
+  fs_rest<R>();
+  fs_dam<R>();
 }
 
 }   // namespace
@@ -671,8 +837,13 @@ int main(int argc, char **argv)
   Kokkos::initialize(argc, argv);
   {
     printf("melt_flow_check on %s\n", Kokkos::DefaultExecutionSpace::name());
-    suite<double>("double");
-    suite<float>("single");
+    if (argc > 1 && std::string(argv[1]) == "fs") {     // the free-surface checks alone
+      printf("double precision\n"); fs_rest<double>(); fs_dam<double>();
+      printf("single precision\n"); fs_rest<float>(); fs_dam<float>();
+    } else {
+      suite<double>("double");
+      suite<float>("single");
+    }
   }
   Kokkos::finalize();
   printf(nfail ? "melt_flow_check: %d check(s) FAILED\n" : "melt_flow_check ok\n", nfail);

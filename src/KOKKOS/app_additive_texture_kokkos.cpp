@@ -1680,6 +1680,10 @@ PlateRule AppAdditiveTextureKokkos::plate_rule() const
     }
     if (!c->config().comp.empty()) {
       r.tlm = d_tlm; r.mat = d_mat;
+      if (d_comp.extent(0) && c->config().comp.size() > 1) {
+        r.cx = d_comp; r.cx0 = c->config().comp_x0;
+        r.ciu = (c->config().comp.size() - 1) / (c->config().comp_x1 - r.cx0);
+      }
       for (const auto &m : c->config().comp) r.tl_lo = std::min(r.tl_lo, m.tl);
     }
   }
@@ -1715,11 +1719,32 @@ void AppAdditiveTextureKokkos::setup_composition()
 }
 
 /* ----------------------------------------------------------------------
-   composition mix pool: every liquid site (i2 = 2) takes the mean x of all
-   liquid sites, over all ranks -- a well-mixed pool, so remelted layers
-   dilute the new powder. Equal weight per site. The sum is in fixed point
-   (x scaled to 2^30 over x1..xn), exact, so the mean does not depend on the
-   list order or the rank count.
+   composition mix pool: the liquid sites (i2 = 2), and the sites at or above
+   their own liquidus that the melt kernel is about to melt, move toward the
+   mean x of the pool, over all ranks -- a well-mixed pool, so remelted
+   layers dilute the new powder -- but only as far as the liquidus allows:
+   by the fraction lam of the way at which the liquidus reaches the site's
+   temperature (liquidus taken linear between its x and the pool's), 1 where
+   the pool's liquidus is below its T or below its own.
+   A site not yet liquid with lam < 1 (substrate above its own liquidus
+   under a pool of higher liquidus) ends just above its T in liquidus, so it
+   does not melt: it keeps its grain. The pool's floor is then a layer
+   graded in x whose grains are the substrate's, as a thin layer that melts
+   and regrows on its own grains would leave them, and the pool freezes onto
+   it. Three other rules were tried on a Nb track on Ti-6Al-4V (2026-11-16):
+   every liquid site takes the pool's x (the old rule) -- the melted site
+   freezes at once, hundreds of K under its new liquidus, taken by the
+   frozen site beside it because the one below is about to melt, and one
+   grain rides the melting front along the whole track; only sites that stay
+   liquid at the pool's x mix -- a slab of unmixed liquid under a pool that
+   freezes first; liquid sites mix by lam -- the graded layer, liquid,
+   freezes after the pool above it (each site lags its own liquidus by the
+   front's undercooling), and one grain still runs along.
+   The pool's x is the lam-weighted mean, x = sum(lam x) / sum(lam), so that
+   sum(lam (x - x_i)) = 0: x is conserved. lam depends on x, so three passes,
+   each with the lam of the x before; the sites are set with the last pass's
+   lam. Sums in fixed point (x to 2^24 over x1..xn, lam to 1/256), exact, so
+   the result does not depend on the list order or the rank count.
    ponytail: one pool -- every liquid site mixes with every other; label
    connected pools if a deck ever holds two apart.
 ------------------------------------------------------------------------- */
@@ -1728,24 +1753,50 @@ void AppAdditiveTextureKokkos::mix_pool(Kokkos::View<int*> d_active_sites, int n
 {
   ConductionTemperatureSource *c = thermal->conduction_source();
   const double x0 = c->config().comp_x0, w = c->config().comp_x1 - x0;
-  const double S = 1073741824.0;   // 2^30
-  auto af = d_active_flag; auto cx = d_comp; auto mat = d_mat;
-  long long loc[2] = {0, 0}, tot[2];
-  Kokkos::parallel_reduce("MixPoolSum", n_active,
-    KOKKOS_LAMBDA(const int idx, long long &sum, long long &cnt) {
-      const int i = d_active_sites(idx);
-      if (af(i) != 2) return;
-      const double u = (cx(i) - x0) / w;
-      sum += (long long) ((u < 0.0 ? 0.0 : u > 1.0 ? 1.0 : u) * S + 0.5);
-      cnt++;
-    }, loc[0], loc[1]);
-  MPI_Allreduce(loc, tot, 2, MPI_LONG_LONG, MPI_SUM, world);
-  if (tot[1] == 0) return;
-  const double x = x0 + w * ((double) tot[0] / (double) tot[1] / S);
-  const unsigned char m = (unsigned char) c->comp_bin(x);
+  const double S = 16777216.0;   // 2^24
+  const int nb = (int) c->config().comp.size();
+  auto af = d_active_flag; auto cx = d_comp; auto mat = d_mat; auto T = d_temp; auto xyz = d_xyz;
+  const PlateRule pr = plate_rule();
+  const bool lim = pr.cx.extent(0) > 0;
+  // lam in 1/256 of site i under a pool of liquidus tp (tp < 0: no limit);
+  // 0: the site is not in the pool
+  auto lam = KOKKOS_LAMBDA(const int i, const double tp) -> long long {
+    const int a = af(i);
+    if (a == 2 && tp < 0.0) return 256;
+    if (a == 5 || !lim) return a == 2 ? 256 : 0;
+    const double Ti = T(i), ti = pr.tl_x(cx(i));
+    if (a != 2 && (Ti < ti || pr.in(xyz(i, 2)))) return 0;   // not about to melt
+    if (tp < 0.0 || tp <= Ti || tp <= ti) return 256;
+    if (Ti <= ti) return 0;
+    const long long l = (long long) (256.0 * (Ti - ti) / (tp - ti));
+    return a == 2 ? l : (l < 255 ? l + 1 : 255);   // not liquid: up, so its liquidus ends above T
+  };
+  double tp = -1.0, x = 0.0;
+  for (int it = 0; it < (lim ? 3 : 1); it++) {
+    long long loc[2] = {0, 0}, tot[2];
+    const double tq = tp;
+    Kokkos::parallel_reduce("MixPoolSum", n_active,
+      KOKKOS_LAMBDA(const int idx, long long &sum, long long &cnt) {
+        const int i = d_active_sites(idx);
+        const long long l = lam(i, tq);
+        if (l == 0) return;
+        const double u = (cx(i) - x0) / w;
+        sum += l * (long long) ((u < 0.0 ? 0.0 : u > 1.0 ? 1.0 : u) * S + 0.5);
+        cnt += l;
+      }, loc[0], loc[1]);
+    MPI_Allreduce(loc, tot, 2, MPI_LONG_LONG, MPI_SUM, world);
+    if (tot[1] == 0) return;
+    x = x0 + w * ((double) tot[0] / (double) tot[1] / S);
+    if (it + 1 < (lim ? 3 : 1)) tp = pr.tl_x(x);   // the last pass's lam sets the sites
+  }
+  const double tq = tp, xm = x, iu = (nb - 1) / w;
   Kokkos::parallel_for("MixPoolSet", n_active, KOKKOS_LAMBDA(const int idx) {
     const int i = d_active_sites(idx);
-    if (af(i) == 2) { cx(i) = x; mat(i) = m; }
+    const long long l = lam(i, tq);
+    if (l == 0) return;
+    const double xn = l == 256 ? xm : cx(i) + (l / 256.0) * (xm - cx(i));
+    const int m = (int) ((xn - x0) * iu + 0.5);
+    cx(i) = xn; mat(i) = (unsigned char) (m < 0 ? 0 : m > nb - 1 ? nb - 1 : m);
   });
 }
 
@@ -2461,12 +2512,14 @@ void AppAdditiveTextureKokkos::app_update(double dt_sweep)
   // count (melting is deterministic given T>=tl: it always melts a candidate,
   // RNG only randomizes the destroyed grain/orientation). So naccept>0 iff there
   // were candidates, preserving the powder-activation trigger (melting_occurred).
+  // mix pool, before the melt: a site about to melt takes its share of the
+  // pool's x first and melts only if it then stays liquid (see mix_pool);
+  // under mix flow the conduction solver's flow carries d11 instead
+  if (d_comp.extent(0) && !thermal->conduction_source()->config().comp_flow)
+    mix_pool(d_active_sites, n_active);
   int nmelt = melting_kernel(d_active_sites, n_active);
   naccept += nmelt;
   if (floor_check_d > 0.0) check_melt_floor(n_active);
-  // mix pool; under mix flow the conduction solver's flow carries d11 instead
-  if (d_comp.extent(0) && !thermal->conduction_source()->config().comp_flow)
-    mix_pool(d_active_sites, n_active);
   bool melting_occurred = (nmelt > 0);
 
   // Phase 3.2: Nucleation (stochastic nucleation in undercooled liquid)

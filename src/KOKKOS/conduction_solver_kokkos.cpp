@@ -1089,7 +1089,8 @@ struct FlowAcc {
    composition X) moves with it. T is not updated here: the stage that
    follows conducts with the old T and then inverts the carried H (a
    splitting error of first order in h).
-   Fluid: a dense cell above its material's solidus. Gas and unborn cells
+   Fluid: a dense cell above the solidus at its composition (mix flow: at
+   its own X, between bins; else its material's). Gas and unborn cells
    are the free surface; powder and solid are walls.
 
    feed surface: blown powder lands on the pool, it is not a slab under it.
@@ -1119,6 +1120,13 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
   // feed surface reaches one layer (the birth depth) below the source plane
   const double zfeed = zsrc - birth_depth;
   const bool comp = fX.extent(0) > 0, feed = fborn.extent(0) > 0;
+  // mix flow: the fluid test takes the solidus and liquidus at the cell's own
+  // X, linear between the two bins around it -- the bin's values move in
+  // steps (40 K over 21 bins from Ti-6Al-4V to Nb) and a cell whose X drifts
+  // across a bin edge would flip between liquid and wall.
+  const int cnb = comp ? (int) src->config().comp.size() : 0;
+  const double ccx0 = src->config().comp_x0;
+  const double cciu = cnb > 1 ? (cnb - 1) / (src->config().comp_x1 - ccx0) : 0.0;
   if (laser_on) { feed_xl = xl; feed_yl = yl; }
   const double lx = feed_xl, ly = feed_yl;
   const double rf = src->config().ded_radius, irf2 = rf > 0.0 ? 1.0 / (rf * rf) : 0.0;
@@ -1161,7 +1169,14 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
       const unsigned char p = P_(i + o0, j + o1, k + o2);
       const int m = M_(i + o0, j + o1, k + o2);
       const double Tv = T_(i + o0, j + o1, k + o2);
-      const double f = (Tv - ts_(m)) / (tl_(m) - ts_(m));
+      double tsc = ts_(m), tlc = tl_(m);
+      if (cnb > 1 && m < cnb) {
+        const double u = Kokkos::fmin(Kokkos::fmax((X(i, j, k) - ccx0) * cciu, 0.0), cnb - 1.0);
+        const int m0 = u >= cnb - 1.0 ? cnb - 2 : (int) u;
+        const double fr = u - m0;
+        tsc = ts_(m0) + fr * (ts_(m0 + 1) - ts_(m0)); tlc = tl_(m0) + fr * (tl_(m0 + 1) - tl_(m0));
+      }
+      const double f = (Tv - tsc) / (tlc - tsc);
       const bool gas = (p & 3) == GAS || (p & UNBORN);
       const bool fluid = !gas && (p & 3) == DENSE && f > 0.0;
       // the carried fields must be finite (read as bits: see MeltFlow::bad)
@@ -1285,7 +1300,14 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
         const unsigned char p = P_(i + o0, j + o1, k + o2);
         const int m = M_(i + o0, j + o1, k + o2);
         const double Tv = T_(i + o0, j + o1, k + o2);
-        const double f = (Tv - ts_(m)) / (tl_(m) - ts_(m));
+        double tsc = ts_(m), tlc = tl_(m);
+        if (cnb > 1 && m < cnb) {
+          const double u = Kokkos::fmin(Kokkos::fmax((X(i, j, k) - ccx0) * cciu, 0.0), cnb - 1.0);
+          const int m0 = u >= cnb - 1.0 ? cnb - 2 : (int) u;
+          const double fr = u - m0;
+          tsc = ts_(m0) + fr * (ts_(m0 + 1) - ts_(m0)); tlc = tl_(m0) + fr * (tl_(m0 + 1) - tl_(m0));
+        }
+        const double f = (Tv - tsc) / (tlc - tsc);
         const bool gas = (p & 3) == GAS || (p & UNBORN);
         const bool fluid = !gas && (p & 3) == DENSE && f > 0.0;
         const bool was = ty(i, j, k) == MeltFlow<KK_FLOAT>::FLUID;

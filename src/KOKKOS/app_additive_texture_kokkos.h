@@ -60,7 +60,11 @@ struct KeyedRNG {
 // Where each site melts (conduction plate_material and composition): below
 // zplate (m) a site melts and freezes at the plate's liquidus and solidifies
 // back to i2 = 6. Elsewhere it takes tl, or under composition its material's
-// liquidus tlm(mat(i)), and solidifies to 3. A flag, not an infinite zplate:
+// liquidus tlm(mat(i)), and solidifies to 3. Where the composition moves
+// (mix pool, mix flow: cx) the liquidus is taken at the site's own x, linear
+// between the two bins around it: the bins' liquidus moves in steps (40 K
+// over 21 bins from Ti-6Al-4V to Nb), which would freeze a row of sites at
+// once when their x crosses a bin edge. A flag, not an infinite zplate:
 // the build uses -ffast-math.
 struct PlateRule {
   bool on;
@@ -68,9 +72,17 @@ struct PlateRule {
   double tl_lo = 0.0;                     // lowest liquidus of all: a quick reject
   Kokkos::View<const double*> tlm;        // composition: liquidus per material; empty = tl
   Kokkos::View<const unsigned char*> mat; // composition: each site's material
+  Kokkos::View<const double*> cx;         // moving composition: each site's x; empty = by material
+  double cx0 = 0.0, ciu = 0.0;            // x of bin 0, bins per unit x
   KOKKOS_INLINE_FUNCTION bool in(double z) const { return on && z * dx < zplate; }
+  KOKKOS_INLINE_FUNCTION double tl_x(double x) const {   // liquidus at composition x
+    const int nb = (int) tlm.extent(0);
+    const double u = Kokkos::fmin(Kokkos::fmax((x - cx0) * ciu, 0.0), nb - 1.0);
+    const int m0 = u >= nb - 1.0 ? nb - 2 : (int) u;
+    return tlm(m0) + (u - m0) * (tlm(m0 + 1) - tlm(m0));
+  }
   KOKKOS_INLINE_FUNCTION double tl_at(int i, double z) const {
-    return in(z) ? tl_plate : tlm.extent(0) ? tlm(mat(i)) : tl;
+    return in(z) ? tl_plate : cx.extent(0) ? tl_x(cx(i)) : tlm.extent(0) ? tlm(mat(i)) : tl;
   }
   KOKKOS_INLINE_FUNCTION double tl_min() const { return tl_lo; }
   KOKKOS_INLINE_FUNCTION int solid(double z) const { return in(z) ? 6 : 3; }

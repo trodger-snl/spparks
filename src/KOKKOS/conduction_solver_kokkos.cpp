@@ -1594,6 +1594,10 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
   const double H0 = Htab_T0, dTt = Htab_dT;
   const int nHt = (int) Htab.extent(1);
   const double kp = cfg.k_powder, hc = cfg.h, Tinf = cfg.T_inf;
+  // ded: born material is blown into the pool, not a bed: it conducts as
+  // dense metal (at k_powder one unmelted row under the pool insulated the
+  // substrate from it)
+  const bool kbed = !cfg.ded;
   const double es = cfg.emissivity * SIGMA_SB;
   const bool ev = ev_on, evamb = cfg.evap_ambient > 0.0; auto evA_ = evA, evX_ = evX;
   const double evB0 = evB[0], evB1 = evB[1], eviT0 = 1.0 / evTb[0], eviT1 = 1.0 / evTb[1];
@@ -1686,7 +1690,7 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
       const R half = R(0.5);
       // k(T) of a cell: powder, or its material m's table
       auto kof = [&](R Tv, unsigned char p, int m) {
-        return (p & 3) == POWDER ? R(kp)
+        return ((p & 3) == POWDER && kbed) ? R(kp)
              : interp<R>(&kT_(m, 0), &kV_(m, 0), &kS_(m, 0), kN_(m), Tv);
       };
       auto kcell = [&](int cc) { return kof(Tp[cc], Pp[cc], Mp[cc]); };

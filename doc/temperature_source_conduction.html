@@ -325,8 +325,10 @@ energy and are not updated, and the faces next to them lose heat like
 faces next to gas.  An unborn cell is born, as powder at <I>T_birth</I>, when
 the laser is on, its axis passes within <I>radius</I> of the cell centre, and
 the centre lies less than <I>depth</I> below the laser plane.  From then on it
-is ordinary powder (<I>k_powder</I>, melts to dense at the liquidus), so the
-pool pays to heat and melt the added material.  Lay out the bead as
+is powder that melts to dense at the liquidus, so the pool pays to heat
+and melt the added material; it conducts as the dense material, not at
+<I>k_powder</I>, because blown powder is no insulating bed (at <I>k_powder</I> a
+single unmelted row under the pool can keep it from the substrate).  Lay out the bead as
 <I>i2</I> = 0 in a box that is otherwise <I>i2</I> = 5 above the substrate.  Laser
 energy that falls on unborn or gas cells is lost, so <I>radius</I> should
 cover the beam.  At the next layer the phases are re-read from <I>i2</I>, so

@@ -125,7 +125,8 @@ in `processors`.
     is on, the beam axis is within `radius` of the cell centre, and the
     centre lies less than `depth` below the source plane. It becomes plain
     POWDER at `T_birth` (H = H(T_birth)), so from the next sub-step it
-    conducts at `k_powder` and melts to dense at the liquidus. The pool
+    conducts (as dense metal since 2026-11-15, not at `k_powder`: see
+    Evaporation) and melts to dense at the liquidus. The pool
     pays the added powder's heat and melt, which is blown powder's
     thermal sink.
   - Birth follows the path, sub-step by sub-step. It is not layer-wise:

@@ -101,6 +101,8 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
       // Gaussian of this 1/e radius about the laser axis, at temperature T
       // (default T0); only what lands on liquid is caught.
       double powder = 0.0, powder_radius = 0.0, powder_T = -1.0;
+      // MeltFlow's free-surface stabilisers (see melt_flow_kokkos.h); < 0: its default
+      double fs_tau = -1.0, fs_raw = -1.0, fs_cap = -1.0;
       // Tables made at setup. sig[iT * nx + ix] (N/m) on uniform grids from
       // (T0, x0), steps (dT, dx); linear beyond the T range, held in x.
       // rho = r0 + r1 (T - Tr) and the dynamic viscosity eta at n points

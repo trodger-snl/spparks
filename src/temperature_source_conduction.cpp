@@ -292,7 +292,8 @@ void ConductionTemperatureSource::setup_temperature_source(
         double *v = k == "dsigma_dT" ? &cfg.flow.dsigma_dT : k == "beta" ? &cfg.flow.beta
                   : k == "viscosity" ? &cfg.flow.viscosity : k == "mushy" ? &cfg.flow.mushy
                   : k == "u_ref" ? &cfg.flow.u_ref : k == "smagorinsky" ? &cfg.flow.smag
-                  : k == "sigma" ? &cfg.flow.sigma : nullptr;
+                  : k == "sigma" ? &cfg.flow.sigma : k == "fs_tau" ? &cfg.flow.fs_tau
+                  : k == "fs_raw" ? &cfg.flow.fs_raw : k == "fs_cap" ? &cfg.flow.fs_cap : nullptr;
         if (!v) break;
         *v = num(i + 2);
         i += 2;

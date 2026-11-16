@@ -202,7 +202,10 @@ struct MeltFlow {
   // run(): dt <= this * sqrt(rho dx^3 / sigma), i.e. lattice sigma <= its
   // square. Measured on the pool of check 21 at rest: currents of 4e-5 m/s at
   // lattice sigma 0.021, 2e-3 at 0.032, 1.5 at 0.072.
-  double fs_cap = 0.18;
+  // In a track (316L, 367 W, 1.5 mm spot) 0.18 with the smoothing below let
+  // one-column pits grow until the pool broke up at 150-200 ms; 0.08 with
+  // no smoothing kept the surface within 1 cell of flat.
+  double fs_cap = 0.08;
   // A floor on the relaxation time of interface cells. At a liquid metal's
   // viscosity (tau about 0.51) they are unstable under a Marangoni force:
   // the pool of check 21 breaks up at a third of its forcing with no floor,
@@ -210,7 +213,10 @@ struct MeltFlow {
   // viscous (nu = 1/6 lattice at 1), so the surface is dragged along with
   // the cell under it: a known bias on the surface speed.
   double fs_tau = 1.0;
-  double fs_raw = 0.25;                      // the unsmoothed part of the height the forces see
+  // The unsmoothed part of the height the forces see. Smoothing lets a
+  // larger step be stable but takes the restoring force from cell-sized
+  // pits, which then never heal: off (1) by default.
+  double fs_raw = 1.0;
 
   // per column (x, y), from surface(): the metal's height, the gas density
   // the surface sees (less 1), the surface force as an acceleration of the

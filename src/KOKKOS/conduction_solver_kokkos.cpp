@@ -1658,6 +1658,11 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
           P_(li, lj, lk) = (unsigned char) (guest ? base | PART : base);
           if (t == MF::FLUID || guest) H_(li, lj, lk) = (KK_FLOAT) (qv - Hr(m));
           if (fresh) T_(li, lj, lk) = (KK_FLOAT) T_of(m, qv - Hr(m));
+        } else if (t == MF::GAS && (p & 3) != GAS) {
+          // the liquid left this cell within the step (it was full at the
+          // last write-back): gas to the stencil too, or the next step
+          // would take it for metal and make a cell of liquid from nothing
+          P_(li, lj, lk) = GAS;
         }
       });
     Kokkos::fence();

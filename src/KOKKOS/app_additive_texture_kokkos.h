@@ -304,6 +304,7 @@ class AppAdditiveTextureKokkos : public QuaternionKokkos<AppAdditiveTexture> {
   // composition (conduction): each site's material from d11, its liquidus
   Kokkos::View<unsigned char*> d_mat;
   Kokkos::View<double*> d_comp;   // d11, allocated under composition only
+  Kokkos::View<unsigned char*> d_melt_hold;   // mix flow: per active-list entry, 1 = do not melt this step
   Kokkos::View<double*> d_tlm;
   Kokkos::View<double*> d_mobility_out; // 1 once a site has been smoothed (d5), as on the CPU
 

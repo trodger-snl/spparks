@@ -1246,6 +1246,35 @@ int AppAdditiveTextureKokkos::melting_kernel(Kokkos::View<int*> d_active_sites, 
   auto d_wall_t_local = d_wall_t;
   const double t_now = time;
 
+  // mix flow: a site next to liquid of a higher liquidus does not melt until
+  // it is as hot as that liquidus. The flow would carry the neighbour's
+  // composition into it and freeze it again at once, hundreds of K under its
+  // new liquidus, taken by the frozen site beside it because the one below is
+  // about to melt -- one grain riding the melting front along the track. Held
+  // solid it keeps its grain while the solver (for which it is fluid above
+  // its own solidus) grades its composition, and the pool freezes onto it:
+  // the mix pool rule's counterpart (see mix_pool). Its own pass, reads only,
+  // so the melt below stays free of races.
+  const bool hold = pr.cx.extent(0) > 0 && thermal->conduction_source()->config().comp_flow;
+  if (hold) {
+    if ((int) d_melt_hold.extent(0) < n_active)
+      d_melt_hold = Kokkos::View<unsigned char*>(Kokkos::view_alloc("melt_hold", Kokkos::WithoutInitializing), n_active + n_active / 4);
+    auto hl = d_melt_hold; auto nn = d_numneigh; auto nb = d_neighbor_rm;
+    Kokkos::parallel_for("MeltHold", n_active, KOKKOS_LAMBDA(const int idx) {
+      const int i = d_active_sites_local(idx);
+      unsigned char h = 0;
+      if (d_active_flag_local(i) != 2) {
+        const double T_i = d_T_local(i);
+        for (int k = 0; k < nn(i) && !h; k++) {
+          const int j = nb(i, k);
+          if (d_active_flag_local(j) == 2 && pr.tl_x(pr.cx(j)) > T_i) h = 1;
+        }
+      }
+      hl(idx) = h;
+    });
+  }
+  auto d_hold_local = d_melt_hold;
+
   // Melting kernel: parallel over the active-front list with event tracking
   // Race-free: each site only reads/writes itself
   int naccept_local = 0;
@@ -1257,7 +1286,7 @@ int AppAdditiveTextureKokkos::melting_kernel(Kokkos::View<int*> d_active_sites, 
       int active_flag_i = d_active_flag_local(i);
 
       // Check if site should melt: T >= liquidus && not already liquid
-      if (T_i >= pr.tl_at(i, k_xyz_d(i, 2)) && active_flag_i != 2) {
+      if (T_i >= pr.tl_at(i, k_xyz_d(i, 2)) && active_flag_i != 2 && !(hold && d_hold_local(idx))) {
         KeyedRNG generator(key_local, i, RNG_MELT);
 
         // Wall guard: only a melting face site writes (atomics, rare)

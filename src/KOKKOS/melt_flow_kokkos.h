@@ -356,10 +356,12 @@ struct MeltFlow {
               R w = R(2);
               if (a[d] < 0) { if (per) a[d] += nd; else { a[d] = 0; w -= R(1); } }
               if (b[d] >= nd) { if (per) b[d] -= nd; else { b[d] = nd - 1; w -= R(1); } }
-              if (hp) {
-                if (ty(a[0], a[1], a[2]) != FLUID) { a[d] = d == 0 ? i : j; w -= R(1); }
-                if (ty(b[0], b[1], b[2]) != FLUID) { b[d] = d == 0 ? i : j; w -= R(1); }
-              }
+              // one-sided where the neighbour holds no surface value: sigma
+              // exists in FLUID cells only; T exists in walls too, but a gas
+              // cell's T is not the surface's (it gave a false edge gradient)
+              const unsigned char ta = ty(a[0], a[1], a[2]), tb = ty(b[0], b[1], b[2]);
+              if (hp ? ta != FLUID : ta == GAS) { a[d] = d == 0 ? i : j; w -= R(1); }
+              if (hp ? tb != FLUID : tb == GAS) { b[d] = d == 0 ? i : j; w -= R(1); }
               return w > R(0) ? (S_(b[0], b[1], b[2]) - S_(a[0], a[1], a[2])) / w : R(0);
             };
             const R ms = hp ? mar / (R(1) + dn_(i, j, k)) : mar;

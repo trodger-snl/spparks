@@ -1072,6 +1072,48 @@ void fs_inject()
   check("20   (and levelled: height max - min, cells)", hhi - hlo, 0.05);
 }
 
+// 22. The surface force on a steep surface (no flow: surface() alone). A
+//     wave of slope up to 2 with sigma linear along x: the force put on the
+//     cells, summed over a wavelength, against the integral of
+//     sigma_x (1, h_x) / sqrt(1 + h_x^2), and the largest acceleration of
+//     any one cell against sigma_x (a cell holding little must not be thrown).
+template <class R>
+void fs_force()
+{
+  MeltFlow<R> m;
+  const int nx = 64, nz = 48;
+  const double H = 24.0, A = 8.0, kw = 2.0 * M_PI / nx, tau = 1e-5;
+  m.fs = true;
+  m.resize(nx, 2, nz);
+  m.p.periodic[0] = m.p.periodic[1] = true;
+  m.p.marangoni = tau; m.p.sigma = 0.01; m.p.Tref = 0.0;
+  auto hT = Kokkos::create_mirror_view(m.T.v);
+  // T periodic with a uniform gradient over the middle half (sigma_x = tau there)
+  for (int i = 0; i < nx; i++)
+    for (int j = 0; j < 2; j++)
+      for (int k = 0; k < nz; k++) hT(i, j, k) = R(i < nx / 2 ? i : nx - i);
+  Kokkos::deep_copy(m.T.v, hT);
+  fs_shape(m, [&](int i) { return 1.0 + H + A * std::cos(kw * (i + 0.5)); });
+  const int lo[3] = {0, 0, 0}, hi[3] = {nx, 2, nz};
+  m.surface(lo, hi);
+  auto ax = host(m.sax), az = host(m.saz); auto kt = host(m.skt), kb = host(m.skb);
+  auto t = host(m.type.v); auto e = host(m.eps.v);
+  double fx = 0, fz = 0, ex = 0, ez = 0, amax = 0;
+  for (int i = 4; i < nx / 2 - 4; i++) {
+    // what the step applies: the column's acceleration on each cell, by its fill
+    for (int k = kb(i, 0); k <= kt(i, 0); k++) {
+      const double w = t(i, 0, k) == MeltFlow<R>::INTERFACE ? std::min(1.0, std::max(0.0, (double) e(i, 0, k))) : 1.0;
+      fx += w * ax(i, 0); fz += w * az(i, 0);
+    }
+    amax = std::max(amax, std::hypot((double) ax(i, 0), (double) az(i, 0)));
+    const double hx = -A * kw * std::sin(kw * (i + 0.5)), g = std::sqrt(1.0 + hx * hx);
+    ex += tau / g; ez += tau * hx / g;
+  }
+  check("22 steep surface: force along x, applied / exact - 1", fx / ex - 1.0, 5e-2);
+  check("22 steep surface: force along z, (applied - exact) / |exact x|", (fz - ez) / ex, 5e-2);
+  check("22 steep surface: largest cell acceleration / sigma_x", amax / tau, 1.5);
+}
+
 template <class R>
 void fs_all()
 {
@@ -1081,6 +1123,7 @@ void fs_all()
   fs_load<R>();
   fs_thermocapillary<R>(0.0); fs_thermocapillary<R>(1.0);
   fs_inject<R>();
+  fs_force<R>();
   fs_pool<R>();
 }
 

@@ -58,6 +58,8 @@ per-move speed).
 | `cp_table n T1 c1 ...` | cp(T), piecewise linear, clamped | constant `cp` |
 | `latent L` | latent heat (J/kg), released linearly over [solidus, liquidus] | 0 |
 | `k_powder k` | powder conductivity | k/100 |
+| `evaporation n Tb Lv M ...` | evaporative loss, 1 or 2 species (see Evaporation) | off |
+| `evaporation_coef c`, `evaporation_ambient p` | vacuum net-flux fraction; ambient pressure (Pa, 0 = vacuum) | 0.82; 101325 |
 | `convection h T_inf` | convective loss on gas faces and the top face | h = 0 |
 | `emissivity e` | radiative loss (to `T_inf`) on the same faces | 0 |
 | `margin xlo xhi ylo yhi` | thermal domain beyond the lattice box (m) | 0 |

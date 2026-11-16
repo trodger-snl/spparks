@@ -401,6 +401,51 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   kN = Kokkos::View<int*>("cond_kN", nm);
   Hbirth = Kokkos::View<KK_FLOAT*>("cond_Hbirth", nm);
   tlm = Kokkos::View<double*>("cond_tl", nm);
+  // evaporation: the loss from a metal surface at T is
+  //   q = coef * sum_i X_i Lv_i p_i(T) sqrt(M_i / (2 pi R T)),
+  //   p_i = 1 atm * exp(Lv_i M_i / R * (1 / Tb_i - 1 / T))
+  // (Hertz-Knudsen with Clausius-Clapeyron, Raoult's law over mole fractions
+  // X_i; coef = 1 less the fraction that recondenses). evA holds everything
+  // but the exponential and 1 / sqrt(T). With two species a composition
+  // bin's mass fraction of the second runs 0..1 over the bins.
+  // Into a gas at pressure pa the net loss is less: none until the vapour
+  // pressure p = sum_i X_i p_i passes pa (below that only diffusion through
+  // the gas removes vapour, about 1e-2 of this rate: neglected), then
+  //   q * (1 - (pa / p)^2.3),
+  // a fit (within 0.05 of coef) to Knight's Knudsen-layer jump conditions
+  // with the layer's outer pressure at pa (gamma = 5/3); pa = 0 is vacuum.
+  // ponytail: no diffusive loss below boiling and no shock into the ambient
+  // gas (that roughly halves the loss just above boiling).
+  // ponytail: Tb, Lv, M are keywords; move them into the material cards
+  // when a third species or Al loss from Ti-6Al-4V is wanted.
+  ev_on = !cfg.evap.empty(); ev_hsurf = 0.0;
+  evA = Kokkos::View<KK_FLOAT*[2]>("cond_evA", ev_on ? nm : 0);
+  evX = Kokkos::View<KK_FLOAT*[2]>("cond_evX", ev_on ? nm : 0);
+  if (ev_on) {
+    const int ns = (int) cfg.evap.size() / 3, nb = (int) cfg.comp.size();
+    if (ns == 2 && nb < 2) error->all(FLERR,"conduction: evaporation with two species needs composition");
+    const double Rg = 8.314462618, P0 = 101325.0, PI = 3.14159265358979323846;
+    double a[2] = {0, 0};
+    for (int s = 0; s < ns; s++) {
+      const double Tb = cfg.evap[3*s], Lv = cfg.evap[3*s+1], Mm = cfg.evap[3*s+2];
+      evTb[s] = Tb; evB[s] = Lv * Mm / Rg;
+      a[s] = cfg.evap_coef * Lv * P0 * std::sqrt(Mm / (2.0 * PI * Rg));
+      // the explicit step limit takes dq/dT at Tb + 300 K: above about that
+      // the loss exceeds what a laser delivers and the surface cannot stay
+      const double Tr = Tb + 300.0;
+      const double q = a[s] * std::exp(evB[s] * (1.0 / Tb - 1.0 / Tr)) / std::sqrt(Tr);
+      ev_hsurf = std::max(ev_hsurf, q * (evB[s] / (Tr * Tr) - 0.5 / Tr));
+    }
+    auto hA = Kokkos::create_mirror_view(evA), hX = Kokkos::create_mirror_view(evX);
+    const double ipa = cfg.evap_ambient > 0.0 ? P0 / cfg.evap_ambient : 0.0;
+    for (int m = 0; m < nm; m++) {
+      const double w = (ns == 2 && m < nb) ? (double) m / (nb - 1) : 0.0;    // mass fraction of species 1
+      const double n0 = (1.0 - w) / cfg.evap[2], n1 = ns == 2 ? w / cfg.evap[5] : 0.0;
+      hA(m, 0) = (KK_FLOAT) (a[0] * n0 / (n0 + n1)); hA(m, 1) = (KK_FLOAT) (a[1] * n1 / (n0 + n1));
+      hX(m, 0) = (KK_FLOAT) (ipa * n0 / (n0 + n1)); hX(m, 1) = (KK_FLOAT) (ipa * n1 / (n0 + n1));
+    }
+    Kokkos::deep_copy(evA, hA); Kokkos::deep_copy(evX, hX);
+  }
   auto hHt = Kokkos::create_mirror_view(Htab), hiH = Kokkos::create_mirror_view(iHtab);
   auto hkT = Kokkos::create_mirror_view(kTr), hkV = Kokkos::create_mirror_view(kVr);
   auto hkS = Kokkos::create_mirror_view(kSr);
@@ -516,7 +561,7 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
     const double cn = *std::min_element(cmin.begin() + m0, cmin.begin() + m1 + 1);
     for (int m = 0; m < np_; m++) { kmax[m] = kx; cmin[m] = cn; }
   }
-  const double hsurf = cfg.h + 4.0 * cfg.emissivity * SIGMA_SB * 4000.0 * 4000.0 * 4000.0;
+  const double hsurf = cfg.h + 4.0 * cfg.emissivity * SIGMA_SB * 4000.0 * 4000.0 * 4000.0 + ev_hsurf;
   // an adiabatic far face carries no flux, so it does not limit the step
   const bool far_fixed = cfg.far_bc == ConductionTemperatureSource::FAR_FIXED;
   double dtl = 1e300;
@@ -1550,6 +1595,9 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
   const int nHt = (int) Htab.extent(1);
   const double kp = cfg.k_powder, hc = cfg.h, Tinf = cfg.T_inf;
   const double es = cfg.emissivity * SIGMA_SB;
+  const bool ev = ev_on, evamb = cfg.evap_ambient > 0.0; auto evA_ = evA, evX_ = evX;
+  const double evB0 = evB[0], evB1 = evB[1], eviT0 = 1.0 / evTb[0], eviT1 = 1.0 / evTb[1];
+  const double evTmin = 0.6 * std::min(evTb[0], evTb[1]);    // below this the loss is under 1e-4 of its value at Tb
   const bool fixed = cfg.far_bc == ConductionTemperatureSource::FAR_FIXED;
   const double Tfar = src->ambient();
   const bool exlo = edge[0], exhi = edge[1], eylo = edge[2], eyhi = edge[3];
@@ -1704,7 +1752,16 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
             Tnp[c] = Tr; Pnp[c] = pfull;
           } else {
             auto surf = [&](R A) {
-              return -A * (R(hc) * (Tr - R(Tinf)) + R(es) * (Tr*Tr*Tr*Tr - R(Tinf)*R(Tinf)*R(Tinf)*R(Tinf)));
+              R q = R(hc) * (Tr - R(Tinf)) + R(es) * (Tr*Tr*Tr*Tr - R(Tinf)*R(Tinf)*R(Tinf)*R(Tinf));
+              if (ev && Tr > R(evTmin)) {
+                const R iT = R(1) / Tr;
+                const R e0 = Kokkos::exp(R(evB0) * (R(eviT0) - iT)), e1 = Kokkos::exp(R(evB1) * (R(eviT1) - iT));
+                const R pr = evX_(mc, 0) * e0 + evX_(mc, 1) * e1;        // vapour pressure / ambient
+                if (!evamb || pr > R(1))
+                  q += (evA_(mc, 0) * e0 + evA_(mc, 1) * e1) * Kokkos::sqrt(iT)
+                       * (evamb ? R(1) - Kokkos::pow(pr, R(-2.3)) : R(1));
+              }
+              return -A * q;
             };
             auto far = [&](R A, R halfw) {   // k looked up again: not carried for the few edge cells
               return fixed ? A * kcell(c) / halfw * (R(Tfar) - Tr) : R(0);

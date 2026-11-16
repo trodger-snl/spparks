@@ -57,6 +57,13 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
     double k_powder = 0.0;
     double h = 0.0, T_inf = 300.0;     // convection
     double emissivity = 0.0;
+    // evaporation: Tb (K, at 1 atm), Lv (J/kg), M (kg/mol) of one species, or
+    // of two: the composition's ends (x = comp_x0 and comp_x1). Empty: off.
+    std::vector<double> evap;
+    double evap_coef = 0.82;           // net fraction of the Hertz-Knudsen flux into vacuum
+    // ambient pressure (Pa): the loss is zero until the liquid's vapour
+    // pressure passes it (the surface boils); 0 = vacuum, the full rate
+    double evap_ambient = 101325.0;
     double margin[4] = {0, 0, 0, 0};   // xlo xhi ylo yhi beyond the lattice box
     double plate = 0.0;                // grid depth below the lattice box
     double plate_top = -1e300;         // all cells below this z are dense

@@ -212,6 +212,20 @@ void ConductionTemperatureSource::setup_temperature_source(
     else if (a == "k_powder") k_powder = num(++i);
     else if (a == "convection") { cfg.h = num(++i); cfg.T_inf = num(++i); }
     else if (a == "emissivity") cfg.emissivity = num(++i);
+    else if (a == "evaporation") {
+      const int n = (int) num(++i);
+      if (n < 1 || n > 2) error->all(FLERR,"setup_temperature_source conduction: evaporation takes 1 or 2 species (Tb Lv M each)");
+      cfg.evap.clear();
+      for (int j = 0; j < 3 * n; j++) {
+        cfg.evap.push_back(num(++i));
+        if (cfg.evap.back() <= 0.0) error->all(FLERR,"setup_temperature_source conduction: evaporation Tb, Lv and M must be positive");
+      }
+    }
+    else if (a == "evaporation_coef") cfg.evap_coef = num(++i);
+    else if (a == "evaporation_ambient") {
+      cfg.evap_ambient = num(++i);
+      if (cfg.evap_ambient < 0.0) error->all(FLERR,"setup_temperature_source conduction: evaporation_ambient must be >= 0");
+    }
     else if (a == "margin") for (int j = 0; j < 4; j++) cfg.margin[j] = num(++i);
     else if (a == "plate") cfg.plate = num(++i);
     else if (a == "plate_top") { cfg.plate_top = num(++i); cfg.plate_top_set = true; }
@@ -419,6 +433,10 @@ void ConductionTemperatureSource::print_source_info() const
             << "-point k table, " << cfg.cp_T.size() << "-point cp table, latent="
             << cfg.latent << " J/kg, h=" << cfg.h << ", emissivity="
             << cfg.emissivity << ", stretch=" << cfg.stretch << std::endl;
+  for (size_t s = 0; s + 2 < cfg.evap.size(); s += 3)
+    std::cout << "conduction: evaporation, species " << s / 3 << ": Tb=" << cfg.evap[s] << " K, Lv="
+              << cfg.evap[s+1] << " J/kg, M=" << cfg.evap[s+2] << " kg/mol, coefficient " << cfg.evap_coef
+              << ", ambient " << cfg.evap_ambient << " Pa" << std::endl;
   if (cfg.far > 0.0)
     std::cout << "conduction: far " << cfg.far << " m: passes farther from the box "
               << "ride RKL2 super-steps; the run ends once the box is done" << std::endl;

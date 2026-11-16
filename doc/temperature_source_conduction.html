@@ -35,7 +35,7 @@ setup_temperature_source conduction card overrides keyword values ...
 
 <LI>zero or more keyword/value pairs may be appended 
 
-<LI>keyword = <I>k_table</I> or <I>cp_table</I> or <I>latent</I> or <I>k_powder</I> or <I>convection</I> or <I>emissivity</I> or <I>margin</I> or <I>plate</I> or <I>stretch</I> or <I>max_cell</I> or <I>part</I> or <I>layer_thickness</I> or <I>packing</I> or <I>plate_top</I> or <I>plate_material</I> or <I>plate_growth</I> or <I>composition</I> or <I>far_bc</I> or <I>sts</I> or <I>carry</I> or <I>flow</I> or <I>init</I> or <I>far</I> or <I>ded</I> 
+<LI>keyword = <I>k_table</I> or <I>cp_table</I> or <I>latent</I> or <I>k_powder</I> or <I>convection</I> or <I>emissivity</I> or <I>evaporation</I> or <I>evaporation_coef</I> or <I>evaporation_ambient</I> or <I>margin</I> or <I>plate</I> or <I>stretch</I> or <I>max_cell</I> or <I>part</I> or <I>layer_thickness</I> or <I>packing</I> or <I>plate_top</I> or <I>plate_material</I> or <I>plate_growth</I> or <I>composition</I> or <I>far_bc</I> or <I>sts</I> or <I>carry</I> or <I>flow</I> or <I>init</I> or <I>far</I> or <I>ded</I> 
 
 <PRE>  <I>k_table</I> values = n T1 k1 ... Tn kn
     dense conductivity k(T), piecewise linear, held at the end values (K, W/(m K))
@@ -49,6 +49,13 @@ setup_temperature_source conduction card overrides keyword values ...
     convective loss coefficient (W/(m^2 K)) and gas temperature (K)
   <I>emissivity</I> value = e
     radiative loss to T_inf
+  <I>evaporation</I> values = n Tb Lv M ...
+    evaporative loss from metal surfaces: n = 1 or 2 species, each with its
+    boiling point at 1 atm (K), latent heat of vaporisation (J/kg) and molar mass (kg/mol)
+  <I>evaporation_coef</I> value = c
+    net fraction of the Hertz-Knudsen flux that leaves into vacuum (default 0.82)
+  <I>evaporation_ambient</I> value = p
+    ambient pressure (Pa, default 101325); 0 = vacuum
   <I>margin</I> values = xlo xhi ylo yhi
     thermal domain beyond the lattice box on each side (m)
   <I>plate</I> value = d
@@ -284,6 +291,33 @@ instead gives powder cells f*rho, kept after they melt.  The microstructure
 model does not shrink melted powder, so <I>packing</I> below 1 is for
 single-layer tests only.
 </P>
+<P><B>Evaporation.</B>  Without it nothing limits the temperature under the
+beam, and a concentrated laser drives the surface far past the boiling
+point.  <I>evaporation</I> adds, on every face where convection and
+radiation act, the loss
+</P>
+<PRE>q = c f sum_i X_i Lv_i p_i(T) sqrt(M_i / (2 pi R T)),  p_i = 1 atm exp(Lv_i M_i / R (1/Tb_i - 1/T)) 
+</PRE>
+<P>the Hertz-Knudsen flux of each species at its Clausius-Clapeyron vapour
+pressure, weighted by mole fraction X_i (Raoult's law).  c is
+<I>evaporation_coef</I>: 0.82 is the fraction that does not recondense when
+the vapour expands into vacuum.  f accounts for the gas above the
+surface at pressure pa = <I>evaporation_ambient</I>: with p = sum_i X_i p_i
+the liquid's vapour pressure, f = 0 while p <= pa (the surface is below
+its boiling point; the slow diffusion of vapour through the gas is
+neglected) and f = 1 - (pa / p)^2.3 above, a fit to Knight's
+Knudsen-layer jump conditions.  pa = 0 gives f = 1.  The surface then
+settles a little above the local boiling point.  With one species every
+metal cell evaporates alike.  With two (needs <I>composition</I>) they are
+the materials at the two ends of the composition range, and a cell's
+mole fractions follow from its composition bin, so the cap rises as the
+less volatile species takes over.  Example, Ti (standing in for
+Ti-6Al-4V) and Nb: <I>evaporation 2 3560 8.88e6 0.047867 5017 7.43e6
+0.092906</I>.  Limits: an alloy is one species here (Ti-6Al-4V loses Al
+first and boils some 100-300 K below Ti); no mass leaves, only heat; no
+recoil pressure.  The loss is steep in T, so the explicit step limit
+includes its slope 300 K above the lowest boiling point.
+</P>
 <P><B>Directed energy deposition.</B>  With <I>ded</I> there is no powder bed.
 Outside the box, cells that powder would fill are gas instead.  Inside
 it, sites with <I>i2</I> = 0 or 1 are unborn: they are gas, take no laser
@@ -400,7 +434,7 @@ layer thickness when <I>ded</I> is given.
 <P><B>Default:</B>
 </P>
 <P>k_table = constant k, cp_table = constant cp, latent = 0, k_powder =
-k/100, convection h = 0 (T_inf = 300), emissivity = 0, margin = 0, plate
+k/100, convection h = 0 (T_inf = 300), emissivity = 0, no evaporation, margin = 0, plate
 = 0, stretch = 1.25, max_cell = none, part = whole domain dense,
 layer_thickness = 0, packing = 1, plate_top = box bottom, plate_material
 = none, plate_growth = 0, composition = none (mix pool when given), far_bc = fixed, sts = 32, carry = no, flow off, init T0, far = 0 (off), ded off (when on: radius = 2 sx, T_birth

@@ -114,6 +114,11 @@ class ConductionSolverKokkos : protected Pointers {
   Tab2 Htab, iHtab, kTr, kVr, kSr;
   Kokkos::View<int*> kN;
   Kokkos::View<KK_FLOAT*> Hbirth;
+  // evaporation: per material, each species' flux prefactor (see build);
+  // evB = Lv M / R and evTb per species; ev_on = the keyword was given
+  Kokkos::View<KK_FLOAT*[2]> evA, evX;    // evX: the species' mole fractions * 1 atm / ambient
+  double evB[2] = {0, 0}, evTb[2] = {1, 1}, ev_hsurf = 0.0;
+  bool ev_on = false;
   Kokkos::View<double*> tlm;
   std::vector<KK_FLOAT> hHtab;   // host copy of Htab, row-major
   // KK_FLOAT copies for the stencil (aliases under FP64)

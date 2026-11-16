@@ -441,10 +441,25 @@ enough for mixing; one rank first (several ranks: see the end of this section).
   adjustment off), same run time. Six layers of the first wall: 0.93 GB
   against about 8. An OpenMP run of four layers does not grow (0.8 GB).
   spparks.cpp now calls `mallopt(M_MMAP_THRESHOLD, 128 KiB)` in HIP builds
-  unless the variable is set. Not yet run: a whole wall with it.
+  unless the variable is set.
+- OPEN again (2026-11-15, evening): that does not hold for a whole wall in
+  double precision. The same two walls with the call in (7718ec92, FP64):
+  41.8 GB (properties cards; growing from the tenth minute, with steps of
+  2-9 GB at layers 3, 8, 12 and 20) and 22.9 GB (constant properties; flat
+  at 0.75 GB for 130 minutes, then the same pattern). At layer 15 of the
+  first, 13.4 GB was anonymous memory and 8.6 GB shared (the device arrays
+  on this APU: 2.5 GB at layer 8, 4.5 at 12, 8.6 from 15 on), so there is a
+  device-side part as well. Not yet separated: double against mixed, the
+  call against the environment variable, and what steps the device arrays.
+  A third pair (evaporation, below) was flat at 0.76 GB at layer 7.
 - Mirror symmetry and precision (2026-11-15). A track on the centreline is
-  mirror symmetric in y. Double: exactly so, OpenMP (25 ms) and HIP (50 ms,
-  to the float dump), 25% Nb on Ti-6Al-4V. Mixed: 1e-6 of the peak speed
+  mirror symmetric in y. Double: to round-off over the first 25-50 ms
+  (OpenMP, HIP), 25% Nb on Ti-6Al-4V; over whole tracks 4 of 14 double
+  runs lose it all the same (50% Nb and Nb on Ti-6Al-4V, Nb on 50%), the
+  difference growing steadily from 1e-12 K: an instability of the flow,
+  seeded by round-off, which double only delays. (A T dumped as float
+  shows any double difference that straddles a rounding step as one float
+  step, 2.4e-4 K at 3800 K: that is not single-precision arithmetic.) Mixed: 1e-6 of the peak speed
   from the first step; with one composition it stays there for the whole
   track, with feed != substrate it jumps to 1e-2..2e-1 after 20-45 ms
   (HIP and OpenMP alike), in single frames first, as when a cell crosses a
@@ -503,6 +518,66 @@ enough for mixing; one rank first (several ranks: see the end of this section).
   constants for every composition; with it the inertia is still one
   density's and eta has no T dependence; melted LOOSE cells carried as
   dense.
+
+## Evaporation, the edge gradient and the born bead (2026-11-15)
+
+Three corrections to the DED flow model, found on Nb fed on Ti-6Al-4V
+(590 W, 10 mm/s, OpenMP, double; decks and figures: LaCie
+`tinb_tracks/diag`, `cmp.py`, `evsum.py`).
+
+- Edge gradient (273fe8f6). With constant properties the Marangoni
+  gradient at the bead's side walls was differenced against the gas (300
+  K): a false outward force, the bright stripes along the walls in top
+  views. It also held the flow mirror symmetric: with it gone a
+  constant-properties track is as lopsided and unsteady as a `properties
+  cards` one (asymmetry 0.76 against 0.77 of the peak speed at 0.25 s).
+  Every constant-properties result before this commit carries the bug, so
+  the earlier on / off contrasts in steadiness were mostly this.
+- What the unsteadiness is not: solutal Marangoni (Nb given Ti-6Al-4V's
+  surface tension: asymmetry 0.70) or the composition bins (101 bins:
+  0.84; the detached liquid patches under the pool fall from 416 to 125
+  cells but do not go). A 0.1 step in composition (60% on 50% Nb) is
+  nearly steady (asymmetry 3e-3, speed fluctuation 0.03 m/s rms against
+  0.10). At 2 ms between frames the fluctuation alternates in sign: it is
+  faster than 250 Hz and its frequency is not measured.
+- Evaporation (61709807). Without it the surface under the beam reaches
+  4700-5000 K. A constant coefficient (the vacuum rate) over-cools: it
+  takes 11% of the peak laser flux at 0.9 Tb and half at Tb where the loss
+  into 1 atm is about zero (literature: DebRoy's group scales the vacuum
+  rate by 0.1 at 1 atm, or adds a small diffusive term below Tb to a
+  pressure-driven one above). Hence the ambient-limited form. Peak T then
+  holds 3850-3875 K for the whole track (pool about 44% Nb). Measured DED
+  pools on Ti-6Al-4V are 2300-3000 K, so the beam is still too
+  concentrated or heat spreading is missing; evaporation is not to be
+  tuned to hide that. Not in: Ti-6Al-4V as Ti + Al + V (Al carries most
+  of the loss and lowers the cap to about 3250-3470 K), the diffusive
+  loss, recoil.
+- The born bead (51529824). Born cells conducted at `k_powder`. One
+  unmelted row of them under the pool then insulates the substrate (liquid
+  3520 K, the powder row 2326 K, substrate 1091 K): with any cap on the
+  surface the pool perched on that row, 0.18 mm deep in a 0.20 mm bead,
+  the bead stayed 0.94-0.97 Nb and nothing bonded. The model has both
+  states; without evaporation the hot start melts through and the pool
+  stays through. Born material now conducts as dense: depth 0.58 mm, bead
+  0.44 Nb, 29 unmelted cells of 51000.
+
+| Nb on Ti-6Al-4V at 0.25 s | peak T (K) | depth (mm) | liquid cells | bead x | asymmetry |
+|---|---|---|---|---|---|
+| no evaporation | 4799 | 0.58 | 54271 | 0.40 | 0.8 |
+| coefficient 0.82, vacuum form | 4652 | 0.18 | 18020 | 0.97 | 1e-3 |
+| coefficient 0.2, vacuum form | 4359 | 0.46 | 19921 | 0.69 | 0.3 |
+| ambient 1 atm, born at k_powder | 4801 | 0.18 | 19726 | 0.94 | 0.3 |
+| ambient 1 atm, born dense | 3863 | 0.58 | 37510 | 0.44 | 0.5 |
+
+Free surface (scoped, not built): a single-phase free-surface LBM (fill
+fraction, mass exchange) fits the solver, about 3.5-5 months with the
+conduction and DED coupling the larger part, flow cost 2-4x; it would not
+calm the flow (the Weber number is about 2, so the lid is not justified,
+but capillarity restores normal motion only). No gas phase is needed:
+evaporation, recoil and powder are boundary conditions; gas shear is
+under 1% of the Marangoni stress. Still flat-surface artefacts: the
+bead's gas side faces are no-slip walls without Marangoni stress, and the
+surface layer (10-25 um) is one cell.
 
 ## Material (examples: 316L)
 

@@ -12,7 +12,6 @@
 
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -666,7 +665,7 @@ void fs_rest()
 {
   MeltFlow<R> m;
   const int nx = 12, ny = 6, nz = 16;
-  m.fs = true;
+  m.fs = true; m.fs_tau = 0.0;
   m.resize(nx, ny, nz);
   m.p.periodic[0] = m.p.periodic[1] = true;
   m.p.accel[2] = -1e-4;
@@ -713,7 +712,7 @@ void fs_dam()
 {
   MeltFlow<R> m;
   const int nx = 48, ny = 4, nz = 32;
-  m.fs = true;
+  m.fs = true; m.fs_tau = 0.0;
   m.resize(nx, ny, nz);
   m.p.periodic[1] = true;
   m.p.accel[2] = -5e-5;
@@ -757,21 +756,6 @@ void fs_dam()
     if (s % 50 == 49) open += fs_open(m);
     if (s % 500 == 499) {
       umax = std::max(umax, std::sqrt((double) m.max_u2(lo, hi)));
-      if (getenv("FS_DEBUG")) {
-        printf("   step %d: mass %.15g lost %g umax %g\n", s + 1, m.total_mass(), lost, std::sqrt((double) m.max_u2(lo, hi)));
-        auto t = host(m.type.v); auto pz = host(m.pz.v); auto px = host(m.px.v); auto ms = host(m.cmass.v); auto r = host(m.rho.v);
-        int bi = 0, bk = 0; double bu = -1;
-        for (int i = 0; i < nx; i++) for (int k = 0; k < nz; k++) {
-          const double u = std::hypot((double) px(i, 1, k), (double) pz(i, 1, k));
-          if (MeltFlow<R>::liq(t(i, 1, k)) && u > bu) { bu = u; bi = i; bk = k; }
-        }
-        printf("     fastest (%d, %d): u %g %g type %d mass %g rho %g; types around (k down):\n", bi, bk, (double) px(bi, 1, bk), (double) pz(bi, 1, bk), (int) t(bi, 1, bk), (double) ms(bi, 1, bk), (double) r(bi, 1, bk));
-        for (int k = std::min(nz - 1, bk + 2); k >= std::max(0, bk - 2); k--) {
-          printf("       ");
-          for (int i = std::max(0, bi - 3); i <= std::min(nx - 1, bi + 3); i++) printf("%d(%.2f) ", (int) t(i, 1, k), (double) ms(i, 1, k));
-          printf("\n");
-        }
-      }
     }
   }
   total(s1, r1);
@@ -794,6 +778,309 @@ void fs_dam()
   check("16 moving surface, sum of mass x q: |change| / sum", s1 / s0 - 1.0, 1e-4);
   check("16 uniform q stays: max |q - q0|", uni, pick<R>(1e-13, 1e-5));
   check("16 q stays in [0, 1]: over/undershoot", std::max(qhi - 1.0, -qlo), pick<R>(1e-12, 1e-5));
+}
+
+// A free surface of height h(i) (cells, from the block's bottom; the row
+// k = 0 is wall) in a block uniform along y; returns the liquid's mass.
+template <class R, class F>
+void fs_shape(MeltFlow<R> &m, const F h)
+{
+  auto ht = Kokkos::create_mirror_view(m.type.v);
+  auto hm = Kokkos::create_mirror_view(m.cmass.v);
+  auto he = Kokkos::create_mirror_view(m.eps.v);
+  for (int i = 0; i < m.nx; i++)
+    for (int j = 0; j < m.ny; j++)
+      for (int k = 0; k < m.nz; k++) {
+        const double f = std::min(1.0, std::max(0.0, h(i) - k));
+        ht(i, j, k) = k == 0 ? MeltFlow<R>::WALL : f >= 1.0 ? MeltFlow<R>::FLUID
+                    : f > 0.0 ? MeltFlow<R>::INTERFACE : MeltFlow<R>::GAS;
+        hm(i, j, k) = he(i, j, k) = k == 0 ? R(0) : R(f);
+      }
+  Kokkos::deep_copy(m.type.v, ht); Kokkos::deep_copy(m.cmass.v, hm); Kokkos::deep_copy(m.eps.v, he);
+  m.fs_repair();
+}
+
+// the surface's height per column i (at j = 0), as fs_shape took it
+template <class R>
+std::vector<double> fs_height(const MeltFlow<R> &m)
+{
+  auto e = host(m.eps.v);
+  std::vector<double> h(m.nx, 1.0);
+  for (int i = 0; i < m.nx; i++)
+    for (int k = 1; k < m.nz; k++) h[i] += e(i, 0, k);
+  return h;
+}
+
+// 17. Capillary wave: a standing wave of one wavelength on a deep layer,
+//     periodic, no gravity. omega^2 = sigma k^3 tanh(k H) / rho, and it
+//     decays as exp(-2 nu k^2 t).
+template <class R>
+void fs_wave(double floor)
+{
+  MeltFlow<R> m;
+  const int nx = 64, nz = 48;
+  const double H = 32.0, a0 = 1.0, kw = 2.0 * M_PI / nx;
+  m.fs = true; m.fs_tau = floor;
+  m.resize(nx, 2, nz);
+  m.p.periodic[0] = m.p.periodic[1] = true;
+  m.p.nu = 0.005;
+  m.p.sigma = 0.005;
+  fs_shape(m, [&](int i) { return 1.0 + H + a0 * std::cos(kw * (i + 0.5)); });
+  const int lo[3] = {0, 0, 0}, hi[3] = {nx, 2, nz};
+  const double m0 = m.total_mass();
+  // the wave's amplitude every 20 steps: its zero crossings and extrema
+  std::vector<double> A;
+  const int every = 20, nstep = 7000;
+  double lost = 0.0;
+  for (int s = 0; s <= nstep; s++) {
+    if (s % every == 0) {
+      const auto h = fs_height(m);
+      double c = 0.0;
+      for (int i = 0; i < nx; i++) c += h[i] * std::cos(kw * (i + 0.5));
+      A.push_back(2.0 * c / nx);
+    }
+    m.surface(lo, hi); m.step(); lost += m.convert();
+  }
+  std::vector<double> zero, ext;
+  for (size_t n = 1; n < A.size(); n++)
+    if (A[n - 1] * A[n] < 0.0) zero.push_back(every * (n - 1 + A[n - 1] / (A[n - 1] - A[n])));
+  for (size_t n = 1; n + 1 < A.size(); n++)
+    if (std::fabs(A[n]) > std::fabs(A[n - 1]) && std::fabs(A[n]) >= std::fabs(A[n + 1])) ext.push_back(std::fabs(A[n]));
+  const double gam = 2.0 * m.p.nu * kw * kw;
+  const double w0 = std::sqrt(m.p.sigma * kw * kw * kw * std::tanh(kw * H)), w = std::sqrt(w0 * w0 - gam * gam);
+  const bool got = zero.size() >= 3 && ext.size() >= 2;
+  const double period = got ? zero[2] - zero[0] : NAN;
+  const double eper = period * w / (2.0 * M_PI) - 1.0, edec = got ? std::log(ext[0] / ext[1]) / (0.5 * period) / gam - 1.0 : NAN;
+  if (floor > 0.0) {
+    // what the stabiliser costs (not a check: the floor is not physics)
+    printf("       17 with the interface floor tau = %g: period %+.1f%%, decay rate %+.1f%%\n", floor, 100 * eper, 100 * edec);
+    return;
+  }
+  check("17 capillary wave: period / (2 pi / omega) - 1", eper, 5e-2);
+  check("17 capillary wave: decay rate / (2 nu k^2) - 1", edec, 0.2);
+  check("17 capillary wave: |mass change| / mass", (m.total_mass() + lost) / m0 - 1.0, pick<R>(1e-12, 1e-5));
+}
+
+// 18. A Gaussian gas pressure on a layer, periodic, no gravity: at rest the
+//     surface's curvature carries it, sigma h'' / (1 + h'^2)^(3/2) = p - mean.
+template <class R>
+void fs_load()
+{
+  MeltFlow<R> m;
+  const int nx = 64, nz = 24;
+  const double H = 12.0, P0 = 2e-4, wd = 6.0;
+  m.fs = true; m.fs_tau = 0.0;
+  m.resize(nx, 2, nz);
+  m.p.periodic[0] = m.p.periodic[1] = true;
+  m.p.nu = 0.1;
+  m.p.sigma = 0.01;
+  fs_shape(m, [&](int) { return 1.0 + H + 0.5; });
+  std::vector<double> pr(nx);
+  auto hp = Kokkos::create_mirror_view(m.pgas);
+  double mean = 0.0;
+  for (int i = 0; i < nx; i++) {
+    pr[i] = P0 * std::exp(-(i - 31.5) * (i - 31.5) / (wd * wd));
+    mean += pr[i] / nx;
+    hp(i, 0) = hp(i, 1) = R(pr[i]);
+  }
+  Kokkos::deep_copy(m.pgas, hp);
+  const int lo[3] = {0, 0, 0}, hi[3] = {nx, 2, nz};
+  for (int s = 0; s < 40000; s++) { m.surface(lo, hi); m.step(); m.convert(); }
+  // the small-slope solution: integrate h'' = (p - mean) / sigma twice, zero mean
+  std::vector<double> g(nx, 0.0), e(nx, 0.0);
+  double sl = 0.0, gm = 0.0, em = 0.0;
+  for (int i = 1; i < nx; i++) { sl += 0.5 * (pr[i - 1] + pr[i] - 2.0 * mean) / m.p.sigma; g[i] = sl; }
+  for (int i = 0; i < nx; i++) gm += g[i] / nx;
+  for (int i = 1; i < nx; i++) e[i] = e[i - 1] + 0.5 * (g[i - 1] + g[i]) - gm;
+  for (int i = 0; i < nx; i++) em += e[i] / nx;
+  const auto h = fs_height(m);
+  double hm = 0.0, err = 0.0, depth = 0.0;
+  for (int i = 0; i < nx; i++) hm += h[i] / nx;
+  for (int i = 0; i < nx; i++) {
+    err = std::max(err, std::fabs((h[i] - hm) - (e[i] - em)));
+    depth = std::max(depth, em - e[i]);
+  }
+  auto u = host(m.px.v); auto w = host(m.pz.v);
+  double umax = 0.0;
+  for (int i = 0; i < nx; i++)
+    for (int k = 0; k < nz; k++) umax = std::max({umax, std::fabs((double) u(i, 0, k)), std::fabs((double) w(i, 0, k))});
+  check("18 pressure load: max |h - Young-Laplace| / depth", err / depth, 5e-2);
+  check("18   (the surface is pushed in under the load: depth, cells)", hm - h[31], 0.5, false);
+  check("18 pressure load: at rest, max |u| (lattice)", umax, 1e-5);
+}
+
+static double usurf0 = 0.0;   // check 19's surface cell speed / theory, no floor
+
+// 19. Check 3 with a surface that can move: T linear along x in a closed
+//     layer under gravity. Far from the ends the profile is check 3's, and
+//     the surface tilts to drive the return flow: dh/dx = 3 tau / (2 rho g h).
+template <class R>
+void fs_thermocapillary(double floor)
+{
+  MeltFlow<R> m;
+  const int nx = 96, nz = 24;
+  const double H = 16.0, g = 1e-4, tau = -1e-5;
+  m.fs = true; m.fs_tau = floor;
+  m.resize(nx, 1, nz);
+  m.p.periodic[1] = true;
+  m.p.nu = 0.1;
+  m.p.accel[2] = -g;
+  m.p.marangoni = tau; m.p.Tref = 48.0; m.p.sigma = 2e-3;
+  auto hT = Kokkos::create_mirror_view(m.T.v);
+  for (int i = 0; i < nx; i++)
+    for (int k = 0; k < nz; k++) hT(i, 0, k) = R(i);
+  Kokkos::deep_copy(m.T.v, hT);
+  fs_shape(m, [&](int) { return 1.0 + H; });
+  const int lo[3] = {0, 0, 0}, hi[3] = {nx, 1, nz};
+  for (int s = 0; s < 120000; s++) { m.surface(lo, hi); m.step(); m.convert(); }
+  const auto h = fs_height(m);
+  // the tilt over the middle half, by least squares
+  double sx = 0, sy = 0, sxx = 0, sxy = 0;
+  int n = 0;
+  for (int i = nx / 4; i < 3 * nx / 4; i++) { sx += i; sy += h[i]; sxx += (double) i * i; sxy += i * h[i]; n++; }
+  const double slope = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+  auto u = host(m.ux.v);
+  const double hl = h[nx / 2] - 1.0, us = tau * hl / (4.0 * m.p.nu);
+  double err = 0.0, flux = 0.0;
+  for (int k = 1; k < nz; k++) {
+    const double z = k - 0.5;
+    if (z < hl - 2.0) err = std::max(err, std::fabs(u(nx / 2, 0, k) - tau * (3.0 * z * z - 2.0 * hl * z) / (4.0 * m.p.nu * hl)) / std::fabs(us));
+    flux += u(nx / 2, 0, k) / (hl * std::fabs(us));
+  }
+  if (floor > 0.0) {
+    printf("       19 with the interface floor tau = %g: tilt %+.1f%%, surface cell speed / theory %.2f (without: %.2f)\n", floor,
+           100 * (slope / (3.0 * tau / (2.0 * g * hl)) - 1.0), u(nx / 2, 0, (int) h[nx / 2] - 1) / us, usurf0);
+    return;
+  }
+  usurf0 = u(nx / 2, 0, (int) h[nx / 2] - 1) / us;
+  check("19 fs thermocapillary: tilt / (3 tau / (2 g h)) - 1", slope / (3.0 * tau / (2.0 * g * hl)) - 1.0, 5e-2);
+  check("19 fs thermocapillary: max |u - profile| / u_surf, 2 cells below the surface", err, 3e-2);
+  check("19 fs thermocapillary: net flux / (h u_surf)", flux, 2e-2);
+}
+
+// 21. The pool of the SI driver check with a free surface (surface tension
+//     1.5 N/m): it must stay finite and in range; the deflection is reported.
+template <class R>
+void fs_pool()
+{
+  MeltFlow<R> m;
+  const int nx = 64, nz = 30, ns = 24;       // the surface starts at k = ns
+  m.fs = true;
+  m.resize(nx, nx, nz);
+  m.ph.dx = 20e-6; m.ph.nu = 8.5e-7; m.ph.dsdT_rho = -2.6e-4 / 4100.0; m.ph.sig_rho = 1.5 / 4100.0;
+  m.ph.beta_g = 1e-5 * 9.81; m.ph.Tref = 1928.0; m.ph.darcy = 1e4; m.ph.u_ref = 1.0;
+  auto ht = Kokkos::create_mirror_view(m.type.v);
+  auto hT = Kokkos::create_mirror_view(m.T.v);
+  auto hf = Kokkos::create_mirror_view(m.fl.v);
+  for (int i = 0; i < nx; i++)
+    for (int j = 0; j < nx; j++)
+      for (int k = 0; k < nz; k++) {
+        const double x = i - 31.5, y = j - 31.5, d = std::max(0.0, ns - 0.5 - k);
+        const double e = (x * x + y * y) / (20.0 * 20.0) + d * d / (12.0 * 12.0);
+        ht(i, j, k) = k >= ns ? MeltFlow<R>::GAS : e < 1.0 ? MeltFlow<R>::FLUID : MeltFlow<R>::WALL;
+        hT(i, j, k) = R(1928.0 + 1200.0 * std::exp(-(x * x + y * y) / (12.0 * 12.0) - d * d / (8.0 * 8.0)));
+        // nothing freezes here: liquid that spills over the solid is held as if it had (a liquid fraction of 1e-3)
+        hf(i, j, k) = R(std::min(1.0, std::max(k >= ns ? 1e-3 : 0.05, 4.0 * (1.0 - e))));
+      }
+  Kokkos::deep_copy(m.type.v, ht); Kokkos::deep_copy(m.T.v, hT); Kokkos::deep_copy(m.fl.v, hf);
+  m.fs_repair();
+  const int lo[3] = {0, 0, 0}, hi[3] = {nx, nx, nz};
+  const double v0 = m.total_mass();
+  double lat_max = 0.0, u_late = 0.0, lost = 0.0;
+  int bad = 0, nmax = 0;
+  m.post = [&]() { lost += m.convert(lo, hi); };
+  for (int s = 0; s < 4000 && !bad; s++) {
+    const int n = m.run(5e-6, lo, hi);
+    if (n < 0 || !std::isfinite(m.umax)) { bad = 1; break; }
+    nmax = std::max(nmax, n);
+    if (s >= 200) lat_max = std::max(lat_max, m.umax * m.dt / m.ph.dx);
+    if (s >= 3000) u_late = std::max(u_late, m.umax);
+  }
+  auto e = host(m.eps.v); auto t = host(m.type.v);
+  double up = 0.0, down = 0.0;
+  for (int i = 0; i < nx; i++)
+    for (int j = 0; j < nx; j++) {
+      if (ht(i, j, ns - 1) != MeltFlow<R>::FLUID) continue;
+      double h = 0.0;
+      for (int k = 0; k < nz; k++) h += t(i, j, k) == MeltFlow<R>::WALL ? 1.0 : e(i, j, k);
+      up = std::max(up, h - ns); down = std::max(down, ns - h);
+    }
+  // the liquid's volume (the mass is not kept when the step changes: the
+  // pressure's part of the density is rescaled)
+  double vol = 0.0;
+  for (int i = 0; i < nx; i++)
+    for (int j = 0; j < nx; j++)
+      for (int k = 0; k < nz; k++) vol += t(i, j, k) == MeltFlow<R>::WALL ? 0.0 : e(i, j, k);
+  check("21 fs pool (SI driver, 20 ms): stays finite, steps <= nmax", bad, 0.0);
+  check("21 fs pool: max lattice speed after start-up", bad ? NAN : lat_max, 0.25);
+  check("21 fs pool: max speed in the last 5 ms (m/s), >= 0.5", bad ? NAN : u_late, 0.5, false);
+  check("21 fs pool: max speed in the last 5 ms (m/s), <= 10", bad ? NAN : u_late, 10.0);
+  check("21 fs pool: |volume change| / volume, lost droplets included", bad ? NAN : (vol + lost) / v0 - 1.0, 2e-3);
+  check("21 fs pool: lost droplets / volume", bad ? NAN : lost / v0, 2e-3);
+  printf("       fs pool: surface up %.2f, down %.2f cells; %d flow steps per 5 us at most, dt %.3g s, lost %.3g\n",
+         up, down, nmax, m.dt, lost);
+}
+
+// 20. Mass fed onto a pool at rest under a Gaussian footprint (powder):
+//     the pool gains what was fed, and the carried field its share.
+template <class R>
+void fs_inject()
+{
+  MeltFlow<R> m;
+  const int nx = 32, ny = 32, nz = 20;
+  m.fs = true;
+  m.resize(nx, ny, nz);
+  m.p.periodic[0] = m.p.periodic[1] = true;
+  m.p.accel[2] = -1e-4;
+  m.p.nu = 0.05;
+  m.p.sigma = 0.01;
+  fs_shape(m, [&](int) { return 9.5; });
+  Kokkos::View<R**> dm("dm", nx, ny);
+  auto hd = Kokkos::create_mirror_view(dm);
+  for (int i = 0; i < nx; i++)
+    for (int j = 0; j < ny; j++)
+      hd(i, j) = R(1e-3 * std::exp(-((i - 15.5) * (i - 15.5) + (j - 15.5) * (j - 15.5)) / 36.0));
+  Kokkos::deep_copy(dm, hd);
+  Kokkos::View<R***> q("q", nx, ny, nz), tmp("tmp", nx, ny, nz);
+  Kokkos::deep_copy(q, R(1));
+  const int lo[3] = {0, 0, 0}, hi[3] = {nx, ny, nz};
+  auto total = [&]() {
+    auto h = host(q); auto r = host(m.rho.v); auto ms = host(m.cmass.v); auto t = host(m.type.v);
+    double sum = 0.0;
+    for (int i = 0; i < nx; i++)
+      for (int j = 0; j < ny; j++)
+        for (int k = 0; k < nz; k++)
+          sum += t(i, j, k) == MeltFlow<R>::FLUID ? (1.0 + r(i, j, k)) * h(i, j, k)
+               : t(i, j, k) == MeltFlow<R>::INTERFACE ? (double) ms(i, j, k) * h(i, j, k) : 0.0;
+    return sum;
+  };
+  const double m0 = m.total_mass(), s0 = total(), qf = 3.0;
+  double fed = 0.0, lost = 0.0;
+  for (int s = 0; s < 6000; s++) {
+    m.surface(lo, hi); m.step();
+    melt_advect(m, q, tmp, lo, hi);
+    if (s < 3000) fed += m.inject(lo, hi, dm, q, R(qf));
+    lost += m.convert(lo, hi, q);
+  }
+  const auto h = fs_height(m);
+  double hlo = 1e300, hhi = -1e300;
+  for (int i = 0; i < nx; i++) { hlo = std::min(hlo, h[i]); hhi = std::max(hhi, h[i]); }
+  check("20 injection: (mass gained - fed) / fed", (m.total_mass() + lost - m0) / fed - 1.0, pick<R>(1e-10, 1e-3));
+  check("20 injection: (sum of mass x q gained) / (fed x q fed) - 1", (total() - s0) / (fed * qf) - 1.0, 1e-3);
+  check("20   (the pool rose: cells)", 0.5 * (hlo + hhi) - 9.5, 0.1, false);
+  check("20   (and levelled: height max - min, cells)", hhi - hlo, 0.05);
+}
+
+template <class R>
+void fs_all()
+{
+  fs_rest<R>();
+  fs_dam<R>();
+  fs_wave<R>(0.0); fs_wave<R>(1.0);
+  fs_load<R>();
+  fs_thermocapillary<R>(0.0); fs_thermocapillary<R>(1.0);
+  fs_inject<R>();
+  fs_pool<R>();
 }
 
 template <class R>
@@ -826,8 +1113,7 @@ void suite(const char *name)
   const double u1 = pool_si<R>(1.0), u2 = pool_si<R>(0.25);
   check("pool: speed from u_ref 0.25 / from u_ref 1 - 1", u2 / u1 - 1.0, 0.15);
   advect_suite<R>();
-  fs_rest<R>();
-  fs_dam<R>();
+  fs_all<R>();
 }
 
 }   // namespace
@@ -838,8 +1124,8 @@ int main(int argc, char **argv)
   {
     printf("melt_flow_check on %s\n", Kokkos::DefaultExecutionSpace::name());
     if (argc > 1 && std::string(argv[1]) == "fs") {     // the free-surface checks alone
-      printf("double precision\n"); fs_rest<double>(); fs_dam<double>();
-      printf("single precision\n"); fs_rest<float>(); fs_dam<float>();
+      printf("double precision\n"); fs_all<double>();
+      printf("single precision\n"); fs_all<float>();
     } else {
       suite<double>("double");
       suite<float>("single");

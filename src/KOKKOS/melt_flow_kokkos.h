@@ -172,6 +172,10 @@ struct MeltFlow {
     double Tref = 0.0;
     double marangoni = 0.0;
     double darcy = 0.0;
+    // fs: the surface tension itself, sigma * dt^2 / (rho dx^3), at T = Tref
+    // (it then follows T by `marangoni`). props: the N/m to add to `sig`,
+    // which is stored less its first value.
+    double sigma = 0.0;
     bool periodic[3] = {false, false, false};
   } p;
 
@@ -195,6 +199,25 @@ struct MeltFlow {
   W3 cmass, eps;                             // interface cells' mass; fill (1 fluid, 0 gas)
   FlowWin<Kokkos::View<unsigned char***>> mark, type2;   // convert()'s scratch
   double fs_kappa = 1e-3;                    // a cell converts when its mass passes the end by this
+  // run(): dt <= this * sqrt(rho dx^3 / sigma), i.e. lattice sigma <= its
+  // square. Measured on the pool of check 21 at rest: currents of 4e-5 m/s at
+  // lattice sigma 0.021, 2e-3 at 0.032, 1.5 at 0.072.
+  double fs_cap = 0.18;
+  // A floor on the relaxation time of interface cells. At a liquid metal's
+  // viscosity (tau about 0.51) they are unstable under a Marangoni force:
+  // the pool of check 21 breaks up at a third of its forcing with no floor,
+  // is rough at 0.6 and holds at 1. It makes the one-cell surface layer
+  // viscous (nu = 1/6 lattice at 1), so the surface is dragged along with
+  // the cell under it: a known bias on the surface speed.
+  double fs_tau = 1.0;
+  double fs_raw = 0.25;                      // the unsmoothed part of the height the forces see
+
+  // per column (x, y), from surface(): the metal's height, the gas density
+  // the surface sees (less 1), the surface force as an acceleration of the
+  // cells kb..kt, and what the caller may set: the gas pressure on the
+  // surface (lattice units; e.g. recoil), less the ambient
+  Kokkos::View<R**> hcol, scol, slcol, mcol, drg, sax, say, saz, pgas;
+  Kokkos::View<int**> skt, skb;
   int wlo[3] = {0, 0, 0}, whi[3] = {0, 0, 0};   // the cells the fields hold
 
   // A block of nx_ x ny_ x nz_ cells. all: the fields hold every cell;
@@ -226,6 +249,10 @@ struct MeltFlow {
       eps = Kokkos::View<R***>("flow_eps", a, b, c);
       mark = Kokkos::View<unsigned char***>("flow_mark", a, b, c);
       type2 = Kokkos::View<unsigned char***>("flow_type2", a, b, c);
+      for (auto v : {&hcol, &scol, &slcol, &mcol, &drg, &sax, &say, &saz, &pgas})
+        *v = Kokkos::View<R**>("flow_col", nx, ny);
+      skt = Kokkos::View<int**>("flow_skt", nx, ny); skb = Kokkos::View<int**>("flow_skb", nx, ny);
+      Kokkos::deep_copy(skt, -1);
     }
     Kokkos::deep_copy(fl.v, R(1));
     for (int d = 0; d < 3; d++) wlo[d] = 0;
@@ -299,8 +326,9 @@ struct MeltFlow {
     // props: the Marangoni force follows sig, not T
     const bool hp = props, lazy_ = lazy, fs_ = fs;
     auto ms_ = cmass; auto ep_ = eps;
+    auto dg_ = drg; auto sax_ = sax; auto say_ = say; auto saz_ = saz; auto kt_ = skt; auto kb_ = skb;
     auto S_ = hp ? sig : T; auto dn_ = dens; auto vs_ = visc;
-    const R nu3 = R(3.0 * p.nu);
+    const R nu3 = R(3.0 * p.nu), tauif = R(fs_tau);
     Kokkos::parallel_for("FlowStep",
       Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
@@ -346,7 +374,7 @@ struct MeltFlow {
         // fs: what arrives from the gas is the gas's equilibrium at this
         // cell's velocity, less what left toward it (the pressure boundary)
         const R ug = px_(i, j, k), vg = py_(i, j, k), wg = pz_(i, j, k);
-        const R usg = ug * ug + vg * vg + wg * wg, drg = R(0);
+        const R usg = ug * ug + vg * vg + wg * wg, drg = fs_ ? dg_(i, j) : R(0);
         auto rec = [&](int q) -> R {
           int cx, cy, cz; vel(q, cx, cy, cz);
           const R cu = cx * ug + cy * vg + cz * wg;
@@ -406,7 +434,16 @@ struct MeltFlow {
         // acceleration: uniform + buoyancy + Marangoni (surface cells)
         const R dT = hp ? -dn_(i, j, k) : T_(i, j, k) - Tref;
         R ax = a0x + bx * dT, ay = a0y + by * dT, az = a0z + bz * dT;
-        if (mar != R(0) && !fs_) {
+        if (fs_) {
+          // the surface force, on the column's surface cells (see surface())
+          if (k >= kb_(i, j) && k <= kt_(i, j)) { ax += sax_(i, j); ay += say_(i, j); az += saz_(i, j); }
+          // a partial cell takes its fill's part of every force: the
+          // pressure under the surface then follows the surface's height
+          // within a cell (else a surface inside a cell layer feels no
+          // restoring force), and the column's cells together take the
+          // whole surface force
+          if (ifc) { const R w = e0 < R(0) ? R(0) : e0 > R(1) ? R(1) : e0; ax *= w; ay *= w; az *= w; }
+        } else if (mar != R(0)) {
           int ii = i, jj = j, kk = k + 1;
           if (cell(ii, jj, kk) == GAS) {
             // T's difference per cell, one-sided at the block's edges
@@ -450,7 +487,8 @@ struct MeltFlow {
           feq[q] = wgt(q) * (dr + r * (R(3) * cu + R(4.5) * cu * cu - R(1.5) * usq));
           src[q] = wgt(q) * r * (R(3) * (ca - ua) + R(9) * cu * ca);
         }
-        const R tau0 = hp ? nu3 * vs_(i, j, k) + R(0.5) : tau00;
+        R tau0 = hp ? nu3 * vs_(i, j, k) + R(0.5) : tau00;
+        if (ifc && tau0 < tauif) tau0 = tauif;
         R tau = tau0;
         if (smag2 != R(0)) {
           // eddy viscosity from the non-equilibrium stress
@@ -527,17 +565,24 @@ struct MeltFlow {
     double Tref = 0.0;        // buoyancy is zero at this T
     double darcy = 0.0;       // mushy drag constant (1/s)
     double u_ref = 1.0;       // expected speed (m/s): the first u_cap
+    double sig_rho = 0.0;     // fs: surface tension / rho (m^3 / s^2), the largest there is
     int nmax = 256;
   } ph;
   double dt = 0.0, u_cap = 0.0, umax = 0.0;   // step (s), cap and last max speed (m/s)
   std::function<void()> halo;   // several ranks: brings the halo cells' f up to date
+  // fs: called after each step in place of convert() (the caller carries
+  // its fields and then converts)
+  std::function<void()> post;
   long ncall = 0;
 
   int run(double h, const int lo[3], const int hi[3]) {
     if (u_cap == 0.0) u_cap = ph.u_ref;
     while (umax > 1.5 * u_cap) u_cap *= 2.0;
     if (umax < 0.3 * u_cap && u_cap > ph.u_ref) u_cap = std::max(ph.u_ref, 0.5 * u_cap);
-    const int n = 2 * std::max(1, (int) std::ceil(0.5 * h * u_cap / (0.1 * ph.dx) - 1e-9));
+    int n = 2 * std::max(1, (int) std::ceil(0.5 * h * u_cap / (0.1 * ph.dx) - 1e-9));
+    // fs: the shortest capillary wave (two cells) must not outrun the step
+    if (fs && ph.sig_rho > 0.0)
+      n = std::max(n, 2 * (int) std::ceil(0.5 * h / (fs_cap * std::sqrt(ph.dx * ph.dx * ph.dx / ph.sig_rho)) - 1e-9));
     if (n > ph.nmax) return -1;
     const double dtn = h / n;
     if (dt > 0.0 && dtn != dt) { rescale(dtn / dt, lo, hi); if (halo) halo(); }
@@ -549,10 +594,17 @@ struct MeltFlow {
     p.buoy[2] = ph.beta_g * dt * dt / ph.dx;
     p.Tref = ph.Tref;
     p.darcy = ph.darcy * dt;
+    if (!props) p.sigma = ph.sig_rho * dt * dt / (ph.dx * ph.dx * ph.dx);
     // A fence per step: inside spparks on HIP (gfx1151) host memory grows
     // during long runs; fenced plain launches grow least (measured, 3-layer
     // pillar: 1.1 GB; unfenced 1.8; every step a reduction 2.0; no flow 0.6).
-    for (int s = 0; s < n; s++) { step(lo, hi, s == 0); Kokkos::fence(); if (halo) halo(); }
+    for (int s = 0; s < n; s++) {
+      if (fs) surface(lo, hi);
+      step(lo, hi, fs || s == 0);
+      Kokkos::fence();
+      if (halo) halo();
+      if (fs) { if (post) post(); else convert(lo, hi); }
+    }
     // the speed is measured every 16th call (a reduction; it can at most
     // double in that time at the accelerations a pool has). Several ranks:
     // the caller takes the maximum of umax over them after every run().
@@ -694,6 +746,149 @@ struct MeltFlow {
           }
         }
       });
+  }
+
+  /* --------------------------------------------------------------------
+     Before each step: the surface's shape and the forces it carries, per
+     column. The metal's height h(x, y) is the top full cell's top plus the
+     fill of the interface cells stacked above it, so the surface is one
+     height per column.
+     ponytail: no overhangs (a bead that wets past 90 degrees, a keyhole, a
+     droplet over a gap): local height functions along the normal if needed.
+     - Capillary pressure: curvature kappa = div(grad h / sqrt(1 + |grad
+       h|^2)) (negative on a hump); the surface sees the gas at
+       pgas - sigma kappa, as the density of the reconstructed populations.
+       A column with no liquid surface mirrors its liquid neighbour (a
+       right contact angle), as does the block's edge.
+     - Marangoni: the tangential force per column, sqrt(g) grad_s sigma =
+       [((1 + hy^2) sx - hx hy sy) (1, 0, hx) + ((1 + hx^2) sy - hx hy sx)
+       (0, 1, hy)] / sqrt(1 + hx^2 + hy^2), shared as one acceleration by the
+       column's interface cells and the fluid cell under them (so a cell
+       holding next to nothing is not thrown). sigma's difference is taken
+       as in the flat model: one-sided beside a column without it.
+  -------------------------------------------------------------------- */
+  void surface(const int lo[3], const int hi[3]) {
+    auto ty = type; auto ep_ = eps; auto ms_ = cmass; auto rho_ = rho; auto T_ = T;
+    auto h_ = hcol; auto S_ = scol; auto sl_ = slcol; auto M_ = mcol; auto dg_ = drg; auto pg_ = pgas;
+    auto sax_ = sax; auto say_ = say; auto saz_ = saz; auto kt_ = skt; auto kb_ = skb;
+    const bool hp = props;
+    auto sg_ = sig; auto dn_ = dens;
+    const R mar = R(p.marangoni), sig0 = R(p.sigma), Tref = R(p.Tref), rawp = R(fs_raw);
+    const int z0 = wlo[2], z1 = whi[2];
+    // the columns held, and those of them the step needs (one more around)
+    int a[2], b[2], c[2], d[2];
+    const int nn[2] = {nx, ny};
+    const bool per[2] = {p.periodic[0], p.periodic[1]};
+    for (int e = 0; e < 2; e++) {
+      a[e] = wlo[e]; b[e] = whi[e];
+      c[e] = std::max(a[e], lo[e] - 1); d[e] = std::max(c[e], std::min(b[e], hi[e] + 1));
+    }
+    const int a0 = a[0], a1 = a[1], b0 = b[0], b1 = b[1], n0 = nx, n1 = ny;
+    const bool p0 = per[0], p1 = per[1];
+    (void) nn;
+    Kokkos::parallel_for("FlowFsColumns",
+      Kokkos::MDRangePolicy<Kokkos::Rank<2>>({a[0], a[1]}, {b[0], b[1]}),
+      KOKKOS_LAMBDA(const int i, const int j) {
+        int k = z1 - 1;
+        while (k >= z0 && ty(i, j, k) == GAS) k--;
+        kt_(i, j) = -1; kb_(i, j) = 0; M_(i, j) = R(1); S_(i, j) = R(0); sl_(i, j) = R(0);
+        if (k < z0) { h_(i, j) = R(z0); kt_(i, j) = -2; return; }      // no metal: -2
+        const int kt = k;
+        S_(i, j) = hp ? sg_(i, j, kt) : T_(i, j, kt);
+        if (ty(i, j, kt) == WALL) { h_(i, j) = R(kt + 1); return; }  // solid on top: -1
+        sl_(i, j) = hp ? mar * (sg_(i, j, kt) + sig0) : sig0 + mar * (T_(i, j, kt) - Tref);
+        R sum = 0, M = 0;
+        while (k >= z0 && ty(i, j, k) == INTERFACE) { sum += ep_(i, j, k); M += ms_(i, j, k); k--; }
+        int kb = k + 1;
+        if (k >= z0 && ty(i, j, k) == FLUID) { M += R(1) + rho_(i, j, k); kb = k; }
+        h_(i, j) = R(k + 1) + sum;
+        kt_(i, j) = kt; kb_(i, j) = kb;
+        M_(i, j) = (M > R(0.5) ? M : R(0.5)) * (hp ? R(1) + dn_(i, j, kt) : R(1));
+      });
+    Kokkos::parallel_for("FlowFsSurface",
+      Kokkos::MDRangePolicy<Kokkos::Rank<2>>({c[0], c[1]}, {d[0], d[1]}),
+      KOKKOS_LAMBDA(const int i, const int j) {
+        dg_(i, j) = sax_(i, j) = say_(i, j) = saz_(i, j) = R(0);
+        if (kt_(i, j) < 0) return;
+        // a neighbouring column: wraps, or stays at the edge of what is held
+        auto col = [&](int di, int dj, int &ii, int &jj) {
+          ii = i + di; jj = j + dj;
+          if (p0) ii = (ii + n0) % n0;
+          if (p1) jj = (jj + n1) % n1;
+          ii = ii < a0 ? a0 : ii >= b0 ? b0 - 1 : ii;
+          jj = jj < a1 ? a1 : jj >= b1 ? b1 - 1 : jj;
+        };
+        // The height the forces see is smoothed over 3 x 3 columns (1 2 1
+        // each way). A capillary wave two cells long would travel at
+        // sqrt(pi sigma), near the lattice's speed of sound for a metal at
+        // any affordable step, and the surface breaks up; smoothed, that
+        // wave feels no force and one four cells long half of it.
+        // A column without a liquid surface (solid on top, or no metal)
+        // counts as this column's height: the liquid meets solid at a right
+        // angle, neither pulled over it nor held back, and where it stops
+        // is left to the flow and to freezing.
+        auto Hr = [&](int di, int dj) -> R {
+          int ii, jj; col(di, dj, ii, jj);
+          return kt_(ii, jj) < 0 ? h_(i, j) : h_(ii, jj);
+        };
+        auto H = [&](int di, int dj) -> R {
+          const R sm = R(0.25) * Hr(di, dj)
+               + R(0.125) * (Hr(di - 1, dj) + Hr(di + 1, dj) + Hr(di, dj - 1) + Hr(di, dj + 1))
+               + R(0.0625) * (Hr(di - 1, dj - 1) + Hr(di + 1, dj - 1) + Hr(di - 1, dj + 1) + Hr(di + 1, dj + 1));
+          return sm + rawp * (Hr(di, dj) - sm);
+        };
+        const R hc = H(0, 0);
+        const R hx = R(0.5) * (H(1, 0) - H(-1, 0)), hy = R(0.5) * (H(0, 1) - H(0, -1));
+        const R hxx = H(1, 0) - R(2) * hc + H(-1, 0), hyy = H(0, 1) - R(2) * hc + H(0, -1);
+        const R hxy = R(0.25) * (H(1, 1) - H(1, -1) - H(-1, 1) + H(-1, -1));
+        const R g = R(1) + hx * hx + hy * hy, sg = Kokkos::sqrt(g);
+        const R kap = (hxx * (R(1) + hy * hy) + hyy * (R(1) + hx * hx) - R(2) * hxy * hx * hy) / (g * sg);
+        dg_(i, j) = R(3) * (pg_(i, j) - sl_(i, j) * kap);
+        if (mar == R(0)) return;
+        // sigma's difference per cell along x (e = 0) or y
+        auto grad = [&](int e) -> R {
+          int ia, ja, ib, jb;
+          col(e == 0 ? -1 : 0, e == 0 ? 0 : -1, ia, ja); col(e == 0 ? 1 : 0, e == 0 ? 0 : 1, ib, jb);
+          R w = R((e == 0 ? ib - ia : jb - ja));
+          if (w < R(0)) w += R(e == 0 ? n0 : n1);          // wrapped
+          // props: sigma is the liquid's only; else T, wherever there is metal
+          if (hp ? kt_(ia, ja) < 0 : kt_(ia, ja) == -2) { ia = i; ja = j; w -= R(1); }
+          if (hp ? kt_(ib, jb) < 0 : kt_(ib, jb) == -2) { ib = i; jb = j; w -= R(1); }
+          return w > R(0) ? mar * (S_(ib, jb) - S_(ia, ja)) / w : R(0);
+        };
+        const R sx = grad(0), sy = grad(1);
+        const R fa = ((R(1) + hy * hy) * sx - hx * hy * sy) / sg, fb = ((R(1) + hx * hx) * sy - hx * hy * sx) / sg;
+        const R im = R(1) / M_(i, j);
+        sax_(i, j) = fa * im; say_(i, j) = fb * im; saz_(i, j) = (fa * hx + fb * hy) * im;
+      });
+  }
+
+  // Mass arriving on the surface (powder): dm(x, y), in cells of liquid,
+  // goes into the top interface cell of each column that has one (as
+  // surface() found it: call between step() and convert(), which passes on
+  // what overfills a cell). The carried fields mix: q with qf, q2 with the
+  // value q2f holds for that cell. Returns the mass taken; what falls on a
+  // column with no liquid surface is not.
+  double inject(const int lo[3], const int hi[3], Kokkos::View<R**> dm, W3 q = W3(), R qf = R(0),
+                W3 q2 = W3(), W3 q2f = W3()) {
+    auto ty = type; auto ms_ = cmass; auto kt_ = skt;
+    const bool one = q.v.extent(0) > 0, two = q2.v.extent(0) > 0;
+    double got = 0.0;
+    Kokkos::parallel_reduce("FlowFsInject",
+      Kokkos::MDRangePolicy<Kokkos::Rank<2>>({lo[0], lo[1]}, {hi[0], hi[1]}),
+      KOKKOS_LAMBDA(const int i, const int j, double &g) {
+        const int k = kt_(i, j);
+        const R d = dm(i, j);
+        if (k < 0 || d <= R(0) || ty(i, j, k) != INTERFACE) return;
+        const R m = ms_(i, j, k), mn = m + d;
+        // a cell overdrawn by more than arrives takes the feed's values
+        const R w = m > R(0) ? d / mn : R(1);
+        if (one) q(i, j, k) += w * (qf - q(i, j, k));
+        if (two) q2(i, j, k) += w * (q2f(i, j, k) - q2(i, j, k));
+        ms_(i, j, k) = mn;
+        g += d;
+      }, got);
+    return got;
   }
 
   // After a step (and melt_advect): filled interface cells become FLUID,

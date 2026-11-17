@@ -6,9 +6,9 @@ schema_version = 1
 material = "Ti6Al4V"
 designation = { UNS = "R56400 (Grade 5), R56401 (Grade 23 ELI)", spec = "LPBF: ASTM F2924 (Grade 5), ASTM F3001 (ELI)" }
 composition_wt_pct = { Ti = "bal", Al = "5.50-6.75", V = "3.50-4.50", Fe = "<0.30", O = "<0.20", C = "<0.08", N = "<0.05", H = "<0.015", note = "Grade 5 ranges; ELI (F3001) narrows Al to 5.50-6.50, Fe <0.25, O <0.13, H <0.012. Al/V ranges as quoted by bartsch2021; interstitial limits from the ASTM F2924/F3001 tables, not re-checked against the standard text for this card. Measured LPBF powder heat (rottler2025 Table 1): Al 6.23, V 3.76, O 0.119, N 0.035, H 0.004." }
-version = "1.1.0"
+version = "1.2.0"
 created = 2026-10-17
-modified = 2026-11-14
+modified = 2026-11-16
 status = "draft"
 reviewed_by = ""
 
@@ -23,6 +23,12 @@ version = "1.1.0"
 date = 2026-11-14
 author = "research agent (Claude)"
 changes = "Added [flow] (liquid surface tension, its temperature coefficient, viscosity and density from the ISS levitation measurements of Mohr 2020) and three laser DED process sets (Marshall 2016 LENS thin wall, Seely 2024 graded Ti-6Al-4V/Ti-1B, Wang 2025). No existing value changed."
+
+[[changelog]]
+version = "1.2.0"
+date = 2026-11-16
+author = "research agent (Claude)"
+changes = "From the papers read in full on 2026-11-16: Liu & Shin 2020 LENS process set (inputs only, no bead dimensions are tabulated) and Morville 2012 added as references; Morville's model values recorded in a comment. No existing value changed."
 
 [references.bartsch2021]
 citation = "K. Bartsch, D. Herzog, B. Bossen, C. Emmelmann, Material modeling of Ti-6Al-4V alloy processed by laser powder bed fusion for application in macro-scale process simulation, Mater. Sci. Eng. A 814 (2021) 141237"
@@ -95,6 +101,14 @@ citation = "F. Lia, J. Park, J. Tressler, R. Martukanitz, Partitioning of laser 
 doi = "10.1016/j.addma.2017.08.012"
 url = "https://pure.psu.edu/en/publications/partitioning-of-laser-energy-during-directed-energy-deposition/"
 
+[references.liu_shin2020]
+citation = "S. Liu, Y.C. Shin, Prediction of 3D microstructure and phase distributions of Ti6Al4V built by the directed energy deposition process via combined multi-physics models, Addit. Manuf. 34 (2020) 101234"
+doi = "10.1016/j.addma.2020.101234"
+
+[references.morville2012]
+citation = "S. Morville, M. Carin, P. Peyre, M. Gharbi, D. Carron, P. Le Masson, R. Fabbro, 2D longitudinal modeling of heat transfer and fluid flow during multilayered direct laser metal deposition process, J. Laser Appl. 24 (2012) 032008"
+doi = "10.2351/1.4726445"
+
 [thermal]
 density = { value = 4417.5, unit = "kg/m^3", ref = "rottler2025", uncertainty = [4410, 4430], uncertainty_type = "bounds", T_range = [293, 298], note = "as-built LPBF Ti-6Al-4V ELI, He pycnometry (4.4175 g/cm^3, ~0.6% porosity); powder skeletal 4414.0. Bounds = data-sheet spread 4410-4430 quoted by bartsch2021. One dense density for the conduction solver." }
 solidus = { value = 1878, unit = "K", ref = "bartsch2021", uncertainty = [1873, 1878], uncertainty_type = "bounds", note = "median of experimental + simulation literature (Bartsch 2021 Sec. 3.3; experimental values 1873 and 1878 K). Cezairliyan 1977 saw a melting plateau at 1943 +/- 8 K in subsecond heating; panwisawas2017 also uses 1878 K." }
@@ -114,9 +128,15 @@ conductivity = { value = 0.177, unit = "W/(m K)", ref = "bartsch2021", note = "B
 packing = { value = 0.61, unit = "1", ref = "rottler2025", uncertainty = [0.60, 0.62], uncertainty_type = "bounds", note = "1 - porosity 0.39: apparent density 2.70 +/- 0.04 g/cm^3 of spatula-levelled powder in an LFA holder vs 4430 kg/m^3 solid; not a recoater-spread bed. EOS Ti-6Al-4V ELI powder, D10/D50/D90 = 25.4/37.6/46.4 um, sphericity 0.88." }
 
 # Blown-powder DED arrival temperature and beam attenuation: see 316L.toml
-# [powder] (survey of DED melt-pool models, 2026-11-16). The survey found no
-# value verified for Ti-6Al-4V (0.4 pool absorptivity in Morville 2012, from
-# a search snippet only, not recorded).
+# [powder] (survey of DED melt-pool models, 2026-11-16). For Ti-6Al-4V the
+# one DED pool model read, Morville 2012 (2D thin wall, COMSOL ALE), uses
+# literature values (its Table II): absorptivity 0.4, emissivity 0.4,
+# surface tension 1.5 N/m, dsigma/dT -2.7e-4 N/(m K), viscosity 4e-3 Pa s
+# (laminar), latent heat 3e5 J/kg, solidus/liquidus 1873/1923 K; powder
+# assumed at the pool temperature, no beam attenuation, catchment 0.5
+# (weighed). Its predicted peak is 2471 K and surface speed about 1.2 m/s at
+# 400 W, 0.4 m/min, 2 g/min (top-hat spot, radius 0.65 mm). Recorded here,
+# not as card values: the card's [flow] values are measurements (Mohr 2020).
 
 [optical]
 absorptivity = { value = 0.26, unit = "1", ref = "ye2019", note = "minimum calorimetric absorptivity of bare Ti-6Al-4V plate at ~1080 nm in conduction mode (flat melt surface), Ye 2019 Table 1; flat-Ti room-temperature value 0.39. Absorptivity rises sharply above the keyhole threshold (Ye 2019 Fig. 1, not read numerically). cook2023 calibrates 0.27 +/- 0.03 in situ for LPBF at 1.07 um; bartsch2021 reviews solid 0.34-0.55 (median 0.4) and powder 0.65-0.74 (median 0.7)." }
@@ -192,3 +212,12 @@ note = "Ti-6Al-4V (TC4) end of an Inconel 625 to TC4 graded build on an IN625 pl
 power = { value = 2300, unit = "W", ref = "wang2025" }
 speed = { value = 12e-3, unit = "m/s", ref = "wang2025", note = "720 mm/min" }
 layer_thickness = { value = 0.6e-3, unit = "m", ref = "wang2025" }
+
+[process.ded_liu_shin2020_lens_330W]
+method = "laser DED, blown powder (LENS)"
+machine = "OPTOMEC LENS 750, 500 W fibre laser"
+note = "inputs only: the paper tabulates no bead or pool dimensions (overlays in its Fig. 6) and prints no property values (deferred to Katinas, Liu, Shin, J. Manuf. Sci. Eng. 141 (2018) 011001, not read). Track spacing 304.8 um; Puris Grade 5 powder 44-149 um; 3.5 mm hot-rolled Ti-6Al-4V substrate at about 300 K; Ar chamber, O2 below 10 ppm. Their level-set model predicts a peak of 2682 K and fusion-zone cooling rates of order 1e4 K/s"
+power = { value = 330, unit = "W", ref = "liu_shin2020" }
+speed = { value = 15e-3, unit = "m/s", ref = "liu_shin2020" }
+beam_diameter = { value = 0.66e-3, unit = "m", profile = "unstated", ref = "liu_shin2020", note = "'beam diameter is about 660 um', no convention given" }
+powder_feed = { value = 3.33e-5, unit = "kg/s", ref = "liu_shin2020", note = "2 g/min" }

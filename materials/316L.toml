@@ -6,7 +6,7 @@ schema_version = 1
 material = "316L"
 designation = { UNS = "S31603", spec = "NIST SRM 316L (Pichler 2020 samples); LPBF powder per ASTM F3184" }
 composition_wt_pct = { Fe = "bal", Cr = "16-18", Ni = "10-14", Mo = "2-3", Mn = "<2", C = "<0.03", note = "UNS S31603 ranges, not a measured heat" }
-version = "1.2.0"
+version = "1.3.0"
 created = 2026-10-17
 modified = 2026-11-16
 status = "draft"
@@ -35,6 +35,12 @@ version = "1.2.0"
 date = 2026-11-16
 author = "research agent (Claude)"
 changes = "Added [powder] ded_arrival_temperature and ded_beam_attenuation from a survey of melt-pool models of blown-powder DED (Knapp 2017, Manvatkar 2014, Sattari 2024, Qi 2006). These are modelling practice, not measurements on this alloy. No existing value changed."
+
+[[changelog]]
+version = "1.3.0"
+date = 2026-11-16
+author = "research agent (Claude)"
+changes = "From the papers read in full on 2026-11-16: Sattari 2024 citation completed and two of its single-track sets added (no-powder melting at 700 W and DED at 600 W, 1.2 mm top-hat spot, with sectioned width, depth and height); Ancalmo & Narra 2025 (the companion paper) added as a reference and the origin of the 0.32 absorptivity recorded on the 700 W set with the no-powder track widths. No existing value changed."
 
 [references.pichler2020]
 citation = "P. Pichler, B.J. Simonds, J.W. Sowards, G. Pottlacher, Measurements of thermophysical properties of solid and liquid NIST SRM 316L stainless steel, J. Mater. Sci. 55 (2020) 4081-4093"
@@ -104,8 +110,13 @@ citation = "V. Manvatkar, A. De, T. DebRoy, Heat transfer and material flow duri
 doi = "10.1063/1.4896751"
 
 [references.sattari2024]
-citation = "Sattari et al., Addit. Manuf. 86 (2024) 104227 (DEM + finite-volume model of 316L blown-powder DED; full author list and title not recorded)"
+citation = "M. Sattari, A. Ebrahimi, M. Luckabauer, G.R.B.E. Romer, The effect of the laser beam intensity profile in laser-based directed energy deposition: A high-fidelity thermal-fluid modeling approach, Addit. Manuf. 86 (2024) 104227"
+doi = "10.1016/j.addma.2024.104227"
 url = "https://repository.tudelft.nl/file/File_15bbea51-9088-4417-be41-09ccaaba77b0"
+
+[references.ancalmo_narra2025]
+citation = "C. Ancalmo, S.P. Narra, Prediction of the powder catchment efficiency and melt track height in laser directed energy deposition, J. Manuf. Process. 137 (2025) 207-220"
+doi = "10.1016/j.jmapro.2025.01.039"
 
 [references.qi2006]
 citation = "H. Qi, J. Mazumder, H. Ki, Numerical simulation of heat transfer and fluid flow in coaxial laser cladding process for direct metal deposition, J. Appl. Phys. 100 (2006) 024903"
@@ -191,7 +202,7 @@ note = "single 60 mm track on a 152.4 x 152.4 x 6.35 mm 316L plate in ambient ai
 power = { value = 700, unit = "W", ref = "ancalmo2025" }
 speed = { value = 7.5e-3, unit = "m/s", ref = "ancalmo2025" }
 spot = { value = 0.75e-3, unit = "m", convention = "1/e radius", ref = "ancalmo2025", note = "half the stated 1/e intensity diameter; the authors did not calibrate the spot diameter themselves" }
-absorptivity = { value = 0.32, unit = "1", ref = "ancalmo2025", note = "calibrated by the authors between a heat-conduction model and no-powder tracks (their companion paper, J. Manuf. Process. 137 (2025) 207, not read); quoted in the data article" }
+absorptivity = { value = 0.32, unit = "1", ref = "ancalmo_narra2025", note = "an effective conduction-model value, not a measurement: fitted by the authors (Appendix A) to the width of ONE no-powder track (1500 W, 2.5 mm spot, 5 mm/s: measured 2.89 mm, simulated 3.2 mm) with a semi-analytical Gaussian-source conduction code, no flow, constant room-temperature properties (k 13.4 W/(m K), cp 470 J/(kg K), rho 7950 kg/m^3), pool = above 1683 K. No-powder track widths at 7.5 mm/s (Table A.6), measured / simulated: 700 W 1.5 mm spot 1.51 / 1.4 mm; 1500 W 2.5 mm 2.57 / 2.4 mm; 2500 W 3.5 mm 3.58 / 3.2 mm. No depths measured" }
 powder_feed = { value = 1.66e-4, unit = "kg/s", ref = "ancalmo2025", note = "9.98 +/- 0.83 g/min measured at the nozzle" }
 capture_efficiency = { value = 0.252, unit = "1", ref = "ancalmo2025", uncertainty = 0.020, note = "powder catchment efficiency from the track volume, 25.2 +/- 2.0 %; the range reflects the feed-rate variation" }
 preheat = { value = 298, unit = "K", ref = "ancalmo2025", note = "ambient chamber, 24-26 C; two minutes idle between tracks" }
@@ -257,3 +268,26 @@ power = { value = 357, unit = "W", ref = "shang2025" }
 speed = { value = 11.58e-3, unit = "m/s", ref = "shang2025" }
 beam_diameter = { value = 1.0e-3, unit = "m", profile = "unstated", ref = "shang2025", note = "nominal beam size, no convention or profile given" }
 powder_feed = { value = 1.97e-5, unit = "kg/s", ref = "shang2025", note = "1.18 g/min" }
+
+# Sattari 2024: sectioned single tracks with a 1.2 mm uniform (top-hat) spot,
+# the only sets here with melt depth. Their model (FLOW-3D, VOF) uses a
+# temperature- and angle-dependent absorptivity with ray tracing, so no
+# single absorptivity is given.
+[process.melt_sattari2024_700W]
+method = "laser melting, no powder (bare plate)"
+machine = "Yb:YAG disk laser, 1030 nm, fibre-imaged uniform spot"
+note = "single track on AISI 316L, circular uniform beam; Fig. 13 (experiment, transverse sections). Ring beam: depth 604 +/- 26, width 1145 +/- 17 um; square (1.2 mm side): depth 493 +/- 22, width 1222 +/- 14 um. Their simulation: depth 576, width 1200 um. Stand-off and preheat not stated"
+power = { value = 700, unit = "W", ref = "sattari2024" }
+speed = { value = 20e-3, unit = "m/s", ref = "sattari2024" }
+beam_diameter = { value = 1.2e-3, unit = "m", profile = "top-hat", ref = "sattari2024", note = "uniform circular spot, diameter of the fibre image" }
+validation = { track_width = 1.189e-3, melt_depth = 0.552e-3, unit = "m", ref = "sattari2024", note = "Fig. 13: width 1189 +/- 10 um, depth 552 +/- 22 um" }
+
+[process.ded_sattari2024_600W]
+method = "laser DED, blown powder"
+machine = "Yb:YAG disk laser, 1030 nm, fibre-imaged uniform spot; off-axis 1.5 mm nozzle at 70 degrees"
+note = "single track on AISI 316L, circular uniform beam; Fig. 14a (experiment). Carrier Ar 2.5 NL/min, shield 20 NL/min; powder stream footprint 3.22 mm, particle speed 5.12 m/s. Square beam (Fig. 14b): height 607 +/- 13, depth 589 +/- 44, width 1513 +/- 76 um. Their simulation: height 581, depth 666, width 1508 um, peak 2456 K, peak flow 0.768 m/s, pool length 1726 um; computed beam attenuation 14.6 %. Capture efficiency not reported"
+power = { value = 600, unit = "W", ref = "sattari2024" }
+speed = { value = 5e-3, unit = "m/s", ref = "sattari2024" }
+beam_diameter = { value = 1.2e-3, unit = "m", profile = "top-hat", ref = "sattari2024", note = "uniform circular spot" }
+powder_feed = { value = 4.17e-5, unit = "kg/s", ref = "sattari2024", note = "2.5 g/min" }
+validation = { track_width = 1.495e-3, track_height = 0.591e-3, melt_depth = 0.722e-3, unit = "m", ref = "sattari2024", note = "Fig. 14a: width 1495 +/- 37 um, height 591 +/- 8 um, depth 722 um" }

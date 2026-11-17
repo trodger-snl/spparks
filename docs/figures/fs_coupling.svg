@@ -1,0 +1,418 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="744.68603pt" height="950.179537pt" viewBox="0 0 744.68603 950.179537" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-11-17T15:35:22.597362</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.10.8, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 950.179537 
+L 744.68603 950.179537 
+L 744.68603 -0 
+L 0 -0 
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 60.057973 128.011537 
+L 591.964447 128.011537 
+Q 597.98603 128.011537 597.98603 121.026097 
+L 597.98603 91.920097 
+Q 597.98603 84.934657 591.964447 84.934657 
+L 60.057973 84.934657 
+Q 54.03639 84.934657 54.03639 91.920097 
+L 54.03639 121.026097 
+Q 54.03639 128.011537 60.057973 128.011537 
+z
+" clip-path="url(#pe8189150d0)" style="fill: #eef3fa; stroke: #333333; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_3">
+    <path d="M 60.057973 183.312937 
+L 591.964447 183.312937 
+Q 597.98603 183.312937 597.98603 176.327497 
+L 597.98603 147.221497 
+Q 597.98603 140.236057 591.964447 140.236057 
+L 60.057973 140.236057 
+Q 54.03639 140.236057 54.03639 147.221497 
+L 54.03639 176.327497 
+Q 54.03639 183.312937 60.057973 183.312937 
+z
+" clip-path="url(#pe8189150d0)" style="fill: #eef3fa; stroke: #333333; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 60.057973 238.614337 
+L 591.964447 238.614337 
+Q 597.98603 238.614337 597.98603 231.628897 
+L 597.98603 202.522897 
+Q 597.98603 195.537457 591.964447 195.537457 
+L 60.057973 195.537457 
+Q 54.03639 195.537457 54.03639 202.522897 
+L 54.03639 231.628897 
+Q 54.03639 238.614337 60.057973 238.614337 
+z
+" clip-path="url(#pe8189150d0)" style="fill: #eef3fa; stroke: #333333; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 60.057973 293.915737 
+L 591.964447 293.915737 
+Q 597.98603 293.915737 597.98603 286.930297 
+L 597.98603 257.824297 
+Q 597.98603 250.838857 591.964447 250.838857 
+L 60.057973 250.838857 
+Q 54.03639 250.838857 54.03639 257.824297 
+L 54.03639 286.930297 
+Q 54.03639 293.915737 60.057973 293.915737 
+z
+" clip-path="url(#pe8189150d0)" style="fill: #eef3fa; stroke: #333333; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 60.057973 349.217137 
+L 591.964447 349.217137 
+Q 597.98603 349.217137 597.98603 342.231697 
+L 597.98603 313.125697 
+Q 597.98603 306.140257 591.964447 306.140257 
+L 60.057973 306.140257 
+Q 54.03639 306.140257 54.03639 313.125697 
+L 54.03639 342.231697 
+Q 54.03639 349.217137 60.057973 349.217137 
+z
+" clip-path="url(#pe8189150d0)" style="fill: #eef3fa; stroke: #333333; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 90.165886 430.713937 
+L 591.964447 430.713937 
+Q 597.98603 430.713937 597.98603 423.728497 
+L 597.98603 394.622497 
+Q 597.98603 387.637057 591.964447 387.637057 
+L 90.165886 387.637057 
+Q 84.144304 387.637057 84.144304 394.622497 
+L 84.144304 423.728497 
+Q 84.144304 430.713937 90.165886 430.713937 
+z
+" clip-path="url(#pe8189150d0)" style="fill: #fdf2e3; stroke: #333333; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_8">
+    <path d="M 90.165886 486.015337 
+L 591.964447 486.015337 
+Q 597.98603 486.015337 597.98603 479.029897 
+L 597.98603 449.923897 
+Q 597.98603 442.938457 591.964447 442.938457 
+L 90.165886 442.938457 
+Q 84.144304 442.938457 84.144304 449.923897 
+L 84.144304 479.029897 
+Q 84.144304 486.015337 90.165886 486.015337 
+z
+" clip-path="url(#pe8189150d0)" style="fill: #fdf2e3; stroke: #333333; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_9">
+    <path d="M 90.165886 541.316737 
+L 591.964447 541.316737 
+Q 597.98603 541.316737 597.98603 534.331297 
+L 597.98603 505.225297 
+Q 597.98603 498.239857 591.964447 498.239857 
+L 90.165886 498.239857 
+Q 84.144304 498.239857 84.144304 505.225297 
+L 84.144304 534.331297 
+Q 84.144304 541.316737 90.165886 541.316737 
+z
+" clip-path="url(#pe8189150d0)" style="fill: #fdf2e3; stroke: #333333; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_10">
+    <path d="M 90.165886 596.618137 
+L 591.964447 596.618137 
+Q 597.98603 596.618137 597.98603 589.632697 
+L 597.98603 560.526697 
+Q 597.98603 553.541257 591.964447 553.541257 
+L 90.165886 553.541257 
+Q 84.144304 553.541257 84.144304 560.526697 
+L 84.144304 589.632697 
+Q 84.144304 596.618137 90.165886 596.618137 
+z
+" clip-path="url(#pe8189150d0)" style="fill: #fdf2e3; stroke: #333333; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_11">
+    <path d="M 90.165886 651.919537 
+L 591.964447 651.919537 
+Q 597.98603 651.919537 597.98603 644.934097 
+L 597.98603 615.828097 
+Q 597.98603 608.842657 591.964447 608.842657 
+L 90.165886 608.842657 
+Q 84.144304 608.842657 84.144304 615.828097 
+L 84.144304 644.934097 
+Q 84.144304 651.919537 90.165886 651.919537 
+z
+" clip-path="url(#pe8189150d0)" style="fill: #fdf2e3; stroke: #333333; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_12">
+    <path d="M 74.108332 655.994377 
+L 597.98603 655.994377 
+Q 605.513009 655.994377 605.513009 647.262577 
+L 605.513009 371.337697 
+Q 605.513009 362.605897 597.98603 362.605897 
+L 74.108332 362.605897 
+Q 66.581354 362.605897 66.581354 371.337697 
+L 66.581354 647.262577 
+Q 66.581354 655.994377 74.108332 655.994377 
+L 74.108332 655.994377 
+z
+" clip-path="url(#pe8189150d0)" style="fill: none; stroke: #e07b00; stroke-width: 2; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_13">
+    <path d="M 60.057973 724.684537 
+L 591.964447 724.684537 
+Q 597.98603 724.684537 597.98603 717.699097 
+L 597.98603 688.593097 
+Q 597.98603 681.607657 591.964447 681.607657 
+L 60.057973 681.607657 
+Q 54.03639 681.607657 54.03639 688.593097 
+L 54.03639 717.699097 
+Q 54.03639 724.684537 60.057973 724.684537 
+z
+" clip-path="url(#pe8189150d0)" style="fill: #eef3fa; stroke: #333333; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_14">
+    <path d="M 60.057973 779.985937 
+L 591.964447 779.985937 
+Q 597.98603 779.985937 597.98603 773.000497 
+L 597.98603 743.894497 
+Q 597.98603 736.909057 591.964447 736.909057 
+L 60.057973 736.909057 
+Q 54.03639 736.909057 54.03639 743.894497 
+L 54.03639 773.000497 
+Q 54.03639 779.985937 60.057973 779.985937 
+z
+" clip-path="url(#pe8189150d0)" style="fill: #eef3fa; stroke: #333333; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_15">
+    <path d="M 60.057973 835.287337 
+L 591.964447 835.287337 
+Q 597.98603 835.287337 597.98603 828.301897 
+L 597.98603 799.195897 
+Q 597.98603 792.210457 591.964447 792.210457 
+L 60.057973 792.210457 
+Q 54.03639 792.210457 54.03639 799.195897 
+L 54.03639 828.301897 
+Q 54.03639 835.287337 60.057973 835.287337 
+z
+" clip-path="url(#pe8189150d0)" style="fill: #eef3fa; stroke: #333333; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_16">
+    <path d="M 60.057973 890.588737 
+L 591.964447 890.588737 
+Q 597.98603 890.588737 597.98603 883.603297 
+L 597.98603 854.497297 
+Q 597.98603 847.511857 591.964447 847.511857 
+L 60.057973 847.511857 
+Q 54.03639 847.511857 54.03639 854.497297 
+L 54.03639 883.603297 
+Q 54.03639 890.588737 60.057973 890.588737 
+z
+" clip-path="url(#pe8189150d0)" style="fill: #eef3fa; stroke: #333333; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_17">
+    <path d="M 60.057973 945.890137 
+L 591.964447 945.890137 
+Q 597.98603 945.890137 597.98603 938.904697 
+L 597.98603 909.798697 
+Q 597.98603 902.813257 591.964447 902.813257 
+L 60.057973 902.813257 
+Q 54.03639 902.813257 54.03639 909.798697 
+L 54.03639 938.904697 
+Q 54.03639 945.890137 60.057973 945.890137 
+z
+" clip-path="url(#pe8189150d0)" style="fill: #eef3fa; stroke: #333333; stroke-linejoin: miter"/>
+   </g>
+   <g id="line2d_1">
+    <path d="M 596.982433 272.377297 
+L 609.527397 272.377297 
+" clip-path="url(#pe8189150d0)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #8e44ad; stroke-width: 0.8"/>
+   </g>
+   <g id="line2d_2">
+    <path d="M 596.982433 464.476897 
+L 609.527397 464.476897 
+" clip-path="url(#pe8189150d0)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #8e44ad; stroke-width: 0.8"/>
+   </g>
+   <g id="line2d_3">
+    <path d="M 596.982433 519.778297 
+L 609.527397 519.778297 
+" clip-path="url(#pe8189150d0)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #8e44ad; stroke-width: 0.8"/>
+   </g>
+   <g id="line2d_4">
+    <path d="M 596.982433 575.079697 
+L 609.527397 575.079697 
+" clip-path="url(#pe8189150d0)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #8e44ad; stroke-width: 0.8"/>
+   </g>
+   <g id="line2d_5">
+    <path d="M 596.982433 630.381097 
+L 609.527397 630.381097 
+" clip-path="url(#pe8189150d0)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #8e44ad; stroke-width: 0.8"/>
+   </g>
+   <g id="line2d_6">
+    <path d="M 596.982433 703.146097 
+L 609.527397 703.146097 
+" clip-path="url(#pe8189150d0)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #8e44ad; stroke-width: 0.8"/>
+   </g>
+   <g id="line2d_7">
+    <path d="M 596.982433 869.050297 
+L 609.527397 869.050297 
+" clip-path="url(#pe8189150d0)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #8e44ad; stroke-width: 0.8"/>
+   </g>
+   <g id="text_1">
+    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans Mono'; text-anchor: start" x="62.566965" y="109.370441" transform="rotate(-0 62.566965 109.370441)">FlowBox, FlowWin::move</text>
+   </g>
+   <g id="text_2">
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; text-anchor: start" x="205.579555" y="109.094504" transform="rotate(-0 205.579555 109.094504)">hold the liquid's bounding box + 3 cells (same box on every rank)</text>
+   </g>
+   <g id="text_3">
+    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans Mono'; text-anchor: start" x="62.566965" y="164.671841" transform="rotate(-0 62.566965 164.671841)">FlowFsTypes</text>
+   </g>
+   <g id="text_4">
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'" transform="translate(205.579555 159.076943)">new types from this step's T: melts → FLUID, freezes → WALL;</text>
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'" transform="translate(205.579555 169.714865)">frozen interface stacks capped / wait / settle / round → reservoir</text>
+   </g>
+   <g id="text_5">
+    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans Mono'; text-anchor: start" x="62.566965" y="219.973241" transform="rotate(-0 62.566965 219.973241)">FlowFill</text>
+   </g>
+   <g id="text_6">
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; text-anchor: start" x="205.579555" y="219.697304" transform="rotate(-0 205.579555 219.697304)">T, liquid fraction, composition (σ, ρ, ν per cell with properties cards)</text>
+   </g>
+   <g id="text_7">
+    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans Mono'; text-anchor: start" x="62.566965" y="275.407532" transform="rotate(-0 62.566965 275.407532)">fs_repair</text>
+   </g>
+   <g id="text_8">
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; text-anchor: start" x="205.579555" y="274.998704" transform="rotate(-0 205.579555 274.998704)">FLUID touching GAS → full INTERFACE</text>
+   </g>
+   <g id="text_9">
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #8e44ad" x="614.545383" y="274.860735" transform="rotate(-0 614.545383 274.860735)">type, ε, mass, ρ, u, f</text>
+   </g>
+   <g id="text_10">
+    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans Mono'; text-anchor: start" x="62.566965" y="330.576041" transform="rotate(-0 62.566965 330.576041)">FlowFsPowder</text>
+   </g>
+   <g id="text_11">
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'" transform="translate(205.579555 324.981143)">powder per column: Gaussian about the beam, only where the surface cell</text>
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'" transform="translate(205.579555 335.619065)">is fully liquid; the reservoir is repaid through it (±50 %)</text>
+   </g>
+   <g id="text_12">
+    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans Mono'; text-anchor: start" x="92.674879" y="412.072841" transform="rotate(-0 92.674879 412.072841)">surface()</text>
+   </g>
+   <g id="text_13">
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; text-anchor: start" x="235.687469" y="411.664794" transform="rotate(-0 235.687469 411.664794)">FlowFsColumns, FlowFsSurface: h, κ, ρ_G, Marangoni force</text>
+   </g>
+   <g id="text_14">
+    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans Mono'; text-anchor: start" x="92.674879" y="467.374241" transform="rotate(-0 92.674879 467.374241)">step()</text>
+   </g>
+   <g id="text_15">
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; text-anchor: start" x="235.687469" y="467.098304" transform="rotate(-0 235.687469 467.098304)">FlowStep: collide, stream / rebuild / bounce, mass exchange, face fluxes</text>
+   </g>
+   <g id="text_16">
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #8e44ad" x="614.545383" y="466.960335" transform="rotate(-0 614.545383 466.960335)">flux, ρ, u</text>
+   </g>
+   <g id="text_17">
+    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans Mono'; text-anchor: start" x="92.674879" y="522.529626" transform="rotate(-0 92.674879 522.529626)">melt_advect</text>
+   </g>
+   <g id="text_18">
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; text-anchor: start" x="235.687469" y="522.399704" transform="rotate(-0 235.687469 522.399704)">FlowAdvect × 3: enthalpy q and composition x with the face fluxes</text>
+   </g>
+   <g id="text_19">
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #8e44ad" x="614.545383" y="522.261735" transform="rotate(-0 614.545383 522.261735)">q, x per sweep</text>
+   </g>
+   <g id="text_20">
+    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans Mono'; text-anchor: start" x="92.674879" y="578.251026" transform="rotate(-0 92.674879 578.251026)">inject</text>
+   </g>
+   <g id="text_21">
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; text-anchor: start" x="235.687469" y="577.701104" transform="rotate(-0 235.687469 577.701104)">FlowFsInject: powder into each column's lowest interface cell</text>
+   </g>
+   <g id="text_22">
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #8e44ad" x="614.545383" y="577.563135" transform="rotate(-0 614.545383 577.563135)">mass, q, x</text>
+   </g>
+   <g id="text_23">
+    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans Mono'; text-anchor: start" x="92.674879" y="633.278441" transform="rotate(-0 92.674879 633.278441)">convert()</text>
+   </g>
+   <g id="text_24">
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; text-anchor: start" x="235.687469" y="633.002504" transform="rotate(-0 235.687469 633.002504)">FlowFsMark, FlowFsRetype, FlowFsExcess</text>
+   </g>
+   <g id="text_25">
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #8e44ad" transform="translate(614.545383 627.825519)">mark; type2; then</text>
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #8e44ad" transform="translate(614.545383 637.903551)">type, ε, m, ρ, q, x, f</text>
+   </g>
+   <g id="text_26">
+    <text style="font-size: 10px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #e07b00" x="75.111929" y="372.532815" transform="rotate(-0 75.111929 372.532815)">F.run(h): n sub-steps (speed or capillary bound, even); post() = advect, inject, convert</text>
+   </g>
+   <g id="patch_18">
+    <path d="M 68.683061 638.858211 
+Q -53.651194 515.121114 67.425822 392.656115 
+" style="fill: none; stroke: #e07b00; stroke-width: 1.6; stroke-linecap: round"/>
+    <path d="M 62.767859 394.238322 
+L 67.425822 392.656115 
+L 65.896809 397.33181 
+z
+" style="fill: #e07b00; stroke: #e07b00; stroke-width: 1.6; stroke-linecap: round"/>
+   </g>
+   <g id="text_27">
+    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans Mono'; text-anchor: start" x="62.566965" y="706.043441" transform="rotate(-0 62.566965 706.043441)">tallies</text>
+   </g>
+   <g id="text_28">
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; text-anchor: start" x="205.579555" y="705.767504" transform="rotate(-0 205.579555 705.767504)">caught and lost mass: one reduction per thermal step → reservoir, spatter log</text>
+   </g>
+   <g id="text_29">
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #8e44ad" x="614.545383" y="705.629535" transform="rotate(-0 614.545383 705.629535)">sum</text>
+   </g>
+   <g id="text_30">
+    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans Mono'; text-anchor: start" x="62.566965" y="761.344841" transform="rotate(-0 62.566965 761.344841)">FlowFsOut</text>
+   </g>
+   <g id="text_31">
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'" transform="translate(205.579555 755.749943)">write-back: interface cells are gas to the stencil, their stack shares the</text>
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'" transform="translate(205.579555 766.387865)">host's enthalpy (PART, Cap); a filled cell becomes DENSE; an emptied one GAS</text>
+   </g>
+   <g id="text_32">
+    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans Mono'; text-anchor: start" x="62.566965" y="816.500226" transform="rotate(-0 62.566965 816.500226)">fs_surface_z</text>
+   </g>
+   <g id="text_33">
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; text-anchor: start" x="205.579555" y="816.370304" transform="rotate(-0 205.579555 816.370304)">the laser hangs from each column's top full cell; z range of the stage</text>
+   </g>
+   <g id="text_34">
+    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans Mono'; text-anchor: start" x="62.566965" y="872.221626" transform="rotate(-0 62.566965 872.221626)">conduction stage</text>
+   </g>
+   <g id="text_35">
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; text-anchor: start" x="205.579555" y="871.671704" transform="rotate(-0 205.579555 871.671704)">enthalpy step on the graded grid (ConductionStep)</text>
+   </g>
+   <g id="text_36">
+    <text style="font-size: 9px; font-family: 'DejaVu Sans'; text-anchor: start; fill: #8e44ad" x="614.545383" y="871.533735" transform="rotate(-0 614.545383 871.533735)">grid halo</text>
+   </g>
+   <g id="text_37">
+    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans Mono'; text-anchor: start" x="62.566965" y="927.103026" transform="rotate(-0 62.566965 927.103026)">phase_out</text>
+   </g>
+   <g id="text_38">
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; text-anchor: start" x="205.579555" y="926.973104" transform="rotate(-0 205.579555 926.973104)">sites follow the metal: i2 5 → 2 (melted in), 2 → 5 (emptied)</text>
+   </g>
+   <g id="text_39">
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; fill: #8e44ad" transform="translate(614.545383 54.275312)">several ranks:</text>
+    <text style="font-size: 9.5px; font-family: 'DejaVu Sans'; fill: #8e44ad" transform="translate(614.545383 64.913234)">exchanged after</text>
+   </g>
+   <g id="text_40">
+    <text style="font-size: 13.2px; font-family: 'DejaVu Sans'; text-anchor: start" x="39.98603" y="17.229937" transform="rotate(-0 39.98603 17.229937)">One thermal step with free surface (flow_step, then the conduction stage)</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pe8189150d0">
+   <rect x="39.98603" y="23.229937" width="697.5" height="919.7496"/>
+  </clipPath>
+ </defs>
+</svg>

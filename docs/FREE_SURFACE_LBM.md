@@ -15,6 +15,7 @@ Code:
   thermal coupling, the powder feed and the write-back. `fs_surface_z()`
   sets where the laser lands.
 - `tools/melt_flow_check.cpp`: gates 14-21 cover the free surface.
+- `docs/figures/make_fs_figures.py`: draws the figures (`python3 docs/figures/make_fs_figures.py`).
 
 Developer notes on the flat-lid flow it extends:
 `docs/CONDUCTION_SOURCE.md`, "Melt-pool flow". User syntax:
@@ -123,6 +124,10 @@ surface this reduces to the flat-lid model's force.
 
 ### Implementation
 
+![Cell types, the column height function, force cells and the contact-angle rule at a dry rim](figures/fs_cells.svg)
+
+*Figure 1. An x–z slice of a pool. The black line is h. The red box is one column's force cells. The orange and purple dashes are the ghost heights a dry, lower rim is given: hot solid uses `fs_angle`, cold solid below `fs_pin` is held at 90° (`fs_pin`, off by default).*
+
 **`FlowFsColumns`** is a 2-D kernel over the held columns. It walks down
 from the window top past GAS and records, per column:
 
@@ -218,6 +223,10 @@ times):
    the column's cells together take the whole surface force.
 
 ### Implementation
+
+![How each link into an interface cell is treated](figures/fs_links.svg)
+
+*Figure 2. What arrives at an interface cell along each link, by where the link comes from.*
 
 The kernel is pull-form: one thread per cell gathers what arrives along
 each of the 18 links. A link's handling depends on the source cell type
@@ -325,6 +334,10 @@ stops cells from flipping back and forth on round-off.
 
 ### Implementation: three kernels in gather form, so there are no atomics
 
+![The three conversion kernels on a small example](figures/fs_convert.svg)
+
+*Figure 3. One cell fills and one empties. The panels are computed by a 2-D copy of the kernels' rules in `figures/make_fs_figures.py`, not drawn by hand.*
+
 The kernels run over step 2's window grown by one cell (cells one beyond
 can become INTERFACE).
 
@@ -374,6 +387,10 @@ neighbours.
 
 ## 7. Coupling to the thermal solver (once per thermal step, `flow_step`)
 
+![One thermal step: the coupling kernels, the flow sub-step loop, and the halo exchanges on several ranks](figures/fs_coupling.svg)
+
+*Figure 4. One thermal step. Purple: what is exchanged after each kernel when several ranks are used (section 8).*
+
 The thermal grid and the flow block share the lattice box's cells. The
 order is:
 
@@ -401,6 +418,11 @@ order is:
    - **Freeze reservoir.** Each rounding error goes to `fs_res`, reported
      as capped / settled / single. The powder feed pays it back: the next
      thermal steps' feed is scaled by up to ±50%.
+
+   ![The four ways a frozen interface stack is resolved](figures/fs_freeze.svg)
+
+   *Figure 5. The four freeze cases and what each sends to the reservoir.*
+
 3. **`FlowFill`** writes T, liquid fraction, composition and, under
    `properties cards`, `sig`, `dens` and `visc` per cell. A frozen
    interface cell that is still waiting gets f_l = 1e-3, so the mushy drag

@@ -452,6 +452,21 @@ enough for mixing; one rank first (several ranks: see the end of this section).
   device-side part as well. Not yet separated: double against mixed, the
   call against the environment variable, and what steps the device arrays.
   A third pair (evaporation, below) was flat at 0.76 GB at layer 7.
+- FOUND (2026-11-17): Kokkos' constant-memory launches. Kokkos launches a
+  HIP kernel whose functor is 512 bytes or more (`HIPTraits::
+  ConstantMemoryUseThreshold`) by copying the functor to constant memory:
+  an async copy and an event per launch. Nearly every conduction and flow
+  lambda captures enough Views to pass 512 bytes; a standalone loop of
+  small kernels does not, which is why the growth was "seen only inside
+  spparks". The [heap] objects are live (`malloc_trim(0)` through gdb
+  freed nothing), so this is not the mmap-threshold fragmentation above.
+  Free-surface Ti-6Al-4V track (0.5 s): 12 MB/s to 24.5 GB; with Kokkos'
+  threshold raised to 4 KB (a test build) flat at 1.14 GB. The fix in the
+  source: the MDRange policies of the conduction solver and the flow carry
+  `HintLightWeight` (`LightMD<N>` in melt_flow_kokkos.h), which passes the
+  functor as a kernel argument (up to 4 KB): flat at 1.14 GB, bit-identical,
+  11% faster (a6900e95). The other kk apps' kernels still launch through
+  constant memory.
 - Mirror symmetry and precision (2026-11-15). A track on the centreline is
   mirror symmetric in y. Double: to round-off over the first 25-50 ms
   (OpenMP, HIP), 25% Nb on Ti-6Al-4V; over whole tracks 4 of 14 double

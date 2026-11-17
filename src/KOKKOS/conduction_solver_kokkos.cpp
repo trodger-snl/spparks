@@ -1149,7 +1149,7 @@ void ConductionSolverKokkos::step(double h, double t0)
   const double frac = src->laser_window(t0, t0 + h, c.xl, c.yl);
   c.Pq = 0.25 * frac * src->absorbed_power();   // P/4 * prod(d erf)
   if (flow) { flow_step(h, frac > 0.0, c.xl, c.yl); c.stamp = ++fstamp; }
-  if (flow && flow->fs && c.Pq > 0.0) fs_surface_z();
+  if (flow && flow->fs) fs_surface_z();
   stage(c, H, H, H);
   fg_ok = flow != nullptr;
 }
@@ -1980,6 +1980,11 @@ void ConductionSolverKokkos::fs_surface_z()
       zs(i + o0, j + o1) = (KK_FLOAT) (k >= 0 ? zhi(k + o2) : zlo(o2));
       if (k > mx) mx = k;
     }, Kokkos::Max<int>(top));
+  // The step's z range: above the highest metal cell and the flow's window
+  // (interface cells, and every cell the flow wrote this step) there is
+  // only gas, the same in both of the step's T and phase buffers, so it is
+  // not swept (the box's gas is half the grid in a DED deck).
+  kz_end = std::min(nz, std::max(top + 1, flow->whi[2]) + o2 + 2);
   // ponytail: metal thrown to the lattice's top faulted on the GPU (which
   // kernel was not traced); stop before it gets there
   if (top >= bz - 2) {
@@ -2195,6 +2200,8 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
   R *Hp = H.data(), *Yop = Yout.data(), *L0p = L0.data(), *Tnp = Tn.data();
   unsigned char *Pnp = Pn.data();
   using Team = Kokkos::TeamPolicy<>::member_type;
+  // free surface, plain steps: up to the gas above the metal (fs_surface_z)
+  const int kz1 = fsz && !sts && kz_end > 0 ? kz_end : nz_;
   Kokkos::parallel_for("ConductionStep",
     Kokkos::TeamPolicy<Kokkos::LaunchBounds<SPK_COND_MINB ? TX * TY : 0, SPK_COND_MINB>>(
         nbx * nby, TX * TY).set_scratch_size(0, Kokkos::PerTeam(shmem)),
@@ -2226,7 +2233,7 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
       R ik_next = R(1) / kc_next;
       R rz_next = half * R(wz_(0)) * ik_next;   // r_z of the plane, carried up
       R rz_prev = R(0);
-      for (int k = 0; k < nz_; k++) {
+      for (int k = 0; k < kz1; k++) {
         R *rx = sbuf.data() + (k & 1) * (nsx + nsy), *ry = rx + nsx;
         const int c = c0 + k * sk;
         const R ik = ik_next, rzc = rz_next;

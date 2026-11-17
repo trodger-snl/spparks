@@ -178,6 +178,7 @@ class ConductionSolverKokkos : protected Pointers {
   // liquid owed by that rounding and by lost droplets (cells; + = to return),
   // paid back through the powder feed.
   Kokkos::View<KK_FLOAT***> Cap;          // T's shape; read where PART is set
+  int kz_end = 0;                         // free surface: cell layers the step sweeps (0: all)
   Kokkos::View<KK_FLOAT**> zsf;           // per local column: the surface the laser lands on
   Kokkos::View<KK_FLOAT***> fXfed, fqfed; // block: the composition and enthalpy powder brings to a cell
   Kokkos::View<KK_FLOAT**> fdm;           // block columns: powder per thermal step (cells of liquid)

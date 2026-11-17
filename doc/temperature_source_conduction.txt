@@ -69,7 +69,7 @@ keyword = {k_table} or {cp_table} or {latent} or {k_powder} or {convection} or {
     m = {pool} (default), {flow} or {none}: the melt pool is well mixed,
     the melt-pool flow carries the composition ({flow} keyword), or it does not change
     f = {slab} (default) or {surface}: how new material enters under {mix flow} with {ded}
-  {flow} values = {lbm} [dsigma_dT s] [beta b] [viscosity nu] [mushy C] [u_ref u] [smagorinsky cs] [properties cards|constant] [sigma_table file] [free_surface] [sigma g] [powder r R [T Tf]] [fs_angle a] [fs_cap c] [fs_tau t] [fs_raw w]
+  {flow} values = {lbm} [dsigma_dT s] [beta b] [viscosity nu] [mushy C] [u_ref u] [smagorinsky cs] [properties cards|constant] [sigma_table file] [free_surface] [sigma g] [powder r R [T Tf]] [fs_angle a] [fs_pin Tp] [fs_cap c] [fs_tau t] [fs_raw w]
     melt-pool flow (lattice Boltzmann) on the liquid cells of the lattice box
     s = surface tension's temperature coefficient (N/m/K, default -2.6e-4)
     b = volumetric thermal expansion of the liquid (1/K, default 1.7e-4)
@@ -429,7 +429,11 @@ tilted surface.  Where liquid meets a lower solid column the surface
 is given the contact angle {fs_angle} (0 = wets it fully, 90 = meets it
 at its own height).  On a 316L powder track 0 spread the bead flat over
 gas pockets under its flanks and 45 made it hump; 20 gave a dense,
-continuous bead.  The thermal grid then runs to the top of the box,
+continuous bead.  With {fs_pin} Tp, dry solid whose top cell is
+colder than Tp (K) meets the liquid at 90 degrees instead: molten metal
+that reaches cold solid freezes at the contact line and stops there
+(Schiaffino and Sonin 1997), and {fs_angle} applies to hot solid only.
+Off by default.  The thermal grid then runs to the top of the box,
 interface cells share the enthalpy of the full cell under them, the
 laser lands on each column's surface, and a cell that freezes partly
 full becomes a whole cell or gas (stacks of them settle first); that

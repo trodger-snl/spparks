@@ -236,6 +236,11 @@ struct MeltFlow {
   // under its flanks; 45 humped (the pool broke away, 600 cells of
   // spatter); 20 gave a dense, round, continuous bead.
   double fs_angle = 20.0;
+  // surface(): dry solid whose top cell is colder than this (K) pins the
+  // contact line instead (90 degrees: the surface is held back). Molten
+  // metal reaching cold solid freezes at the contact line and stops there
+  // (Schiaffino & Sonin 1997); fs_angle then applies to hot solid only.
+  double fs_pin_T = -1e30;
   // A floor on the relaxation time of interface cells. At a liquid metal's
   // viscosity (tau about 0.51) they are unstable under a Marangoni force:
   // the pool of check 21 breaks up at a third of its forcing with no floor,
@@ -252,7 +257,7 @@ struct MeltFlow {
   // the surface sees (less 1), the surface force as an acceleration of the
   // cells kb..kt, and what the caller may set: the gas pressure on the
   // surface (lattice units; e.g. recoil), less the ambient
-  Kokkos::View<R**> hcol, scol, slcol, mcol, drg, sax, say, saz, pgas;
+  Kokkos::View<R**> hcol, scol, slcol, mcol, drg, sax, say, saz, pgas, tcol;
   Kokkos::View<int**> skt, skb;
   // fs: per column, the mass inject() and convert() took and lost since
   // tallies() (with dev: no reduction to the host per flow step)
@@ -288,7 +293,7 @@ struct MeltFlow {
       eps = Kokkos::View<R***>("flow_eps", a, b, c);
       mark = Kokkos::View<unsigned char***>("flow_mark", a, b, c);
       type2 = Kokkos::View<unsigned char***>("flow_type2", a, b, c);
-      for (auto v : {&hcol, &scol, &slcol, &mcol, &drg, &sax, &say, &saz, &pgas})
+      for (auto v : {&hcol, &scol, &slcol, &mcol, &drg, &sax, &say, &saz, &pgas, &tcol})
         *v = Kokkos::View<R**>("flow_col", nx, ny);
       skt = Kokkos::View<int**>("flow_skt", nx, ny); skb = Kokkos::View<int**>("flow_skb", nx, ny);
       sgot = Kokkos::View<double**>("flow_sgot", nx, ny); slost = Kokkos::View<double**>("flow_slost", nx, ny);
@@ -834,9 +839,10 @@ struct MeltFlow {
   void surface(const int lo[3], const int hi[3]) {
     auto ty = type; auto ep_ = eps; auto ms_ = cmass; auto rho_ = rho; auto T_ = T;
     auto h_ = hcol; auto S_ = scol; auto sl_ = slcol; auto M_ = mcol; auto dg_ = drg; auto pg_ = pgas;
-    auto sax_ = sax; auto say_ = say; auto saz_ = saz; auto kt_ = skt; auto kb_ = skb;
+    auto sax_ = sax; auto say_ = say; auto saz_ = saz; auto kt_ = skt; auto kb_ = skb; auto tc_ = tcol;
     const bool hp = props;
     auto sg_ = sig; auto dn_ = dens;
+    const R pinT = R(fs_pin_T);
     const R mar = R(p.marangoni), sig0 = R(p.sigma), Tref = R(p.Tref), rawp = R(fs_raw);
     auto st_ = stab;
     const bool tab = !hp && stab.extent(0) > 1;
@@ -865,6 +871,7 @@ struct MeltFlow {
         if (k < z0) { h_(i, j) = R(z0); kt_(i, j) = -2; return; }      // no metal: -2
         const int kt = k;
         R sv = T_(i, j, kt);
+        tc_(i, j) = sv;
         if (tab) {     // sigma(T) / rho from the table, linear between (and beyond) its rows
           const R u = (sv - sT0) * siT;
           const int m = u < R(0) ? 0 : u >= R(nst - 1) ? nst - 2 : (int) u;
@@ -915,8 +922,9 @@ struct MeltFlow {
           // cells down, not below the solid. Mirrored (fs_angle 0) nothing
           // held a bead's edge, and it crept out over the rim and hung in
           // the air beside the pool.
+          // Cold (below fs_pin_T): 90 degrees, the solid's own height.
           if (kt_(ii, jj) == -1 && h_(ii, jj) < h_(i, j))
-            return h_(i, j) - edge > h_(ii, jj) ? h_(i, j) - edge : h_(ii, jj);
+            return tc_(ii, jj) < pinT || h_(i, j) - edge < h_(ii, jj) ? h_(ii, jj) : h_(i, j) - edge;
           return h_(i, j);
         };
         auto H = [&](int di, int dj) -> R {

@@ -209,6 +209,9 @@ struct MeltFlow {
   // on the surface at 0.08 (spikes at 2-3 m/s by 110-250 ms); 0.04 was calm
   // to 200 ms, and half smoothing at 0.08 was not.
   double fs_cap = 0.04;
+  // surface(): how far a lower, dry neighbour column counts as its own height
+  // (0: mirrored, a right contact angle; 1: fully, the liquid does not wet it)
+  double fs_edge = 0.0;
   // A floor on the relaxation time of interface cells. At a liquid metal's
   // viscosity (tau about 0.51) they are unstable under a Marangoni force:
   // the pool of check 21 breaks up at a third of its forcing with no floor,
@@ -783,6 +786,7 @@ struct MeltFlow {
     const bool hp = props;
     auto sg_ = sig; auto dn_ = dens;
     const R mar = R(p.marangoni), sig0 = R(p.sigma), Tref = R(p.Tref), rawp = R(fs_raw);
+    const R edge = R(fs_edge);
     const int z0 = wlo[2], z1 = whi[2];
     // the columns held, and those of them the step needs (one more around)
     int a[2], b[2], c[2], d[2];
@@ -842,7 +846,14 @@ struct MeltFlow {
         // is left to the flow and to freezing.
         auto Hr = [&](int di, int dj) -> R {
           int ii, jj; col(di, dj, ii, jj);
-          return kt_(ii, jj) < 0 ? h_(i, j) : h_(ii, jj);
+          if (kt_(ii, jj) >= 0) return h_(ii, jj);
+          // Solid standing lower than this liquid (the frozen rim under a
+          // bead) counts as its own height, by the share fs_edge: the edge
+          // of the liquid is then a hump, at a pressure that sends liquid
+          // back in. Mirrored (fs_edge 0) nothing held a bead's edge, and
+          // it crept out over the rim and hung in the air beside the pool.
+          if (kt_(ii, jj) == -1 && h_(ii, jj) < h_(i, j)) return h_(i, j) + edge * (h_(ii, jj) - h_(i, j));
+          return h_(i, j);
         };
         auto H = [&](int di, int dj) -> R {
           const R sm = R(0.25) * Hr(di, dj)
@@ -927,6 +938,8 @@ struct MeltFlow {
     //    beside them are a droplet too small for the grid: nothing would
     //    move its mass and it would hang, falling for ever. It empties into
     //    its interface neighbours (if it has none the mass is returned).
+    const bool open = !p.periodic[2];
+    const int ktop = nz - 4;
     Kokkos::parallel_for("FlowFsMark", range, KOKKOS_LAMBDA(const int i, const int j, const int k) {
       mk(i, j, k) = 0;
       if (ty(i, j, k) != INTERFACE) return;
@@ -940,7 +953,8 @@ struct MeltFlow {
         if (t == INTERFACE && ms_(ii, jj, kk) > (R(1) + kap) * (R(1) + rho_(ii, jj, kk))) nf = true;
       }
       if (m > (R(1) + kap) * r) mk(i, j, k) = FILL;
-      else if (!nf && (!held || m < -kap * r)) mk(i, j, k) = EMPTY;
+      // liquid thrown to the block's top (spatter) leaves: it empties there
+      else if (!nf && (!held || m < -kap * r || (open && k >= ktop))) mk(i, j, k) = EMPTY;
     });
     // 2. the new types, in type2. A gas cell that becomes interface starts
     //    at the equilibrium of its liquid neighbours' mean density and

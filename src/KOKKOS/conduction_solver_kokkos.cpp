@@ -649,6 +649,7 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
     if (cfg.flow.fs_tau >= 0.0) flow->fs_tau = cfg.flow.fs_tau;
     if (cfg.flow.fs_raw >= 0.0) flow->fs_raw = cfg.flow.fs_raw;
     if (cfg.flow.fs_cap > 0.0) flow->fs_cap = cfg.flow.fs_cap;
+    if (cfg.flow.fs_edge >= 0.0) flow->fs_edge = cfg.flow.fs_edge;
     flow->resize(bn[0], bn[1], bn[2], false);   // no cells held until there is a pool
     fg0[0] = lo[0] - glo[0] - fh[0]; fg0[1] = lo[1] - glo[1] - fh[2]; fg0[2] = 0;
     for (int d = 0; d < 6; d++) fW[d] = 0;
@@ -1394,7 +1395,7 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
          held by the mushy drag, while any cell around it is still hot (a
          film that creeps onto cold solid would else be removed each step: a
          sink at the pool's rim); once the pool has moved on it becomes a
-         whole cell if at least half full or under metal, else gas, the difference going to
+         whole cell if at least half full, else gas (stacks: see below), the difference going to
          the reservoir. An interface cell's T and enthalpy are its host's
          (the full cell below), with which it shared them at the last
          write-back. */
@@ -1414,13 +1415,18 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
           const bool metal = (p & 3) != GAS;
           const int prev = held(i, j, k) ? (int) ty(i, j, k) : metal ? MF::WALL : MF::GAS;
           // the host: a full cell below (by the last types: nothing here writes them)
+          // (the first full cell under the interface cells stacked on it)
           bool host = false;
-          if (prev == MF::INTERFACE && k > z0) {
-            const int tb = held(i, j, k - 1) ? (int) ty(i, j, k - 1) : MF::WALL;
-            host = tb == MF::FLUID || (tb == MF::WALL && (P_(i + o0, j + o1, k - 1 + o2) & 3) != GAS);
+          int kh = k - 1;
+          if (prev == MF::INTERFACE) {
+            while (kh >= z0 && held(i, j, kh) && ty(i, j, kh) == MF::INTERFACE) kh--;
+            if (kh >= z0) {
+              const int tb = held(i, j, kh) ? (int) ty(i, j, kh) : MF::WALL;
+              host = tb == MF::FLUID || (tb == MF::WALL && (P_(i + o0, j + o1, kh + o2) & 3) != GAS);
+            }
           }
-          const double Tv = host ? T_(i + o0, j + o1, k - 1 + o2) : T_(i + o0, j + o1, k + o2);
-          const double qa = host ? H_(i + o0, j + o1, k - 1 + o2) + Hr(M_(i + o0, j + o1, k - 1 + o2))
+          const double Tv = host ? T_(i + o0, j + o1, kh + o2) : T_(i + o0, j + o1, k + o2);
+          const double qa = host ? H_(i + o0, j + o1, kh + o2) + Hr(M_(i + o0, j + o1, kh + o2))
                                  : H_(i + o0, j + o1, k + o2) + Hr(m);
           double tsc = ts_(m), tlc = tl_(m);
           if (cnb > 1 && m < cnb) {
@@ -1433,31 +1439,63 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
           int nt;
           if (prev == MF::INTERFACE) {
             nt = MF::INTERFACE;
-            bool near = false;     // a liquid cell around it above the lowest solidus
-            if (!hot)
-              for (int c = 1; c < 19 && !near; c++) {
-                int cx, cy, cz; MF::vel(c, cx, cy, cz);
-                const int a = i + cx, b = j + cy, d = k + cz;
-                near = held(a, b, d) && MF::liq(ty(a, b, d)) && T_(a + o0, b + o1, d + o2) > tsm0;
-              }
-            // Under metal (a full cell, or one at least half full) a frozen
-            // cell is no surface: it is filled at once, whatever it holds.
-            // Left as a film it is gas to the stencil, and a bead flowing
-            // over cold plate sat on a layer of it, insulated (2,000 K
-            // liquid one cell above plate at 1,100 K, no fusion).
-            bool cov = false;
-            if (!hot && held(i, j, k + 1)) {
-              const int ta = ty(i, j, k + 1);
-              cov = ta == MF::FLUID || ta == MF::WALL || (ta == MF::INTERFACE && ep(i, j, k + 1) >= 0.5);
+            // a liquid cell above the lowest solidus beside any cell of its
+            // stack (the stack decides as one, or it would tear)
+            bool near = false;
+            if (!hot) {
+              int k0s = k, k1s = k;
+              while (k0s - 1 >= z0 && held(i, j, k0s - 1) && ty(i, j, k0s - 1) == MF::INTERFACE) k0s--;
+              while (held(i, j, k1s + 1) && ty(i, j, k1s + 1) == MF::INTERFACE) k1s++;
+              for (int kk = k0s; kk <= k1s && !near; kk++)
+                for (int c = 1; c < 19 && !near; c++) {
+                  int cx, cy, cz; MF::vel(c, cx, cy, cz);
+                  const int a = i + cx, b = j + cy, d = kk + cz;
+                  if (a == i && b == j && d >= k0s && d <= k1s) continue;    // the stack itself
+                  near = held(a, b, d) && MF::liq(ty(a, b, d)) && T_(a + o0, b + o1, d + o2) > tsm0;
+                }
             }
-            if (!hot && (!near || cov)) {
-              const double e = ep(i, j, k);
-              if (e >= 0.5 || cov) {
-                nt = MF::WALL; rs -= 1.0 - e;
-                P_(i + o0, j + o1, k + o2) = DENSE;
-                H_(i + o0, j + o1, k + o2) = (KK_FLOAT) (qa - Hr(m));
-                T_(i + o0, j + o1, k + o2) = (KK_FLOAT) Tv;
-              } else { nt = MF::GAS; rs += e > 0.0 ? e : 0.0; }
+            /* A frozen stack (its host is below the solidus) becomes solid:
+               - capped by a full cell, every cell of it is filled, whatever
+                 it holds. Left as a film it is gas to the stencil, and a
+                 bead flowing over cold plate sat on a layer of it, insulated
+                 (2,000 K liquid one cell above plate at 1,100 K, no fusion);
+               - else it waits while a liquid cell beside it is hot (a film
+                 that creeps onto cold solid would else be removed each
+                 step; settling without waiting ate the pool's front and
+                 threw 580 cells of spatter in 450 ms), then
+               - two cells or more deep (a steep flank), it settles: its mass
+                 fills it from the bottom, and each cell is then whole if at
+                 least half full, else gas. Rounding each cell as it stood
+                 made 0.6 cell of metal per cell caught on a bead's flank;
+               - one cell deep, it rounds.
+               The difference goes to the reservoir.
+               ponytail: a settled cell keeps its own composition. */
+            if (!hot) {
+              int kt = k;
+              while (held(i, j, kt + 1) && ty(i, j, kt + 1) == MF::INTERFACE) kt++;
+              const int kb = kh + 1;
+              bool cap = false;
+              if (held(i, j, kt + 1)) {
+                const int ta = ty(i, j, kt + 1);
+                cap = ta == MF::FLUID || (ta == MF::WALL && (P_(i + o0, j + o1, kt + 1 + o2) & 3) != GAS);
+              }
+              const double e = ep(i, j, k) > 0.0 ? (double) ep(i, j, k) : 0.0;
+              double a = e;
+              bool go = cap || !near;
+              if (cap) a = 1.0;
+              else if (kt > kb) {
+                double S = 0.0;
+                for (int kk = kb; kk <= kt; kk++) S += ep(i, j, kk) > 0.0 ? (double) ep(i, j, kk) : 0.0;
+                a = S - (k - kb);
+              }
+              if (go) {
+                if (a >= 0.5) {
+                  nt = MF::WALL; rs -= 1.0 - e;
+                  P_(i + o0, j + o1, k + o2) = DENSE;
+                  H_(i + o0, j + o1, k + o2) = (KK_FLOAT) (qa - Hr(m));
+                  T_(i + o0, j + o1, k + o2) = (KK_FLOAT) Tv;
+                } else { nt = MF::GAS; rs += e; }
+              }
             }
           } else if (!metal) nt = MF::GAS;
           else nt = ((p & 3) == DENSE && hot) ? MF::FLUID : MF::WALL;
@@ -1608,11 +1646,12 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
     fs_got += fs_got_now / dmscale;
     fs_res += fs_lost_now - (fs_got_now - fs_got_now / dmscale);
     fs_lost += fs_lost_now;
+    fs_spatter(fs_lost_now, xl, yl, false);
     if (fs_laser && !laser_on) fs_report();
     fs_laser = laser_on;
     /* Write back, in the cells the steps could touch. An interface cell is
-       gas to the stencil; with a full cell below it (its host) the two
-       share one enthalpy and the host's capacity carries both (Cap, PART).
+       gas to the stencil; with a full cell below its stack (its host) they
+       share one enthalpy and the host's capacity carries all (Cap, PART).
        A cell that filled becomes metal, of the bin of its composition. */
     auto ty = F.type; auto ms = F.cmass; auto q = fq; auto Xw = fXw;
     auto Cap_ = Cap; auto Ht = Htab;
@@ -1647,15 +1686,30 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
           const int n = (int) Kokkos::lround((Xw(i, j, k) - cx0) / cw * (nbm - 1));
           return n < 0 ? 0 : n > nbm - 1 ? nbm - 1 : n;
         };
+        // a host (the full cell at kh) and every interface cell stacked on it
+        // share one enthalpy: their mass (less the host's 1) and the mean.
+        // Only the cell right on the host used to: powder fed into the ones
+        // above stayed at its own temperature, cut off from the liquid, and
+        // froze there as a porous mound under a liquid skin.
+        auto stack = [&](int kh, double &mg, double &qm) {
+          mg = 0.0; qm = q(i, j, kh);
+          for (int kk = kh + 1; kk < z1 && ty(i, j, kk) == MF::INTERFACE; kk++) {
+            const double mk = ms(i, j, kk) > 0.0 ? (double) ms(i, j, kk) : 0.0;
+            mg += mk; qm += mk * q(i, j, kk);
+          }
+          qm /= 1.0 + mg;
+        };
         const unsigned char p = P_(li, lj, lk);
         if (t == MF::INTERFACE) {
           bool host = false;
-          if (k > z0) {
-            const int tb = ty(i, j, k - 1);
-            host = tb == MF::FLUID || (tb == MF::WALL && (P_(li, lj, lk - 1) & 3) != GAS);
+          int kh = k - 1;
+          while (kh >= z0 && ty(i, j, kh) == MF::INTERFACE) kh--;
+          if (kh >= z0) {
+            const int tb = ty(i, j, kh);
+            host = tb == MF::FLUID || (tb == MF::WALL && (P_(li, lj, kh + o2) & 3) != GAS);
           }
-          const double mg = ms(i, j, k) > 0.0 ? (double) ms(i, j, k) : 0.0;
-          const double qv = host ? (mg * q(i, j, k) + q(i, j, k - 1)) / (mg + 1.0) : (double) q(i, j, k);
+          double qv = q(i, j, k);
+          if (host) { double mg; stack(kh, mg, qv); }
           const int m = bin(M_(li, lj, lk));
           M_(li, lj, lk) = (unsigned char) m;
           H_(li, lj, lk) = (KK_FLOAT) (qv - Hr(m));
@@ -1668,8 +1722,7 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
           const bool fresh = t == MF::FLUID && (p & 3) == GAS;    // it filled
           if (fresh) { m = bin(m); M_(li, lj, lk) = (unsigned char) m; }
           if (guest) {
-            const double mg = ms(i, j, k + 1) > 0.0 ? (double) ms(i, j, k + 1) : 0.0;
-            qv = (mg * q(i, j, k + 1) + qv) / (mg + 1.0);
+            double mg; stack(k, mg, qv);
             Cap_(li, lj, lk) = (KK_FLOAT) (1.0 + mg);
           }
           const unsigned char base = t == MF::FLUID ? (unsigned char) DENSE : (unsigned char) (p & ~PART);
@@ -1838,8 +1891,29 @@ void ConductionSolverKokkos::comp_out(Kokkos::View<double*> d_comp,
    box: the top of its highest full cell (interface cells are gas here).
 ------------------------------------------------------------------------- */
 
+// ponytail: the position logged is the laser's when the burst began, not the
+// droplets' (convert() returns only the mass); return moments from it if
+// the landing place matters.
+void ConductionSolverKokkos::fs_spatter(double lost, double x, double y, bool flush)
+{
+  if (lost > 1e-3) {
+    if (sp_t0 < 0.0) { sp_t0 = t_fd; sp_x = x; sp_y = y; sp_sum = 0.0; }
+    sp_sum += lost; sp_last = t_fd;
+  }
+  if (sp_t0 < 0.0 || !(flush || t_fd - sp_last > 1e-3)) return;
+  if (sp_sum >= 1.0 && domain->me == 0) {
+    char msg[200];
+    snprintf(msg, sizeof(msg), "conduction: spatter at t = %.4f s (%.1f ms long), laser at x = %.4g y = %.4g m: "
+             "%.1f cells of liquid lost\n", sp_t0, 1e3 * (sp_last - sp_t0), sp_x, sp_y, sp_sum);
+    if (screen) fputs(msg, screen);
+    if (logfile) fputs(msg, logfile);
+  }
+  sp_t0 = -1.0;
+}
+
 void ConductionSolverKokkos::fs_report()
 {
+  fs_spatter(0.0, 0.0, 0.0, true);
   if (domain->me) return;
   // the metal's enthalpy (J, each material's from its own H(T0)) and volume
   // (cells): full cells, and interface cells by their mass

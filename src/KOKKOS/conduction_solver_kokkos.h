@@ -228,6 +228,10 @@ class ConductionSolverKokkos : protected Pointers {
   // flow free_surface: each column's surface for the laser; and the sites
   // follow the metal (i2 5 -> 2 where a cell filled, -> 5 where it emptied)
   void fs_surface_z();
+  // spatter log: lost droplets grouped into bursts (a burst ends after
+  // 1 ms without loss); one line per burst of at least one cell
+  double sp_t0 = -1.0, sp_last = 0.0, sp_sum = 0.0, sp_x = 0.0, sp_y = 0.0;
+  void fs_spatter(double lost, double x, double y, bool flush);
   void fs_report();   // the powder and reservoir tallies, at each dump conduction and when the laser goes off
   void phase_out(Kokkos::View<int*> d_af, int nall);
   // flow lbm, several ranks: the w owned layers next to each neighbour go

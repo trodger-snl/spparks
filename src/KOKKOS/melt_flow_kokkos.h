@@ -204,8 +204,11 @@ struct MeltFlow {
   // lattice sigma 0.021, 2e-3 at 0.032, 1.5 at 0.072.
   // In a track (316L, 367 W, 1.5 mm spot) 0.18 with the smoothing below let
   // one-column pits grow until the pool broke up at 150-200 ms; 0.08 with
-  // no smoothing kept the surface within 1 cell of flat.
-  double fs_cap = 0.08;
+  // no smoothing kept the surface within 1 cell of flat. A wider, hotter
+  // pool (Ti-6Al-4V, 400 W, 1.5 mm spot) still grew a two-cell checkerboard
+  // on the surface at 0.08 (spikes at 2-3 m/s by 110-250 ms); 0.04 was calm
+  // to 200 ms, and half smoothing at 0.08 was not.
+  double fs_cap = 0.04;
   // A floor on the relaxation time of interface cells. At a liquid metal's
   // viscosity (tau about 0.51) they are unstable under a Marangoni force:
   // the pool of check 21 breaks up at a third of its forcing with no floor,

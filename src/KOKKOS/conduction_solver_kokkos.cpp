@@ -1394,7 +1394,7 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
          held by the mushy drag, while any cell around it is still hot (a
          film that creeps onto cold solid would else be removed each step: a
          sink at the pool's rim); once the pool has moved on it becomes a
-         whole cell if at least half full, else gas, the difference going to
+         whole cell if at least half full or under metal, else gas, the difference going to
          the reservoir. An interface cell's T and enthalpy are its host's
          (the full cell below), with which it shared them at the last
          write-back. */
@@ -1442,7 +1442,10 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
               }
             if (!hot && !near) {
               const double e = ep(i, j, k);
-              if (e >= 0.5) {
+              // under metal it is filled whatever it holds: no pore is left
+              // where a bead flows over the frozen rim
+              const bool cov = held(i, j, k + 1) && ty(i, j, k + 1) != MF::GAS;
+              if (e >= 0.5 || cov) {
                 nt = MF::WALL; rs -= 1.0 - e;
                 P_(i + o0, j + o1, k + o2) = DENSE;
                 H_(i + o0, j + o1, k + o2) = (KK_FLOAT) (qa - Hr(m));
@@ -1551,13 +1554,18 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
       dmscale = 1.0 + add / step;
       const double a0 = step * dmscale * dx * dx / (M_PI * fc.powder_radius * fc.powder_radius);
       const double ir2 = 1.0 / (fc.powder_radius * fc.powder_radius);
-      auto dm = fdm;
+      auto dm = fdm; auto skt_ = F.skt; auto ffl = F.fl;
       Kokkos::parallel_for("FlowFsPowder",
         Kokkos::MDRangePolicy<Kokkos::Rank<2>>({F.wlo[0], F.wlo[1]}, {F.whi[0], F.whi[1]}),
         KOKKOS_LAMBDA(const int i, const int j) {
           const double ddx = 0.5 * (fxlo_(i + o0) + fxhi_(i + o0)) - xl;
           const double ddy = 0.5 * (fylo_(j + o1) + fyhi_(j + o1)) - yl;
-          dm(i, j) = (KK_FLOAT) (a0 * Kokkos::exp(-(ddx * ddx + ddy * ddy) * ir2));
+          // a particle sticks to liquid, not to mush: fed where the column's
+          // surface cell is above its liquidus (else the cold rim of the
+          // pool piles up as a mush that never flows)
+          const int kt = skt_(i, j);
+          dm(i, j) = kt >= 0 && ffl(i, j, kt) >= (KK_FLOAT) 1.0
+            ? (KK_FLOAT) (a0 * Kokkos::exp(-(ddx * ddx + ddy * ddy) * ir2)) : (KK_FLOAT) 0.0;
         });
       fs_fed += step;
     }
@@ -1870,13 +1878,19 @@ void ConductionSolverKokkos::fs_surface_z()
   auto P_ = P; auto zs = zsf; auto zlo = fzlo, zhi = fzhi;
   const int bx = flow->nx, by = flow->ny, bz = flow->nz;
   const int o0 = fb0[0], o1 = fb0[1], o2 = fb0[2];
-  Kokkos::parallel_for("ConductionFsSurfaceZ",
+  int top = 0;
+  Kokkos::parallel_reduce("ConductionFsSurfaceZ",
     Kokkos::MDRangePolicy<Kokkos::Rank<2>>({0, 0}, {bx, by}),
-    KOKKOS_LAMBDA(const int i, const int j) {
+    KOKKOS_LAMBDA(const int i, const int j, int &mx) {
       int k = bz - 1;
       while (k >= 0 && (P_(i + o0, j + o1, k + o2) & 3) == GAS) k--;
       zs(i + o0, j + o1) = (KK_FLOAT) (k >= 0 ? zhi(k + o2) : zlo(o2));
-    });
+      if (k > mx) mx = k;
+    }, Kokkos::Max<int>(top));
+  // ponytail: metal thrown to the lattice's top faulted on the GPU (which
+  // kernel was not traced); stop before it gets there
+  if (top >= bz - 2)
+    error->one(FLERR, "conduction: flow free_surface: metal reached the top of the lattice (spatter, or the box is too low)");
 }
 
 /* ----------------------------------------------------------------------

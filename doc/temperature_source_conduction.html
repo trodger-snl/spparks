@@ -82,7 +82,7 @@ setup_temperature_source conduction card overrides keyword values ...
     m = <I>pool</I> (default), <I>flow</I> or <I>none</I>: the melt pool is well mixed,
     the melt-pool flow carries the composition (<I>flow</I> keyword), or it does not change
     f = <I>slab</I> (default) or <I>surface</I>: how new material enters under <I>mix flow</I> with <I>ded</I>
-  <I>flow</I> values = <I>lbm</I> <B>dsigma_dT s</B> <B>beta b</B> <B>viscosity nu</B> <B>mushy C</B> <B>u_ref u</B> <B>smagorinsky cs</B> <B>properties cards|constant</B> <B>sigma_table file</B>
+  <I>flow</I> values = <I>lbm</I> <B>dsigma_dT s</B> <B>beta b</B> <B>viscosity nu</B> <B>mushy C</B> <B>u_ref u</B> <B>smagorinsky cs</B> <B>properties cards|constant</B> <B>sigma_table file</B> <B>free_surface</B> <B>sigma g</B> <B>powder r R <B>T Tf</B></B> <B>fs_angle a</B> <B>fs_cap c</B> <B>fs_tau t</B> <B>fs_raw w</B>
     melt-pool flow (lattice Boltzmann) on the liquid cells of the lattice box
     s = surface tension's temperature coefficient (N/m/K, default -2.6e-4)
     b = volumetric thermal expansion of the liquid (1/K, default 1.7e-4)
@@ -92,6 +92,11 @@ setup_temperature_source conduction card overrides keyword values ...
     cs = Smagorinsky constant (default 0.17, 0 = off)
     properties cards = surface tension, density and viscosity of the liquid by composition, from the composition's cards (default constant: s, b, nu)
     file = table of surface tension over T and composition, with properties cards (default: from the cards)
+    free_surface = the liquid's surface moves (free-surface lattice Boltzmann; needs <I>ded</I>, one process)
+    g = surface tension at the liquidus (N/m, default 1.5), without properties cards
+    r = powder mass rate (kg/s) blown onto the surface, R = 1/e radius (m) of its footprint about the laser axis, Tf = its temperature (K, default T0)
+    a = contact angle (degrees) where the liquid meets lower solid (default 0)
+    c, t, w = stabilisers: capillary step factor (default 0.04), relaxation-time floor of surface cells (default 1), share of the unsmoothed surface height (default 1)
   <I>beam</I> value = <I>gaussian</I> or <I>square</I>
     gaussian = exp(-x^2/sx^2) per axis; square = uniform over |x| <= sx, |y| <= sy (a top-hat of side 2 sx by 2 sy; the depth profile is unchanged)
   <I>far_bc</I> value = <I>fixed</I> or <I>adiabatic</I>
@@ -413,6 +418,33 @@ are in docs/CONDUCTION_SOURCE.md in the source tree.
 </P>
 <HR>
 
+<P><B>Free surface.</B>  With <I>free_surface</I> the liquid's surface is not a
+fixed lid: each cell is metal, gas or an interface cell holding a
+fraction of liquid (the free-surface lattice Boltzmann method of Koerner
+et al. 2005 and Thuerey 2007), so the pool can rise, sink and make a
+bead.  The gas is a boundary at the pressure p_gas - sigma kappa, the
+curvature kappa from each column's metal height (sum of fill; no
+overhangs: a liquid surface is one height per column, liquid hanging
+over gas carries no surface force).  The Marangoni stress acts along the
+tilted surface.  Where liquid meets a lower solid column the surface
+is given the contact angle <I>fs_angle</I> (0 = wets it fully, 90 = meets it
+at its own height).  The thermal grid then runs to the top of the box,
+interface cells share the enthalpy of the full cell under them, the
+laser lands on each column's surface, and a cell that freezes partly
+full becomes a whole cell or gas (stacks of them settle first); that
+rounding and any liquid that leaves through the top of the box
+(spatter, reported in 1 ms bursts) go to a reservoir, repaid through
+the powder feed.  Air sites are <I>i2</I> = 5; no bead region is needed.
+With <I>powder</I>, liquid arrives at rate r in a Gaussian footprint of 1/e
+radius R about the laser axis, at Tf, but only on columns whose surface
+cell is fully liquid; the caught share (capture efficiency) is a result.
+Every 0.05 s and at the end of a pass a line reports powder fed and
+caught, droplets lost, the rounding and the reservoir.  The flow step
+is also bound by the shortest capillary wave (<I>fs_cap</I>).  Validation
+(316L, 20 um cells): a 700 W, 20 mm/s track with a 1.2 mm square
+<I>beam</I> gives a pool 1.2 mm wide and 0.50 mm deep against 1.22 and 0.49
+measured (Sattari et al. 2024).
+</P>
 <P><B>Restrictions:</B>
 </P>
 <P>Only <A HREF = "app_additive_texture.html">app_style additive/texture/kk</A> can use

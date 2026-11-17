@@ -659,7 +659,7 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
     if (cfg.flow.fs_tau >= 0.0) flow->fs_tau = cfg.flow.fs_tau;
     if (cfg.flow.fs_raw >= 0.0) flow->fs_raw = cfg.flow.fs_raw;
     if (cfg.flow.fs_cap > 0.0) flow->fs_cap = cfg.flow.fs_cap;
-    if (cfg.flow.fs_edge >= 0.0) flow->fs_edge = cfg.flow.fs_edge;
+    if (cfg.flow.fs_angle >= 0.0) flow->fs_angle = cfg.flow.fs_angle;
     flow->resize(bn[0], bn[1], bn[2], false);   // no cells held until there is a pool
     fg0[0] = lo[0] - glo[0] - fh[0]; fg0[1] = lo[1] - glo[1] - fh[2]; fg0[2] = 0;
     for (int d = 0; d < 6; d++) fW[d] = 0;

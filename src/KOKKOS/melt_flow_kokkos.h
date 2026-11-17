@@ -209,9 +209,13 @@ struct MeltFlow {
   // on the surface at 0.08 (spikes at 2-3 m/s by 110-250 ms); 0.04 was calm
   // to 200 ms, and half smoothing at 0.08 was not.
   double fs_cap = 0.04;
-  // surface(): how far a lower, dry neighbour column counts as its own height
-  // (0: mirrored, a right contact angle; 1: fully, the liquid does not wet it)
-  double fs_edge = 0.0;
+  // surface(): contact angle (degrees) where the liquid meets a lower, dry
+  // column: that column counts as the liquid's height less tan(angle) cells,
+  // not below its own (0: mirrored, the liquid wets it; 90: at its own
+  // height). As a share of the height difference (the earlier fs_edge) any
+  // value held a tall bead's edge too stiffly: at 0.5 a 316L bead 16 cells
+  // high balled and the pool broke away from it.
+  double fs_angle = 0.0;
   // A floor on the relaxation time of interface cells. At a liquid metal's
   // viscosity (tau about 0.51) they are unstable under a Marangoni force:
   // the pool of check 21 breaks up at a third of its forcing with no floor,
@@ -786,7 +790,7 @@ struct MeltFlow {
     const bool hp = props;
     auto sg_ = sig; auto dn_ = dens;
     const R mar = R(p.marangoni), sig0 = R(p.sigma), Tref = R(p.Tref), rawp = R(fs_raw);
-    const R edge = R(fs_edge);
+    const R edge = R(fs_angle >= 89.99 ? 1e30 : std::tan(fs_angle * M_PI / 180.0));
     const int z0 = wlo[2], z1 = whi[2];
     // the columns held, and those of them the step needs (one more around)
     int a[2], b[2], c[2], d[2];
@@ -848,11 +852,12 @@ struct MeltFlow {
           int ii, jj; col(di, dj, ii, jj);
           if (kt_(ii, jj) >= 0) return h_(ii, jj);
           // Solid standing lower than this liquid (the frozen rim under a
-          // bead) counts as its own height, by the share fs_edge: the edge
-          // of the liquid is then a hump, at a pressure that sends liquid
-          // back in. Mirrored (fs_edge 0) nothing held a bead's edge, and
-          // it crept out over the rim and hung in the air beside the pool.
-          if (kt_(ii, jj) == -1 && h_(ii, jj) < h_(i, j)) return h_(i, j) + edge * (h_(ii, jj) - h_(i, j));
+          // bead): the surface meets it at the contact angle, tan(fs_angle)
+          // cells down, not below the solid. Mirrored (fs_angle 0) nothing
+          // held a bead's edge, and it crept out over the rim and hung in
+          // the air beside the pool.
+          if (kt_(ii, jj) == -1 && h_(ii, jj) < h_(i, j))
+            return h_(i, j) - edge > h_(ii, jj) ? h_(i, j) - edge : h_(ii, jj);
           return h_(i, j);
         };
         auto H = [&](int di, int dj) -> R {
@@ -956,9 +961,11 @@ struct MeltFlow {
         if (t == FLUID || t == WALL) held = true;
         if (t == INTERFACE && ms_(ii, jj, kk) > (R(1) + kap) * (R(1) + rho_(ii, jj, kk))) nf = true;
       }
-      if (m > (R(1) + kap) * r) mk(i, j, k) = FILL;
-      // liquid thrown to the block's top (spatter) leaves: it empties there
-      else if (!nf && (!held || m < -kap * r || (open && k >= ktop))) mk(i, j, k) = EMPTY;
+      // liquid thrown to the block's top (spatter) leaves: it empties there,
+      // filling or not (a filling cell there let a whole droplet through)
+      if (open && k >= ktop) mk(i, j, k) = EMPTY;
+      else if (m > (R(1) + kap) * r) mk(i, j, k) = FILL;
+      else if (!nf && (!held || m < -kap * r)) mk(i, j, k) = EMPTY;
     });
     // 2. the new types, in type2. A gas cell that becomes interface starts
     //    at the equilibrium of its liquid neighbours' mean density and

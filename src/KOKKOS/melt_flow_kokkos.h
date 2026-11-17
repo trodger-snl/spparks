@@ -882,6 +882,7 @@ struct MeltFlow {
           return h_(i, j);
         };
         auto H = [&](int di, int dj) -> R {
+          if (rawp == R(1)) return Hr(di, dj);     // no smoothing (the default): 9 lookups, not 81
           const R sm = R(0.25) * Hr(di, dj)
                + R(0.125) * (Hr(di - 1, dj) + Hr(di + 1, dj) + Hr(di, dj - 1) + Hr(di, dj + 1))
                + R(0.0625) * (Hr(di - 1, dj - 1) + Hr(di + 1, dj - 1) + Hr(di - 1, dj + 1) + Hr(di + 1, dj + 1));

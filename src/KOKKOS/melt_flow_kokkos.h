@@ -245,6 +245,9 @@ struct MeltFlow {
   // surface (lattice units; e.g. recoil), less the ambient
   Kokkos::View<R**> hcol, scol, slcol, mcol, drg, sax, say, saz, pgas;
   Kokkos::View<int**> skt, skb;
+  // fs: per column, the mass inject() and convert() took and lost since
+  // tallies() (with dev: no reduction to the host per flow step)
+  Kokkos::View<double**> sgot, slost;
   int wlo[3] = {0, 0, 0}, whi[3] = {0, 0, 0};   // the cells the fields hold
 
   // A block of nx_ x ny_ x nz_ cells. all: the fields hold every cell;
@@ -279,6 +282,7 @@ struct MeltFlow {
       for (auto v : {&hcol, &scol, &slcol, &mcol, &drg, &sax, &say, &saz, &pgas})
         *v = Kokkos::View<R**>("flow_col", nx, ny);
       skt = Kokkos::View<int**>("flow_skt", nx, ny); skb = Kokkos::View<int**>("flow_skb", nx, ny);
+      sgot = Kokkos::View<double**>("flow_sgot", nx, ny); slost = Kokkos::View<double**>("flow_slost", nx, ny);
       Kokkos::deep_copy(skt, -1);
     }
     Kokkos::deep_copy(fl.v, R(1));
@@ -632,13 +636,11 @@ struct MeltFlow {
     p.Tref = ph.Tref;
     p.darcy = ph.darcy * dt;
     if (!props) p.sigma = ph.sig_rho * dt * dt / (ph.dx * ph.dx * ph.dx);
-    // A fence per step: inside spparks on HIP (gfx1151) host memory grows
-    // during long runs; fenced plain launches grow least (measured, 3-layer
-    // pillar: 1.1 GB; unfenced 1.8; every step a reduction 2.0; no flow 0.6).
+    // No fence per step: one was added when host memory grew on HIP with
+    // the launches, which was Kokkos' constant-memory launch path (LightMD).
     for (int s = 0; s < n; s++) {
       if (fs) surface(lo, hi);
       step(lo, hi, fs || s == 0);
-      Kokkos::fence();
       if (halo) halo();
       if (fs) { if (post) post(); else convert(lo, hi); }
     }
@@ -921,15 +923,12 @@ struct MeltFlow {
   // an empty one (made when a neighbour filled) was built over and left as
   // a void in the liquid: a two-cell foam in the pool's top layers. The carried fields mix with the values qf
   // and q2f hold for that cell. Returns the mass taken; what falls on a
-  // column with no liquid surface is not.
+  // column with no liquid surface is not (with dev: kept for tallies()).
   double inject(const int lo[3], const int hi[3], Kokkos::View<R**> dm, R scale, W3 q = W3(), W3 qf = W3(),
-                W3 q2 = W3(), W3 q2f = W3()) {
+                W3 q2 = W3(), W3 q2f = W3(), bool dev = false) {
     auto ty = type; auto ms_ = cmass; auto kt_ = skt; auto kb_ = skb;
     const bool one = q.v.extent(0) > 0, two = q2.v.extent(0) > 0;
-    double got = 0.0;
-    Kokkos::parallel_reduce("FlowFsInject",
-      LightMD<2>({lo[0], lo[1]}, {hi[0], hi[1]}),
-      KOKKOS_LAMBDA(const int i, const int j, double &g) {
+    auto body = KOKKOS_LAMBDA(const int i, const int j, double &g) {
         if (kt_(i, j) < 0) return;
         int k = kb_(i, j);
         if (ty(i, j, k) != INTERFACE) k++;      // kb is the fluid cell under the stack
@@ -942,8 +941,37 @@ struct MeltFlow {
         if (two) q2(i, j, k) += w * (q2f(i, j, k) - q2(i, j, k));
         ms_(i, j, k) = mn;
         g += d;
-      }, got);
-    return got;
+      };
+    return run_sum(LightMD<2>({lo[0], lo[1]}, {hi[0], hi[1]}), "FlowFsInject", dev, sgot, body);
+  }
+
+  // A sum over a range, reduced to the host (dev false), or added per
+  // column to acc (one value per column and call: a 2-D range writes its
+  // own column; a 3-D one adds atomically, nonzero values only).
+  template <class P, class B>
+  double run_sum(const P &pol, const char *nm, bool dev, Kokkos::View<double**> acc, const B &body) {
+    if (!dev) { double s = 0.0; Kokkos::parallel_reduce(nm, pol, body, s); return s; }
+    if constexpr (P::rank == 2)
+      Kokkos::parallel_for(nm, pol, KOKKOS_LAMBDA(const int i, const int j) {
+        double v = 0.0; body(i, j, v); acc(i, j) += v;
+      });
+    else
+      Kokkos::parallel_for(nm, pol, KOKKOS_LAMBDA(const int i, const int j, const int k) {
+        double v = 0.0; body(i, j, k, v);
+        if (v != 0.0) Kokkos::atomic_add(&acc(i, j), v);
+      });
+    return 0.0;
+  }
+
+  // what inject() took and convert() lost (dev) since the last call
+  void tallies(double &got, double &lost) {
+    auto g = sgot; auto l = slost;
+    double a = 0.0, b = 0.0;
+    Kokkos::parallel_reduce("FlowFsTallies", LightMD<2>({0, 0}, {nx, ny}),
+      KOKKOS_LAMBDA(const int i, const int j, double &x, double &y) {
+        x += g(i, j); y += l(i, j); g(i, j) = 0.0; l(i, j) = 0.0;
+      }, a, b);
+    got = a; lost = b;
   }
 
   // After a step (and melt_advect): filled interface cells become FLUID,
@@ -951,9 +979,10 @@ struct MeltFlow {
   // the interface cells around, with its share of the carried fields q, q2
   // (may be empty). [lo, hi) is step()'s window; cells one beyond it can
   // become INTERFACE, so the next window must hold them. Returns the mass
-  // that found no interface cell to go to (0 unless a cell is isolated).
+  // that found no interface cell to go to (0 unless a cell is isolated;
+  // with dev it is kept for tallies()).
   double convert() { const int lo[3] = {0, 0, 0}, hi[3] = {nx, ny, nz}; return convert(lo, hi); }
-  double convert(const int lo[3], const int hi[3], W3 q = W3(), W3 q2 = W3()) {
+  double convert(const int lo[3], const int hi[3], W3 q = W3(), W3 q2 = W3(), bool dev = false) {
     auto f_ = f; auto ty = type; auto t2 = type2; auto mk = mark; auto ms_ = cmass; auto ep_ = eps;
     auto rho_ = rho; auto ux_ = ux; auto uy_ = uy; auto uz_ = uz; auto px_ = px; auto py_ = py; auto pz_ = pz;
     auto fl_ = fl; auto flux_ = flux;
@@ -1037,8 +1066,7 @@ struct MeltFlow {
     // 3. the excess: a converted cell's mass beyond its new state, in equal
     //    shares to the interface cells around it. Only cells that stay or
     //    become interface are written, only converted ones read: no race.
-    double lost = 0.0;
-    Kokkos::parallel_reduce("FlowFsExcess", range, KOKKOS_LAMBDA(const int i, const int j, const int k, double &ls) {
+    auto body = KOKKOS_LAMBDA(const int i, const int j, const int k, double &ls) {
       const int t = ty(i, j, k), nt = t2(i, j, k);
       // a converted cell's excess and the number of cells that take it
       auto excess = [&](int ci, int cj, int ck, int &cnt) -> R {
@@ -1078,8 +1106,8 @@ struct MeltFlow {
       if (one && qb >= qa) q(i, j, k) = mix(mq, qa, qb);
       if (two && q2b >= q2a) q2(i, j, k) = mix(mq2, q2a, q2b);
       ms_(i, j, k) = m; ep_(i, j, k) = m / r;
-    }, lost);
-    return lost;
+    };
+    return run_sum(range, "FlowFsExcess", dev, slost, body);
   }
 };
 

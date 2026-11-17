@@ -1630,12 +1630,13 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
     F.post = [&, feeding]() {
       melt_advect(F, fq, ftmp, comp ? fXw : W3(), fX2, w, w + 3, true);
       if (feeding)
-        fs_got_now += F.inject(w, w + 3, fdm, (KK_FLOAT) (F.dt / h), fq, W3(fqfed), comp ? fXw : W3(), W3(fXfed));
-      fs_lost_now += F.convert(w, w + 3, fq, comp ? fXw : W3());
+        F.inject(w, w + 3, fdm, (KK_FLOAT) (F.dt / h), fq, W3(fqfed), comp ? fXw : W3(), W3(fXfed), true);
+      F.convert(w, w + 3, fq, comp ? fXw : W3(), true);
     };
   }
   const int n = F.run(h, w, w + 3);
   F.post = nullptr;
+  if (fsm) F.tallies(fs_got_now, fs_lost_now);   // one read per thermal step
   MPI_Allreduce(MPI_IN_PLACE, &F.umax, 1, MPI_DOUBLE, MPI_MAX, world);
   if (n < 0) {
     char msg[200];

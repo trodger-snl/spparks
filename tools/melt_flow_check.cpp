@@ -988,9 +988,11 @@ void fs_pool()
   const double v0 = m.total_mass();
   double lat_max = 0.0, u_late = 0.0, lost = 0.0;
   int bad = 0, nmax = 0;
-  m.post = [&]() { lost += m.convert(lo, hi); };
+  // the lost mass kept on the device, read once per run() (as the conduction source does)
+  m.post = [&]() { m.convert(lo, hi, typename MeltFlow<R>::W3(), typename MeltFlow<R>::W3(), true); };
   for (int s = 0; s < 4000 && !bad; s++) {
     const int n = m.run(5e-6, lo, hi);
+    { double g, l; m.tallies(g, l); lost += l; }
     if (n < 0 || !std::isfinite(m.umax)) { bad = 1; break; }
     nmax = std::max(nmax, n);
     if (s >= 200) lat_max = std::max(lat_max, m.umax * m.dt / m.ph.dx);
@@ -1060,9 +1062,13 @@ void fs_inject()
   for (int s = 0; s < 6000; s++) {
     m.surface(lo, hi); m.step();
     melt_advect(m, q, tmp, lo, hi);
-    if (s < 3000) fed += m.inject(lo, hi, dm, R(1), q, qfv);
-    lost += m.convert(lo, hi, q);
+    // the sums kept on the device (as the conduction source runs it)
+    using W3 = typename MeltFlow<R>::W3;
+    if (s < 3000) m.inject(lo, hi, dm, R(1), q, qfv, W3(), W3(), true);
+    m.convert(lo, hi, q, W3(), true);
+    if (s % 100 == 99) { double g, l; m.tallies(g, l); fed += g; lost += l; }
   }
+  { double g, l; m.tallies(g, l); fed += g; lost += l; }
   const auto h = fs_height(m);
   double hlo = 1e300, hhi = -1e300;
   for (int i = 0; i < nx; i++) { hlo = std::min(hlo, h[i]); hhi = std::max(hhi, h[i]); }

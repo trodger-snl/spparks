@@ -630,6 +630,11 @@ struct MeltFlow {
   } ph;
   double dt = 0.0, u_cap = 0.0, umax = 0.0;   // step (s), cap and last max speed (m/s)
   std::function<void()> halo;   // several ranks: brings the halo cells' f up to date
+  // fs, several ranks: called inside convert() after the marks (0) and the
+  // new types (1) are made, to bring the halo's up to date. own: this
+  // rank's cells; the mass that convert() loses is counted there only.
+  std::function<void(int)> fs_halo;
+  int own_lo[3] = {0, 0, 0}, own_hi[3] = {1 << 30, 1 << 30, 1 << 30};
   // fs: called after each step in place of convert() (the caller carries
   // its fields and then converts)
   std::function<void()> post;
@@ -661,7 +666,7 @@ struct MeltFlow {
     for (int s = 0; s < n; s++) {
       if (fs) surface(lo, hi);
       step(lo, hi, fs || s == 0);
-      if (halo) halo();
+      if (halo && !post) halo();     // fs: post() brings f over once the cells are converted
       if (fs) { if (post) post(); else convert(lo, hi); }
     }
     // the speed is measured every 16th call (a reduction; it can at most
@@ -1049,6 +1054,7 @@ struct MeltFlow {
       else if (m > (R(1) + kap) * r) mk(i, j, k) = FILL;
       else if (!nf && (!held || m < -kap * r)) mk(i, j, k) = EMPTY;
     });
+    if (fs_halo) fs_halo(0);
     // 2. the new types, in type2. A gas cell that becomes interface starts
     //    at the equilibrium of its liquid neighbours' mean density and
     //    velocity; an emptied cell is cleared.
@@ -1094,6 +1100,8 @@ struct MeltFlow {
       }
       t2(i, j, k) = (unsigned char) nt;
     });
+    if (fs_halo) fs_halo(1);
+    const int ol0 = own_lo[0], ol1 = own_lo[1], ol2 = own_lo[2], oh0 = own_hi[0], oh1 = own_hi[1], oh2 = own_hi[2];
     // 3. the excess: a converted cell's mass beyond its new state, in equal
     //    shares to the interface cells around it. Only cells that stay or
     //    become interface are written, only converted ones read: no race.
@@ -1108,7 +1116,7 @@ struct MeltFlow {
         }
         return ms_(ci, cj, ck) - (mk(ci, cj, ck) == FILL ? R(1) + rho_(ci, cj, ck) : R(0));
       };
-      if (mk(i, j, k)) {
+      if (mk(i, j, k) && i >= ol0 && i < oh0 && j >= ol1 && j < oh1 && k >= ol2 && k < oh2) {
         int cnt;
         const R e = excess(i, j, k, cnt);
         if (cnt == 0) ls += e;

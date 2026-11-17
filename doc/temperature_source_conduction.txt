@@ -444,7 +444,13 @@ caught, droplets lost, the rounding and the reservoir.  The flow step
 is also bound by the shortest capillary wave ({fs_cap}).  Validation
 (316L, 20 um cells): a 700 W, 20 mm/s track with a 1.2 mm square
 {beam} gives a pool 1.2 mm wide and 0.50 mm deep against 1.22 and 0.49
-measured (Sattari et al. 2024). 
+measured (Sattari et al. 2024).  Several ranks (split in x and y) take
+the pool's box over all ranks within their own cells and exchange the
+surface's fields two cells deep at each flow step; a scaled powder
+track agrees with one rank on 2 and 4 ranks (capture within 0.1 %,
+metal balance within 0.05 cell), not bit for bit (the flow is chaotic).
+The exchanges are many small ones per flow step, so a small pool gains
+nothing from more ranks.
 
 [Restrictions:]
 

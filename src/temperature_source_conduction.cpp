@@ -435,9 +435,6 @@ void ConductionTemperatureSource::setup_temperature_source(
     }
   }
   if (cfg.flow.fs) {
-    int np;
-    MPI_Comm_size(world, &np);
-    if (np > 1) error->all(FLERR,"setup_temperature_source conduction: flow free_surface runs on one rank");
     if (!cfg.ded) error->all(FLERR,"setup_temperature_source conduction: flow free_surface needs ded");
     if (cfg.comp_feed_surface)
       error->all(FLERR,"setup_temperature_source conduction: flow free_surface feeds by powder, not feed surface");

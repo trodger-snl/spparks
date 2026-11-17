@@ -482,7 +482,14 @@ flow sub-step:
   - no seams in the dumps.
 - `melt_flow_check` passes.
 
-The HIP check is running. On CPU the extra ranks are slower (114 s → 189–234 s).
+- HIP, FP64, 2026-11-17:
+  - `melt_flow_check` passes;
+  - one rank is bit for bit the code before (100 ms deck: same columns, 131 s);
+  - 1, 1×2 and 2×2 ranks: caught 2468.95 / 2466.44 / 2467.00 cells, enthalpy
+    within 6e-6 relative, peak T 2348 / 2367 / 2347 K.
+
+Extra ranks sharing one GPU or CPU are slower (HIP 38 s → 190 / 417 s; OpenMP
+114 s → 189–234 s): more launches and host-staged exchanges per sub-step.
 
 `ponytail:` about 15 exchanges per flow sub-step. Batching them into one
 message per neighbour is the next lever if this runs at scale.

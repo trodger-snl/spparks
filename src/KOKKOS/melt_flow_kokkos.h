@@ -354,6 +354,7 @@ struct MeltFlow {
     const bool hp = props, lazy_ = lazy, fs_ = fs;
     auto ms_ = cmass; auto ep_ = eps;
     auto dg_ = drg; auto sax_ = sax; auto say_ = say; auto saz_ = saz; auto kt_ = skt; auto kb_ = skb;
+    auto sl_ = slcol;
     auto S_ = hp ? sig : T; auto dn_ = dens; auto vs_ = visc;
     const R nu3 = R(3.0 * p.nu), tauif = R(fs_tau);
     Kokkos::parallel_for("FlowStep",
@@ -401,7 +402,16 @@ struct MeltFlow {
         // fs: what arrives from the gas is the gas's equilibrium at this
         // cell's velocity, less what left toward it (the pressure boundary)
         const R ug = px_(i, j, k), vg = py_(i, j, k), wg = pz_(i, j, k);
-        const R usg = ug * ug + vg * vg + wg * wg, drg = fs_ ? dg_(i, j) : R(0);
+        // An interface cell under its column's surface (a bubble's wall, or
+        // the underside of an overhang) is held a one-cell bubble's Laplace
+        // pressure, 2 sigma / r with r one cell, below the liquid: such a void
+        // closes, as a bubble that small does. At the surface's own pressure
+        // it neither closed nor grew; bubbles caught in a large 316L pool
+        // were stretched and merged until a slot opened through the pool and
+        // it collapsed (Sattari DED set, 380 ms).
+        R drg = fs_ ? dg_(i, j) : R(0);
+        if (fs_ && ifc && kt_(i, j) >= 0 && k < kb_(i, j)) drg -= R(6) * sl_(i, j);
+        const R usg = ug * ug + vg * vg + wg * wg;
         auto rec = [&](int q) -> R {
           int cx, cy, cz; vel(q, cx, cy, cz);
           const R cu = cx * ug + cy * vg + cz * wg;

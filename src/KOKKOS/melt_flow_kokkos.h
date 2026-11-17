@@ -22,6 +22,14 @@
 #include <type_traits>
 #include <utility>
 
+// HIP launches a kernel whose lambda is 512 bytes or more (most here: they
+// capture many Views) through constant memory, an async copy and an event
+// per launch, and the ROCm runtime (7.1.1, gfx1151) keeps host memory for
+// each: a free-surface track grew 12 MB/s. A light-weight policy passes the
+// lambda as a kernel argument (up to 4 KB); other backends ignore the hint.
+template <int N>
+using LightMD = Kokkos::MDRangePolicy<Kokkos::Rank<N>, Kokkos::Experimental::WorkItemProperty::HintLightWeight_t>;
+
 namespace SPPARKS_NS {
 
 /* ----------------------------------------------------------------------
@@ -149,7 +157,7 @@ struct FlowWin {
     nw.o0 = lo[0]; nw.o1 = lo[1]; nw.o2 = lo[2];
     if (both)
       Kokkos::parallel_for("FlowWinMove",
-        Kokkos::MDRangePolicy<Kokkos::Rank<3>>({a[0], a[1], a[2]}, {b[0], b[1], b[2]}),
+        LightMD<3>({a[0], a[1], a[2]}, {b[0], b[1], b[2]}),
         KOKKOS_LAMBDA(const int i, const int j, const int k) {
           if constexpr (V::rank() == 4) { for (int q = 0; q < nc; q++) nw(i, j, k, q) = old(i, j, k, q); }
           else nw(i, j, k) = old(i, j, k);
@@ -315,7 +323,7 @@ struct MeltFlow {
   void init(const F fnc) {
     auto f_ = f;
     Kokkos::parallel_for("FlowInit",
-      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({0, 0, 0}, {nx, ny, nz}),
+      LightMD<3>({0, 0, 0}, {nx, ny, nz}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
         R dr = 0, u = 0, v = 0, w = 0;
         fnc(i, j, k, dr, u, v, w);
@@ -349,7 +357,7 @@ struct MeltFlow {
     auto S_ = hp ? sig : T; auto dn_ = dens; auto vs_ = visc;
     const R nu3 = R(3.0 * p.nu), tauif = R(fs_tau);
     Kokkos::parallel_for("FlowStep",
-      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
+      LightMD<3>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
         if (!liq(ty(i, j, k))) {
           if (lazy_ && fl_(i, j, k) >= R(0)) return;
@@ -553,7 +561,7 @@ struct MeltFlow {
     auto px_ = px; auto py_ = py; auto pz_ = pz;
     R m2 = 0;
     Kokkos::parallel_reduce("FlowMax",
-      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
+      LightMD<3>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k, R &mx) {
         R v = px_(i, j, k) * px_(i, j, k) + py_(i, j, k) * py_(i, j, k) + pz_(i, j, k) * pz_(i, j, k);
         if (bad(px_(i, j, k)) || bad(py_(i, j, k)) || bad(pz_(i, j, k))) v = R(1e12);
@@ -644,7 +652,7 @@ struct MeltFlow {
     auto ux_ = ux; auto uy_ = uy; auto uz_ = uz; auto px_ = px; auto py_ = py; auto pz_ = pz;
     const R s = R(s_);
     Kokkos::parallel_for("FlowRescale",
-      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
+      LightMD<3>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
         if (!liq(ty(i, j, k))) return;
         R dr = 0, mx = 0, my = 0, mz = 0;
@@ -675,7 +683,7 @@ struct MeltFlow {
     auto fl_ = flux;
     const R h[3] = {R(0.5 * u), R(0.5 * v), R(0.5 * w)};
     Kokkos::parallel_for("FlowSetFlux",
-      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({0, 0, 0}, {nx, ny, nz}),
+      LightMD<3>({0, 0, 0}, {nx, ny, nz}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
         for (int g = 0; g < 6; g++) fl_(i, j, k, g) = (g & 1) ? h[g / 2] : -h[g / 2];
       });
@@ -686,7 +694,7 @@ struct MeltFlow {
     auto f_ = f; auto ty = type;
     double m = 0.0;
     Kokkos::parallel_reduce("FlowMass",
-      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({0, 0, 0}, {nx, ny, nz}),
+      LightMD<3>({0, 0, 0}, {nx, ny, nz}),
       KOKKOS_LAMBDA(const int i, const int j, const int k, double &s) {
         if (ty(i, j, k) != FLUID) return;
         for (int q = 0; q < 19; q++) s += f_(i, j, k, q);
@@ -703,7 +711,7 @@ struct MeltFlow {
     auto f_ = f; auto ty = type; auto ms_ = cmass;
     double m = 0.0;
     Kokkos::parallel_reduce("FlowTotalMass",
-      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({wlo[0], wlo[1], wlo[2]}, {whi[0], whi[1], whi[2]}),
+      LightMD<3>({wlo[0], wlo[1], wlo[2]}, {whi[0], whi[1], whi[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k, double &s) {
         if (ty(i, j, k) == INTERFACE) s += ms_(i, j, k);
         if (ty(i, j, k) != FLUID) return;
@@ -751,7 +759,7 @@ struct MeltFlow {
     grown(lo, hi, a, b);
     // only FLUID cells are written and only GAS cells decide: no race
     Kokkos::parallel_for("FlowFsRepair",
-      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({a[0], a[1], a[2]}, {b[0], b[1], b[2]}),
+      LightMD<3>({a[0], a[1], a[2]}, {b[0], b[1], b[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
         const int t = ty(i, j, k);
         if (t == INTERFACE) return;
@@ -807,7 +815,7 @@ struct MeltFlow {
     const bool p0 = per[0], p1 = per[1];
     (void) nn;
     Kokkos::parallel_for("FlowFsColumns",
-      Kokkos::MDRangePolicy<Kokkos::Rank<2>>({a[0], a[1]}, {b[0], b[1]}),
+      LightMD<2>({a[0], a[1]}, {b[0], b[1]}),
       KOKKOS_LAMBDA(const int i, const int j) {
         int k = z1 - 1;
         while (k >= z0 && ty(i, j, k) == GAS) k--;
@@ -830,7 +838,7 @@ struct MeltFlow {
         M_(i, j) = (M > R(0.5) ? M : R(0.5)) * (hp ? R(1) + dn_(i, j, kt) : R(1));
       });
     Kokkos::parallel_for("FlowFsSurface",
-      Kokkos::MDRangePolicy<Kokkos::Rank<2>>({c[0], c[1]}, {d[0], d[1]}),
+      LightMD<2>({c[0], c[1]}, {d[0], d[1]}),
       KOKKOS_LAMBDA(const int i, const int j) {
         dg_(i, j) = sax_(i, j) = say_(i, j) = saz_(i, j) = R(0);
         if (kt_(i, j) < 0) return;
@@ -909,7 +917,7 @@ struct MeltFlow {
     const bool one = q.v.extent(0) > 0, two = q2.v.extent(0) > 0;
     double got = 0.0;
     Kokkos::parallel_reduce("FlowFsInject",
-      Kokkos::MDRangePolicy<Kokkos::Rank<2>>({lo[0], lo[1]}, {hi[0], hi[1]}),
+      LightMD<2>({lo[0], lo[1]}, {hi[0], hi[1]}),
       KOKKOS_LAMBDA(const int i, const int j, double &g) {
         if (kt_(i, j) < 0) return;
         int k = kb_(i, j);
@@ -944,7 +952,7 @@ struct MeltFlow {
     enum { FILL = 1, EMPTY = 2 };
     int a[3], b[3];
     grown(lo, hi, a, b);
-    const Kokkos::MDRangePolicy<Kokkos::Rank<3>> range({a[0], a[1], a[2]}, {b[0], b[1], b[2]});
+    const LightMD<3> range({a[0], a[1], a[2]}, {b[0], b[1], b[2]});
     // 1. mark. A cell does not empty beside one that fills (the filled
     //    cell would touch gas). Interface cells with neither fluid nor wall
     //    beside them are a droplet too small for the grid: nothing would
@@ -1116,7 +1124,7 @@ void melt_advect(const MeltFlow<R> &m, FlowField<R> q, FlowField<R> tmp,
     auto src2 = (d & 1) ? tmp2 : q2, dst2 = (d & 1) ? q2 : tmp2;
     if (d == 3) {
       Kokkos::parallel_for("FlowAdvectCopy",
-        Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
+        LightMD<3>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
         KOKKOS_LAMBDA(const int i, const int j, const int k) {
           dst(i, j, k) = src(i, j, k);
           if (two) dst2(i, j, k) = src2(i, j, k);
@@ -1125,7 +1133,7 @@ void melt_advect(const MeltFlow<R> &m, FlowField<R> q, FlowField<R> tmp,
     }
     if (halo) halo(d, src, src2);
     Kokkos::parallel_for("FlowAdvect",
-      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
+      LightMD<3>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
         if (!MeltFlow<R>::liq(ty(i, j, k))) {
           dst(i, j, k) = src(i, j, k);

@@ -860,7 +860,7 @@ void ConductionSolverKokkos::carry_field(Kokkos::View<KK_FLOAT***> Told,
   const double T0 = Htab_T0, dTt = Htab_dT;
   const int n = (int) tab.extent(1);
   Kokkos::parallel_for("ConductionCarry",
-    Kokkos::MDRangePolicy<Kokkos::Rank<3>>({0, 0, 0},
+    LightMD<3>({0, 0, 0},
       {(long) T.extent(0), (long) T.extent(1), (long) nzo}),
     KOKKOS_LAMBDA(const int i, const int j, const int k) {
       const double v = Told(i, j, k);
@@ -885,7 +885,7 @@ void ConductionSolverKokkos::reset_field(double Tr)
     Kokkos::deep_copy(Hr, hr);
     auto H_ = H; auto M_ = M;
     Kokkos::parallel_for("ConductionResetH",
-      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({0, 0, 0}, {(int) H.extent(0), (int) H.extent(1), nz}),
+      LightMD<3>({0, 0, 0}, {(int) H.extent(0), (int) H.extent(1), nz}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) { H_(i, j, k) = Hr(M_(i, j, k)); });
   }
   Kokkos::deep_copy(T, Tr);
@@ -1414,7 +1414,7 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
       const double tsm0 = ts_min;
       double dres = 0.0, dcap = 0.0, dset = 0.0;
       Kokkos::parallel_reduce("FlowFsTypes",
-        Kokkos::MDRangePolicy<Kokkos::Rank<3>>({fl0[0], fl0[1], fl0[2]}, {fl1[0], fl1[1], fl1[2]}),
+        LightMD<3>({fl0[0], fl0[1], fl0[2]}, {fl1[0], fl1[1], fl1[2]}),
         KOKKOS_LAMBDA(const int i, const int j, const int k, double &rs, double &rc, double &rt) {
           using MF = MeltFlow<KK_FLOAT>;
           auto held = [&](int a, int b, int c) {
@@ -1531,7 +1531,7 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
     const double sig0 = props ? pr.sig[0] : 0.0;
     auto t2f = F.type2;
     Kokkos::parallel_for("FlowFill",
-      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({fl0[0], fl0[1], fl0[2]}, {fl1[0], fl1[1], fl1[2]}),
+      LightMD<3>({fl0[0], fl0[1], fl0[2]}, {fl1[0], fl1[1], fl1[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
         const unsigned char p = P_(i + o0, j + o1, k + o2);
         const int m = M_(i + o0, j + o1, k + o2);
@@ -1613,7 +1613,7 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
       const double ir2 = 1.0 / (fc.powder_radius * fc.powder_radius);
       auto dm = fdm; auto skt_ = F.skt; auto ffl = F.fl;
       Kokkos::parallel_for("FlowFsPowder",
-        Kokkos::MDRangePolicy<Kokkos::Rank<2>>({F.wlo[0], F.wlo[1]}, {F.whi[0], F.whi[1]}),
+        LightMD<2>({F.wlo[0], F.wlo[1]}, {F.whi[0], F.whi[1]}),
         KOKKOS_LAMBDA(const int i, const int j) {
           const double ddx = 0.5 * (fxlo_(i + o0) + fxhi_(i + o0)) - xl;
           const double ddy = 0.5 * (fylo_(j + o1) + fyhi_(j + o1)) - yl;
@@ -1677,7 +1677,7 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
     }
     const int z0 = F.wlo[2], z1 = F.whi[2];
     Kokkos::parallel_for("FlowFsOut",
-      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({a[0], a[1], a[2]}, {b[0], b[1], b[2]}),
+      LightMD<3>({a[0], a[1], a[2]}, {b[0], b[1], b[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
         using MF = MeltFlow<KK_FLOAT>;
         const int li = i + o0, lj = j + o1, lk = k + o2;
@@ -1785,7 +1785,7 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
       X(i, j, k) = (KK_FLOAT) (x + d);
       return d;
     };
-  const Kokkos::MDRangePolicy<Kokkos::Rank<3>> win({w[0], w[1], w[2]}, {w[3], w[4], w[5]});
+  const LightMD<3> win({w[0], w[1], w[2]}, {w[3], w[4], w[5]});
   if (share == 0.0)
     Kokkos::parallel_for("FlowOut", win, KOKKOS_LAMBDA(const int i, const int j, const int k) { out(i, j, k); });
   else {
@@ -1934,7 +1934,7 @@ void ConductionSolverKokkos::fs_report()
   const int nxo_ = nxo, nyo_ = nyo, nz_ = nz;
   double E = 0.0, V = 0.0;
   Kokkos::parallel_reduce("ConductionFsEnergy",
-    Kokkos::MDRangePolicy<Kokkos::Rank<3>>({1, 1, 0}, {nxo_ + 1, nyo_ + 1, nz_}),
+    LightMD<3>({1, 1, 0}, {nxo_ + 1, nyo_ + 1, nz_}),
     KOKKOS_LAMBDA(const int i, const int j, const int k, double &e, double &v) {
       if ((P_(i, j, k) & 3) == GAS) return;
       const double vol = wx_(i) * wy_(j) * wz_(k);
@@ -1947,7 +1947,7 @@ void ConductionSolverKokkos::fs_report()
     const double vc = dx * dx * dx;
     double Ei = 0.0, Vi = 0.0;
     Kokkos::parallel_reduce("ConductionFsEnergyI",
-      Kokkos::MDRangePolicy<Kokkos::Rank<3>>({flow->wlo[0], flow->wlo[1], flow->wlo[2]},
+      LightMD<3>({flow->wlo[0], flow->wlo[1], flow->wlo[2]},
                                              {flow->whi[0], flow->whi[1], flow->whi[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k, double &e, double &v) {
         if (ty(i, j, k) != MeltFlow<KK_FLOAT>::INTERFACE) return;
@@ -1973,7 +1973,7 @@ void ConductionSolverKokkos::fs_surface_z()
   const int o0 = fb0[0], o1 = fb0[1], o2 = fb0[2];
   int top = 0;
   Kokkos::parallel_reduce("ConductionFsSurfaceZ",
-    Kokkos::MDRangePolicy<Kokkos::Rank<2>>({0, 0}, {bx, by}),
+    LightMD<2>({0, 0}, {bx, by}),
     KOKKOS_LAMBDA(const int i, const int j, int &mx) {
       int k = bz - 1;
       while (k >= 0 && (P_(i + o0, j + o1, k + o2) & 3) == GAS) k--;
@@ -2032,7 +2032,7 @@ double ConductionSolverKokkos::path_source(double t0, double t1)
   auto fxlo_ = fxlo, fxhi_ = fxhi, fylo_ = fylo, fyhi_ = fyhi;
   const bool sq = src->config().beam_square;
   Kokkos::parallel_for("ConductionPathSource",
-    Kokkos::MDRangePolicy<Kokkos::Rank<2>>({0, 0}, {nxl, nyl}),
+    LightMD<2>({0, 0}, {nxl, nyl}),
     KOKKOS_LAMBDA(const int i, const int j) {
       double v = 0.0;
       for (int k = 0; k < ns; k++) {

@@ -97,8 +97,8 @@ setup_temperature_source conduction card overrides keyword values ...
     r = powder mass rate (kg/s) blown onto the surface, R = 1/e radius (m) of its footprint about the laser axis, Tf = its temperature (K, default T0)
     a = contact angle (degrees) where the liquid meets lower solid (default 20)
     c, t, w = stabilisers: capillary step factor (default 0.04), relaxation-time floor of surface cells (default 1), share of the unsmoothed surface height (default 1)
-  <I>beam</I> value = <I>gaussian</I> or <I>square</I>
-    gaussian = exp(-x^2/sx^2) per axis; square = uniform over |x| <= sx, |y| <= sy (a top-hat of side 2 sx by 2 sy; the depth profile is unchanged)
+  <I>beam</I> value = <I>gaussian</I> or <I>square</I> or <I>circle</I>
+    gaussian = exp(-x^2/sx^2) per axis; square = uniform over |x| <= sx, |y| <= sy (a top-hat of side 2 sx by 2 sy); circle = uniform over (x/sx)^2 + (y/sy)^2 <= 1 (a round top-hat of radius sx when sx = sy); the depth profile is unchanged
   <I>far_bc</I> value = <I>fixed</I> or <I>adiabatic</I>
     outer faces of the thermal domain held at T0, or insulated
   <I>sts</I> value = s

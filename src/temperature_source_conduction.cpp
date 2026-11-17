@@ -323,9 +323,9 @@ void ConductionTemperatureSource::setup_temperature_source(
       }
     }
     else if (a == "beam") {
-      if (++i >= args.size() || (args[i] != "gaussian" && args[i] != "square"))
-        error->all(FLERR,"setup_temperature_source conduction: beam is gaussian or square");
-      cfg.beam_square = args[i] == "square";
+      if (++i >= args.size() || (args[i] != "gaussian" && args[i] != "square" && args[i] != "circle"))
+        error->all(FLERR,"setup_temperature_source conduction: beam is gaussian, square or circle");
+      cfg.beam_shape = args[i] == "square" ? 1 : args[i] == "circle" ? 2 : 0;
     }
     else if (a == "far_bc") {
       if (++i >= args.size()) error->all(FLERR,"setup_temperature_source conduction: far_bc needs a value");

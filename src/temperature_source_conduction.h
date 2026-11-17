@@ -113,7 +113,8 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
         std::vector<double> sig, r0, r1, eta;
       } props;
     } flow;
-    bool   beam_square = false;         // uniform over |x - xl| <= sx, |y - yl| <= sy (Ez unchanged)
+    int    beam_shape = 0;              // 0 Gaussian; 1 square: uniform over |x - xl| <= sx, |y - yl| <= sy;
+                                        // 2 circle: uniform over ((x-xl)/sx)^2 + ((y-yl)/sy)^2 <= 1 (Ez unchanged)
     bool   carry = false;               // a layer's grid rebuild keeps the field (else T0)
     int    sts_smax = 32;               // RKL2 stages per laser-off super-step; 0 = explicit
     bool   init_d6 = false;             // init d6: the run's first grid takes in-box T from d6

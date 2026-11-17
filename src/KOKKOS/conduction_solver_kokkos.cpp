@@ -46,6 +46,30 @@ KOKKOS_INLINE_FUNCTION double beam1(bool sq, double a, double b, double s)
   return hi > lo ? (hi - lo) / s : 0.0;
 }
 
+// The beam's share of the cell [x0, x1] x [y0, y1] (relative to the axis),
+// times 4: shape 0 Gaussian, 1 square (both per axis, beam1), 2 circle =
+// uniform over (x/sx)^2 + (y/sy)^2 <= 1 (the overlap by 16-point midpoint
+// rule along x; the cells' shares add up to 1 within 1e-5).
+KOKKOS_INLINE_FUNCTION double beam2(int shape, double x0, double x1, double y0, double y1,
+                                    double sx, double sy)
+{
+  if (shape != 2) {
+    const double ex = beam1(shape == 1, x0, x1, sx);
+    return ex == 0.0 ? 0.0 : ex * beam1(shape == 1, y0, y1, sy);
+  }
+  const double a = Kokkos::fmax(x0 / sx, -1.0), b = Kokkos::fmin(x1 / sx, 1.0);
+  const double c = y0 / sy, d = y1 / sy;
+  if (b <= a || c >= 1.0 || d <= -1.0) return 0.0;
+  constexpr int n = 16;
+  double s = 0.0;
+  for (int m = 0; m < n; m++) {
+    const double u = a + (m + 0.5) * (b - a) / n, h = Kokkos::sqrt(1.0 - u * u);
+    const double len = Kokkos::fmin(d, h) - Kokkos::fmax(c, -h);
+    if (len > 0.0) s += len;
+  }
+  return 4.0 / M_PI * s * (b - a) / n;
+}
+
 // Outward cell widths covering length L: dx*r, dx*r^2, ... capped at cap; a
 // remainder under half a cell is merged into the last one.
 std::vector<double> stretched(double dx, double r, double cap, double L)
@@ -2036,16 +2060,14 @@ double ConductionSolverKokkos::path_source(double t0, double t1)
     S2 = Kokkos::View<KK_FLOAT**>("cond_S2", nxl, nyl);
   auto S2_ = S2; auto smp = d_samp;
   auto fxlo_ = fxlo, fxhi_ = fxhi, fylo_ = fylo, fyhi_ = fyhi;
-  const bool sq = src->config().beam_square;
+  const int shape = src->config().beam_shape;
   Kokkos::parallel_for("ConductionPathSource",
     LightMD<2>({0, 0}, {nxl, nyl}),
     KOKKOS_LAMBDA(const int i, const int j) {
       double v = 0.0;
       for (int k = 0; k < ns; k++) {
         const double xs = smp(3*k), ys = smp(3*k+1);
-        const double ex = beam1(sq, fxlo_(i) - xs, fxhi_(i) - xs, sx);
-        if (ex == 0.0) continue;
-        v += smp(3*k+2) * ex * beam1(sq, fylo_(j) - ys, fyhi_(j) - ys, sy);
+        v += smp(3*k+2) * beam2(shape, fxlo_(i) - xs, fxhi_(i) - xs, fylo_(j) - ys, fyhi_(j) - ys, sx, sy);
       }
       S2_(i, j) = v;
     });
@@ -2108,7 +2130,8 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
   const double mu = c.mu, nu = c.nu, mut = c.mut, gat = c.gat;
   const double sx = src->sigma_x(), sy = src->sigma_y(), sz = src->sigma_z();
   const double zs = zsrc;
-  const bool sq = cfg.beam_square;
+  const int shape = cfg.beam_shape;
+  const bool sq = shape == 1;
 
   auto wx_ = wxr, wy_ = wyr, wz_ = wzr;
   auto fxlo_ = fxlo, fxhi_ = fxhi, fylo_ = fylo, fyhi_ = fyhi, fzlo_ = fzlo, fzhi_ = fzhi;
@@ -2147,13 +2170,25 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
   auto fgx_ = fgx, fgy_ = fgy, fgz_ = fgz;
   const KK_FLOAT tsmin = (KK_FLOAT) ts_min;
   auto Ex_ = Ex, Ey_ = Ey, Ez_ = Ez;   // KK_FLOAT: rounded once, as the stencil used them
-  auto S2_ = S2;                       // far: path plane in place of Ex Ey
+  // circle: not separable, so its shares go to the plane S2 (as for far)
+  const bool circ = shape == 2 && !path && Pq > 0.0;
+  if (circ) {
+    const int nxl = (int) fxlo.extent(0), nyl = (int) fylo.extent(0);
+    if ((int) S2.extent(0) != nxl || (int) S2.extent(1) != nyl)
+      S2 = Kokkos::View<KK_FLOAT**>("cond_S2", nxl, nyl);
+    auto S2c = S2;
+    Kokkos::parallel_for("ConductionSourceCircle", LightMD<2>({0, 0}, {nxl, nyl}),
+      KOKKOS_LAMBDA(const int i, const int j) {
+        S2c(i, j) = beam2(2, fxlo_(i) - xl, fxhi_(i) - xl, fylo_(j) - yl, fyhi_(j) - yl, sx, sy);
+      });
+  }
+  auto S2_ = S2;                       // far or circle: the plane in place of Ex Ey
   if (Pq > 0.0) {
     const int nmax = std::max(std::max((int) Ex.extent(0), (int) Ey.extent(0)), nz_);
     Kokkos::parallel_for("ConductionSource", LightRange(0, nmax), KOKKOS_LAMBDA(const int n) {
-      if (!path && n < (int) Ex_.extent(0))
+      if (!path && !circ && n < (int) Ex_.extent(0))
         Ex_(n) = beam1(sq, fxlo_(n) - xl, fxhi_(n) - xl, sx);
-      if (!path && n < (int) Ey_.extent(0))
+      if (!path && !circ && n < (int) Ey_.extent(0))
         Ey_(n) = beam1(sq, fylo_(n) - yl, fyhi_(n) - yl, sy);
       if (n < nz_) {
         const double zt = fzhi_(n) < zs ? fzhi_(n) : zs;   // half space z <= zs
@@ -2325,7 +2360,7 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
                 const double zc = zsf_(i, j), zt = fzhi_(k) < zc ? fzhi_(k) : zc;
                 Ezc = zt > fzlo_(k) ? R(Kokkos::erf((zt - zc) / sz) - Kokkos::erf((fzlo_(k) - zc) / sz)) : R(0);
               }
-              q += R(Pq) * (path ? S2_(i, j) : Ex_(i) * Ey_(j)) * Ezc;
+              q += R(Pq) * (path || circ ? S2_(i, j) : Ex_(i) * Ey_(j)) * Ezc;
             }
 
             const R ivol = iwx_(ic) * iwy_(jc) * iwz_(k) * ((pfull & LOOSE) ? R(ipack) : R(1))

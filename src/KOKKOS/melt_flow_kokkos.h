@@ -367,9 +367,11 @@ struct MeltFlow {
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
         if (!liq(ty(i, j, k))) {
           if (lazy_ && fl_(i, j, k) >= R(0)) return;
+          #pragma unroll
           for (int q = 0; q < 19; q++) g_(i, j, k, q) = R(0);
           ux_(i, j, k) = uy_(i, j, k) = uz_(i, j, k) = rho_(i, j, k) = R(0);
           px_(i, j, k) = py_(i, j, k) = pz_(i, j, k) = R(0);
+          #pragma unroll
           for (int g = 0; g < 6; g++) flux_(i, j, k, g) = R(0);
           return;
         }
@@ -393,6 +395,7 @@ struct MeltFlow {
         const bool ifc = ty(i, j, k) == INTERFACE;
         const R e0 = ifc ? ep_(i, j, k) : R(1);
         fq[0] = f_(i, j, k, 0); tq[0] = FLUID; L[0] = true; ph[0] = R(1);
+        #pragma unroll
         for (int q = 1; q < 19; q++) {
           int cx, cy, cz; vel(q, cx, cy, cz);
           int ii = i - cx, jj = j - cy, kk = k - cz;
@@ -423,6 +426,7 @@ struct MeltFlow {
           return R(2) * wgt(q) * (drg + (R(1) + drg) * (R(4.5) * cu * cu - R(1.5) * usg)) - f_(i, j, k, opp(q));
         };
         // the axis velocities: q = 1 + 2 A + (sign < 0); face 2 A + (side > 0)
+        #pragma unroll
         for (int q = 1; q < 7; q++) {
           if (L[q]) {
             G[q - 1] -= ph[q] * fq[q];               // came in by the face toward its source
@@ -431,6 +435,7 @@ struct MeltFlow {
           else if (fs_ && tq[q] == GAS) fq[q] = rec(q);
           else fq[q] = f_(i, j, k, opp(q));          // wall, or the flat surface above
         }
+        #pragma unroll
         for (int q = 7; q < 19; q++) {
           int c[3]; vel(q, c[0], c[1], c[2]);
           const int A = c[0] != 0 ? 0 : 1, B = c[2] != 0 ? 2 : 1, sA = c[A], sB = c[B];
@@ -464,8 +469,10 @@ struct MeltFlow {
             }
           }
         }
+        #pragma unroll
         for (int g = 0; g < 6; g++) flux_(i, j, k, g) = first ? G[g] : flux_(i, j, k, g) + G[g];
         R dr = 0, mx = 0, my = 0, mz = 0;
+        #pragma unroll
         for (int q = 0; q < 19; q++) {
           int cx, cy, cz; vel(q, cx, cy, cz);
           dr += fq[q]; mx += cx * fq[q]; my += cy * fq[q]; mz += cz * fq[q];
@@ -523,6 +530,7 @@ struct MeltFlow {
 
         const R usq = u * u + v * v + w * w, ua = u * ax + v * ay + w * az;
         R feq[19], src[19];
+        #pragma unroll
         for (int q = 0; q < 19; q++) {
           int cx, cy, cz; vel(q, cx, cy, cz);
           const R cu = cx * u + cy * v + cz * w, ca = cx * ax + cy * ay + cz * az;
@@ -535,6 +543,7 @@ struct MeltFlow {
         if (smag2 != R(0)) {
           // eddy viscosity from the non-equilibrium stress
           R pxx = 0, pyy = 0, pzz = 0, pxy = 0, pxz = 0, pyz = 0;
+          #pragma unroll
           for (int q = 1; q < 19; q++) {
             int cx, cy, cz; vel(q, cx, cy, cz);
             const R d = fq[q] - feq[q];
@@ -548,6 +557,7 @@ struct MeltFlow {
         const R wp = R(1) / tau;                                        // symmetric part
         const R wm = R(1) / (R(0.1875) / (tau - R(0.5)) + R(0.5));      // antisymmetric
         g_(i, j, k, 0) = fq[0] - wp * (fq[0] - feq[0]) + (R(1) - R(0.5) * wp) * src[0];
+        #pragma unroll
         for (int q = 1; q < 19; q += 2) {
           const int o = q + 1;
           const R fs = R(0.5) * (fq[q] + fq[o]), fa = R(0.5) * (fq[q] - fq[o]);

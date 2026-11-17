@@ -29,6 +29,7 @@
 // lambda as a kernel argument (up to 4 KB); other backends ignore the hint.
 template <int N>
 using LightMD = Kokkos::MDRangePolicy<Kokkos::Rank<N>, Kokkos::Experimental::WorkItemProperty::HintLightWeight_t>;
+using LightRange = Kokkos::RangePolicy<Kokkos::Experimental::WorkItemProperty::HintLightWeight_t>;
 
 namespace SPPARKS_NS {
 

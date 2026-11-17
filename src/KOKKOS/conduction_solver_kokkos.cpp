@@ -799,7 +799,7 @@ void ConductionSolverKokkos::seed_from_sites(Kokkos::View<double*> d_T, int nloc
   auto tab = Htab;
   const double T0 = Htab_T0, dTt = Htab_dT;
   const int n = (int) tab.extent(1);
-  Kokkos::parallel_for("ConductionSeedD6", nlocal, KOKKOS_LAMBDA(const int s) {
+  Kokkos::parallel_for("ConductionSeedD6", LightRange(0, nlocal), KOKKOS_LAMBDA(const int s) {
     const int o = sc(s);
     const double v = d_T(s);
     if (o < 0 || !(v > 0.0)) return;
@@ -826,7 +826,7 @@ void ConductionSolverKokkos::remat(Kokkos::View<unsigned char*> d_mat, int nloca
   auto tab = Htab;
   const double T0 = Htab_T0, dTt = Htab_dT;
   const int n = (int) tab.extent(1);
-  Kokkos::parallel_for("ConductionRemat", nlocal, KOKKOS_LAMBDA(const int s) {
+  Kokkos::parallel_for("ConductionRemat", LightRange(0, nlocal), KOKKOS_LAMBDA(const int s) {
     const int o = sc(s);
     if (o < 0 || (P_.data()[o] & PLATE)) return;
     const int m = d_mat(s);
@@ -1241,7 +1241,7 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
     auto gx = fgx, gy = fgy, gz = fgz;
     const int stp = fstamp, n0 = (int) gx.extent(0), n1 = (int) gy.extent(0), n2 = (int) gz.extent(0);
     FlowAcc b;
-    Kokkos::parallel_reduce("FlowBox", std::max(n0, std::max(n1, n2)),
+    Kokkos::parallel_reduce("FlowBox", LightRange(0, std::max(n0, std::max(n1, n2))),
       KOKKOS_LAMBDA(const int n, FlowAcc &a) {
         FlowAcc c;
         if (n < n0 && gx(n) == stp) c.lo[0] = c.hi[0] = n;
@@ -1269,7 +1269,7 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
   const int sx_ = s1[0] - s0[0], sy_ = s1[1] - s0[1], sz_ = s1[2] - s0[2];
   const int bx0 = s0[0], by0 = s0[1], bz0 = s0[2];
   FlowAcc acc;
-  Kokkos::parallel_reduce("FlowCells", sx_ * sy_ * sz_,
+  Kokkos::parallel_reduce("FlowCells", LightRange(0, sx_ * sy_ * sz_),
     KOKKOS_LAMBDA(const int n, FlowAcc &a) {
       const int i = n % sx_ + bx0, j = (n / sx_) % sy_ + by0, k = n / (sx_ * sy_) + bz0;
       const unsigned char p = P_(i + o0, j + o1, k + o2);
@@ -1831,7 +1831,7 @@ void ConductionSolverKokkos::flow_exchange(Kokkos::View<S****> v, FlowHalo<S> &b
     }
     auto sb = b.s, rb = b.r;
     // layout: [side][layer][line][z][component], side 0 = lo, 1 = hi
-    Kokkos::parallel_for("FlowPack", np, KOKKOS_LAMBDA(const int p) {
+    Kokkos::parallel_for("FlowPack", LightRange(0, np), KOKKOS_LAMBDA(const int p) {
       const int c = p % nc, k = (p / nc) % nz_, a = (p / (nc * nz_)) % na, l = p / (nc * nz_ * na);
       for (int side = 0; side < 2; side++) {
         const int e = side ? nd - hr - w + l : hl + l;
@@ -1859,7 +1859,7 @@ void ConductionSolverKokkos::flow_exchange(Kokkos::View<S****> v, FlowHalo<S> &b
     if (stage_host)
       Kokkos::deep_copy(exec, Kokkos::subview(b.r, used), Kokkos::subview(b.hr, used));
     const bool has_lo = lo_n >= 0, has_hi = hi_n >= 0;
-    Kokkos::parallel_for("FlowUnpack", np, KOKKOS_LAMBDA(const int p) {
+    Kokkos::parallel_for("FlowUnpack", LightRange(0, np), KOKKOS_LAMBDA(const int p) {
       const int c = p % nc, k = (p / nc) % nz_, a = (p / (nc * nz_)) % na, l = p / (nc * nz_ * na);
       for (int side = 0; side < 2; side++) {
         if (!(side ? has_hi : has_lo)) continue;
@@ -1888,7 +1888,7 @@ void ConductionSolverKokkos::comp_out(Kokkos::View<double*> d_comp,
   const int bx = flow->nx, by = flow->ny;
   const double x0 = src->config().comp_x0, w = src->config().comp_x1 - x0;
   const int nb = src->ncomp();
-  Kokkos::parallel_for("ConductionCompOut", nall, KOKKOS_LAMBDA(const int s) {
+  Kokkos::parallel_for("ConductionCompOut", LightRange(0, nall), KOKKOS_LAMBDA(const int s) {
     const int b = sb(s);
     if (b < 0) return;
     const double x = X(b % bx, (b / bx) % by, b / (bx * by));
@@ -2006,7 +2006,7 @@ void ConductionSolverKokkos::phase_out(Kokkos::View<int*> d_af, int nall)
 {
   auto sc = site_cell;
   const unsigned char *Pp = P.data();
-  Kokkos::parallel_for("ConductionPhaseOut", nall, KOKKOS_LAMBDA(const int s) {
+  Kokkos::parallel_for("ConductionPhaseOut", LightRange(0, nall), KOKKOS_LAMBDA(const int s) {
     const int c = sc(s);
     if (c < 0 || d_af(s) == 6) return;
     const bool metal = (Pp[c] & 3) != GAS;
@@ -2150,7 +2150,7 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
   auto S2_ = S2;                       // far: path plane in place of Ex Ey
   if (Pq > 0.0) {
     const int nmax = std::max(std::max((int) Ex.extent(0), (int) Ey.extent(0)), nz_);
-    Kokkos::parallel_for("ConductionSource", nmax, KOKKOS_LAMBDA(const int n) {
+    Kokkos::parallel_for("ConductionSource", LightRange(0, nmax), KOKKOS_LAMBDA(const int n) {
       if (!path && n < (int) Ex_.extent(0))
         Ex_(n) = beam1(sq, fxlo_(n) - xl, fxhi_(n) - xl, sx);
       if (!path && n < (int) Ey_.extent(0))
@@ -2204,7 +2204,8 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
   // free surface, plain steps: up to the gas above the metal (fs_surface_z)
   const int kz1 = fsz && !sts && kz_end > 0 ? kz_end : nz_;
   Kokkos::parallel_for("ConductionStep",
-    Kokkos::TeamPolicy<Kokkos::LaunchBounds<SPK_COND_MINB ? TX * TY : 0, SPK_COND_MINB>>(
+    Kokkos::TeamPolicy<Kokkos::LaunchBounds<SPK_COND_MINB ? TX * TY : 0, SPK_COND_MINB>,
+                       Kokkos::Experimental::WorkItemProperty::HintLightWeight_t>(
         nbx * nby, TX * TY).set_scratch_size(0, Kokkos::PerTeam(shmem)),
     KOKKOS_LAMBDA(const Team &team) {
       Scratch sbuf(team.team_scratch(0), 2 * (nsx + nsy));
@@ -2390,7 +2391,7 @@ void ConductionSolverKokkos::exchange()
     const int nline = (dir == 0 ? nyo_ : nxo_) + 2;
     const int np = nline * nz_;   // cells per plane
     // layout: [side][field][cell], side 0 = lo, 1 = hi
-    Kokkos::parallel_for("ConductionPack", np, KOKKOS_LAMBDA(const int p) {
+    Kokkos::parallel_for("ConductionPack", LightRange(0, np), KOKKOS_LAMBDA(const int p) {
       const int a = p / nz_, k = p % nz_;
       for (int side = 0; side < 2; side++) {
         const int i = dir == 0 ? (side ? nxo_ : 1) : a;
@@ -2421,7 +2422,7 @@ void ConductionSolverKokkos::exchange()
     if (stage_host)
       Kokkos::deep_copy(exec, Kokkos::subview(rbuf, used), Kokkos::subview(hrbuf, used));
     const bool has_lo = lo_n >= 0, has_hi = hi_n >= 0;
-    Kokkos::parallel_for("ConductionUnpack", np, KOKKOS_LAMBDA(const int p) {
+    Kokkos::parallel_for("ConductionUnpack", LightRange(0, np), KOKKOS_LAMBDA(const int p) {
       const int a = p / nz_, k = p % nz_;
       for (int side = 0; side < 2; side++) {
         if (!(side ? has_hi : has_lo)) continue;

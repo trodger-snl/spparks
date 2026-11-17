@@ -696,6 +696,17 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
     ph.beta_g = cfg.flow.beta * 9.81; ph.Tref = tl;
     ph.darcy = cfg.flow.mushy; ph.u_ref = cfg.flow.u_ref;
     ph.sig_rho = cfg.flow.fs ? cfg.flow.sigma / src->density() : 0.0;
+    if (!cfg.flow.sig1.empty() && !flow->props) {
+      // one liquid's sigma(T) / rho; the step is bounded by the largest
+      const auto &sv = cfg.flow.sig1;
+      Kokkos::View<KK_FLOAT*> st("flow_stab", sv.size());
+      auto h = Kokkos::create_mirror_view(st);
+      for (size_t m = 0; m < sv.size(); m++) h(m) = (KK_FLOAT) (sv[m] / src->density());
+      Kokkos::deep_copy(st, h);
+      flow->stab = st;
+      flow->stab_T0 = (KK_FLOAT) cfg.flow.sig1_T0; flow->stab_idT = (KK_FLOAT) (1.0 / cfg.flow.sig1_dT);
+      ph.sig_rho = *std::max_element(sv.begin(), sv.end()) / src->density();
+    }
     if (flow->props) {
       // sig in N/m, dens = rho / rho0 - 1, visc = nu / nu0 (see MeltFlow):
       // rho0, nu0 are the first card's liquid at Tr

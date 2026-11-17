@@ -185,6 +185,8 @@ struct MeltFlow {
     // (it then follows T by `marangoni`). props: the N/m to add to `sig`,
     // which is stored less its first value.
     double sigma = 0.0;
+    // stab: dt^2 / dx^3, the factor from sigma / rho (m^3/s^2) to lattice units
+    double sigconv = 0.0;
     bool periodic[3] = {false, false, false};
   } p;
 
@@ -203,6 +205,12 @@ struct MeltFlow {
   // Else every non-FLUID cell of the window is cleared at every step.
   bool lazy = false;
   W3 sig, dens, visc;
+  // fs, one liquid (no props): sigma(T) / rho (m^3/s^2) on the uniform grid
+  // stab_T0 + m / stab_idT, linear beyond it (flow lbm ... sigma_table):
+  // capillary pressure and Marangoni stress follow the surface cell's T.
+  // Empty: sigma = p.sigma + p.marangoni (T - Tref).
+  Kokkos::View<R*> stab;
+  R stab_T0 = 0, stab_idT = 1;
   // fs (set before resize()): the surface moves; see "Free surface" below
   bool fs = false;
   W3 cmass, eps;                             // interface cells' mass; fill (1 fluid, 0 gas)
@@ -647,6 +655,7 @@ struct MeltFlow {
     p.Tref = ph.Tref;
     p.darcy = ph.darcy * dt;
     if (!props) p.sigma = ph.sig_rho * dt * dt / (ph.dx * ph.dx * ph.dx);
+    p.sigconv = dt * dt / (ph.dx * ph.dx * ph.dx);
     // No fence per step: one was added when host memory grew on HIP with
     // the launches, which was Kokkos' constant-memory launch path (LightMD).
     for (int s = 0; s < n; s++) {
@@ -824,6 +833,11 @@ struct MeltFlow {
     const bool hp = props;
     auto sg_ = sig; auto dn_ = dens;
     const R mar = R(p.marangoni), sig0 = R(p.sigma), Tref = R(p.Tref), rawp = R(fs_raw);
+    auto st_ = stab;
+    const bool tab = !hp && stab.extent(0) > 1;
+    const int nst = (int) stab.extent(0);
+    const R sT0 = stab_T0, siT = stab_idT, sc = R(p.sigconv);
+    const R mg = tab ? sc : mar;    // the lattice sigma per unit of S_
     const R edge = R(fs_angle >= 89.99 ? 1e30 : std::tan(fs_angle * M_PI / 180.0));
     const int z0 = wlo[2], z1 = whi[2];
     // the columns held, and those of them the step needs (one more around)
@@ -845,9 +859,15 @@ struct MeltFlow {
         kt_(i, j) = -1; kb_(i, j) = 0; M_(i, j) = R(1); S_(i, j) = R(0); sl_(i, j) = R(0);
         if (k < z0) { h_(i, j) = R(z0); kt_(i, j) = -2; return; }      // no metal: -2
         const int kt = k;
-        S_(i, j) = hp ? sg_(i, j, kt) : T_(i, j, kt);
+        R sv = T_(i, j, kt);
+        if (tab) {     // sigma(T) / rho from the table, linear between (and beyond) its rows
+          const R u = (sv - sT0) * siT;
+          const int m = u < R(0) ? 0 : u >= R(nst - 1) ? nst - 2 : (int) u;
+          sv = st_(m) + (u - R(m)) * (st_(m + 1) - st_(m));
+        }
+        S_(i, j) = hp ? sg_(i, j, kt) : sv;
         if (ty(i, j, kt) == WALL) { h_(i, j) = R(kt + 1); return; }  // solid on top: -1
-        sl_(i, j) = hp ? mar * (sg_(i, j, kt) + sig0) : sig0 + mar * (T_(i, j, kt) - Tref);
+        sl_(i, j) = hp ? mar * (sg_(i, j, kt) + sig0) : tab ? sc * sv : sig0 + mar * (T_(i, j, kt) - Tref);
         R sum = 0, M = 0;
         while (k >= z0 && ty(i, j, k) == INTERFACE) { sum += ep_(i, j, k); M += ms_(i, j, k); k--; }
         int kb = k + 1;
@@ -908,7 +928,7 @@ struct MeltFlow {
         const R g = R(1) + hx * hx + hy * hy, sg = Kokkos::sqrt(g);
         const R kap = (hxx * (R(1) + hy * hy) + hyy * (R(1) + hx * hx) - R(2) * hxy * hx * hy) / (g * sg);
         dg_(i, j) = R(3) * (pg_(i, j) - sl_(i, j) * kap);
-        if (mar == R(0)) return;
+        if (mg == R(0)) return;
         // sigma's difference per cell along x (e = 0) or y
         auto grad = [&](int e) -> R {
           int ia, ja, ib, jb;
@@ -918,7 +938,7 @@ struct MeltFlow {
           // props: sigma is the liquid's only; else T, wherever there is metal
           if (hp ? kt_(ia, ja) < 0 : kt_(ia, ja) == -2) { ia = i; ja = j; w -= R(1); }
           if (hp ? kt_(ib, jb) < 0 : kt_(ib, jb) == -2) { ib = i; jb = j; w -= R(1); }
-          return w > R(0) ? mar * (S_(ib, jb) - S_(ia, ja)) / w : R(0);
+          return w > R(0) ? mg * (S_(ib, jb) - S_(ia, ja)) / w : R(0);
         };
         const R sx = grad(0), sy = grad(1);
         const R fa = ((R(1) + hy * hy) * sx - hx * hy * sy) / sg, fb = ((R(1) + hx * hx) * sy - hx * hy * sx) / sg;

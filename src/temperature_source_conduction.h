@@ -112,6 +112,10 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
         double T0 = 0.0, dT = 1.0, x0 = 0.0, dx = 1.0, Tr = 0.0;
         std::vector<double> sig, r0, r1, eta;
       } props;
+      // sigma_table without properties cards (one liquid): sigma (N/m) at
+      // T = sig1_T0 + m sig1_dT; capillary pressure and Marangoni follow it
+      std::vector<double> sig1;
+      double sig1_T0 = 0.0, sig1_dT = 1.0;
     } flow;
     int    beam_shape = 0;              // 0 Gaussian; 1 square: uniform over |x - xl| <= sx, |y - yl| <= sy;
                                         // 2 circle: uniform over ((x-xl)/sx)^2 + ((y-yl)/sy)^2 <= 1 (Ez unchanged)

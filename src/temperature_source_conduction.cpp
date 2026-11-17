@@ -71,6 +71,23 @@ Material card_material(const std::string &path, MPI_Comm world)
    outer, x inner, both uniform; x is d11. Every rank reads the file.
 ------------------------------------------------------------------------- */
 
+// The rows "T x sigma ..." of a sigma_table (or "T sigma": x = 0); '#' lines skipped.
+void sigma_rows(const std::string &file, std::vector<double> &T, std::vector<double> &x,
+                std::vector<double> &s)
+{
+  FILE *fp = fopen(file.c_str(), "r");
+  if (!fp) throw std::runtime_error("cannot open sigma_table " + file);
+  char line[1024];
+  while (fgets(line, sizeof(line), fp)) {
+    double a, b, c;
+    if (line[0] == '#') continue;
+    const int n = sscanf(line, "%lf %lf %lf", &a, &b, &c);
+    if (n == 3) { T.push_back(a); x.push_back(b); s.push_back(c); }
+    else if (n == 2) { T.push_back(a); x.push_back(0.0); s.push_back(b); }
+  }
+  fclose(fp);
+}
+
 void flow_props(const std::vector<double> &xs, const std::vector<std::string> &cards,
                 const std::string &sigma_file, MPI_Comm world,
                 ConductionTemperatureSource::Config::Flow::Props &p)
@@ -115,16 +132,8 @@ void flow_props(const std::vector<double> &xs, const std::vector<std::string> &c
       }
     return;
   }
-  FILE *fp = fopen(sigma_file.c_str(), "r");
-  if (!fp) throw std::runtime_error("cannot open sigma_table " + sigma_file);
   std::vector<double> T, x;
-  char line[1024];
-  while (fgets(line, sizeof(line), fp)) {
-    double t, xv, s;
-    if (line[0] == '#' || sscanf(line, "%lf %lf %lf", &t, &xv, &s) != 3) continue;
-    T.push_back(t); x.push_back(xv); p.sig.push_back(s);
-  }
-  fclose(fp);
+  sigma_rows(sigma_file, T, x, p.sig);
   const size_t nrow = T.size();
   size_t nx = 1;
   while (nx < nrow && T[nx] == T[0]) nx++;
@@ -439,9 +448,27 @@ void ConductionTemperatureSource::setup_temperature_source(
       error->all(FLERR,"setup_temperature_source conduction: flow powder needs a rate >= 0 and a radius > 0, sigma > 0");
     if (cfg.flow.powder_T < 0.0) cfg.flow.powder_T = T0_default;
   }
-  if (cfg.flow.on && (cfg.flow.cards || !cfg.flow.sigma_file.empty()) && cfg.flow.props.n == 0)
-    error->all(FLERR,"setup_temperature_source conduction: flow properties cards and sigma_table "
-               "need composition ... mix flow (and sigma_table needs properties cards)");
+  if (cfg.flow.on && cfg.flow.cards && cfg.flow.props.n == 0)
+    error->all(FLERR,"setup_temperature_source conduction: flow properties cards need composition ... mix flow");
+  // sigma_table alone: one liquid's sigma(T), at the rows of the first x
+  if (cfg.flow.on && !cfg.flow.cards && !cfg.flow.sigma_file.empty()) {
+    if (!cfg.flow.fs)
+      error->all(FLERR,"setup_temperature_source conduction: flow sigma_table without properties cards needs free_surface");
+    std::vector<double> T, x, sg;
+    try { sigma_rows(cfg.flow.sigma_file, T, x, sg); }
+    catch (const std::exception &e) { error->all(FLERR, ("setup_temperature_source conduction: " + std::string(e.what())).c_str()); }
+    auto &v = cfg.flow.sig1;
+    v.clear();
+    for (size_t r = 0; r < T.size(); r++)
+      if (x[r] == x[0]) v.push_back(sg[r]);
+    bool ok = v.size() >= 2;
+    if (ok) { cfg.flow.sig1_T0 = T[0]; cfg.flow.sig1_dT = (T.back() - T[0]) / (v.size() - 1); }
+    for (size_t r = 0, m = 0; ok && r < T.size(); r++)
+      if (x[r] == x[0]) ok = cfg.flow.sig1_dT > 0.0 && std::fabs(T[r] - (T[0] + cfg.flow.sig1_dT * m++)) <= 1e-6 * cfg.flow.sig1_dT;
+    if (!ok)
+      error->all(FLERR,"setup_temperature_source conduction: flow sigma_table needs 2 or more rows T sigma "
+                 "(or T x sigma) on a uniform T grid");
+  }
   configured = true;
   print_source_info();
 }
@@ -504,7 +531,10 @@ void ConductionTemperatureSource::print_source_info() const
               << cfg.flow.smag << std::endl;
   if (cfg.flow.fs)
     std::cout << "conduction: flow lbm free surface"
-              << (cfg.flow.props.n ? "" : ", surface tension " + std::to_string(cfg.flow.sigma) + " N/m")
+              << (cfg.flow.props.n ? "" : !cfg.flow.sig1.empty()
+                  ? ", surface tension from " + cfg.flow.sigma_file + " (" + std::to_string(cfg.flow.sig1.size()) + " rows from "
+                    + std::to_string(cfg.flow.sig1_T0) + " K)"
+                  : ", surface tension " + std::to_string(cfg.flow.sigma) + " N/m")
               << "; powder " << cfg.flow.powder << " kg/s within " << cfg.flow.powder_radius
               << " m of the axis at " << cfg.flow.powder_T << " K; no cell is born" << std::endl;
   if (cfg.ded)

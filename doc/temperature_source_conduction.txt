@@ -23,7 +23,7 @@ sx, sy, sz = Gaussian source widths (m), as in "moser"_temperature_source_moser.
 {card} = take the positional values and material keywords from the loaded
 "material card"_material.html; see "setup_temperature_source"_setup_temperature_source.html :l
 zero or more keyword/value pairs may be appended :l
-keyword = {k_table} or {cp_table} or {latent} or {k_powder} or {convection} or {emissivity} or {evaporation} or {evaporation_coef} or {evaporation_ambient} or {margin} or {plate} or {stretch} or {max_cell} or {part} or {layer_thickness} or {packing} or {plate_top} or {plate_material} or {plate_growth} or {composition} or {far_bc} or {sts} or {carry} or {flow} or {init} or {far} or {ded} :l
+keyword = {k_table} or {cp_table} or {latent} or {k_powder} or {convection} or {emissivity} or {evaporation} or {evaporation_coef} or {evaporation_ambient} or {margin} or {plate} or {stretch} or {max_cell} or {part} or {layer_thickness} or {packing} or {plate_top} or {plate_material} or {plate_growth} or {composition} or {beam} or {far_bc} or {sts} or {carry} or {flow} or {init} or {far} or {ded} :l
   {k_table} values = n T1 k1 ... Tn kn
     dense conductivity k(T), piecewise linear, held at the end values (K, W/(m K))
   {cp_table} values = n T1 c1 ... Tn cn
@@ -79,6 +79,8 @@ keyword = {k_table} or {cp_table} or {latent} or {k_powder} or {convection} or {
     cs = Smagorinsky constant (default 0.17, 0 = off)
     properties cards = surface tension, density and viscosity of the liquid by composition, from the composition's cards (default constant: s, b, nu)
     file = table of surface tension over T and composition, with properties cards (default: from the cards)
+  {beam} value = {gaussian} or {square}
+    gaussian = exp(-x^2/sx^2) per axis; square = uniform over |x| <= sx, |y| <= sy (a top-hat of side 2 sx by 2 sy; the depth profile is unchanged)
   {far_bc} value = {fixed} or {adiabatic}
     outer faces of the thermal domain held at T0, or insulated
   {sts} value = s
@@ -425,7 +427,7 @@ k_table = constant k, cp_table = constant cp, latent = 0, k_powder =
 k/100, convection h = 0 (T_inf = 300), emissivity = 0, no evaporation, margin = 0, plate
 = 0, stretch = 1.25, max_cell = none, part = whole domain dense,
 layer_thickness = 0, packing = 1, plate_top = box bottom, plate_material
-= none, plate_growth = 0, composition = none (mix pool when given), far_bc = fixed, sts = 32, carry = no, flow off, init T0, far = 0 (off), ded off (when on: radius = 2 sx, T_birth
+= none, plate_growth = 0, composition = none (mix pool when given), beam = gaussian, far_bc = fixed, sts = 32, carry = no, flow off, init T0, far = 0 (off), ded off (when on: radius = 2 sx, T_birth
 = T0, depth = the rise of the laser plane since the previous layer,
 unlimited for the first).  With a material card loaded, none of these material
 defaults (latent, k_powder, convection, emissivity, layer_thickness) is

@@ -36,6 +36,16 @@ namespace {
 
 const double SIGMA_SB = 5.670374419e-8;
 
+// The beam's share of one cell [a, b] (relative to the axis) along one axis,
+// times 2 (the erf difference): Gaussian of 1/e radius s, or (square)
+// uniform over |x| <= s.
+KOKKOS_INLINE_FUNCTION double beam1(bool sq, double a, double b, double s)
+{
+  if (!sq) return Kokkos::erf(b / s) - Kokkos::erf(a / s);
+  const double lo = a > -s ? a : -s, hi = b < s ? b : s;
+  return hi > lo ? (hi - lo) / s : 0.0;
+}
+
 // Outward cell widths covering length L: dx*r, dx*r^2, ... capped at cap; a
 // remainder under half a cell is merged into the last one.
 std::vector<double> stretched(double dx, double r, double cap, double L)
@@ -1402,10 +1412,10 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
       auto t2 = F.type2; auto ep = F.eps;
       const int z0 = F.wlo[2];
       const double tsm0 = ts_min;
-      double dres = 0.0;
+      double dres = 0.0, dcap = 0.0, dset = 0.0;
       Kokkos::parallel_reduce("FlowFsTypes",
         Kokkos::MDRangePolicy<Kokkos::Rank<3>>({fl0[0], fl0[1], fl0[2]}, {fl1[0], fl1[1], fl1[2]}),
-        KOKKOS_LAMBDA(const int i, const int j, const int k, double &rs) {
+        KOKKOS_LAMBDA(const int i, const int j, const int k, double &rs, double &rc, double &rt) {
           using MF = MeltFlow<KK_FLOAT>;
           auto held = [&](int a, int b, int c) {
             return a >= ov[0] && a < ov[3] && b >= ov[1] && b < ov[4] && c >= ov[2] && c < ov[5];
@@ -1489,12 +1499,13 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
                 a = S - (k - kb);
               }
               if (go) {
+                double &rk = cap ? rc : kt > kb ? rt : rs;
                 if (a >= 0.5) {
-                  nt = MF::WALL; rs -= 1.0 - e;
+                  nt = MF::WALL; rk -= 1.0 - e;
                   P_(i + o0, j + o1, k + o2) = DENSE;
                   H_(i + o0, j + o1, k + o2) = (KK_FLOAT) (qa - Hr(m));
                   T_(i + o0, j + o1, k + o2) = (KK_FLOAT) Tv;
-                } else { nt = MF::GAS; rs += e; }
+                } else { nt = MF::GAS; rk += e; }
               }
             }
           } else if (!metal) nt = MF::GAS;
@@ -1502,8 +1513,9 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
           t2(i, j, k) = (unsigned char) nt;
           fT(i, j, k) = (KK_FLOAT) Tv;
           q(i, j, k) = (KK_FLOAT) qa;
-        }, dres);
-      fs_res += dres; fs_round += dres;
+        }, dres, dcap, dset);
+      fs_res += dres + dcap + dset; fs_round += dres + dcap + dset;
+      fs_rcap += dcap; fs_rset += dset;
     }
     // properties cards: the cell's surface tension (less the table's first
     // value: single precision keeps the differences), density and viscosity
@@ -1945,10 +1957,10 @@ void ConductionSolverKokkos::fs_report()
       }, Ei, Vi);
     E += Ei; V += Vi;
   }
-  char msg[320];
+  char msg[400];
   snprintf(msg, sizeof(msg), "conduction: free surface at t = %g s: powder fed %.6g cells, caught %.6g (%.1f%%); "
-           "droplets lost %.4g, freeze rounding %+.4g, reservoir %+.4g cells; metal %.6f cells, enthalpy %.9g J\n", t_fd,
-           fs_fed, fs_got, fs_fed > 0.0 ? 100.0 * fs_got / fs_fed : 0.0, fs_lost, fs_round, fs_res,
+           "droplets lost %.4g, freeze rounding %+.4g (capped %+.4g, settled %+.4g), reservoir %+.4g cells; metal %.6f cells, enthalpy %.9g J\n", t_fd,
+           fs_fed, fs_got, fs_fed > 0.0 ? 100.0 * fs_got / fs_fed : 0.0, fs_lost, fs_round, fs_rcap, fs_rset, fs_res,
            V / (dx * dx * dx), E);
   if (screen) fputs(msg, screen);
   if (logfile) fputs(msg, logfile);
@@ -2018,16 +2030,16 @@ double ConductionSolverKokkos::path_source(double t0, double t1)
     S2 = Kokkos::View<KK_FLOAT**>("cond_S2", nxl, nyl);
   auto S2_ = S2; auto smp = d_samp;
   auto fxlo_ = fxlo, fxhi_ = fxhi, fylo_ = fylo, fyhi_ = fyhi;
+  const bool sq = src->config().beam_square;
   Kokkos::parallel_for("ConductionPathSource",
     Kokkos::MDRangePolicy<Kokkos::Rank<2>>({0, 0}, {nxl, nyl}),
     KOKKOS_LAMBDA(const int i, const int j) {
       double v = 0.0;
       for (int k = 0; k < ns; k++) {
         const double xs = smp(3*k), ys = smp(3*k+1);
-        const double ex = Kokkos::erf((fxhi_(i) - xs) / sx) - Kokkos::erf((fxlo_(i) - xs) / sx);
+        const double ex = beam1(sq, fxlo_(i) - xs, fxhi_(i) - xs, sx);
         if (ex == 0.0) continue;
-        v += smp(3*k+2) * ex *
-             (Kokkos::erf((fyhi_(j) - ys) / sy) - Kokkos::erf((fylo_(j) - ys) / sy));
+        v += smp(3*k+2) * ex * beam1(sq, fylo_(j) - ys, fyhi_(j) - ys, sy);
       }
       S2_(i, j) = v;
     });
@@ -2090,6 +2102,7 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
   const double mu = c.mu, nu = c.nu, mut = c.mut, gat = c.gat;
   const double sx = src->sigma_x(), sy = src->sigma_y(), sz = src->sigma_z();
   const double zs = zsrc;
+  const bool sq = cfg.beam_square;
 
   auto wx_ = wxr, wy_ = wyr, wz_ = wzr;
   auto fxlo_ = fxlo, fxhi_ = fxhi, fylo_ = fylo, fyhi_ = fyhi, fzlo_ = fzlo, fzhi_ = fzhi;
@@ -2133,9 +2146,9 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
     const int nmax = std::max(std::max((int) Ex.extent(0), (int) Ey.extent(0)), nz_);
     Kokkos::parallel_for("ConductionSource", nmax, KOKKOS_LAMBDA(const int n) {
       if (!path && n < (int) Ex_.extent(0))
-        Ex_(n) = Kokkos::erf((fxhi_(n) - xl) / sx) - Kokkos::erf((fxlo_(n) - xl) / sx);
+        Ex_(n) = beam1(sq, fxlo_(n) - xl, fxhi_(n) - xl, sx);
       if (!path && n < (int) Ey_.extent(0))
-        Ey_(n) = Kokkos::erf((fyhi_(n) - yl) / sy) - Kokkos::erf((fylo_(n) - yl) / sy);
+        Ey_(n) = beam1(sq, fylo_(n) - yl, fyhi_(n) - yl, sy);
       if (n < nz_) {
         const double zt = fzhi_(n) < zs ? fzhi_(n) : zs;   // half space z <= zs
         Ez_(n) = zt > fzlo_(n) ? Kokkos::erf((zt - zs) / sz) - Kokkos::erf((fzlo_(n) - zs) / sz)

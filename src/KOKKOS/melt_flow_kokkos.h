@@ -888,22 +888,26 @@ struct MeltFlow {
   }
 
   // Mass arriving on the surface (powder): scale * dm(x, y), in cells of
-  // liquid, goes into the top interface cell of each column that has one
-  // (as surface() found it: call between step() and convert(), which passes
-  // on what overfills a cell). The carried fields mix with the values qf
+  // liquid, goes into the lowest interface cell of each column's surface
+  // stack (as surface() found it: call between step() and convert(), which
+  // passes on what overfills a cell). Into the top one, a partial cell under
+  // an empty one (made when a neighbour filled) was built over and left as
+  // a void in the liquid: a two-cell foam in the pool's top layers. The carried fields mix with the values qf
   // and q2f hold for that cell. Returns the mass taken; what falls on a
   // column with no liquid surface is not.
   double inject(const int lo[3], const int hi[3], Kokkos::View<R**> dm, R scale, W3 q = W3(), W3 qf = W3(),
                 W3 q2 = W3(), W3 q2f = W3()) {
-    auto ty = type; auto ms_ = cmass; auto kt_ = skt;
+    auto ty = type; auto ms_ = cmass; auto kt_ = skt; auto kb_ = skb;
     const bool one = q.v.extent(0) > 0, two = q2.v.extent(0) > 0;
     double got = 0.0;
     Kokkos::parallel_reduce("FlowFsInject",
       Kokkos::MDRangePolicy<Kokkos::Rank<2>>({lo[0], lo[1]}, {hi[0], hi[1]}),
       KOKKOS_LAMBDA(const int i, const int j, double &g) {
-        const int k = kt_(i, j);
+        if (kt_(i, j) < 0) return;
+        int k = kb_(i, j);
+        if (ty(i, j, k) != INTERFACE) k++;      // kb is the fluid cell under the stack
         const R d = scale * dm(i, j);
-        if (k < 0 || d <= R(0) || ty(i, j, k) != INTERFACE) return;
+        if (k > kt_(i, j) || d <= R(0) || ty(i, j, k) != INTERFACE) return;
         const R m = ms_(i, j, k), mn = m + d;
         // a cell overdrawn by more than arrives takes the feed's values
         const R w = m > R(0) ? d / mn : R(1);

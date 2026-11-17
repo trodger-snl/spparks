@@ -322,6 +322,11 @@ void ConductionTemperatureSource::setup_temperature_source(
         else break;
       }
     }
+    else if (a == "beam") {
+      if (++i >= args.size() || (args[i] != "gaussian" && args[i] != "square"))
+        error->all(FLERR,"setup_temperature_source conduction: beam is gaussian or square");
+      cfg.beam_square = args[i] == "square";
+    }
     else if (a == "far_bc") {
       if (++i >= args.size()) error->all(FLERR,"setup_temperature_source conduction: far_bc needs a value");
       if (args[i] == "fixed") cfg.far_bc = FAR_FIXED;

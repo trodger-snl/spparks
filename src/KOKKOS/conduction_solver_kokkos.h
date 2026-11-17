@@ -182,7 +182,7 @@ class ConductionSolverKokkos : protected Pointers {
   Kokkos::View<KK_FLOAT***> fXfed, fqfed; // block: the composition and enthalpy powder brings to a cell
   Kokkos::View<KK_FLOAT**> fdm;           // block columns: powder per thermal step (cells of liquid)
   int fvalid[6] = {0, 0, 0, 0, 0, 0};     // block cells whose flow type is current (the window last filled)
-  double fs_res = 0.0, fs_fed = 0.0, fs_got = 0.0, fs_lost = 0.0, fs_round = 0.0, rho_feed = 0.0;
+  double fs_res = 0.0, fs_fed = 0.0, fs_got = 0.0, fs_lost = 0.0, fs_round = 0.0, fs_rcap = 0.0, fs_rset = 0.0, rho_feed = 0.0;
   bool fs_laser = false;
   bool has_pool = false;
   Kokkos::View<int*> site_blk;       // mix flow: a site's block cell (flat; ghosts too), -1 = none

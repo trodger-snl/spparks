@@ -196,6 +196,6 @@ User-manual pages (txt2html: edit the `.txt`, regenerate with `python3 doc/txt2h
 `doc/app_additive_texture`, `setup_temperature_source`, `temperature_source_{rosenthal,moser,conduction,hdf5}`,
 `laser_path`, `laser_fluctuations`, `material`. Developer notes:
 `docs/AM_KOKKOS_PLAN.md` (the additive Kokkos plan/status),
-`docs/CONDUCTION_SOURCE.md` (the nonlinear conduction temperature source), `docs/ANNEAL_IN625.md` (potts/anneal heat treatments; the H window), `docs/MATERIAL_CARDS.md`
+`docs/CONDUCTION_SOURCE.md` (the nonlinear conduction temperature source), `docs/FREE_SURFACE_LBM.md` (free-surface melt-pool flow: theory and code), `docs/ANNEAL_IN625.md` (potts/anneal heat treatments; the H window), `docs/MATERIAL_CARDS.md`
 (TOML material cards, `material` command, `tools/material_card.py`), plus
 `docs/KOKKOS_HOT_LOOP_OPTIMIZATION.md`, `docs/KOKKOS_MULTI_GPU.md`, `docs/EL_CAPITAN_BUILD.md`.

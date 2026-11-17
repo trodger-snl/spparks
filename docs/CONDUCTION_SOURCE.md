@@ -584,7 +584,7 @@ Three corrections to the DED flow model, found on Nb fed on Ti-6Al-4V
 | ambient 1 atm, born at k_powder | 4801 | 0.18 | 19726 | 0.94 | 0.3 |
 | ambient 1 atm, born dense | 3863 | 0.58 | 37510 | 0.44 | 0.5 |
 
-Free surface (scoped, not built): a single-phase free-surface LBM (fill
+Free surface (scoped here; built since, see docs/FREE_SURFACE_LBM.md): a single-phase free-surface LBM (fill
 fraction, mass exchange) fits the solver, about 3.5-5 months with the
 conduction and DED coupling the larger part, flow cost 2-4x; it would not
 calm the flow (the Weber number is about 2, so the lid is not justified,

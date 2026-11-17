@@ -129,6 +129,8 @@ the table below exactly; it never converts units.
 | `thermal.emissivity`, `powder.packing`, `optical.absorptivity` | `1` |
 | `thermal.emissivity_table` (table against T, recorded only) | `1` |
 | `powder.psd` (any of `D10`, `D50`, `D90`, increasing; recorded only) | `m` |
+| `powder.ded_arrival_temperature` (blown-powder DED: particle temperature on reaching the pool; recorded only) | `K` |
+| `powder.ded_beam_attenuation` (blown-powder DED: fraction of laser power intercepted by the powder stream; recorded only) | `1` |
 | `flow.surface_tension` | `N/m` |
 | `flow.dsigma_dT` | `N/(m K)` |
 | `flow.viscosity` (dynamic; scalar or table) | `Pa s` |

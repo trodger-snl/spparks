@@ -113,6 +113,11 @@ T_ref = { value = 1000, unit = "K", ref = "estimate", note = "between preheat an
 conductivity = { value = 0.177, unit = "W/(m K)", ref = "bartsch2021", note = "Bartsch 2021 Eq. 25, k_p = 327.6e-6 T + 0.079 W/(m K), evaluated at 300 K; C-Therm TCi modified transient plane source, Ar-flushed cell, lightly compacted (75 g), mixed fresh/recycled powder. Wei 2018 transient hot wire (as quoted by Bartsch): ~0.2 at 300 K to ~0.25 at 450 K in ambient-pressure gas." }
 packing = { value = 0.61, unit = "1", ref = "rottler2025", uncertainty = [0.60, 0.62], uncertainty_type = "bounds", note = "1 - porosity 0.39: apparent density 2.70 +/- 0.04 g/cm^3 of spatula-levelled powder in an LFA holder vs 4430 kg/m^3 solid; not a recoater-spread bed. EOS Ti-6Al-4V ELI powder, D10/D50/D90 = 25.4/37.6/46.4 um, sphericity 0.88." }
 
+# Blown-powder DED arrival temperature and beam attenuation: see 316L.toml
+# [powder] (survey of DED melt-pool models, 2026-11-16). The survey found no
+# value verified for Ti-6Al-4V (0.4 pool absorptivity in Morville 2012, from
+# a search snippet only, not recorded).
+
 [optical]
 absorptivity = { value = 0.26, unit = "1", ref = "ye2019", note = "minimum calorimetric absorptivity of bare Ti-6Al-4V plate at ~1080 nm in conduction mode (flat melt surface), Ye 2019 Table 1; flat-Ti room-temperature value 0.39. Absorptivity rises sharply above the keyhole threshold (Ye 2019 Fig. 1, not read numerically). cook2023 calibrates 0.27 +/- 0.03 in situ for LPBF at 1.07 um; bartsch2021 reviews solid 0.34-0.55 (median 0.4) and powder 0.65-0.74 (median 0.7)." }
 

@@ -29,6 +29,8 @@ UNITS = {
     'thermal.linear.conductivity': 'W/(m K)', 'thermal.linear.heat_capacity': 'J/(kg K)',
     'thermal.linear.T_ref': 'K', 'powder.conductivity': 'W/(m K)', 'powder.packing': '1',
     'powder.psd': 'm',
+    # blown-powder DED (recorded; decks pass `flow ... powder R r T x` and the absorbed power)
+    'powder.ded_arrival_temperature': 'K', 'powder.ded_beam_attenuation': '1',
     'optical.absorptivity': '1', 'microstructure.solid_front_vel': 'm/s',
     'microstructure.front_velocity_source': 'm/s',
     'microstructure.nucleation_density': '1/m^3', 'microstructure.critical_undercooling': 'K',

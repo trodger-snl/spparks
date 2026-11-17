@@ -6,9 +6,9 @@ schema_version = 1
 material = "316L"
 designation = { UNS = "S31603", spec = "NIST SRM 316L (Pichler 2020 samples); LPBF powder per ASTM F3184" }
 composition_wt_pct = { Fe = "bal", Cr = "16-18", Ni = "10-14", Mo = "2-3", Mn = "<2", C = "<0.03", note = "UNS S31603 ranges, not a measured heat" }
-version = "1.1.0"
+version = "1.2.0"
 created = 2026-10-17
-modified = 2026-11-14
+modified = 2026-11-16
 status = "draft"
 reviewed_by = ""
 
@@ -29,6 +29,12 @@ version = "1.1.0"
 date = 2026-11-14
 author = "research agent (Claude)"
 changes = "Added [flow] (liquid surface tension and its temperature coefficient from the NIST SRM 1155a levitation measurements of Leitner 2021 / Pichler 2022, liquid density from Pichler 2020, stainless-steel viscosity from Mills 2004) and six laser DED process sets (Ancalmo 2025, Fillingim 2024, Shang 2025). No existing value changed."
+
+[[changelog]]
+version = "1.2.0"
+date = 2026-11-16
+author = "research agent (Claude)"
+changes = "Added [powder] ded_arrival_temperature and ded_beam_attenuation from a survey of melt-pool models of blown-powder DED (Knapp 2017, Manvatkar 2014, Sattari 2024, Qi 2006). These are modelling practice, not measurements on this alloy. No existing value changed."
 
 [references.pichler2020]
 citation = "P. Pichler, B.J. Simonds, J.W. Sowards, G. Pottlacher, Measurements of thermophysical properties of solid and liquid NIST SRM 316L stainless steel, J. Mater. Sci. 55 (2020) 4081-4093"
@@ -89,6 +95,22 @@ citation = "X. Shang, E. Li, A. Talbot, H. Wen, T. Lyu, J. Zhang, Y. Zou, Accura
 doi = "10.1016/j.addma.2025.104736"
 url = "https://arxiv.org/abs/2407.17338"
 
+[references.knapp2017]
+citation = "G.L. Knapp, T. Mukherjee, J.S. Zuback, H.L. Wei, T.A. Palmer, A. De, T. DebRoy, Building blocks for a digital twin of additive manufacturing, Acta Mater. 135 (2017) 390-399"
+doi = "10.1016/j.actamat.2017.06.039"
+
+[references.manvatkar2014]
+citation = "V. Manvatkar, A. De, T. DebRoy, Heat transfer and material flow during laser assisted multi-layer additive manufacturing, J. Appl. Phys. 116 (2014) 124905"
+doi = "10.1063/1.4896751"
+
+[references.sattari2024]
+citation = "Sattari et al., Addit. Manuf. 86 (2024) 104227 (DEM + finite-volume model of 316L blown-powder DED; full author list and title not recorded)"
+url = "https://repository.tudelft.nl/file/File_15bbea51-9088-4417-be41-09ccaaba77b0"
+
+[references.qi2006]
+citation = "H. Qi, J. Mazumder, H. Ki, Numerical simulation of heat transfer and fluid flow in coaxial laser cladding process for direct metal deposition, J. Appl. Phys. 100 (2006) 024903"
+doi = "10.1063/1.2209807"
+
 [thermal]
 density = { value = 7900, unit = "kg/m^3", ref = "pichler2020", note = "room-temperature solid; the conduction solver uses one dense density" }
 solidus = { value = 1675, unit = "K", ref = "pichler2020" }
@@ -105,6 +127,14 @@ T_ref = { value = 1000, unit = "K", ref = "estimate", note = "between preheat an
 
 [powder]
 conductivity = { value = 0.3, unit = "W/(m K)", ref = "estimate", note = "loose powder in Ar, order of magnitude; source not recorded" }
+
+# Blown-powder DED, from a survey of 19 melt-pool models (2006-2024; 11 read in
+# full). Most let the powder arrive preheated by its flight through the beam
+# and use a literature absorptivity for the pool (0.30 for 316 at 1.06 um in
+# Manvatkar 2014, 0.3-0.7 lumped in Knapp 2017); cold powder with a tuned
+# absorptivity is the minority. Deck: flow ... powder R r T <arrival K>.
+ded_arrival_temperature = { value = 1693, unit = "K", ref = "knapp2017", uncertainty = [1000, 1693], uncertainty_type = "bounds", note = "a modelling assumption, not a measurement: Knapp 2017 take the powder as heated to the solidus (their 1693 K for 316L), Q = mdot cp (Tsol - Tamb); Manvatkar 2014 and Sattari 2024 compute it from an in-flight heat balance. Lower bound 1000 K is the coolest arrival temperature the survey found prescribed (a Ni model). Computed stream cores can be molten" }
+ded_beam_attenuation = { value = 0.13, unit = "1", ref = "sattari2024", uncertainty = [0.07, 0.21], uncertainty_type = "bounds", note = "fraction of laser power intercepted by the powder stream: 0.11-0.15 computed for 316L (Sattari 2024); bounds are the 0.07-0.21 of Qi 2006 at 6-12 g/min (H13-type steel, CO2 laser). The energy-conserving treatment applies the pool absorptivity to the transmitted power and returns the intercepted part only with captured powder (Manvatkar 2014 Eq. 2). Depends on feed rate and nozzle, not on the alloy" }
 
 [flow]
 # Liquid-state properties for the conduction source's melt-pool flow (flow lbm).

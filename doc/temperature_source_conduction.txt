@@ -82,7 +82,7 @@ keyword = {k_table} or {cp_table} or {latent} or {k_powder} or {convection} or {
     free_surface = the liquid's surface moves (free-surface lattice Boltzmann; needs {ded}, one process)
     g = surface tension at the liquidus (N/m, default 1.5), without properties cards
     r = powder mass rate (kg/s) blown onto the surface, R = 1/e radius (m) of its footprint about the laser axis, Tf = its temperature (K, default T0)
-    a = contact angle (degrees) where the liquid meets lower solid (default 0)
+    a = contact angle (degrees) where the liquid meets lower solid (default 20)
     c, t, w = stabilisers: capillary step factor (default 0.04), relaxation-time floor of surface cells (default 1), share of the unsmoothed surface height (default 1)
   {beam} value = {gaussian} or {square}
     gaussian = exp(-x^2/sx^2) per axis; square = uniform over |x| <= sx, |y| <= sy (a top-hat of side 2 sx by 2 sy; the depth profile is unchanged)
@@ -414,7 +414,9 @@ overhangs: a liquid surface is one height per column, liquid hanging
 over gas carries no surface force).  The Marangoni stress acts along the
 tilted surface.  Where liquid meets a lower solid column the surface
 is given the contact angle {fs_angle} (0 = wets it fully, 90 = meets it
-at its own height).  The thermal grid then runs to the top of the box,
+at its own height).  On a 316L powder track 0 spread the bead flat over
+gas pockets under its flanks and 45 made it hump; 20 gave a dense,
+continuous bead.  The thermal grid then runs to the top of the box,
 interface cells share the enthalpy of the full cell under them, the
 laser lands on each column's surface, and a cell that freezes partly
 full becomes a whole cell or gas (stacks of them settle first); that

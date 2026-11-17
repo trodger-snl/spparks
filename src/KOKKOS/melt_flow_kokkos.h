@@ -214,8 +214,11 @@ struct MeltFlow {
   // not below its own (0: mirrored, the liquid wets it; 90: at its own
   // height). As a share of the height difference (the earlier fs_edge) any
   // value held a tall bead's edge too stiffly: at 0.5 a 316L bead 16 cells
-  // high balled and the pool broke away from it.
-  double fs_angle = 0.0;
+  // high balled and the pool broke away from it. 316L powder track (367 W,
+  // 1.5 mm spot, 450 ms): 0 spread the bead flat and wide over gas pockets
+  // under its flanks; 45 humped (the pool broke away, 600 cells of
+  // spatter); 20 gave a dense, round, continuous bead.
+  double fs_angle = 20.0;
   // A floor on the relaxation time of interface cells. At a liquid metal's
   // viscosity (tau about 0.51) they are unstable under a Marangoni force:
   // the pool of check 21 breaks up at a third of its forcing with no floor,

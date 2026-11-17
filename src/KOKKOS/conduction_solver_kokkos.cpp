@@ -1440,11 +1440,18 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
                 const int a = i + cx, b = j + cy, d = k + cz;
                 near = held(a, b, d) && MF::liq(ty(a, b, d)) && T_(a + o0, b + o1, d + o2) > tsm0;
               }
-            if (!hot && !near) {
+            // Under metal (a full cell, or one at least half full) a frozen
+            // cell is no surface: it is filled at once, whatever it holds.
+            // Left as a film it is gas to the stencil, and a bead flowing
+            // over cold plate sat on a layer of it, insulated (2,000 K
+            // liquid one cell above plate at 1,100 K, no fusion).
+            bool cov = false;
+            if (!hot && held(i, j, k + 1)) {
+              const int ta = ty(i, j, k + 1);
+              cov = ta == MF::FLUID || ta == MF::WALL || (ta == MF::INTERFACE && ep(i, j, k + 1) >= 0.5);
+            }
+            if (!hot && (!near || cov)) {
               const double e = ep(i, j, k);
-              // under metal it is filled whatever it holds: no pore is left
-              // where a bead flows over the frozen rim
-              const bool cov = held(i, j, k + 1) && ty(i, j, k + 1) != MF::GAS;
               if (e >= 0.5 || cov) {
                 nt = MF::WALL; rs -= 1.0 - e;
                 P_(i + o0, j + o1, k + o2) = DENSE;
@@ -1889,8 +1896,12 @@ void ConductionSolverKokkos::fs_surface_z()
     }, Kokkos::Max<int>(top));
   // ponytail: metal thrown to the lattice's top faulted on the GPU (which
   // kernel was not traced); stop before it gets there
-  if (top >= bz - 2)
-    error->one(FLERR, "conduction: flow free_surface: metal reached the top of the lattice (spatter, or the box is too low)");
+  if (top >= bz - 2) {
+    char msg[200];
+    snprintf(msg, sizeof(msg), "conduction: flow free_surface: metal reached the top of the lattice "
+             "(cell layer %d of %d; spatter, or the box is too low)", top, bz);
+    error->one(FLERR, msg);
+  }
 }
 
 /* ----------------------------------------------------------------------

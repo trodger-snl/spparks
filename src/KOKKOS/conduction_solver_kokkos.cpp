@@ -2588,3 +2588,4 @@ void ConductionSolverKokkos::exchange()
 /* ---------------------------------------------------------------------- */
 
 double ConductionSolverKokkos::ambient() const { return src->ambient(); }
+bool ConductionSolverKokkos::fs_on() const { return flow && flow->fs; }

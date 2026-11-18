@@ -255,12 +255,17 @@ class ConductionSolverKokkos : protected Pointers {
   // reading the whole lattice again.
   template <class F>
   double sample(Kokkos::View<double*> d_T, int nlocal, int nall, const F on_owned) {
-    auto T_ = T; auto sc = site_cell;
+    auto T_ = T; auto sc = site_cell; auto P_ = P;
     const double Ta = ambient();
+    // free surface: a gas cell's T is stale (a cell the liquid left, or an
+    // interface cell rounded to gas as it froze, keeps its last T); its sites
+    // are air (i2 = 5) and read ambient, or the hottest of them would hold
+    // the max above the solidus and the next layer would never start
+    const bool gas_amb = fs_on();
     double m = 0.0;
     Kokkos::parallel_reduce("ConductionSample", nall, KOKKOS_LAMBDA(const int s, double &mx) {
       const int o = sc(s);
-      const double v = o < 0 ? Ta : T_.data()[o];
+      const double v = o < 0 || (gas_amb && (P_.data()[o] & 3) == GAS) ? Ta : T_.data()[o];
       d_T(s) = v;
       if (s < nlocal) {
         if (v > mx) mx = v;
@@ -272,6 +277,7 @@ class ConductionSolverKokkos : protected Pointers {
 
  private:
   double ambient() const;
+  bool fs_on() const;
 };
 
 }

@@ -1548,12 +1548,9 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
               }
               if (go) {
                 double &rk = cap ? rc : kt > kb ? rt : rs;
-                if (a >= 0.5) {
-                  nt = MF::WALL; rk -= 1.0 - e;
-                  P_(i + o0, j + o1, k + o2) = DENSE;
-                  H_(i + o0, j + o1, k + o2) = (KK_FLOAT) (qa - Hr(m));
-                  T_(i + o0, j + o1, k + o2) = (KK_FLOAT) Tv;
-                } else { nt = MF::GAS; rk += e; }
+                // made metal in FlowFsFrozen: a neighbour's `near` reads this T
+                if (a >= 0.5) { nt = MF::WALL; rk -= 1.0 - e; }
+                else { nt = MF::GAS; rk += e; }
               }
             }
           } else if (!metal) nt = MF::GAS;
@@ -1562,6 +1559,18 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
           fT(i, j, k) = (KK_FLOAT) Tv;
           q(i, j, k) = (KK_FLOAT) qa;
         }, dres, dcap, dset);
+      // a frozen interface cell made whole: metal at its host's T and enthalpy
+      Kokkos::parallel_for("FlowFsFrozen",
+        LightMD<3>({fl0[0], fl0[1], fl0[2]}, {fl1[0], fl1[1], fl1[2]}),
+        KOKKOS_LAMBDA(const int i, const int j, const int k) {
+          using MF = MeltFlow<KK_FLOAT>;
+          if (!(i >= ov[0] && i < ov[3] && j >= ov[1] && j < ov[4] && k >= ov[2] && k < ov[5])) return;
+          if (ty(i, j, k) != MF::INTERFACE || t2(i, j, k) != MF::WALL) return;
+          const int m = M_(i + o0, j + o1, k + o2);
+          P_(i + o0, j + o1, k + o2) = DENSE;
+          H_(i + o0, j + o1, k + o2) = (KK_FLOAT) (q(i, j, k) - Hr(m));
+          T_(i + o0, j + o1, k + o2) = fT(i, j, k);
+        });
       double dr3[3] = {dres, dcap, dset};
       MPI_Allreduce(MPI_IN_PLACE, dr3, 3, MPI_DOUBLE, MPI_SUM, world);
       dres = dr3[0]; dcap = dr3[1]; dset = dr3[2];

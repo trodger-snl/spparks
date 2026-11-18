@@ -143,11 +143,14 @@ class ConductionSolverKokkos : protected Pointers {
   int fwin[6] = {0, 0, 0, 0, 0, 0};
   int fg0[3] = {0, 0, 0}, fW[6] = {0, 0, 0, 0, 0, 0}, fG[6] = {0, 0, 0, 0, 0, 0};
   bool fwin_on = false, fwin_loc = false;
-  // halo buffers of the flow's fields (hs, hr: host staging, as hsbuf)
+  // halo buffers of the flow's fields (hs, hr: host staging, as hsbuf);
+  // public: nvcc rejects a private type in a kernel's signature
+ public:
   template <class S> struct FlowHalo {
     Kokkos::View<S*> s, r;
     Kokkos::View<S*, MPIStagingSpace> hs, hr;
   };
+ private:
   FlowHalo<KK_FLOAT> fhR;
   FlowHalo<unsigned char> fhC;
   double flow_cap_seen = 0.0;

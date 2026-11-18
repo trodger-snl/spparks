@@ -160,8 +160,11 @@ struct FlowWin {
       Kokkos::parallel_for("FlowWinMove",
         LightMD<3>({a[0], a[1], a[2]}, {b[0], b[1], b[2]}),
         KOKKOS_LAMBDA(const int i, const int j, const int k) {
-          if constexpr (V::rank() == 4) { for (int q = 0; q < nc; q++) nw(i, j, k, q) = old(i, j, k, q); }
-          else nw(i, j, k) = old(i, j, k);
+          // (named before the if constexpr: nvcc will not capture there first)
+          const FlowWin &dst = nw, &src = old;
+          const int nq = nc;
+          if constexpr (V::rank() == 4) { for (int q = 0; q < nq; q++) dst(i, j, k, q) = src(i, j, k, q); }
+          else dst(i, j, k) = src(i, j, k);
         });
     *this = nw;
   }

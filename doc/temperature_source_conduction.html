@@ -82,7 +82,7 @@ setup_temperature_source conduction card overrides keyword values ...
     m = <I>pool</I> (default), <I>flow</I> or <I>none</I>: the melt pool is well mixed,
     the melt-pool flow carries the composition (<I>flow</I> keyword), or it does not change
     f = <I>slab</I> (default) or <I>surface</I>: how new material enters under <I>mix flow</I> with <I>ded</I>
-  <I>flow</I> values = <I>lbm</I> <B>dsigma_dT s</B> <B>beta b</B> <B>viscosity nu</B> <B>mushy C</B> <B>u_ref u</B> <B>smagorinsky cs</B> <B>properties cards|constant</B> <B>sigma_table file</B> <B>free_surface</B> <B>sigma g</B> <B>powder r R <B>T Tf</B></B> <B>fs_angle a</B> <B>fs_pin Tp</B> <B>fs_cap c</B> <B>fs_tau t</B> <B>fs_raw w</B>
+  <I>flow</I> values = <I>lbm</I> <B>dsigma_dT s</B> <B>beta b</B> <B>viscosity nu</B> <B>mushy C</B> <B>u_ref u</B> <B>smagorinsky cs</B> <B>properties cards|constant</B> <B>sigma_table file</B> <B>free_surface</B> <B>sigma g</B> <B>powder r R <B>T Tf</B></B> <B>fs_angle a</B> <B>fs_pin Tp</B> <B>fs_engulf 0/1</B> <B>fs_cap c</B> <B>fs_tau t</B> <B>fs_raw w</B>
     melt-pool flow (lattice Boltzmann) on the liquid cells of the lattice box
     s = surface tension's temperature coefficient (N/m/K, default -2.6e-4)
     b = volumetric thermal expansion of the liquid (1/K, default 1.7e-4)
@@ -447,7 +447,12 @@ continuous bead.  With <I>fs_pin</I> Tp, dry solid whose top cell is
 colder than Tp (K) meets the liquid at 90 degrees instead: molten metal
 that reaches cold solid freezes at the contact line and stops there
 (Schiaffino and Sonin 1997), and <I>fs_angle</I> applies to hot solid only.
-Off by default.  The thermal grid then runs to the top of the box,
+Off by default.  With <I>fs_engulf</I> 1, powder that lands on solid ahead
+of the laser axis and within the pool's half-width of the track (the
+liquid surface's, measured each step) is held there and melts in as the
+pool front crosses its column (a fraction v h / dx per thermal step);
+powder landing anywhere else off the liquid bounces off and is lost.
+Off by default (powder off the liquid is lost).  The thermal grid then runs to the top of the box,
 interface cells share the enthalpy of the full cell under them, the
 laser lands on each column's surface, and a cell that freezes partly
 full becomes a whole cell or gas (stacks of them settle first); that

@@ -768,6 +768,7 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
       if (fX.extent(0)) Kokkos::deep_copy(fXfed, fX);
       fqfed = Kokkos::View<KK_FLOAT***>("cond_fqfed", bn[0], bn[1], bn[2]);
       fdm = Kokkos::View<KK_FLOAT**>("cond_fdm", bn[0], bn[1]);
+      if (cfg.flow.fs_engulf > 0.0) fpile = Kokkos::View<double**>("cond_fpile", bn[0], bn[1]);
       auto hq = Kokkos::create_mirror_view(fqfed);
       auto hX = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), fX);
       auto hHr = Kokkos::create_mirror_view_and_copy(Kokkos::HostSpace(), Hrefm);
@@ -1671,13 +1672,39 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
       dmscale = 1.0 + add / step;
       const double a0 = step * dmscale * dx * dx / (M_PI * fc.powder_radius * fc.powder_radius);
       const double ir2 = 1.0 / (fc.powder_radius * fc.powder_radius);
-      auto dm = fdm; auto skt_ = F.skt; auto ffl = F.fl;
+      auto dm = fdm; auto skt_ = F.skt; auto ffl = F.fl; auto pile = fpile;
       // this rank's columns: inject() feeds no others, and the grid's
       // face positions do not reach the flow block's halo
-      Kokkos::parallel_for("FlowFsPowder",
-        LightMD<2>({std::max(F.wlo[0], olo[0]), std::max(F.wlo[1], olo[1])},
-                   {std::max(std::max(F.wlo[0], olo[0]), std::min(F.whi[0], ohi[0])),
-                    std::max(std::max(F.wlo[1], olo[1]), std::min(F.whi[1], ohi[1]))}),
+      const LightMD<2> cols({std::max(F.wlo[0], olo[0]), std::max(F.wlo[1], olo[1])},
+                            {std::max(std::max(F.wlo[0], olo[0]), std::min(F.whi[0], ohi[0])),
+                             std::max(std::max(F.wlo[1], olo[1]), std::min(F.whi[1], ohi[1]))});
+      /* fs_engulf: powder that misses the liquid is held where the pool front
+         will run over it -- ahead of the laser axis (along the beam's motion
+         since the last step) and within the pool's half-width of it -- and
+         melts in as the front crosses the column (a fraction v h / dx per
+         thermal step: one column in dx / v). Elsewhere it bounces off
+         (lost). ponytail: held powder stays put (an upper bound: some of it
+         would bounce too) and enters at the feed's enthalpy. */
+      bool engulf = fpile.extent(0) > 0 && fs_lset;
+      double ux = 0.0, uy = 0.0, hw = 0.0, fr = 0.0;
+      if (engulf) {
+        const double mx = xl - fs_lx, my = yl - fs_ly, mv = std::sqrt(mx * mx + my * my);
+        engulf = mv > 0.0;
+        if (engulf) {
+          ux = mx / mv; uy = my / mv; fr = std::min(1.0, mv / dx);
+          // the pool's half-width: liquid surface columns' distance across the track
+          Kokkos::parallel_reduce("FlowFsPoolWidth", cols, KOKKOS_LAMBDA(const int i, const int j, double &w) {
+            const int kt = skt_(i, j);
+            if (kt < 0 || ffl(i, j, kt) < (KK_FLOAT) 1.0) return;
+            const double c = Kokkos::fabs(-(0.5 * (fxlo_(i + o0) + fxhi_(i + o0)) - xl) * uy
+                                          + (0.5 * (fylo_(j + o1) + fyhi_(j + o1)) - yl) * ux);
+            if (c > w) w = c;
+          }, Kokkos::Max<double>(hw));
+          MPI_Allreduce(MPI_IN_PLACE, &hw, 1, MPI_DOUBLE, MPI_MAX, world);
+          hw += 0.5 * dx;
+        }
+      }
+      Kokkos::parallel_for("FlowFsPowder", cols,
         KOKKOS_LAMBDA(const int i, const int j) {
           const double ddx = 0.5 * (fxlo_(i + o0) + fxhi_(i + o0)) - xl;
           const double ddy = 0.5 * (fylo_(j + o1) + fyhi_(j + o1)) - yl;
@@ -1685,11 +1712,19 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
           // surface cell is above its liquidus (else the cold rim of the
           // pool piles up as a mush that never flows)
           const int kt = skt_(i, j);
-          dm(i, j) = kt >= 0 && ffl(i, j, kt) >= (KK_FLOAT) 1.0
-            ? (KK_FLOAT) (a0 * Kokkos::exp(-(ddx * ddx + ddy * ddy) * ir2)) : (KK_FLOAT) 0.0;
+          const double g = a0 * Kokkos::exp(-(ddx * ddx + ddy * ddy) * ir2);
+          const bool liq = kt >= 0 && ffl(i, j, kt) >= (KK_FLOAT) 1.0;
+          if (engulf) {
+            if (liq) { const double r = fr * pile(i, j); dm(i, j) = (KK_FLOAT) (g + r); pile(i, j) -= r; }
+            else {
+              dm(i, j) = (KK_FLOAT) 0.0;
+              if (ddx * ux + ddy * uy > 0.0 && Kokkos::fabs(-ddx * uy + ddy * ux) <= hw) pile(i, j) += g;
+            }
+          } else dm(i, j) = liq ? (KK_FLOAT) g : (KK_FLOAT) 0.0;
         });
       fs_fed += step;
-    }
+      fs_lx = xl; fs_ly = yl; fs_lset = true;
+    } else fs_lset = false;
     // each flow step: carry the fields, feed, convert. Several ranks: the
     // halo's mass fluxes and velocities after the step, the carried fields
     // between the sweeps, mass and fields before convert(), its marks and
@@ -2048,14 +2083,21 @@ void ConductionSolverKokkos::fs_report()
       }, Ei, Vi);
     E += Ei; V += Vi;
   }
-  double ev[2] = {E, V};
-  MPI_Allreduce(MPI_IN_PLACE, ev, 2, MPI_DOUBLE, MPI_SUM, world);
-  E = ev[0]; V = ev[1];
+  // fs_engulf: powder lying on this rank's columns, not yet in a pool
+  double pl = 0.0;
+  if (fpile.extent(0)) {
+    auto pile = fpile;
+    Kokkos::parallel_reduce("ConductionFsPile", LightMD<2>({fh[0], fh[2]}, {flow->nx - fh[1], flow->ny - fh[3]}),
+      KOKKOS_LAMBDA(const int i, const int j, double &s) { s += pile(i, j); }, pl);
+  }
+  double ev[3] = {E, V, pl};
+  MPI_Allreduce(MPI_IN_PLACE, ev, 3, MPI_DOUBLE, MPI_SUM, world);
+  E = ev[0]; V = ev[1]; pl = ev[2];
   if (domain->me) return;
-  char msg[400];
-  snprintf(msg, sizeof(msg), "conduction: free surface at t = %g s: powder fed %.6g cells, caught %.6g (%.1f%%); "
+  char msg[440];
+  snprintf(msg, sizeof(msg), "conduction: free surface at t = %g s: powder fed %.6g cells, caught %.6g (%.1f%%), lying %.4g; "
            "droplets lost %.4g, freeze rounding %+.4g (capped %+.4g, settled %+.4g), reservoir %+.4g cells; metal %.6f cells, enthalpy %.9g J\n", t_fd,
-           fs_fed, fs_got, fs_fed > 0.0 ? 100.0 * fs_got / fs_fed : 0.0, fs_lost, fs_round, fs_rcap, fs_rset, fs_res,
+           fs_fed, fs_got, fs_fed > 0.0 ? 100.0 * fs_got / fs_fed : 0.0, pl, fs_lost, fs_round, fs_rcap, fs_rset, fs_res,
            V / (dx * dx * dx), E);
   if (screen) fputs(msg, screen);
   if (logfile) fputs(msg, logfile);

@@ -182,6 +182,9 @@ class ConductionSolverKokkos : protected Pointers {
   Kokkos::View<KK_FLOAT**> zsf;           // per local column: the surface the laser lands on
   Kokkos::View<KK_FLOAT***> fXfed, fqfed; // block: the composition and enthalpy powder brings to a cell
   Kokkos::View<KK_FLOAT**> fdm;           // block columns: powder per thermal step (cells of liquid)
+  Kokkos::View<double**> fpile;           // fs_engulf: block columns, powder held ahead of the pool (cells)
+  double fs_lx = 0.0, fs_ly = 0.0;          // fs_engulf: the laser axis at the last feeding step
+  bool fs_lset = false;
   int fvalid[6] = {0, 0, 0, 0, 0, 0};     // block cells whose flow type is current (the window last filled)
   double fs_res = 0.0, fs_fed = 0.0, fs_got = 0.0, fs_lost = 0.0, fs_round = 0.0, fs_rcap = 0.0, fs_rset = 0.0, rho_feed = 0.0;
   bool fs_laser = false;

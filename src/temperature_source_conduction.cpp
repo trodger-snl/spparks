@@ -303,7 +303,8 @@ void ConductionTemperatureSource::setup_temperature_source(
                   : k == "u_ref" ? &cfg.flow.u_ref : k == "smagorinsky" ? &cfg.flow.smag
                   : k == "sigma" ? &cfg.flow.sigma : k == "fs_tau" ? &cfg.flow.fs_tau
                   : k == "fs_raw" ? &cfg.flow.fs_raw : k == "fs_cap" ? &cfg.flow.fs_cap : k == "fs_angle" ? &cfg.flow.fs_angle
-                  : k == "fs_pin" ? &cfg.flow.fs_pin : nullptr;
+                  : k == "fs_pin" ? &cfg.flow.fs_pin
+                  : k == "fs_engulf" ? &cfg.flow.fs_engulf : nullptr;
         if (!v) break;
         *v = num(i + 2);
         i += 2;

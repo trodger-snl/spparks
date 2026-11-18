@@ -14,7 +14,7 @@ Code:
 - `src/KOKKOS/conduction_solver_kokkos.cpp`: `flow_step()` holds the
   thermal coupling, the powder feed and the write-back. `fs_surface_z()`
   sets where the laser lands.
-- `tools/melt_flow_check.cpp`: gates 14-25 cover the free surface (23-25
+- `tools/melt_flow_check.cpp`: gates 14-26 cover the free surface (23-26
   the height functions of `fs_curv hf`, section 3a).
 - `docs/figures/make_fs_figures.py`: draws the figures (`python3 docs/figures/make_fs_figures.py`).
 
@@ -268,8 +268,25 @@ INTERFACE cell c, in `surface_hf()` (kernels `FlowFsHF`, `FlowFsHFKappa`,
    filled one (Körner's rule), not only one over metal (a9ac6675, kept for
    `column`): a lip over a gap now carries the curvature of its tip, which
    pushes it back, and the a9ac6675 rule would forbid the bulges a wall
-   needs. Gate 25 holds an overhanging bulge that needs no conversion; the
-   wall deck below is the coupled test.
+   needs. Gate 26 tests it: a floating elliptic cylinder (semi-axes 4 and
+   10 cells) must round into a circle, its sides growing out over gas.
+   Under `hf` it does (half-width −0.5%, Laplace pressure +1.4%); with the
+   a9ac6675 rule kept it stalls (half-width −14%, the inside's pressure
+   lost); under `column` it falls apart (half-width +82%).
+9. **A solid face's contact angle depends on the frame** (`ponytail:`).
+   The column model's rules, carried into each frame, read a vertical
+   solid face two ways: in the frame along the face (heights along z, the
+   surface meeting the face) the solid column is *high* and mirrors, 90°;
+   in the frame across it (heights along x) the solid above or below the
+   liquid is *dry and lower*, and `fs_angle` applies: at 20° the liquid
+   wets the face and climbs it. Youngs' normal counts WALL as full, which
+   tilts the normal of a contact-line cell toward the face's normal, so
+   such cells take the second frame. A liquid half-ellipse on a wall
+   (semi-axes 4 out, 10 along) stayed a lens pinned 18 cells up the wall at
+   20°, and at 0° crept up and down the wall. Below `fs_pin` the face is
+   held (90°, its own height), which is how the decks run. The upgrade is
+   Basilisk's: a contact angle set through ghost fills in the solid cells,
+   one value for every frame.
 
 ### Coupling (conduction solver)
 
@@ -313,6 +330,7 @@ relative, per INTERFACE cell, from the exact fills of the shape.
 | 24 | cylinder (normals all round, under faces too), κ rms R = 8 / 16 / 32 | 0.83% / 0.20% / 0.049%, order 2.07, 2.02 | ≤ 1%; ≥ 1.8 |
 | 24 | cylinder at rest R = 8: ρ inside / (3σ/R) − 1; u ν/σ | 0.8%; 1e-4 | ≤ 3%; ≤ 1e-2 |
 | 25 | half-cylinder on a vertical wall (overhang, 90° at the wall) R = 8: κ rms; Laplace pressure; u ν/σ; lowest point moved | 0.82%; 0.78%; 4e-6 / 6e-6; −0.02 cells | ≤ 1%; ≤ 3%; ≤ 1e-2; ≤ 0.5 |
+| 26 | floating elliptic cylinder 4 × 10 rounds into a circle (r = 6.32), sides growing over gas: middle row's half-width / r − 1; Laplace pressure | −0.52%; +1.4% | ≤ 5%; ≤ 3% |
 | 14–22 | the column gates rerun under `hf` | all pass; 17, 18, 19, 22 within 2e-3 of their column values (17: period +3.56%, decay −13.2%; 18: 0.70%; 19: tilt −2.03%; 22: 4.3e-4). 16: Σ m q off by 1.6e-5 (6.4e-4 under `column`: the a9ac6675 rule, see gate 16's note) | as for `column` |
 
 The largest κ errors (2.65% at R = 8 and 16, 1.05% at 32) are cells
@@ -723,9 +741,10 @@ thermal step).
 | 23 | Sphere (`hf`), R = 4–32 cells | κ second order; Laplace pressure 3%; spurious currents fall with R |
 | 24 | Horizontal cylinder (`hf`), R = 8–32 | κ second order; Laplace pressure 3% |
 | 25 | Half-cylinder on a vertical wall (`hf`) | κ, Laplace pressure; it stays put |
+| 26 | Elliptic cylinder rounding (`hf`) | final radius and Laplace pressure; growth over gas |
 
 `melt_flow_check fs` runs 14-22 under `column` and again under `hf`, then
-23-25; `melt_flow_check hf` runs 23-25 alone.
+23-26; `melt_flow_check hf` runs 23-26 alone.
 
 Gates 17 and 19 also print their results with the interface τ floor on, to
 show its bias.

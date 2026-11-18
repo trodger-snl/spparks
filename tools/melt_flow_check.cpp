@@ -1172,15 +1172,16 @@ double sphere_fill(int i, int j, int k, const double c[3], double r, int n = 256
     }
   return s / (n * n);
 }
-double cylinder_fill(int i, int k, double c0, double c2, double r, double xw = -1e30, int n = 4096)
+double cylinder_fill(int i, int k, double c0, double c2, double r, double xw = -1e30, double rz = 0.0, int n = 4096)
 {
+  if (rz <= 0.0) rz = r;     // an ellipse of semi-axes r along x, rz along z
   double s = 0.0;
   for (int a = 0; a < n; a++) {
     const double x = i + (a + 0.5) / n;
     if (x < xw) continue;
     const double q = r * r - (x - c0) * (x - c0);
     if (q <= 0.0) continue;
-    const double h = std::sqrt(q);
+    const double h = rz / r * std::sqrt(q);
     s += std::max(0.0, std::min(k + 1.0, c2 + h) - std::max((double) k, c2 - h));
   }
   return s / n;
@@ -1305,6 +1306,47 @@ void fs_cyl(bool wall, double r, int nstep, double &rms, double &med, double &mx
   sag = (c2 - r) - zlo;
 }
 
+// 26. A horizontal elliptic cylinder of liquid (semi-axes a along x, b
+//     along z; along y, periodic), floating, no gravity: it must round into
+//     the cylinder of its area, radius r = sqrt(a b) > a, its sides growing
+//     out over gas (which the column model's conversion does not allow:
+//     liquid enters a gas cell sideways only over metal) and holding the
+//     Laplace pressure sigma / r. Returns the middle row's half-width / r
+//     - 1 and that pressure's error. (Not stuck to a wall: on a vertical
+//     wall face the contact angle depends on the frame: docs/
+//     FREE_SURFACE_LBM.md, 3a.) Kept under hf, the a9ac6675 rule held the
+//     sides back: half-width -14%, and the liquid lost its pressure.
+template <class R>
+void fs_relax(double &reach, double &dp)
+{
+  MeltFlow<R> m;
+  const int nx = 24, nz = 32;
+  const double a = 4.0, b = 10.0, c0 = 12.2, c2 = 16.3;
+  m.fs = true; m.fs_hf = g_hf; m.fs_tau = 0.0;
+  m.resize(nx, 2, nz);
+  m.p.periodic[0] = m.p.periodic[1] = true;      // z closed: the conversion rule acts (it needs a floor)
+  m.p.nu = 0.1;
+  m.p.sigma = 0.002;
+  fs_fill(m, [&](int i, int, int k) { return cylinder_fill(i, k, c0, c2, a, -1e30, b); }, [](int, int, int) { return false; });
+  const int lo[3] = {0, 0, 0}, hi[3] = {nx, 2, nz};
+  for (int s = 0; s < 12000; s++) { m.surface(lo, hi); m.step(); m.convert(); }
+  const double r = std::sqrt(a * b);
+  // the liquid's centre (fill-weighted) and the width of its row there
+  auto e = host(m.eps.v); auto t = host(m.type.v);
+  double s = 0.0, sx = 0.0, sz = 0.0;
+  for (int k = 0; k < nz; k++)
+    for (int i = 0; i < nx; i++) {
+      const double f = MeltFlow<R>::liq(t(i, 0, k)) ? std::min(1.0, std::max(0.0, (double) e(i, 0, k))) : 0.0;
+      s += f; sx += f * (i + 0.5); sz += f * (k + 0.5);
+    }
+  const int kc = (int) (sz / s);
+  double row = 0.0;
+  for (int i = 0; i < nx; i++) row += MeltFlow<R>::liq(t(i, 0, kc)) ? std::min(1.0, std::max(0.0, (double) e(i, 0, kc))) : 0.0;
+  reach = 0.5 * row / r - 1.0;
+  auto dist = [&](int i, int, int k) { return std::sqrt(std::pow(i + 0.5 - sx / s, 2) + std::pow(k + 0.5 - sz / s, 2)); };
+  dp = fs_inner_rho(m, dist, r - 3.0) / (3.0 * m.p.sigma / r) - 1.0;
+}
+
 template <class R>
 void fs_hf_shapes()
 {
@@ -1358,6 +1400,14 @@ void fs_hf_shapes()
   check("25 bulge on a wall at rest: rho inside / (3 sigma / r) - 1", dp, 3e-2);
   check("25 bulge on a wall at rest: spurious currents, u nu / sigma", ca, 1e-2);
   check("25 bulge on a wall: its lowest point moved (cells)", sag, 0.5);
+  double reach;
+  fs_relax<R>(reach, dp);
+  check("26 elliptic cylinder rounds: middle row's half-width / r - 1", reach, 5e-2);
+  check("26 elliptic cylinder rounds: rho inside / (sigma / r) - 1", dp, 3e-2);
+  g_hf = false;
+  fs_relax<R>(reach, dp);
+  g_hf = true;
+  printf("       26 under fs_curv column: half-width / r - 1 = %+.3f, rho inside / (sigma / r) - 1 = %+.3f\n", reach, dp);
 }
 
 template <class R>

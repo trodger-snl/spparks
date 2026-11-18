@@ -2523,7 +2523,10 @@ void ConductionSolverKokkos::stage(const Stage &c, Kokkos::View<KK_FLOAT***> Y1,
               // is unique: walk to it from the cell's previous T (a few K away)
               // instead of a 13-level binary search.
               const R u = (Tr - H0r) * idTr;
-              int lo = u <= R(0) ? 0 : (u >= R(nHt - 2) ? nHt - 2 : (int) u);
+              // clamped as an int: a NaN T (fast-math drops the float
+              // tests) converted to a wild index and faulted on the GPU
+              int lo = (int) Kokkos::fmin(Kokkos::fmax(u, R(0)), R(nHt - 2));
+              lo = lo < 0 ? 0 : lo > nHt - 2 ? nHt - 2 : lo;
               while (lo > 0 && Ht[lo] > Hn) lo--;
               while (lo < nHt - 2 && Ht[lo + 1] <= Hn) lo++;
               Tv = H0r + (R(lo) + (Hn - Ht[lo]) * iHt[lo]) * dTr;   // 1/dH, 0 if flat

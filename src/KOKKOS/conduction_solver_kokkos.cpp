@@ -667,11 +667,17 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
   fwin_on = fwin_loc = false;
   if (cfg.flow.on) {
     // this rank's cells of the box, and two halo layers toward each neighbour
+    // (fs_curv hf: HF_L + 1, as deep as the height columns reach from a
+    // cell one beyond this rank's)
     bool multi = false;
-    for (int d = 0; d < 4; d++) { fh[d] = nbr[d] >= 0 ? 2 : 0; multi = multi || fh[d]; }
+    const int hd = flow_halo_depth(cfg.flow.fs && cfg.flow.fs_hf);
+    for (int d = 0; d < 4; d++) { fh[d] = nbr[d] >= 0 ? hd : 0; multi = multi || fh[d]; }
     const int ob[2] = {hi[0] - lo[0] + 1, hi[1] - lo[1] + 1};
-    if ((fh[0] + fh[1] && ob[0] < 2) || (fh[2] + fh[3] && ob[1] < 2))
-      error->one(FLERR,"conduction: flow lbm needs 2 or more sites per rank along x and y");
+    if ((fh[0] + fh[1] && ob[0] < hd) || (fh[2] + fh[3] && ob[1] < hd)) {
+      char msg[120];
+      snprintf(msg, sizeof(msg), "conduction: flow lbm needs %d or more sites per rank along x and y", hd);
+      error->one(FLERR, msg);
+    }
     fb0[0] = ax.nlo + lo[0] - glo[0] - cx0 + 1 - fh[0];
     fb0[1] = ay.nlo + lo[1] - glo[1] - cy0 + 1 - fh[2];
     fb0[2] = az.nlo;
@@ -685,6 +691,7 @@ void ConductionSolverKokkos::build(Kokkos::View<double*[3], Kokkos::LayoutRight>
     if (cfg.flow.fs_cap > 0.0) flow->fs_cap = cfg.flow.fs_cap;
     if (cfg.flow.fs_angle >= 0.0) flow->fs_angle = cfg.flow.fs_angle;
     if (cfg.flow.fs_pin >= 0.0) flow->fs_pin_T = cfg.flow.fs_pin;
+    flow->fs_hf = cfg.flow.fs && cfg.flow.fs_hf;
     flow->resize(bn[0], bn[1], bn[2], false);   // no cells held until there is a pool
     fg0[0] = lo[0] - glo[0] - fh[0]; fg0[1] = lo[1] - glo[1] - fh[2]; fg0[2] = 0;
     for (int d = 0; d < 6; d++) fW[d] = 0;
@@ -1642,16 +1649,20 @@ void ConductionSolverKokkos::flow_step(double h, bool laser_on, double xl, doubl
       });
   }
 
+  // the halo's depth: 2 (fs_curv hf: as deep as the height columns reach)
+  const int hd = flow_halo_depth(F.fs && F.fs_hf);
   if (multi) {
-    flow_exchange(as4(F.type.v), fhC, 2, 3, F.wlo, F.whi);
-    flow_exchange(as4(F.props ? F.sig.v : F.T.v), fhR, 1, 3, F.wlo, F.whi);   // what the Marangoni force reads
+    flow_exchange(as4(F.type.v), fhC, hd, 3, F.wlo, F.whi);
+    // what the Marangoni force reads (fs_curv hf: and the capillary pressure, per cell)
+    flow_exchange(as4(F.props ? F.sig.v : F.T.v), fhR, F.fs_hf ? hd : 1, 3, F.wlo, F.whi);
   }
   using W3 = MeltFlow<KK_FLOAT>::W3;
   double fs_lost_now = 0.0, fs_got_now = 0.0, dmscale = 1.0;
   // free surface, several ranks: bring the halo's copies of these fields
-  // over, two cells deep (the stencils of convert() reach that far)
-  auto xr = [&](std::initializer_list<W3> v) { for (const W3 &a : v) flow_exchange(as4(a.v), fhR, 2, 3, F.wlo, F.whi); };
-  auto xc = [&](FlowWin<Kokkos::View<unsigned char***>> a) { flow_exchange(as4(a.v), fhC, 2, 3, F.wlo, F.whi); };
+  // over, two cells deep (the stencils of convert() reach that far; the
+  // height columns of fs_curv hf, hd)
+  auto xr = [&](std::initializer_list<W3> v) { for (const W3 &a : v) flow_exchange(as4(a.v), fhR, hd, 3, F.wlo, F.whi); };
+  auto xc = [&](FlowWin<Kokkos::View<unsigned char***>> a) { flow_exchange(as4(a.v), fhC, hd, 3, F.wlo, F.whi); };
   std::function<void(int, W3, W3)> ahalo;   // melt_advect's (post() runs inside F.run)
   if (fsm) {
     for (int d = 0; d < 3; d++) { fvalid[d] = F.wlo[d]; fvalid[3+d] = F.whi[d]; }

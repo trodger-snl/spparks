@@ -139,6 +139,7 @@ class ConductionSolverKokkos : protected Pointers {
   std::unique_ptr<MeltFlow<KK_FLOAT>> flow;
   int fb0[3] = {0, 0, 0};
   int fh[4] = {0, 0, 0, 0};
+  static int flow_halo_depth(bool hf) { return hf ? MeltFlow<KK_FLOAT>::HF_L + 1 : 2; }
   int fwin[6] = {0, 0, 0, 0, 0, 0};
   int fg0[3] = {0, 0, 0}, fW[6] = {0, 0, 0, 0, 0, 0}, fG[6] = {0, 0, 0, 0, 0, 0};
   bool fwin_on = false, fwin_loc = false;

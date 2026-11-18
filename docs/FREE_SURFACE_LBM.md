@@ -346,6 +346,29 @@ columns, conservation report and grid fields (T, fill, phase, u) as the
 code before, bit for bit. (Multi-threaded OpenMP runs of that deck are not
 repeatable from run to run, before this change as well: see section 8.)
 
+### Coupled test: a 3-layer thin wall at 40 µm (OpenMP, 2026-11-18)
+
+The `in.wall2` settings (316L, 524 W, 600 µm square beam, powder, `fs_pin`
+1675, `fs_engulf`) at 40 µm cells, three layers of one 1.2 mm track, 0.3 s
+recoat, 1.9 s (LaCie `tinb_fs/hf/wall/in.wall`, `-var curv column|hf`).
+Mid-track cross-section, mean over its middle third:
+
+| | `column` | `hf` |
+|---|---|---|
+| After two layers (1.56 s, solid): width at layers 1 / 5 / 9 / 13 (µm) | 1318 / 1216 / 893 / 256 | 1275 / 1120 / 855 / 227 |
+| After three (1.90 s): height; width at the base / 600 µm | 720 µm; 1379 / 939 µm | 800 µm; 1375 / 943 µm |
+| Gas under metal above the plate; enclosed pores (1.90 s) | 12 cells; 2 | 19; 4 |
+| Enclosed gas during the third layer (1.60–1.70 s) | 317 cells in 281 pores | 35 in 30 |
+| Capture | 36.8% | 36.2% |
+| Freeze rounding, capped (metal made filling capped partial cells) | −3069 cells | −1615 |
+| Run time (two runs side by side, 8 threads each) | 4074 s | 4513 s (+11%) |
+
+Both walls taper; neither side has a re-entrant scallop, which at 40 µm
+would be 1–4 cells. So this deck shows that `hf` runs stably through
+three layers, keeps the wall's mass and width, holds a tenth of the
+column model's gas in the pool and rounds less, but not the overhangs it
+is for. That takes 20 µm or less (`in.wall2` with `fs_curv hf`, on HIP).
+
 ## 4. Step 2: the lattice Boltzmann step (`step()`, kernel `FlowStep`)
 
 ### Theory

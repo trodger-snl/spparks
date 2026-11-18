@@ -175,7 +175,112 @@ one-cell pits, which then never heal.
 
 **Limits** (`ponytail:` in the code). One height per column means no
 overhangs, keyholes, balling past 90°, or droplets over gaps. The fix for
-those would be local height functions along the normal.
+those is local height functions along the normal (section 3a).
+
+## 3a. Local height functions along the normal (`fs_curv hf`)
+
+Status: plan (2026-11-18). The column surface above stays the default
+(`fs_curv column`) and is unchanged, bit for bit, when `hf` is off.
+
+**Why.** A DED thin wall is wavy: each layer's pool bulges out over the
+neck below and freezes, leaving re-entrant scallops 50–150 µm deep, 10–30
+cells at the 5 µm cells production will use. One height per z-column
+cannot describe a surface whose normal points sideways or down. Such cells
+today get no surface force at all (`skt` = −1), so a lip of liquid over
+gas feels only the ambient pressure and spreads freely; a9ac6675 stopped
+that by forbidding liquid to enter a gas cell sideways over gas, which also
+forbids the overhangs the wall needs.
+
+**Method** (Popinet 2009, sections 3–4; Cummins, Francois & Kothe 2005).
+Per INTERFACE cell c, in a pass that replaces `FlowFsSurface`:
+
+1. **Normal and frame.** n = −∇ε by Youngs' 3×3×3 weights (FLUID and WALL
+   count as ε = 1, GAS 0, INTERFACE its clamped fill). The frame is the
+   axis d of the largest |n_d| and the side s = sign n_d (toward the gas).
+   Heights are measured along s·e_d; e1, e2 are the other two axes.
+2. **Heights.** For each of the 3×3 columns (a, b) of the frame, walk
+   along d from c's row: down to the first full cell m_f, up through
+   partial (INTERFACE) cells to the first GAS cell m_e, at most L = 3 cells
+   from c's row (Popinet's 3×7 stencil, walked rather than summed so a
+   column is accepted only if it crosses the surface once). Then
+   h = m_f + ½ + Σ ε over the partial cells, relative to c's centre. A
+   column is
+   - *liquid* (a crossing with a partial cell or a FLUID base),
+   - *dry* (WALL directly under GAS: a dry solid face),
+   - *empty* (no full cell within L: no metal), *high* (no gas within L),
+     or *inconsistent* (gas under a partial cell, or a full cell above
+     one: a second crossing in the window).
+3. **Boundary heights** reuse the column model's rules in the frame: an
+   empty or high column, or the block's edge, mirrors c's column (a right
+   angle); a dry column standing lower than c's is given
+   max(h_c − tan θ, h_n) with θ = `fs_angle`, or its own height (90°)
+   when its cell is colder than `fs_pin`. So the contact angle at a dry rim
+   and the pinning act on side and underside faces as they did on the top.
+4. **Consistency and fallback.** The frame is accepted if c's own column is
+   liquid and no column is inconsistent; in the dominant frame empty/high
+   columns mirror (they are real topology: a wall, the liquid's edge, the
+   block's edge). Otherwise the other two axes are tried in order of |n_d|,
+   with every column required to be liquid or dry (a steeper frame
+   overflows the window, so a mirror there would be wrong). If none
+   passes, Popinet's last resort: a least-squares paraboloid
+   z' = a + b x' + c y' + d x'² + e y'² + f x'y' in c's normal frame
+   through the interface points of the INTERFACE cells in the 3×3×3
+   neighbourhood (cell centre moved along n by (ε − ½)‖n‖₁, the linear
+   part of the PLIC distance), needing 6 points; with fewer, the
+   symmetric z' = a + d(x'² + y'²); with fewer than 2, no curvature.
+   (Popinet also mixes heights from other directions into the fit; not
+   done here, see the gates for how often the fit is used.)
+5. **Curvature** from the 9 heights by the column model's central
+   differences: κ = (h_11(1+h_2²) + h_22(1+h_1²) − 2h_12h_1h_2)/g^{3/2},
+   g = 1 + h_1² + h_2² (negative on a liquid hump in any frame: heights
+   grow toward the gas). Second order for a smooth surface.
+6. **Capillary pressure per cell**: ρ_G − 1 = 3(p_gas(i,j) − σ_c κ_c)
+   with σ_c from the cell's own T (or `sig`), stored per cell and read by
+   `FlowStep` for that cell's gas links. p_gas stays per column (a recoil
+   pressure comes from the laser above). The void rule (−6σ below the
+   column's `skb`) is kept only for cells where every method failed (a
+   void of a cell or two that no stencil resolves).
+7. **Marangoni per frame column**, the column model's formula in the
+   frame: f = [((1+h_2²)σ_1 − h_1h_2σ_2) t_1 + ((1+h_1²)σ_2 − h_1h_2σ_1) t_2]/√g
+   with t_1 = e_1 + h_1 s e_d, t_2 = e_2 + h_2 s e_d, σ of a frame column
+   taken from its top partial (or dry) cell, one-sided beside a column
+   without it. As in the column model, it is shared as one acceleration
+   f/M by the column's partial cells and its FLUID base (M their mass,
+   floored at ½): each INTERFACE cell stores it, and a second kernel lets
+   each FLUID cell gather it from those axis neighbours whose frame column
+   it is the base of. Fit cells carry no Marangoni force (no column to
+   share it).
+8. **Conversion.** With curvature on side and under faces, the
+   a9ac6675 rule (enter a gas cell sideways only over non-gas) is off under
+   `hf`: a lip over a gap now has the curvature of its tip, which pushes it
+   back, and the rule would forbid the bulges a wall needs. Gate (b) and
+   the wall deck test this.
+
+**Coupling** (conduction solver), what changes and what does not:
+
+| Consumer | Under `hf` |
+|---|---|
+| Laser (`fs_surface_z`: hangs from each column's top metal cell) | unchanged: the beam comes from above |
+| Powder (`FlowFsPowder`, `inject`, `fs_engulf` pool width) | unchanged: falls from above onto the column's top stack, which `FlowFsColumns` still finds (it runs under `hf` too; only `FlowFsSurface` is replaced) |
+| Freezing (`FlowFsTypes`) and write-back (`FlowFsOut`) | unchanged: their interface stacks are z-stacks. An underside cell has no host below (gas): it keeps its own T and H, and freezes whole when capped. `ponytail:` settling along the cell's frame instead of z if the scallop shapes need it |
+| Several ranks | the HF walk reaches L = 3 cells along x or y, so the flow halo of ε and type must be 3 deep (2 today), and the per-cell results 1 deep for the base gather. Not done in the first pass: `hf` stops with an error on more than one rank in x or y |
+
+**Memory and cost.** Per held cell: the per-cell result (ρ_G and the
+acceleration, 4 R) and the frame (1 byte): 33 B in double, 17 B in mixed,
+against about 470 B of flow state per cell now (+7%). The HF pass does its
+work on INTERFACE cells only (a surface: at 5 µm, 16× the cells of 20 µm
+against 64× the volume), so it shrinks against `FlowStep`. The surface's
+cost is not the issue at 5 µm: the capillary bound makes the step scale as
+Δx^{3/2}, so a part at 5 µm has 64× the cells and 8× the steps of the same
+part at 20 µm, about 500× the flow work per second of process time.
+
+**Gates** (tools/melt_flow_check, double and single, OpenMP):
+(a) static sphere, R = 4, 8, 16 cells: κ error against 2/R and its order;
+spurious currents and the Laplace pressure of the drop at rest;
+(b) a horizontal cylinder (normals in every direction, under faces
+included) and a half-cylinder on a vertical wall (an overhang meeting a
+wall): Laplace pressure σ/R;
+(c) gates 14–22 rerun under `hf`.
 
 ## 4. Step 2: the lattice Boltzmann step (`step()`, kernel `FlowStep`)
 

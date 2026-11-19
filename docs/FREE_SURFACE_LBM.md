@@ -14,7 +14,8 @@ Code:
 - `src/KOKKOS/conduction_solver_kokkos.cpp`: `flow_step()` holds the
   thermal coupling, the powder feed and the write-back. `fs_surface_z()`
   sets where the laser lands.
-- `tools/melt_flow_check.cpp`: gates 14-21 cover the free surface.
+- `tools/melt_flow_check.cpp`: gates 14-26 cover the free surface (23-26
+  the height functions of `fs_curv hf`, section 3a).
 - `docs/figures/make_fs_figures.py`: draws the figures (`python3 docs/figures/make_fs_figures.py`).
 
 Developer notes on the flat-lid flow it extends:
@@ -38,7 +39,9 @@ A closed layer of `INTERFACE` cells always separates `FLUID` from `GAS`.
 Mass moves across the links between liquid cells. A cell that fills
 becomes `FLUID` and a cell that empties becomes `GAS`, with the interface
 layer moved to follow. Surface tension and Marangoni stress come from a
-**height function**: one metal height per (x, y) column. The thermal
+**height function**: one metal height per (x, y) column, or with
+`fs_curv hf` local height functions along each interface cell's normal
+(section 3a), which also see side faces and overhangs. The thermal
 solver decides what is liquid or solid, and the flow decides where the
 liquid is.
 
@@ -175,7 +178,259 @@ one-cell pits, which then never heal.
 
 **Limits** (`ponytail:` in the code). One height per column means no
 overhangs, keyholes, balling past 90°, or droplets over gaps. The fix for
-those would be local height functions along the normal.
+those is local height functions along the normal (section 3a).
+
+## 3a. Local height functions along the normal (`fs_curv hf`)
+
+`flow lbm ... free_surface fs_curv hf` (2026-11-18). The column surface of
+section 3 stays the default (`fs_curv column`) and is unchanged, bit for
+bit, when `hf` is off.
+
+**Why.** A DED thin wall is wavy: each layer's pool bulges out over the
+neck below and freezes, leaving re-entrant scallops 50–150 µm deep, 10–30
+cells at the 5 µm cells production will use. One height per z-column
+cannot describe a surface whose normal points sideways or down. Such cells
+get no surface force at all under `column` (`skt` = −1), so a lip of
+liquid over gas feels only the ambient pressure and spreads freely;
+a9ac6675 stopped that by forbidding liquid to enter a gas cell sideways
+over gas, which also forbids the overhangs the wall needs.
+
+### Method
+
+Popinet 2009 (sections 3–4) and Cummins, Francois & Kothe 2005. Per
+INTERFACE cell c, in `surface_hf()` (kernels `FlowFsHFList`, `FlowFsHF`,
+`FlowFsHFHard`, `FlowFsHFKappa`, `FlowFsHFBase`; see "Memory and cost"),
+which replaces `FlowFsSurface`:
+
+1. **Normal and frame.** n = −∇ε by Youngs' 3×3×3 weights (FLUID and WALL
+   count as ε = 1, GAS 0, INTERFACE its clamped fill). The frame is the
+   axis d of the largest |n_d| and the side s = sign n_d (toward the gas).
+   Heights are measured along s·e_d; e1, e2 are the other two axes.
+2. **Heights.** Each of the 3×3 columns (u, v) of the frame is walked
+   along d from c's row: down to the first full cell m_f, up through
+   partial (INTERFACE) cells to the first GAS cell m_e, at most
+   L = `HF_L` = 5 cells from c's row. Then h = m_f + ½ + Σε over the
+   partial cells, relative to c's centre. A column is
+   - *liquid* (it crosses the surface once within reach),
+   - *dry* (a full cell right under gas: a dry solid face),
+   - *empty* (no full cell in reach: no metal), *high* (no gas in reach),
+     *edge* (the block's side or the cells held), or
+   - *bad* (gas under a partial cell, or a full cell over one: two
+     crossings in reach).
+
+   Walked, not summed over a fixed 3×7 stencil, so a column is accepted
+   only if it crosses the surface once. L = 3 (Popinet's 3×7) was tried
+   first: a column beside a cell near 45° often needs 4 cells to reach a
+   full one, and a sphere of radius 8 cells left 35% of its interface cells
+   to the fallbacks; at L = 5, 11%, nearly all holding less than 5% liquid.
+3. **Boundary heights**, the column model's rules in the frame: an empty,
+   high or edge column counts as c's own height (a right angle); a dry
+   column lower than c's is given max(h_c − tan θ, h_n) with θ =
+   `fs_angle`, or its own height (90°) when its cell is colder than
+   `fs_pin`. So the contact angle at a dry rim and the pinning act on side
+   and under faces as on the top.
+4. **Which heights.** The dominant frame is used if c's column is liquid
+   and none is bad (empty, high and edge columns are real topology there:
+   a wall, the liquid's edge). Else the other two axes in order of |n_d|,
+   every column then required to be liquid or dry (a steeper frame
+   overflows the reach, so a mirror there would be wrong). Else, in a
+   second kernel, the mean curvature of the INTERFACE cells around c
+   (3×3×3) that their own heights measured (Basilisk's last resort).
+   Else Popinet's fit: a paraboloid z' = c0 + c1x' + c2y' + c3x'² + c4y'²
+   + c5x'y' in the normal's frame through the surface points of every
+   liquid column of all three frames (6 or more). Else none, and a cell
+   under its column's `skb` keeps the column model's void rule (−6σ).
+
+   *Why the mean before the fit:* the heights are column means, not point
+   heights, off the surface by about (h_11 + h_22)/24 cells, more in the
+   steeper frames; the fit reads that difference between frames as
+   curvature. On a sphere it was 4–6% wrong at radius 8 and 16 alike (it
+   does not converge), the mean 1–2%. The cells that need either are
+   corner cells holding next to nothing.
+5. **Curvature** from the 9 heights by the column model's central
+   differences, κ = (h_11(1+h_2²) + h_22(1+h_1²) − 2h_12h_1h_2)/g^{3/2},
+   g = 1 + h_1² + h_2², negative on a liquid hump in any frame (heights
+   grow toward the gas).
+6. **Capillary pressure per cell**: ρ_G − 1 = 3(p_gas(i,j) − σ_c κ_c),
+   σ_c from the cell's own T (or `sig`), kept in `hfs(·,0)` and read by
+   `FlowStep` for that cell's gas links. p_gas stays per column (a recoil
+   pressure comes from the laser above).
+7. **Marangoni per frame column**, the column model's formula in the
+   frame: f = [((1+h_2²)σ_1 − h_1h_2σ_2) t_1 + ((1+h_1²)σ_2 − h_1h_2σ_1) t_2]/√g
+   with t_1 = e_1 + h_1 s e_d, t_2 = e_2 + h_2 s e_d, σ of a frame column
+   from its top partial (or dry, by T) cell, one-sided beside a column
+   without one. As in the column model it is one acceleration f/M shared
+   by the frame column's partial cells and its FLUID base (M their mass,
+   at least ½): each INTERFACE cell stores it (`hfs(·,1..3)`) and
+   `FlowFsHFBase` lets each FLUID cell gather it from the axis neighbours
+   whose frame column it is the base of. Cells measured by the mean or the
+   fit carry no Marangoni force (`ponytail:`, a few corner cells).
+8. **Conversion.** Under `hf` liquid may enter any gas cell beside a
+   filled one (Körner's rule), not only one over metal (a9ac6675, kept for
+   `column`): a lip over a gap now carries the curvature of its tip, which
+   pushes it back, and the a9ac6675 rule would forbid the bulges a wall
+   needs. Gate 26 tests it: a floating elliptic cylinder (semi-axes 4 and
+   10 cells) must round into a circle, its sides growing out over gas.
+   Under `hf` it does (half-width −0.5%, Laplace pressure +1.4%); with the
+   a9ac6675 rule kept it stalls (half-width −14%, the inside's pressure
+   lost); under `column` it falls apart (half-width +82%).
+9. **A solid face's contact angle depends on the frame** (`ponytail:`).
+   The column model's rules, carried into each frame, read a vertical
+   solid face two ways: in the frame along the face (heights along z, the
+   surface meeting the face) the solid column is *high* and mirrors, 90°;
+   in the frame across it (heights along x) the solid above or below the
+   liquid is *dry and lower*, and `fs_angle` applies: at 20° the liquid
+   wets the face and climbs it. Youngs' normal counts WALL as full, which
+   tilts the normal of a contact-line cell toward the face's normal, so
+   such cells take the second frame. A liquid half-ellipse on a wall
+   (semi-axes 4 out, 10 along) stayed a lens pinned 18 cells up the wall at
+   20°, and at 0° crept up and down the wall. Below `fs_pin` the face is
+   held (90°, its own height), which is how the decks run. The upgrade is
+   Basilisk's: a contact angle set through ghost fills in the solid cells,
+   one value for every frame.
+
+### Coupling (conduction solver)
+
+| Consumer | Under `hf` |
+|---|---|
+| Laser (`fs_surface_z`: hangs from each column's top metal cell) | unchanged: the beam comes from above |
+| Powder (`FlowFsPowder`, `inject`, `fs_engulf` pool width) | unchanged: it falls from above onto the column's top stack, which `FlowFsColumns` still finds (it runs under `hf` too; only `FlowFsSurface` is replaced) |
+| Freezing (`FlowFsTypes`) and write-back (`FlowFsOut`) | unchanged: their interface stacks are z-stacks. An underside cell has no host below (gas): it keeps its own T and H and freezes whole when capped. `ponytail:` settling along the cell's frame instead of z if the scallop shapes need it |
+| Several ranks | the flow halo is HF_L + 1 = 6 cells deep under `hf` (2 otherwise), and type, fill, mass, ρ and T (or `sig`) are exchanged that deep: a cell one beyond this rank's (which `FlowFsHFBase` reads) walks its columns 5 more. The f, flux and advection exchanges stay 2 deep |
+
+### Memory and cost
+
+Per held cell: `hfs` (ρ_G, the acceleration, κ: 5 R) and `hfr` (method and
+frame, 1 byte) and the two cell lists (`hfl`, `hfh`, 4 B each): 49 B in
+double, 29 B in mixed, against about 470 B of flow state per cell (+10%).
+The pass works on INTERFACE cells only; at 5 µm a part has 16× the
+interface cells of 20 µm but 64× the cells, so it shrinks against
+`FlowStep`. The surface is not what costs at 5 µm: the capillary
+bound makes the step scale as Δx^{3/2}, so the same part has 64× the cells
+and 8× the steps, about 500× the flow work per second of process.
+
+**The passes** (2026-11-18). `FlowFsHFList` packs the INTERFACE cells of
+the block into a list (`hfl`, 4 B per held cell, an atomic append; the
+order is the atomics' and no result depends on it). `FlowFsHF` takes a
+thread per listed cell: Youngs' normal, the dominant frame's 9 columns,
+and for a cell that frame measures, κ and the Marangoni force. A cell it
+does not measure goes on a second list (`hfh`) with its normal, σ and
+source value parked in `hfs`, and `FlowFsHFHard` gives each such cell a
+team (a wave on the GPU, one thread on the host) whose lanes walk the 27
+columns of the three frames side by side, then picks the other frames or
+the fit from them. `FlowFsHFKappa` (the mean) runs on the list too;
+`FlowFsHFBase` stays a pass over the FLUID cells. The counts never come
+back to the host: each pass runs over as many threads as cells, and those
+past the count return; two counts of each list are used in turn, each
+call zeroing the next call's.
+
+**Why so.** A column is a chain of dependent loads (type, then fill, then
+the next cell), and a cell walks 9 of them, or 27 and the fit when the
+dominant frame fails. On the GPU the pass is as long as its slowest wave's
+chain, not its work: one pass over the whole block (most waves hold no
+INTERFACE cell, the rest a few, each waiting for its slowest lane) took
+three times `FlowStep`. Measured on a single-track DED deck
+(LaCie `tinb_fs/in.sdh`: 396×196×118 thermal grid, 20 µm, HIP,
+gfx1151, KOKKOS_PREC mixed, kp_kernel_timer, 0–0.1 s, 366 002 flow steps,
+µs per call):
+
+| Kernel | `column` | `hf` before | list | list, fit in `FlowFsHFKappa` | team per cell | list + team for the rest (now) |
+|---|---|---|---|---|---|---|
+| `FlowFsHFList` | | | 10.3 | 10.1 | 10.3 | 10.3 |
+| `FlowFsHF` | | 301.7 | 162.4 | 90.9 | 152.1 | 72.9 |
+| `FlowFsHFHard` | | | | | | 34.3 |
+| `FlowFsHFKappa` | | 24.2 | 21.4 | 106.5 | 21.9 | 19.1 |
+| `FlowFsHFBase` | | 17.1 | 16.5 | 22.7 | 16.9 | 17.4 |
+| `FlowFsSurface` | 25.0 | | | | | |
+| surface, s per 0.1 s | 9.1 | 125.5 | 77.1 | 84.3 | 73.6 | 56.4 |
+| `FlowStep` (for scale) | 105.7 | 102.9 | 106.3 | 102.3 | 104.3 | 104.6 |
+
+Wall time to 0.1 s without the timer: `column` 176.8 s; `hf` 285.1 s
+before (1.61×), 234.2 s with the list (1.33×), 211.1 s now (1.19×).
+Over 0.05–0.1 s (a grown pool) `FlowFsHF` alone had been 41% of the
+kernel time (429 µs per call, 3.2× `FlowStep`); everything else, `FlowStep`
+included, costs the same under either model. No FP64 instruction is in
+any of the surface kernels of a mixed build. `FlowFsHF` before used 192
+VGPRs (8 waves per SIMD of 16) and spilled 3; on a range policy it
+spilled 82 (336 B of scratch), with the fit in it. Without the fit
+(which moved to the team pass) it holds 182 and spills none.
+
+A team per cell for every cell (`team per cell`) was slower than a
+thread per cell: a wave per cell with 9 of its 32 lanes walking, where a
+thread per cell packs 32 cells into a wave. Only the few cells the dominant frame does not measure
+are worth a team. The fit inside `FlowFsHFKappa` (thread per cell, 27
+columns in a row) made that pass as long as `FlowFsHF` had been.
+
+The result is the same, bit for bit, on OpenMP (one thread, double: the
+multi-rank test deck's grid and conservation report at 0.01–0.025 s) and,
+for the list alone, on HIP. With the team pass the HIP mixed build (fast
+math) gives other last bits (κ, the force: the same arithmetic in another
+kernel, reassociated), so a coupled run drifts from the old one as two
+thread counts do; every gate prints the same digits (OpenMP double and
+HIP, both precisions).
+
+On OpenMP (8 threads, mixed, `in.sdh` to 0.06 s, before this change) the
+surface was 7.0% of the run under `hf` (`FlowFsHF` 4.85%, `FlowFsHFBase`
+1.51, `FlowFsHFKappa` 0.61) against 0.4% under `column`, and the run took
++12.6% (1058 s against 940 s). `FlowFsHF` took 253 µs per call on 8
+threads, about what the GPU took (302 µs): the GPU gains nothing on a
+chain of dependent loads, while `ConductionStep` (43% of an OpenMP run,
+20–30% of a HIP one) and `FlowStep` run about 12× faster there.
+
+### Gates (tools/melt_flow_check: `melt_flow_check hf`, and all of them in `fs`)
+
+Measured 2026-11-18, OpenMP; double and single agree to the digits shown
+except where two values are given (double / single). κ errors are
+relative, per INTERFACE cell, from the exact fills of the shape.
+
+| # | Problem | Measured | Target |
+|---|---|---|---|
+| 23 | sphere, static κ, R = 4 | rms 12%, median 2.8% (186 of 306 cells by the mean) | under-resolved, reported only |
+| 23 | sphere R = 8 / 16 / 32 | rms 0.64% / 0.26% / 0.063%; median 0.64% / 0.16% / 0.040% | ≤ 1% / 0.5% / 0.2% |
+| 23 | its order | median 1.99 (8→16), 2.02 (16→32); rms 2.04 (16→32) | ≥ 1.8 |
+| 23 | sphere at rest, ρ inside / (6σ/R) − 1, R = 8 / 16 | 7e-4 / 8e-4 | ≤ 3% |
+| 23 | spurious currents u ν/σ, R = 8 / 16 | 1.8e-2 / 1.6e-3 (11× less) | R = 16 ≤ 3e-3, falls ≥ 4× |
+| 24 | cylinder (normals all round, under faces too), κ rms R = 8 / 16 / 32 | 0.83% / 0.20% / 0.049%, order 2.07, 2.02 | ≤ 1%; ≥ 1.8 |
+| 24 | cylinder at rest R = 8: ρ inside / (3σ/R) − 1; u ν/σ | 0.8%; 1e-4 | ≤ 3%; ≤ 1e-2 |
+| 25 | half-cylinder on a vertical wall (overhang, 90° at the wall) R = 8: κ rms; Laplace pressure; u ν/σ; lowest point moved | 0.82%; 0.78%; 4e-6 / 6e-6; −0.02 cells | ≤ 1%; ≤ 3%; ≤ 1e-2; ≤ 0.5 |
+| 26 | floating elliptic cylinder 4 × 10 rounds into a circle (r = 6.32), sides growing over gas: middle row's half-width / r − 1; Laplace pressure | −0.52%; +1.4% | ≤ 5%; ≤ 3% |
+| 14–22 | the column gates rerun under `hf` | all pass; 17, 18, 19, 22 within 2e-3 of their column values (17: period +3.56%, decay −13.2%; 18: 0.70%; 19: tilt −2.03%; 22: 4.3e-4). 16: Σ m q off by 1.6e-5 (6.4e-4 under `column`: the a9ac6675 rule, see gate 16's note) | as for `column` |
+
+The largest κ errors (2.65% at R = 8 and 16, 1.05% at 32) are cells
+whose surface has slope near 1 in both transverse directions (normals near
+(1, 1, 1)): the 3×3 differences there are second order with a large
+constant (a cell on the diagonal: 2.7% at R = 16, 0.40% at 32, 0.13% at
+64). Spurious currents are steady but noisy at R = 8 (conversions at the
+surface) and fall with resolution.
+
+With `column` the gates print the same numbers as before this change, and
+a one-thread run of the multi-rank test deck (0.03 s) gives the same d6
+columns, conservation report and grid fields (T, fill, phase, u) as the
+code before, bit for bit. (Multi-threaded OpenMP runs of that deck are not
+repeatable from run to run, before this change as well: see section 8.)
+
+### Coupled test: a 3-layer thin wall at 40 µm (OpenMP, 2026-11-18)
+
+The `in.wall2` settings (316L, 524 W, 600 µm square beam, powder, `fs_pin`
+1675, `fs_engulf`) at 40 µm cells, three layers of one 1.2 mm track, 0.3 s
+recoat, 1.9 s (LaCie `tinb_fs/hf/wall/in.wall`, `-var curv column|hf`).
+Mid-track cross-section, mean over its middle third:
+
+| | `column` | `hf` |
+|---|---|---|
+| After two layers (1.56 s, solid): width at layers 1 / 5 / 9 / 13 (µm) | 1318 / 1216 / 893 / 256 | 1275 / 1120 / 855 / 227 |
+| After three (1.90 s): height; width at the base / 600 µm | 720 µm; 1379 / 939 µm | 800 µm; 1375 / 943 µm |
+| Gas under metal above the plate; enclosed pores (1.90 s) | 12 cells; 2 | 19; 4 |
+| Enclosed gas during the third layer (1.60–1.70 s) | 317 cells in 281 pores | 35 in 30 |
+| Capture | 36.8% | 36.2% |
+| Freeze rounding, capped (metal made filling capped partial cells) | −3069 cells | −1615 |
+| Run time (two runs side by side, 8 threads each) | 4074 s | 4513 s (+11%) |
+
+Both walls taper; neither side has a re-entrant scallop, which at 40 µm
+would be 1–4 cells. So this deck shows that `hf` runs stably through
+three layers, keeps the wall's mass and width, holds a tenth of the
+column model's gas in the pool and rounds less, but not the overhangs it
+is for. That takes 20 µm or less (`in.wall2` with `fs_curv hf`, on HIP).
 
 ## 4. Step 2: the lattice Boltzmann step (`step()`, kernel `FlowStep`)
 
@@ -516,6 +771,18 @@ Extra ranks sharing one GPU or CPU are slower (HIP 38 s → 190 / 417 s; OpenMP
 `ponytail:` about 15 exchanges per flow sub-step. Batching them into one
 message per neighbour is the next lever if this runs at scale.
 
+**`fs_curv hf`** (2026-11-18): the halo is 6 deep and type, fill, mass, ρ
+and T go over that deep (section 3a). OpenMP, the same deck, 1 / 1×2 / 2×2
+ranks: caught 2473.1 / 2475.3 / 2474.9 cells (0.09%), enthalpy 26.84249 / 26.84267 / 26.84279 J (1.1e-5 relative), peak T 2353 / 2373 / 2353 K, surface heights (column sums of fill) within one cell of one rank's in one column and 1e-3 cell on average.
+
+**OpenMP runs are not repeatable** from run to run at more than one
+thread (found 2026-11-18, the code before `fs_curv` too): two runs of the
+same binary at 8 threads differed from the first stats line (Naccept 308
+against 300 at 10 ms, peak T 1954.9 against 1955.6 K). At one thread they
+are repeatable. Not traced; a race or a reduction whose order follows the
+thread schedule in the flow or conduction kernels. HIP was bit-for-bit
+repeatable on 2026-11-17.
+
 ## 9. Where the time goes
 
 Kernel shares, 316L DED track, late in the run (0.4 s, HIP, FP64):
@@ -556,6 +823,14 @@ thermal step).
 | 19 | Thermocapillary slot with a moving surface | tilt 3τ/(2ρgh) within 5%; velocity profile |
 | 20 | Injection into a basin | mass gained = fed; scalar mean as mixed |
 | 21 | Ti-6Al-4V pool through `run()`, 20 ms | finite; lattice speed ≤ 0.25 |
+| 22 | Marangoni force on a steep surface | total force within 5% |
+| 23 | Sphere (`hf`), R = 4–32 cells | κ second order; Laplace pressure 3%; spurious currents fall with R |
+| 24 | Horizontal cylinder (`hf`), R = 8–32 | κ second order; Laplace pressure 3% |
+| 25 | Half-cylinder on a vertical wall (`hf`) | κ, Laplace pressure; it stays put |
+| 26 | Elliptic cylinder rounding (`hf`) | final radius and Laplace pressure; growth over gas |
+
+`melt_flow_check fs` runs 14-22 under `column` and again under `hf`, then
+23-26; `melt_flow_check hf` runs 23-26 alone.
 
 Gates 17 and 19 also print their results with the interface τ floor on, to
 show its bias.
@@ -579,7 +854,8 @@ shape.
 
 | Limit | Effect | Upgrade path |
 |---|---|---|
-| One height per column | no overhangs, keyholes or balling past 90° | local height functions along the normal |
+| One height per column (`fs_curv column`, the default) | no overhangs, keyholes or balling past 90° | `fs_curv hf` (section 3a) |
+| `fs_curv hf`: freezing and the enthalpy write-back still use z-stacks | an underside cell freezes whole, by its own T | settle along the cell's frame |
 | Contact angle at a dry lower rim only (`fs_angle`) | it is a calibration knob; it may depend on the material | wetting from the surface energies |
 | Interface τ floor 1.0 | surface speed biased low | a stabilised interface collision |
 | Capillary step bound 0.04 | sets the flow cost | implicit surface tension |

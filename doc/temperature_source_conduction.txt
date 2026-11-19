@@ -69,7 +69,7 @@ keyword = {k_table} or {cp_table} or {latent} or {k_powder} or {convection} or {
     m = {pool} (default), {flow} or {none}: the melt pool is well mixed,
     the melt-pool flow carries the composition ({flow} keyword), or it does not change
     f = {slab} (default) or {surface}: how new material enters under {mix flow} with {ded}
-  {flow} values = {lbm} [dsigma_dT s] [beta b] [viscosity nu] [mushy C] [u_ref u] [smagorinsky cs] [properties cards|constant] [sigma_table file] [free_surface] [sigma g] [powder r R [T Tf]] [fs_angle a] [fs_pin Tp] [fs_engulf 0/1] [fs_cap c] [fs_tau t] [fs_raw w]
+  {flow} values = {lbm} [dsigma_dT s] [beta b] [viscosity nu] [mushy C] [u_ref u] [smagorinsky cs] [properties cards|constant] [sigma_table file] [free_surface] [sigma g] [powder r R [T Tf]] [fs_curv column|hf] [fs_angle a] [fs_pin Tp] [fs_engulf 0/1] [fs_cap c] [fs_tau t] [fs_raw w]
     melt-pool flow (lattice Boltzmann) on the liquid cells of the lattice box
     s = surface tension's temperature coefficient (N/m/K, default -2.6e-4)
     b = volumetric thermal expansion of the liquid (1/K, default 1.7e-4)
@@ -425,7 +425,13 @@ bead.  The gas is a boundary at the pressure p_gas - sigma kappa, the
 curvature kappa from each column's metal height (sum of fill; no
 overhangs: a liquid surface is one height per column, liquid hanging
 over gas carries no surface force).  The Marangoni stress acts along the
-tilted surface.  Where liquid meets a lower solid column the surface
+tilted surface.  With {fs_curv} hf the curvature and the Marangoni
+stress are found per interface cell instead, from height functions along
+the cell's normal (Popinet 2009), so side faces and overhangs (a wall's
+scallops, a bead past 90 degrees) carry their surface tension, and
+liquid may then enter any gas cell beside it (with {fs_curv} column, the
+default, only one over metal).  Several ranks along x or y then need 6
+or more sites each along that axis (the flow's halo is 6 deep).  Where liquid meets a lower solid column the surface
 is given the contact angle {fs_angle} (0 = wets it fully, 90 = meets it
 at its own height).  On a 316L powder track 0 spread the bead flat over
 gas pockets under its flanks and 45 made it hump; 20 gave a dense,

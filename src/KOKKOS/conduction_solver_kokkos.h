@@ -139,14 +139,18 @@ class ConductionSolverKokkos : protected Pointers {
   std::unique_ptr<MeltFlow<KK_FLOAT>> flow;
   int fb0[3] = {0, 0, 0};
   int fh[4] = {0, 0, 0, 0};
+  static int flow_halo_depth(bool hf) { return hf ? MeltFlow<KK_FLOAT>::HF_L + 1 : 2; }
   int fwin[6] = {0, 0, 0, 0, 0, 0};
   int fg0[3] = {0, 0, 0}, fW[6] = {0, 0, 0, 0, 0, 0}, fG[6] = {0, 0, 0, 0, 0, 0};
   bool fwin_on = false, fwin_loc = false;
-  // halo buffers of the flow's fields (hs, hr: host staging, as hsbuf)
+  // halo buffers of the flow's fields (hs, hr: host staging, as hsbuf);
+  // public: nvcc rejects a private type in a kernel's signature
+ public:
   template <class S> struct FlowHalo {
     Kokkos::View<S*> s, r;
     Kokkos::View<S*, MPIStagingSpace> hs, hr;
   };
+ private:
   FlowHalo<KK_FLOAT> fhR;
   FlowHalo<unsigned char> fhC;
   double flow_cap_seen = 0.0;

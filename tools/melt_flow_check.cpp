@@ -10,6 +10,7 @@
 
 #include "melt_flow_kokkos.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -20,12 +21,13 @@ using namespace SPPARKS_NS;
 namespace {
 
 int nfail = 0;
+bool g_hf = false;    // the free-surface checks run with fs_hf (their names start "hf")
 
 void check(const std::string &what, double value, double tol, bool below = true)
 {
   const bool ok = std::isfinite(value) && (below ? std::fabs(value) <= tol : std::fabs(value) >= tol);
   if (!ok) nfail++;
-  printf("  %-4s %-58s %10.3e  (%s %.1e)\n", ok ? "ok" : "FAIL", what.c_str(), value,
+  printf("  %-4s %-58s %10.3e  (%s %.1e)\n", ok ? "ok" : "FAIL", ((g_hf ? "hf " : "") + what).c_str(), value,
          below ? "<=" : ">=", tol);
 }
 
@@ -665,7 +667,7 @@ void fs_rest()
 {
   MeltFlow<R> m;
   const int nx = 12, ny = 6, nz = 16;
-  m.fs = true; m.fs_tau = 0.0;
+  m.fs = true; m.fs_hf = g_hf; m.fs_tau = 0.0;
   m.resize(nx, ny, nz);
   m.p.periodic[0] = m.p.periodic[1] = true;
   m.p.accel[2] = -1e-4;
@@ -712,7 +714,7 @@ void fs_dam()
 {
   MeltFlow<R> m;
   const int nx = 48, ny = 4, nz = 32;
-  m.fs = true; m.fs_tau = 0.0;
+  m.fs = true; m.fs_hf = g_hf; m.fs_tau = 0.0;
   m.resize(nx, ny, nz);
   m.p.periodic[1] = true;
   m.p.accel[2] = -5e-5;
@@ -823,7 +825,7 @@ void fs_wave(double floor)
   MeltFlow<R> m;
   const int nx = 64, nz = 48;
   const double H = 32.0, a0 = 1.0, kw = 2.0 * M_PI / nx;
-  m.fs = true; m.fs_tau = floor;
+  m.fs = true; m.fs_hf = g_hf; m.fs_tau = floor;
   m.resize(nx, 2, nz);
   m.p.periodic[0] = m.p.periodic[1] = true;
   m.p.nu = 0.005;
@@ -872,7 +874,7 @@ void fs_load()
   MeltFlow<R> m;
   const int nx = 64, nz = 24;
   const double H = 12.0, P0 = 2e-4, wd = 6.0;
-  m.fs = true; m.fs_tau = 0.0;
+  m.fs = true; m.fs_hf = g_hf; m.fs_tau = 0.0;
   m.resize(nx, 2, nz);
   m.p.periodic[0] = m.p.periodic[1] = true;
   m.p.nu = 0.1;
@@ -923,7 +925,7 @@ void fs_thermocapillary(double floor)
   MeltFlow<R> m;
   const int nx = 96, nz = 24;
   const double H = 16.0, g = 1e-4, tau = -1e-5;
-  m.fs = true; m.fs_tau = floor;
+  m.fs = true; m.fs_hf = g_hf; m.fs_tau = floor;
   m.resize(nx, 1, nz);
   m.p.periodic[1] = true;
   m.p.nu = 0.1;
@@ -968,7 +970,7 @@ void fs_pool()
 {
   MeltFlow<R> m;
   const int nx = 64, nz = 30, ns = 24;       // the surface starts at k = ns
-  m.fs = true;
+  m.fs = true; m.fs_hf = g_hf;
   m.resize(nx, nx, nz);
   m.ph.dx = 20e-6; m.ph.nu = 8.5e-7; m.ph.dsdT_rho = -2.6e-4 / 4100.0; m.ph.sig_rho = 1.5 / 4100.0;
   m.ph.beta_g = 1e-5 * 9.81; m.ph.Tref = 1928.0; m.ph.darcy = 1e4; m.ph.u_ref = 1.0;
@@ -1033,7 +1035,7 @@ void fs_inject()
 {
   MeltFlow<R> m;
   const int nx = 32, ny = 32, nz = 20;
-  m.fs = true;
+  m.fs = true; m.fs_hf = g_hf;
   m.resize(nx, ny, nz);
   m.p.periodic[0] = m.p.periodic[1] = true;
   m.p.accel[2] = -1e-4;
@@ -1092,7 +1094,7 @@ void fs_force()
   MeltFlow<R> m;
   const int nx = 64, nz = 48;
   const double H = 24.0, A = 8.0, kw = 2.0 * M_PI / nx, tau = 1e-5;
-  m.fs = true;
+  m.fs = true; m.fs_hf = g_hf;
   m.resize(nx, 2, nz);
   m.p.periodic[0] = m.p.periodic[1] = true;
   m.p.marangoni = tau; m.p.sigma = 0.01; m.p.Tref = 0.0;
@@ -1108,19 +1110,304 @@ void fs_force()
   auto ax = host(m.sax), az = host(m.saz); auto kt = host(m.skt), kb = host(m.skb);
   auto t = host(m.type.v); auto e = host(m.eps.v);
   double fx = 0, fz = 0, ex = 0, ez = 0, amax = 0;
+  auto hs = host(g_hf ? m.hfs.v : Kokkos::View<R****>("none", 1, 1, 1, 4));
   for (int i = 4; i < nx / 2 - 4; i++) {
     // what the step applies: the column's acceleration on each cell, by its fill
-    for (int k = kb(i, 0); k <= kt(i, 0); k++) {
+    // (hf: each liquid cell's own)
+    for (int k = g_hf ? 0 : kb(i, 0); k <= (g_hf ? nz - 1 : kt(i, 0)); k++) {
+      if (g_hf && !MeltFlow<R>::liq(t(i, 0, k))) continue;
       const double w = t(i, 0, k) == MeltFlow<R>::INTERFACE ? std::min(1.0, std::max(0.0, (double) e(i, 0, k))) : 1.0;
-      fx += w * ax(i, 0); fz += w * az(i, 0);
+      const double cx = g_hf ? hs(i, 0, k, 1) : ax(i, 0), cz = g_hf ? hs(i, 0, k, 3) : az(i, 0);
+      fx += w * cx; fz += w * cz;
+      if (g_hf) amax = std::max(amax, std::hypot(cx, cz));
     }
-    amax = std::max(amax, std::hypot((double) ax(i, 0), (double) az(i, 0)));
+    if (!g_hf) amax = std::max(amax, std::hypot((double) ax(i, 0), (double) az(i, 0)));
     const double hx = -A * kw * std::sin(kw * (i + 0.5)), g = std::sqrt(1.0 + hx * hx);
     ex += tau / g; ez += tau * hx / g;
   }
   check("22 steep surface: force along x, applied / exact - 1", fx / ex - 1.0, 5e-2);
   check("22 steep surface: force along z, (applied - exact) / |exact x|", (fz - ez) / ex, 5e-2);
   check("22 steep surface: largest cell acceleration / sigma_x", amax / tau, 1.5);
+}
+
+/* 23-25 (fs_hf): curvature from local height functions.
+   Shapes are set from their exact fills (the volume of each cell inside,
+   by quadrature fine enough that its error is far below the curvature's),
+   all cells FLUID, INTERFACE or GAS by fill, and WALL where wall(i, j, k). */
+template <class R, class F, class W>
+void fs_fill(MeltFlow<R> &m, const F fill, const W wall)
+{
+  auto ht = Kokkos::create_mirror_view(m.type.v);
+  auto hm = Kokkos::create_mirror_view(m.cmass.v);
+  auto he = Kokkos::create_mirror_view(m.eps.v);
+  for (int i = 0; i < m.nx; i++)
+    for (int j = 0; j < m.ny; j++)
+      for (int k = 0; k < m.nz; k++) {
+        double f = wall(i, j, k) ? 0.0 : fill(i, j, k);
+        if (f < 1e-12) f = 0.0;
+        if (f > 1.0 - 1e-12) f = 1.0;
+        ht(i, j, k) = wall(i, j, k) ? MeltFlow<R>::WALL : f >= 1.0 ? MeltFlow<R>::FLUID
+                    : f > 0.0 ? MeltFlow<R>::INTERFACE : MeltFlow<R>::GAS;
+        hm(i, j, k) = he(i, j, k) = R(f);
+      }
+  Kokkos::deep_copy(m.type.v, ht); Kokkos::deep_copy(m.cmass.v, hm); Kokkos::deep_copy(m.eps.v, he);
+  m.fs_repair();
+}
+
+// The volume of the cell [i, i+1) x [j, j+1) x [k, k+1) inside the sphere
+// (c, r) (chords along z, midpoint rule over n x n in x, y), or inside the
+// cylinder along y (c0, c2, r) for x >= xw.
+double sphere_fill(int i, int j, int k, const double c[3], double r, int n = 256)
+{
+  const double d = std::sqrt(std::pow(i + 0.5 - c[0], 2) + std::pow(j + 0.5 - c[1], 2) + std::pow(k + 0.5 - c[2], 2));
+  if (d > r + 0.9) return 0.0;
+  if (d < r - 0.9) return 1.0;
+  double s = 0.0;
+  for (int a = 0; a < n; a++)
+    for (int b = 0; b < n; b++) {
+      const double x = i + (a + 0.5) / n - c[0], y = j + (b + 0.5) / n - c[1], q = r * r - x * x - y * y;
+      if (q <= 0.0) continue;
+      const double h = std::sqrt(q);
+      s += std::max(0.0, std::min(k + 1.0, c[2] + h) - std::max((double) k, c[2] - h));
+    }
+  return s / (n * n);
+}
+double cylinder_fill(int i, int k, double c0, double c2, double r, double xw = -1e30, double rz = 0.0, int n = 4096)
+{
+  if (rz <= 0.0) rz = r;     // an ellipse of semi-axes r along x, rz along z
+  double s = 0.0;
+  for (int a = 0; a < n; a++) {
+    const double x = i + (a + 0.5) / n;
+    if (x < xw) continue;
+    const double q = r * r - (x - c0) * (x - c0);
+    if (q <= 0.0) continue;
+    const double h = rz / r * std::sqrt(q);
+    s += std::max(0.0, std::min(k + 1.0, c2 + h) - std::max((double) k, c2 - h));
+  }
+  return s / n;
+}
+
+// kappa per INTERFACE cell from surface() (-drg / (3 sigma), no gas
+// pressure) against kexact: the rms, median and largest relative error,
+// and how many cells each method took
+template <class R>
+void fs_kappa_err(MeltFlow<R> &m, double kexact, double &rms, double &med, double &mx, int cnt[6])
+{
+  const int lo[3] = {0, 0, 0}, hi[3] = {m.nx, m.ny, m.nz};
+  m.surface(lo, hi);
+  auto hs = host(m.hfs.v); auto hr = host(m.hfr.v); auto t = host(m.type.v); auto he = host(m.eps.v);
+  double s2 = 0.0;
+  int n = 0;
+  std::vector<double> all;
+  mx = 0.0;
+  for (int c = 0; c < 6; c++) cnt[c] = 0;
+  for (int i = 0; i < m.nx; i++)
+    for (int j = 0; j < m.ny; j++)
+      for (int k = 0; k < m.nz; k++) {
+        if (t(i, j, k) != MeltFlow<R>::INTERFACE) continue;
+        cnt[hr(i, j, k) >> 3]++;
+        const double e = (-hs(i, j, k, 0) / (3.0 * m.p.sigma)) / kexact - 1.0;
+        s2 += e * e; mx = std::max(mx, std::fabs(e)); n++;
+        all.push_back(std::fabs(e));
+      }
+  rms = std::sqrt(s2 / std::max(n, 1));
+  std::sort(all.begin(), all.end());
+  med = all.empty() ? NAN : all[all.size() / 2];
+}
+
+// the mean rho - 1 of the FLUID cells within dist(i, j, k) < rin
+template <class R, class D>
+double fs_inner_rho(const MeltFlow<R> &m, const D dist, double rin)
+{
+  auto r = host(m.rho.v); auto t = host(m.type.v);
+  double s = 0.0;
+  int n = 0;
+  for (int i = 0; i < m.nx; i++)
+    for (int j = 0; j < m.ny; j++)
+      for (int k = 0; k < m.nz; k++)
+        if (t(i, j, k) == MeltFlow<R>::FLUID && dist(i, j, k) < rin) { s += r(i, j, k); n++; }
+  return n ? s / n : NAN;
+}
+
+template <class R>
+double fs_umax(const MeltFlow<R> &m)
+{
+  auto u = host(m.ux.v); auto v = host(m.uy.v); auto w = host(m.uz.v); auto t = host(m.type.v);
+  double mx = 0.0;
+  for (int i = 0; i < m.nx; i++)
+    for (int j = 0; j < m.ny; j++)
+      for (int k = 0; k < m.nz; k++)
+        if (MeltFlow<R>::liq(t(i, j, k)))
+          mx = std::max(mx, std::sqrt((double) u(i, j, k) * u(i, j, k) + (double) v(i, j, k) * v(i, j, k) + (double) w(i, j, k) * w(i, j, k)));
+  return mx;
+}
+
+// 23. A sphere of radius r, periodic box, no gravity. Static: kappa = -2 / r
+//     at every interface cell. At rest after the flow runs: the Laplace
+//     pressure 2 sigma / r inside (rho - 1 = 6 sigma / r) and the spurious
+//     currents, as a capillary number u nu / sigma.
+template <class R>
+void fs_sphere(double r, int nstep, double &rms, double &med, double &mx, int cnt[6], double &dp, double &ca)
+{
+  MeltFlow<R> m;
+  const int n = 2 * (int) std::ceil(r) + 8;
+  const double c[3] = {0.5 * n + 0.1, 0.5 * n - 0.2, 0.5 * n + 0.3};   // off the grid's symmetry
+  m.fs = true; m.fs_hf = true; m.fs_tau = 0.0;
+  m.resize(n, n, n);
+  m.p.periodic[0] = m.p.periodic[1] = m.p.periodic[2] = true;
+  m.p.nu = 0.1;
+  m.p.sigma = 0.002;
+  fs_fill(m, [&](int i, int j, int k) { return sphere_fill(i, j, k, c, r); }, [](int, int, int) { return false; });
+  fs_kappa_err(m, -2.0 / r, rms, med, mx, cnt);
+  dp = ca = NAN;
+  if (nstep <= 0) return;
+  const int lo[3] = {0, 0, 0}, hi[3] = {n, n, n};
+  for (int s = 0; s < nstep; s++) { m.surface(lo, hi); m.step(); m.convert(); }
+  auto dist = [&](int i, int j, int k) { return std::sqrt(std::pow(i + 0.5 - c[0], 2) + std::pow(j + 0.5 - c[1], 2) + std::pow(k + 0.5 - c[2], 2)); };
+  dp = fs_inner_rho(m, dist, r - 3.0) / (6.0 * m.p.sigma / r) - 1.0;
+  ca = fs_umax(m) * m.p.nu / m.p.sigma;
+}
+
+// 24, 25. A horizontal cylinder along y (periodic in y), so the surface's
+//     normal turns through every direction in x-z, under faces included:
+//     kappa = -1 / r, and at rest the Laplace pressure sigma / r. wall: a
+//     half-cylinder on a vertical wall (WALL at i = 0, the liquid at
+//     x >= 1): an overhang that meets the wall at 90 degrees, the column
+//     model's mirror at a wall, an exact equilibrium. Also its lowest point
+//     after the run (it must not run down the wall).
+template <class R>
+void fs_cyl(bool wall, double r, int nstep, double &rms, double &med, double &mx, int cnt[6], double &dp, double &ca, double &sag)
+{
+  MeltFlow<R> m;
+  const int nx = wall ? (int) std::ceil(r) + 6 : 2 * (int) std::ceil(r) + 8, nz = 2 * (int) std::ceil(r) + 8;
+  const double c0 = wall ? 1.0 : 0.5 * nx + 0.2, c2 = 0.5 * nz + 0.3;
+  m.fs = true; m.fs_hf = true; m.fs_tau = 0.0;
+  m.resize(nx, 2, nz);
+  m.p.periodic[1] = m.p.periodic[2] = true;
+  m.p.periodic[0] = !wall;
+  m.p.nu = 0.1;
+  m.p.sigma = 0.002;
+  fs_fill(m, [&](int i, int, int k) { return cylinder_fill(i, k, c0, c2, r, wall ? 1.0 : -1e30); },
+          [&](int i, int, int) { return wall && i == 0; });
+  fs_kappa_err(m, -1.0 / r, rms, med, mx, cnt);
+  dp = ca = sag = NAN;
+  if (nstep <= 0) return;
+  const int lo[3] = {0, 0, 0}, hi[3] = {nx, 2, nz};
+  for (int s = 0; s < nstep; s++) { m.surface(lo, hi); m.step(); m.convert(); }
+  auto dist = [&](int i, int, int k) { return std::sqrt(std::pow(i + 0.5 - c0, 2) + std::pow(k + 0.5 - c2, 2)); };
+  dp = fs_inner_rho(m, dist, r - 3.0) / (3.0 * m.p.sigma / r) - 1.0;
+  ca = fs_umax(m) * m.p.nu / m.p.sigma;
+  // the liquid's lowest point (cells) beside the wall, against c2 - r
+  auto e = host(m.eps.v); auto t = host(m.type.v);
+  double zlo = 1e30;
+  for (int k = 0; k < nz; k++)
+    for (int i = 1; i < nx; i++)
+      if (MeltFlow<R>::liq(t(i, 0, k))) { zlo = std::min(zlo, k + 1.0 - std::min(1.0, std::max(0.0, (double) e(i, 0, k)))); break; }
+  sag = (c2 - r) - zlo;
+}
+
+// 26. A horizontal elliptic cylinder of liquid (semi-axes a along x, b
+//     along z; along y, periodic), floating, no gravity: it must round into
+//     the cylinder of its area, radius r = sqrt(a b) > a, its sides growing
+//     out over gas (which the column model's conversion does not allow:
+//     liquid enters a gas cell sideways only over metal) and holding the
+//     Laplace pressure sigma / r. Returns the middle row's half-width / r
+//     - 1 and that pressure's error. (Not stuck to a wall: on a vertical
+//     wall face the contact angle depends on the frame: docs/
+//     FREE_SURFACE_LBM.md, 3a.) Kept under hf, the a9ac6675 rule held the
+//     sides back: half-width -14%, and the liquid lost its pressure.
+template <class R>
+void fs_relax(double &reach, double &dp)
+{
+  MeltFlow<R> m;
+  const int nx = 24, nz = 32;
+  const double a = 4.0, b = 10.0, c0 = 12.2, c2 = 16.3;
+  m.fs = true; m.fs_hf = g_hf; m.fs_tau = 0.0;
+  m.resize(nx, 2, nz);
+  m.p.periodic[0] = m.p.periodic[1] = true;      // z closed: the conversion rule acts (it needs a floor)
+  m.p.nu = 0.1;
+  m.p.sigma = 0.002;
+  fs_fill(m, [&](int i, int, int k) { return cylinder_fill(i, k, c0, c2, a, -1e30, b); }, [](int, int, int) { return false; });
+  const int lo[3] = {0, 0, 0}, hi[3] = {nx, 2, nz};
+  for (int s = 0; s < 12000; s++) { m.surface(lo, hi); m.step(); m.convert(); }
+  const double r = std::sqrt(a * b);
+  // the liquid's centre (fill-weighted) and the width of its row there
+  auto e = host(m.eps.v); auto t = host(m.type.v);
+  double s = 0.0, sx = 0.0, sz = 0.0;
+  for (int k = 0; k < nz; k++)
+    for (int i = 0; i < nx; i++) {
+      const double f = MeltFlow<R>::liq(t(i, 0, k)) ? std::min(1.0, std::max(0.0, (double) e(i, 0, k))) : 0.0;
+      s += f; sx += f * (i + 0.5); sz += f * (k + 0.5);
+    }
+  const int kc = (int) (sz / s);
+  double row = 0.0;
+  for (int i = 0; i < nx; i++) row += MeltFlow<R>::liq(t(i, 0, kc)) ? std::min(1.0, std::max(0.0, (double) e(i, 0, kc))) : 0.0;
+  reach = 0.5 * row / r - 1.0;
+  auto dist = [&](int i, int, int k) { return std::sqrt(std::pow(i + 0.5 - sx / s, 2) + std::pow(k + 0.5 - sz / s, 2)); };
+  dp = fs_inner_rho(m, dist, r - 3.0) / (3.0 * m.p.sigma / r) - 1.0;
+}
+
+template <class R>
+void fs_hf_shapes()
+{
+  int cnt[6];
+  double rms, med, mx, dp, ca, sag, e[4], em[4], cas[4];
+  const double rs[4] = {4.0, 8.0, 16.0, 32.0};
+  for (int s = 0; s < 4; s++) {
+    fs_sphere<R>(rs[s], s == 1 || s == 2 ? 6000 : 0, rms, med, mx, cnt, dp, ca);
+    e[s] = rms; em[s] = med; cas[s] = ca;
+    printf("       23 sphere r = %g: kappa error rms %.2e, median %.2e, max %.2e; cells by heights (dominant frame, other), fit, mean, none: %d %d %d %d %d\n",
+           rs[s], rms, med, mx, cnt[1], cnt[2], cnt[3], cnt[4], cnt[5]);
+    if (s == 1 || s == 2) {
+      char nm[96];
+      snprintf(nm, sizeof(nm), "23 sphere r = %g at rest: rho inside / (6 sigma / r) - 1", rs[s]);
+      check(nm, dp, 3e-2);
+      printf("       23 sphere r = %g at rest: spurious currents, u nu / sigma = %.2e\n", rs[s], ca);
+    }
+  }
+  // the spurious currents have no analytical value but 0: they must fall
+  // with the resolution (from conversions and the curvature's error)
+  check("23 sphere r = 16 at rest: spurious currents, u nu / sigma", cas[2], 3e-3);
+  check("23 sphere: spurious currents r = 8 / r = 16", cas[1] / cas[2], 4.0, false);
+  check("23 sphere r = 8: kappa rms error / (2 / r)", e[1], 1e-2);
+  check("23 sphere r = 16: kappa rms error / (2 / r)", e[2], 5e-3);
+  check("23 sphere r = 32: kappa rms error / (2 / r)", e[3], 2e-3);
+  // second order: the median cell from 8 cells on; the rms (cells with
+  // slopes near 1 in both directions converge late) from 16 on
+  if (sizeof(R) == 8) {
+    check("23 sphere: median error order, r = 8 -> 16", std::log2(em[1] / em[2]), 1.8, false);
+    check("23 sphere: median error order, r = 16 -> 32", std::log2(em[2] / em[3]), 1.8, false);
+    check("23 sphere: rms error order, r = 16 -> 32", std::log2(e[2] / e[3]), 1.8, false);
+  }
+  for (int s = 1; s < 4; s++) {
+    fs_cyl<R>(false, rs[s], s == 1 ? 6000 : 0, rms, med, mx, cnt, dp, ca, sag);
+    e[s] = rms;
+    printf("       24 cylinder r = %g: kappa error rms %.2e, median %.2e, max %.2e; methods %d %d %d %d %d\n",
+           rs[s], rms, med, mx, cnt[1], cnt[2], cnt[3], cnt[4], cnt[5]);
+    if (s == 1) {
+      check("24 cylinder r = 8 at rest: rho inside / (3 sigma / r) - 1", dp, 3e-2);
+      check("24 cylinder r = 8 at rest: spurious currents, u nu / sigma", ca, 1e-2);
+    }
+  }
+  check("24 cylinder r = 8: kappa rms error / (1 / r)", e[1], 1e-2);
+  if (sizeof(R) == 8) {
+    check("24 cylinder: rms error order, r = 8 -> 16", std::log2(e[1] / e[2]), 1.8, false);
+    check("24 cylinder: rms error order, r = 16 -> 32", std::log2(e[2] / e[3]), 1.8, false);
+  }
+  fs_cyl<R>(true, 8.0, 6000, rms, med, mx, cnt, dp, ca, sag);
+  printf("       25 half-cylinder on a wall r = 8: kappa error rms %.2e, max %.2e; methods %d %d %d %d %d\n", rms, mx, cnt[1], cnt[2], cnt[3], cnt[4], cnt[5]);
+  check("25 bulge on a wall r = 8: kappa rms error / (1 / r)", rms, 1e-2);
+  check("25 bulge on a wall at rest: rho inside / (3 sigma / r) - 1", dp, 3e-2);
+  check("25 bulge on a wall at rest: spurious currents, u nu / sigma", ca, 1e-2);
+  check("25 bulge on a wall: its lowest point moved (cells)", sag, 0.5);
+  double reach;
+  fs_relax<R>(reach, dp);
+  check("26 elliptic cylinder rounds: middle row's half-width / r - 1", reach, 5e-2);
+  check("26 elliptic cylinder rounds: rho inside / (sigma / r) - 1", dp, 3e-2);
+  g_hf = false;
+  fs_relax<R>(reach, dp);
+  g_hf = true;
+  printf("       26 under fs_curv column: half-width / r - 1 = %+.3f, rho inside / (sigma / r) - 1 = %+.3f\n", reach, dp);
 }
 
 template <class R>
@@ -1134,6 +1421,18 @@ void fs_all()
   fs_inject<R>();
   fs_force<R>();
   fs_pool<R>();
+  // the same under fs_hf, then its own
+  g_hf = true;
+  fs_rest<R>();
+  fs_dam<R>();
+  fs_wave<R>(0.0);
+  fs_load<R>();
+  fs_thermocapillary<R>(0.0);
+  fs_inject<R>();
+  fs_force<R>();
+  fs_pool<R>();
+  fs_hf_shapes<R>();
+  g_hf = false;
 }
 
 template <class R>
@@ -1176,7 +1475,11 @@ int main(int argc, char **argv)
   Kokkos::initialize(argc, argv);
   {
     printf("melt_flow_check on %s\n", Kokkos::DefaultExecutionSpace::name());
-    if (argc > 1 && std::string(argv[1]) == "fs") {     // the free-surface checks alone
+    if (argc > 1 && std::string(argv[1]) == "hf") {     // fs_hf's own checks alone
+      g_hf = true;
+      printf("double precision\n"); fs_hf_shapes<double>();
+      printf("single precision\n"); fs_hf_shapes<float>();
+    } else if (argc > 1 && std::string(argv[1]) == "fs") {     // the free-surface checks alone
       printf("double precision\n"); fs_all<double>();
       printf("single precision\n"); fs_all<float>();
     } else {

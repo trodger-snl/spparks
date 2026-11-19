@@ -291,6 +291,14 @@ void ConductionTemperatureSource::setup_temperature_source(
         }
         if (k == "sigma_table") { cfg.flow.sigma_file = args[i+2]; i += 2; continue; }
         if (k == "free_surface") { cfg.flow.fs = true; i += 1; continue; }
+        if (k == "fs_curv") {
+          const std::string &v = args[i+2];
+          if (v != "hf" && v != "column")
+            error->all(FLERR,"setup_temperature_source conduction: flow fs_curv is hf or column");
+          cfg.flow.fs_hf = v == "hf";
+          i += 2;
+          continue;
+        }
         if (k == "powder") {
           if (i + 3 >= args.size()) error->all(FLERR,"setup_temperature_source conduction: flow powder needs a rate (kg/s) and a radius (m)");
           cfg.flow.powder = num(i + 2); cfg.flow.powder_radius = num(i + 3);

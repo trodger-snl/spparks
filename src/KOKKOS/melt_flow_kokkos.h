@@ -269,6 +269,10 @@ struct MeltFlow {
   // a paraboloid fit, the mean of its neighbours, none).
   W4 hfs;
   FlowWin<Kokkos::View<unsigned char***>> hfr;
+  // fs_hf: the INTERFACE cells surface_hf() works on, packed, and their
+  // count (two counts used in turn: each call zeroes the other one)
+  Kokkos::View<int*> hfl, hfn;
+  int hfp = 0;
   enum { HF_DOM = 1, HF_OTHER = 2, HF_FIT = 3, HF_AVG = 4, HF_NONE = 5 };
 
   // per column (x, y), from surface(): the metal's height, the gas density
@@ -320,6 +324,7 @@ struct MeltFlow {
       if (fs_hf) {
         hfs = Kokkos::View<R****>("flow_hfs", a, b, c, 5);
         hfr = Kokkos::View<unsigned char***>("flow_hfr", a, b, c);
+        hfn = Kokkos::View<int*>("flow_hfn", 2);
       }
     }
     Kokkos::deep_copy(fl.v, R(1));
@@ -1054,10 +1059,28 @@ struct MeltFlow {
     const int wl0 = wlo[0], wl1 = wlo[1], wl2 = wlo[2], wh0 = whi[0], wh1 = whi[1], wh2 = whi[2];
     int a[3], b[3];
     grown(lo, hi, a, b);
-    Kokkos::parallel_for("FlowFsHF",
+    // The INTERFACE cells of [a, b), packed: the two passes over them run
+    // on a list, not on the whole block, where a wave holds few of them and
+    // waits for the slowest. The list's order follows the atomics; no
+    // cell's result depends on it. No host read: the passes run over as
+    // many threads as cells and the ones past the count return.
+    const int na0 = b[0] - a[0], na1 = b[1] - a[1], nc = na0 * na1 * (b[2] - a[2]);
+    if ((int) hfl.extent(0) < nc)
+      hfl = Kokkos::View<int*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, "flow_hfl"), nc + nc / 2);
+    auto hl_ = hfl; auto hn_ = hfn;
+    const int cp = hfp, a0 = a[0], a1 = a[1], a2 = a[2];
+    if (nc > 0) hfp = 1 - hfp;     // (an empty range zeroes nothing)
+    Kokkos::parallel_for("FlowFsHFList",
       LightMD<3>({a[0], a[1], a[2]}, {b[0], b[1], b[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
+        if (i == a0 && j == a1 && k == a2) hn_(1 - cp) = 0;    // the next call's
         if (ty(i, j, k) != INTERFACE) return;
+        hl_(Kokkos::atomic_fetch_add(&hn_(cp), 1)) = (i - a0) + na0 * ((j - a1) + na1 * (k - a2));
+      });
+    Kokkos::parallel_for("FlowFsHF", LightRange(0, nc),
+      KOKKOS_LAMBDA(const int n) {
+        if (n >= hn_(cp)) return;
+        const int c = hl_(n), i = a0 + c % na0, j = a1 + (c / na0) % na1, k = a2 + c / (na0 * na1);
         const int nn[3] = {nn0, nn1, nn2}, wl[3] = {wl0, wl1, wl2}, wh[3] = {wh0, wh1, wh2};
         const bool pp[3] = {pp0, pp1, pp2};
         // a cell's class: 0 GAS, 1 partial (INTERFACE; e its fill, clamped),
@@ -1310,10 +1333,10 @@ struct MeltFlow {
     // steeper frames, which the fit takes for curvature (4-6% on a sphere
     // of 8 or 16 cells, not converging; the mean is 1-2%). Then the gas
     // density from kappa.
-    Kokkos::parallel_for("FlowFsHFKappa",
-      LightMD<3>({a[0], a[1], a[2]}, {b[0], b[1], b[2]}),
-      KOKKOS_LAMBDA(const int i, const int j, const int k) {
-        if (ty(i, j, k) != INTERFACE) return;
+    Kokkos::parallel_for("FlowFsHFKappa", LightRange(0, nc),
+      KOKKOS_LAMBDA(const int n) {
+        if (n >= hn_(cp)) return;
+        const int cl = hl_(n), i = a0 + cl % na0, j = a1 + (cl / na0) % na1, k = a2 + cl / (na0 * na1);
         const int c = hr_(i, j, k);
         R kap = hs_(i, j, k, 4);
         const R sl = hs_(i, j, k, 0);

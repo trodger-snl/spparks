@@ -269,9 +269,10 @@ struct MeltFlow {
   // a paraboloid fit, the mean of its neighbours, none).
   W4 hfs;
   FlowWin<Kokkos::View<unsigned char***>> hfr;
-  // fs_hf: the INTERFACE cells surface_hf() works on, packed, and their
-  // count (two counts used in turn: each call zeroes the other one)
-  Kokkos::View<int*> hfl, hfn;
+  // fs_hf: the INTERFACE cells surface_hf() works on, packed; those its
+  // dominant frame does not measure; their counts (hfn: two of each, used
+  // in turn, each call zeroing the next call's)
+  Kokkos::View<int*> hfl, hfh, hfn;
   int hfp = 0;
   enum { HF_DOM = 1, HF_OTHER = 2, HF_FIT = 3, HF_AVG = 4, HF_NONE = 5 };
 
@@ -324,7 +325,7 @@ struct MeltFlow {
       if (fs_hf) {
         hfs = Kokkos::View<R****>("flow_hfs", a, b, c, 5);
         hfr = Kokkos::View<unsigned char***>("flow_hfr", a, b, c);
-        hfn = Kokkos::View<int*>("flow_hfn", 2);
+        hfn = Kokkos::View<int*>("flow_hfn", 4);
       }
     }
     Kokkos::deep_copy(fl.v, R(1));
@@ -1043,9 +1044,73 @@ struct MeltFlow {
      ponytail: cells given the mean or the fit carry no Marangoni force.
   -------------------------------------------------------------------- */
   static constexpr int HF_L = 5;
+  enum { CL_LIQ, CL_DRY, CL_EMPTY, CL_HIGH, CL_EDGE, CL_BAD };
+  // the cells and height columns surface_hf()'s passes walk
+  struct HFCols {
+    FlowWin<Kokkos::View<unsigned char***>> ty;
+    W3 ep;
+    int nn[3], wl[3], wh[3];
+    bool pp[3];
+    // a cell's class: 0 GAS, 1 partial (INTERFACE; e its fill, clamped),
+    // 2 full (FLUID, WALL, below the block), 3 not known (beyond the
+    // block's sides or the cells held). x is wrapped in place; below the
+    // block (class 2) it stays out of range.
+    KOKKOS_INLINE_FUNCTION int at(int x[3], R &e) const {
+      e = R(0);
+      for (int d = 0; d < 3; d++) {
+        if (x[d] < 0 || x[d] >= nn[d]) {
+          if (pp[d]) x[d] = (x[d] + nn[d]) % nn[d];
+          else if (d < 2) return 3;
+          else if (x[d] < 0) { e = R(1); return 2; }
+          else return 0;
+        }
+        if (x[d] < wl[d] || x[d] >= wh[d]) return 3;
+      }
+      const int t = ty(x[0], x[1], x[2]);
+      if (t == GAS) return 0;
+      if (t == INTERFACE) { const R v = ep(x[0], x[1], x[2]); e = v < R(0) ? R(0) : v > R(1) ? R(1) : v; return 1; }
+      e = R(1);
+      return 2;
+    }
+    // the cell of row m of column (u, v) of the frame (d, s) of cell c
+    KOKKOS_INLINE_FUNCTION static void cellx(const int c[3], int d, int s, int u, int v, int m, int x[3]) {
+      const int d1 = d == 0 ? 1 : 0, d2 = d == 2 ? 1 : 2;
+      x[0] = c[0]; x[1] = c[1]; x[2] = c[2];
+      x[d1] += u; x[d2] += v; x[d] += s * m;
+    }
+    // column (u, v) of the frame (d, s) of cell c: its class, height (from
+    // c's centre along s e_d), full row and top non-gas row
+    KOKKOS_INLINE_FUNCTION int column(const int c[3], int d, int s, int u, int v, R &h, int &mf, int &mt) const {
+      auto get = [&](int m, R &e) -> int { int x[3]; cellx(c, d, s, u, v, m, x); return at(x, e); };
+      R e;
+      const int c0 = get(0, e);
+      if (c0 == 3) return CL_EDGE;
+      R sum = R(0);
+      int m = 0, cm = c0, me = 1;
+      if (c0 == 0) {
+        while (cm == 0) { if (--m < -HF_L) return CL_EMPTY; cm = get(m, e); }
+        me = m + 1;
+      }
+      while (cm == 1) { sum += e; if (--m < -HF_L) return CL_BAD; cm = get(m, e); }
+      if (cm == 3) return CL_EDGE;
+      if (cm == 0) return CL_BAD;                    // gas under a partial cell
+      mf = m;
+      if (c0 != 0) {
+        m = 0; cm = c0;
+        if (c0 == 2) { while (cm == 2) { mf = m; if (++m > HF_L) return CL_HIGH; cm = get(m, e); } }
+        else cm = get(++m, e);
+        while (cm == 1) { sum += e; if (++m > HF_L) return CL_BAD; cm = get(m, e); }
+        if (cm == 3) return CL_EDGE;
+        if (cm == 2) return CL_BAD;                  // full over a partial cell
+        me = m;
+      }
+      h = R(mf) + R(0.5) + sum;
+      mt = me - 1;
+      return me > mf + 1 ? CL_LIQ : CL_DRY;
+    }
+  };
   void surface_hf(const int lo[3], const int hi[3]) {
-    enum { CL_LIQ, CL_DRY, CL_EMPTY, CL_HIGH, CL_EDGE, CL_BAD };
-    auto ty = type; auto ep_ = eps; auto ms_ = cmass; auto rho_ = rho; auto T_ = T;
+    auto ty = type; auto ms_ = cmass; auto rho_ = rho; auto T_ = T;
     auto pg_ = pgas; auto kt_ = skt; auto kb_ = skb; auto hs_ = hfs; auto hr_ = hfr;
     const bool hp = props;
     auto sg_ = sig; auto dn_ = dens; auto st_ = stab;
@@ -1056,198 +1121,214 @@ struct MeltFlow {
     const R edge = R(fs_angle >= 89.99 ? 1e30 : std::tan(fs_angle * M_PI / 180.0));
     const int nn0 = nx, nn1 = ny, nn2 = nz;
     const bool pp0 = p.periodic[0], pp1 = p.periodic[1], pp2 = p.periodic[2];
-    const int wl0 = wlo[0], wl1 = wlo[1], wl2 = wlo[2], wh0 = whi[0], wh1 = whi[1], wh2 = whi[2];
+    HFCols hcl;
+    hcl.ty = type; hcl.ep = eps;
+    for (int d = 0; d < 3; d++) { hcl.nn[d] = d == 0 ? nx : d == 1 ? ny : nz; hcl.wl[d] = wlo[d]; hcl.wh[d] = whi[d]; hcl.pp[d] = p.periodic[d]; }
     int a[3], b[3];
     grown(lo, hi, a, b);
-    // The INTERFACE cells of [a, b), packed: the two passes over them run
-    // on a list, not on the whole block, where a wave holds few of them and
-    // waits for the slowest. The list's order follows the atomics; no
-    // cell's result depends on it. No host read: the passes run over as
-    // many threads as cells and the ones past the count return.
+    // The INTERFACE cells of [a, b), packed (hfl), so a thread per cell
+    // walks its columns: over the whole block a wave holds few of them and
+    // waits for its slowest. Those whose dominant frame fails go on a second
+    // list (hfh), to a team each. The lists' order follows the atomics; no
+    // cell's result depends on it. No host read of the counts (hfn: two of
+    // each, used in turn; each call zeroes the next call's): the passes run
+    // over as many threads as there are cells, and those past the count return.
     const int na0 = b[0] - a[0], na1 = b[1] - a[1], nc = na0 * na1 * (b[2] - a[2]);
-    if ((int) hfl.extent(0) < nc)
+    if ((int) hfl.extent(0) < nc) {
       hfl = Kokkos::View<int*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, "flow_hfl"), nc + nc / 2);
-    auto hl_ = hfl; auto hn_ = hfn;
+      hfh = Kokkos::View<int*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, "flow_hfh"), nc + nc / 2);
+    }
+    auto hl_ = hfl; auto hh_ = hfh; auto hn_ = hfn;
     const int cp = hfp, a0 = a[0], a1 = a[1], a2 = a[2];
     if (nc > 0) hfp = 1 - hfp;     // (an empty range zeroes nothing)
     Kokkos::parallel_for("FlowFsHFList",
       LightMD<3>({a[0], a[1], a[2]}, {b[0], b[1], b[2]}),
       KOKKOS_LAMBDA(const int i, const int j, const int k) {
-        if (i == a0 && j == a1 && k == a2) hn_(1 - cp) = 0;    // the next call's
+        if (i == a0 && j == a1 && k == a2) hn_(1 - cp) = hn_(3 - cp) = 0;    // the next call's
         if (ty(i, j, k) != INTERFACE) return;
         hl_(Kokkos::atomic_fetch_add(&hn_(cp), 1)) = (i - a0) + na0 * ((j - a1) + na1 * (k - a2));
       });
+    // the surface's source value at a cell
+    auto Sv = KOKKOS_LAMBDA(const int x[3]) -> R {
+      if (hp) return sg_(x[0], x[1], x[2]);
+      R v = T_(x[0], x[1], x[2]);
+      if (tab) {
+        const R u = (v - sT0) * siT;
+        const int m = u < R(0) ? 0 : u >= R(nst - 1) ? nst - 2 : (int) u;
+        v = st_(m) + (u - R(m)) * (st_(m + 1) - st_(m));
+      }
+      return v;
+    };
+    // the axes by |n|, ties to z (the column model's frame), then x
+    auto order = KOKKOS_LAMBDA(const R nv[3], int ord[3]) {
+      ord[0] = 2; ord[1] = 0; ord[2] = 1;
+      for (int u = 0; u < 2; u++)
+        for (int q = 0; q < 2 - u; q++)
+          if (Kokkos::abs(nv[ord[q + 1]]) > Kokkos::abs(nv[ord[q]])) { const int t = ord[q]; ord[q] = ord[q + 1]; ord[q + 1] = t; }
+    };
+    // kappa and the Marangoni acceleration of cell ic from the 9 columns
+    // of its frame (fd, fsd); Sc its source value
+    auto fin = KOKKOS_LAMBDA(const int ic[3], const R Sc, const int fd, const int fsd, const R H[9],
+                             const int C[9], const int MF[9], const int MT[9], R &kap, R acc[3]) {
+      const int i = ic[0], j = ic[1], k = ic[2];
+      auto at = [&](int x[3], R &e) -> int { return hcl.at(x, e); };
+      auto cellx = [&](int d, int s, int u, int v, int m, int x[3]) { HFCols::cellx(ic, d, s, u, v, m, x); };
+      acc[0] = acc[1] = acc[2] = R(0);
+      const R hc = H[4];
+      // the top cell of column q, if it is in the block
+      auto topx = [&](int q, int x[3]) -> bool {
+        R e;
+        cellx(fd, fsd, q / 3 - 1, q % 3 - 1, MT[q], x);
+        at(x, e);
+        return x[2] >= 0 && x[2] < nn2;
+      };
+      R g9[9];
+      for (int q = 0; q < 9; q++) {
+        g9[q] = hc;     // empty, high, edge: a right angle
+        if (C[q] == CL_LIQ) g9[q] = H[q];
+        else if (C[q] == CL_DRY && H[q] < hc) {
+          // dry solid lower than the liquid: met at the contact angle,
+          // or held at its own height when it is cold
+          int x[3];
+          const bool cold = topx(q, x) && T_(x[0], x[1], x[2]) < pinT;
+          g9[q] = cold || hc - edge < H[q] ? H[q] : hc - edge;
+        }
+      }
+      // q = 3 (u + 1) + (v + 1)
+      const R h1 = R(0.5) * (g9[7] - g9[1]), h2 = R(0.5) * (g9[5] - g9[3]);
+      const R h11 = g9[7] - R(2) * hc + g9[1], h22 = g9[5] - R(2) * hc + g9[3];
+      const R h12 = R(0.25) * (g9[8] - g9[6] - g9[2] + g9[0]);
+      const R g = R(1) + h1 * h1 + h2 * h2, sg = Kokkos::sqrt(g);
+      kap = (h11 * (R(1) + h2 * h2) + h22 * (R(1) + h1 * h1) - R(2) * h12 * h1 * h2) / (g * sg);
+      if (mg == R(0)) return;
+      // the source value of a column's top cell (liquid; or dry, by T)
+      auto Sq = [&](int q, R &v) -> bool {
+        int x[3];
+        if (!(C[q] == CL_LIQ || (C[q] == CL_DRY && !hp)) || !topx(q, x)) return false;
+        v = Sv(x);
+        return true;
+      };
+      R S4 = Sc;
+      Sq(4, S4);
+      auto grad = [&](int qa, int qb) -> R {
+        R va, vb, w = R(2);
+        if (!Sq(qa, va)) { va = S4; w -= R(1); }
+        if (!Sq(qb, vb)) { vb = S4; w -= R(1); }
+        return w > R(0) ? mg * (vb - va) / w : R(0);
+      };
+      const R s1 = grad(1, 7), s2 = grad(3, 5);
+      const R fa = ((R(1) + h2 * h2) * s1 - h1 * h2 * s2) / sg, fb = ((R(1) + h1 * h1) * s2 - h1 * h2 * s1) / sg;
+      // the frame column's mass: its partial cells and a FLUID base
+      R M = R(0);
+      for (int m = MF[4]; m <= MT[4]; m++) {
+        int x[3]; R e;
+        cellx(fd, fsd, 0, 0, m, x);
+        const int cl = at(x, e);
+        if (cl == 1) { const R v = ms_(x[0], x[1], x[2]); M += v > R(0) ? v : R(0); }
+        else if (cl == 2 && m == MF[4] && x[2] >= 0 && ty(x[0], x[1], x[2]) == FLUID)
+          M += R(1) + rho_(x[0], x[1], x[2]);
+      }
+      const R im = R(1) / ((M > R(0.5) ? M : R(0.5)) * (hp ? R(1) + dn_(i, j, k) : R(1)));
+      const int d1 = fd == 0 ? 1 : 0, d2 = fd == 2 ? 1 : 2;
+      acc[d1] = fa * im; acc[d2] = fb * im; acc[fd] = R(fsd) * (fa * h1 + fb * h2) * im;
+    };
+    // a cell's results; hs_(0) = sigma, for the second pass
+    auto put = KOKKOS_LAMBDA(int i, int j, int k, R sl, R kap, const R acc[3], int method, int fd, int fsd) {
+      hs_(i, j, k, 0) = sl; hs_(i, j, k, 4) = kap;
+      hs_(i, j, k, 1) = acc[0]; hs_(i, j, k, 2) = acc[1]; hs_(i, j, k, 3) = acc[2];
+      hr_(i, j, k) = (unsigned char) (method << 3 | (2 * fd + (fsd > 0)));
+    };
+    // A thread per cell: the normal and the dominant frame. A cell that
+    // frame does not measure leaves its normal, sigma and source value in
+    // hfs for the team pass.
     Kokkos::parallel_for("FlowFsHF", LightRange(0, nc),
       KOKKOS_LAMBDA(const int n) {
         if (n >= hn_(cp)) return;
         const int c = hl_(n), i = a0 + c % na0, j = a1 + (c / na0) % na1, k = a2 + c / (na0 * na1);
-        const int nn[3] = {nn0, nn1, nn2}, wl[3] = {wl0, wl1, wl2}, wh[3] = {wh0, wh1, wh2};
-        const bool pp[3] = {pp0, pp1, pp2};
-        // a cell's class: 0 GAS, 1 partial (INTERFACE; e its fill, clamped),
-        // 2 full (FLUID, WALL, below the block), 3 not known (beyond the
-        // block's sides or the cells held). x is wrapped in place; below the
-        // block (class 2) it stays out of range.
-        auto at = [&](int x[3], R &e) -> int {
-          e = R(0);
-          for (int d = 0; d < 3; d++) {
-            if (x[d] < 0 || x[d] >= nn[d]) {
-              if (pp[d]) x[d] = (x[d] + nn[d]) % nn[d];
-              else if (d < 2) return 3;
-              else if (x[d] < 0) { e = R(1); return 2; }
-              else return 0;
-            }
-            if (x[d] < wl[d] || x[d] >= wh[d]) return 3;
-          }
-          const int t = ty(x[0], x[1], x[2]);
-          if (t == GAS) return 0;
-          if (t == INTERFACE) { const R v = ep_(x[0], x[1], x[2]); e = v < R(0) ? R(0) : v > R(1) ? R(1) : v; return 1; }
-          e = R(1);
-          return 2;
-        };
-        // the surface's source value at a cell
-        auto Sv = [&](const int x[3]) -> R {
-          if (hp) return sg_(x[0], x[1], x[2]);
-          R v = T_(x[0], x[1], x[2]);
-          if (tab) {
-            const R u = (v - sT0) * siT;
-            const int m = u < R(0) ? 0 : u >= R(nst - 1) ? nst - 2 : (int) u;
-            v = st_(m) + (u - R(m)) * (st_(m + 1) - st_(m));
-          }
-          return v;
-        };
-        const int xc[3] = {i, j, k};
-        const R Sc = Sv(xc);
+        const int ic[3] = {i, j, k};
+        const R Sc = Sv(ic);
         const R sl = hp ? mar * (Sc + sig0) : tab ? sc * Sc : sig0 + mar * (Sc - Tref);
         // Youngs' normal, toward the gas
         R e0, nv[3] = {R(0), R(0), R(0)};
-        { int x[3] = {i, j, k}; at(x, e0); }
+        { int x[3] = {i, j, k}; hcl.at(x, e0); }
         for (int dz = -1; dz <= 1; dz++)
           for (int dy = -1; dy <= 1; dy++)
             for (int dx = -1; dx <= 1; dx++) {
               if (!dx && !dy && !dz) continue;
               int x[3] = {i + dx, j + dy, k + dz};
               R e;
-              if (at(x, e) == 3) e = e0;
+              if (hcl.at(x, e) == 3) e = e0;
               nv[0] -= R(dx * (dy ? 1 : 2) * (dz ? 1 : 2)) * e;
               nv[1] -= R(dy * (dx ? 1 : 2) * (dz ? 1 : 2)) * e;
               nv[2] -= R(dz * (dx ? 1 : 2) * (dy ? 1 : 2)) * e;
             }
-        // the axes by |n|, ties to z (the column model's frame), then x
-        int ord[3] = {2, 0, 1};
-        for (int u = 0; u < 2; u++)
-          for (int q = 0; q < 2 - u; q++)
-            if (Kokkos::abs(nv[ord[q + 1]]) > Kokkos::abs(nv[ord[q]])) { const int t = ord[q]; ord[q] = ord[q + 1]; ord[q + 1] = t; }
-        // the cell of row m of column (u, v) of the frame (d, s)
-        auto cellx = [&](int d, int s, int u, int v, int m, int x[3]) {
-          const int d1 = d == 0 ? 1 : 0, d2 = d == 2 ? 1 : 2;
-          x[0] = i; x[1] = j; x[2] = k;
-          x[d1] += u; x[d2] += v; x[d] += s * m;
-        };
-        // column (u, v) of the frame (d, s): its class, height (from this
-        // cell's centre along s e_d), full row and top non-gas row
-        auto column = [&](int d, int s, int u, int v, R &h, int &mf, int &mt) -> int {
-          auto get = [&](int m, R &e) -> int { int x[3]; cellx(d, s, u, v, m, x); return at(x, e); };
-          R e;
-          const int c0 = get(0, e);
-          if (c0 == 3) return CL_EDGE;
-          R sum = R(0);
-          int m = 0, cm = c0, me = 1;
-          if (c0 == 0) {
-            while (cm == 0) { if (--m < -HF_L) return CL_EMPTY; cm = get(m, e); }
-            me = m + 1;
-          }
-          while (cm == 1) { sum += e; if (--m < -HF_L) return CL_BAD; cm = get(m, e); }
-          if (cm == 3) return CL_EDGE;
-          if (cm == 0) return CL_BAD;                    // gas under a partial cell
-          mf = m;
-          if (c0 != 0) {
-            m = 0; cm = c0;
-            if (c0 == 2) { while (cm == 2) { mf = m; if (++m > HF_L) return CL_HIGH; cm = get(m, e); } }
-            else cm = get(++m, e);
-            while (cm == 1) { sum += e; if (++m > HF_L) return CL_BAD; cm = get(m, e); }
-            if (cm == 3) return CL_EDGE;
-            if (cm == 2) return CL_BAD;                  // full over a partial cell
-            me = m;
-          }
-          h = R(mf) + R(0.5) + sum;
-          mt = me - 1;
-          return me > mf + 1 ? CL_LIQ : CL_DRY;
-        };
+        int ord[3];
+        order(nv, ord);
+        const int fd = ord[0], fsd = nv[fd] < R(0) ? -1 : 1;
         R H[9];
         int C[9], MF[9], MT[9];
-        auto frame = [&](int d, int s, bool dom) -> bool {
-          for (int q = 0; q < 9; q++) {
-            H[q] = R(0); MF[q] = MT[q] = 0;
-            C[q] = column(d, s, q / 3 - 1, q % 3 - 1, H[q], MF[q], MT[q]);
-            if (C[q] == CL_BAD || (!dom && C[q] != CL_LIQ && C[q] != CL_DRY)) return false;
-          }
-          return C[4] == CL_LIQ;
-        };
-        int method = HF_NONE, fd = ord[0], fsd = nv[ord[0]] < R(0) ? -1 : 1;
-        for (int t = 0; t < 3 && method == HF_NONE; t++) {
-          const int d = ord[t], s = nv[d] < R(0) ? -1 : 1;
-          if (frame(d, s, t == 0)) { method = t == 0 ? HF_DOM : HF_OTHER; fd = d; fsd = s; }
+        bool ok = true;
+        for (int q = 0; q < 9 && ok; q++) {
+          H[q] = R(0); MF[q] = MT[q] = 0;
+          C[q] = hcl.column(ic, fd, fsd, q / 3 - 1, q % 3 - 1, H[q], MF[q], MT[q]);
+          ok = C[q] != CL_BAD;
+        }
+        if (!ok || C[4] != CL_LIQ) {
+          hh_(Kokkos::atomic_fetch_add(&hn_(2 + cp), 1)) = c;
+          hs_(i, j, k, 0) = sl; hs_(i, j, k, 4) = Sc;
+          hs_(i, j, k, 1) = nv[0]; hs_(i, j, k, 2) = nv[1]; hs_(i, j, k, 3) = nv[2];
+          return;
+        }
+        R kap, acc[3];
+        fin(ic, Sc, fd, fsd, H, C, MF, MT, kap, acc);
+        put(i, j, k, sl, kap, acc, HF_DOM, fd, fsd);
+      });
+    // A team per cell the dominant frame did not measure (a wave; one
+    // thread on the host), its lanes walking the 27 columns of the three
+    // frames side by side: a column is a chain of dependent loads, and 18
+    // or 27 of them one after another set the length of a thread-per-cell
+    // pass. Then the other two frames, else the fit; every lane does that
+    // alike and the first writes it.
+    using TP = Kokkos::TeamPolicy<Kokkos::Experimental::WorkItemProperty::HintLightWeight_t>;
+    using Scr = Kokkos::DefaultExecutionSpace::scratch_memory_space;
+    using SR = Kokkos::View<R*, Scr, Kokkos::MemoryUnmanaged>;
+    using SI = Kokkos::View<int*, Scr, Kokkos::MemoryUnmanaged>;
+    const int tsz = std::is_same_v<Kokkos::DefaultExecutionSpace, Kokkos::DefaultHostExecutionSpace> ? 1 : 32;
+    TP tpol(std::max(1, std::min(nc, 1 << 12)), tsz);
+    tpol.set_scratch_size(0, Kokkos::PerTeam(SR::shmem_size(27) + 3 * SI::shmem_size(27)));
+    Kokkos::parallel_for("FlowFsHFHard", tpol,
+      KOKKOS_LAMBDA(const TP::member_type &tm) {
+      SR sH(tm.team_scratch(0), 27);
+      SI sC(tm.team_scratch(0), 27), sMF(tm.team_scratch(0), 27), sMT(tm.team_scratch(0), 27);
+      for (int n = tm.league_rank(); n < hn_(2 + cp); n += tm.league_size()) {
+        const int c = hh_(n), i = a0 + c % na0, j = a1 + (c / na0) % na1, k = a2 + c / (na0 * na1);
+        const int ic[3] = {i, j, k};
+        const R sl = hs_(i, j, k, 0), Sc = hs_(i, j, k, 4);
+        const R nv[3] = {hs_(i, j, k, 1), hs_(i, j, k, 2), hs_(i, j, k, 3)};
+        int ord[3];
+        order(nv, ord);
+        Kokkos::parallel_for(Kokkos::TeamThreadRange(tm, 27), [&](const int l) {
+          const int d = ord[l / 9], s = nv[d] < R(0) ? -1 : 1, q = l % 9;
+          R h = R(0);
+          int mf = 0, mt = 0;
+          sC(l) = hcl.column(ic, d, s, q / 3 - 1, q % 3 - 1, h, mf, mt);
+          sH(l) = h; sMF(l) = mf; sMT(l) = mt;
+        });
+        tm.team_barrier();
+        // the other two frames: every column liquid or dry (a steeper frame
+        // overflows the reach, so no mirrors there), this cell's liquid
+        int method = HF_NONE, fd = ord[0], fsd = nv[ord[0]] < R(0) ? -1 : 1, ft = 0;
+        for (int t = 1; t < 3 && method == HF_NONE; t++) {
+          bool ok = sC(9 * t + 4) == CL_LIQ;
+          for (int q = 0; q < 9; q++) ok = ok && (sC(9 * t + q) == CL_LIQ || sC(9 * t + q) == CL_DRY);
+          if (ok) { method = HF_OTHER; ft = t; fd = ord[t]; fsd = nv[fd] < R(0) ? -1 : 1; }
         }
         R kap = R(0), acc[3] = {R(0), R(0), R(0)};
-        if (method != HF_NONE) {
-          const R hc = H[4];
-          // the top cell of column q, if it is in the block
-          auto topx = [&](int q, int x[3]) -> bool {
-            R e;
-            cellx(fd, fsd, q / 3 - 1, q % 3 - 1, MT[q], x);
-            at(x, e);
-            return x[2] >= 0 && x[2] < nn[2];
-          };
-          R g9[9];
-          for (int q = 0; q < 9; q++) {
-            g9[q] = hc;     // empty, high, edge: a right angle
-            if (C[q] == CL_LIQ) g9[q] = H[q];
-            else if (C[q] == CL_DRY && H[q] < hc) {
-              // dry solid lower than the liquid: met at the contact angle,
-              // or held at its own height when it is cold
-              int x[3];
-              const bool cold = topx(q, x) && T_(x[0], x[1], x[2]) < pinT;
-              g9[q] = cold || hc - edge < H[q] ? H[q] : hc - edge;
-            }
-          }
-          // q = 3 (u + 1) + (v + 1)
-          const R h1 = R(0.5) * (g9[7] - g9[1]), h2 = R(0.5) * (g9[5] - g9[3]);
-          const R h11 = g9[7] - R(2) * hc + g9[1], h22 = g9[5] - R(2) * hc + g9[3];
-          const R h12 = R(0.25) * (g9[8] - g9[6] - g9[2] + g9[0]);
-          const R g = R(1) + h1 * h1 + h2 * h2, sg = Kokkos::sqrt(g);
-          kap = (h11 * (R(1) + h2 * h2) + h22 * (R(1) + h1 * h1) - R(2) * h12 * h1 * h2) / (g * sg);
-          if (mg != R(0)) {
-            // the source value of a column's top cell (liquid; or dry, by T)
-            auto Sq = [&](int q, R &v) -> bool {
-              int x[3];
-              if (!(C[q] == CL_LIQ || (C[q] == CL_DRY && !hp)) || !topx(q, x)) return false;
-              v = Sv(x);
-              return true;
-            };
-            R S4 = Sc;
-            Sq(4, S4);
-            auto grad = [&](int qa, int qb) -> R {
-              R va, vb, w = R(2);
-              if (!Sq(qa, va)) { va = S4; w -= R(1); }
-              if (!Sq(qb, vb)) { vb = S4; w -= R(1); }
-              return w > R(0) ? mg * (vb - va) / w : R(0);
-            };
-            const R s1 = grad(1, 7), s2 = grad(3, 5);
-            const R fa = ((R(1) + h2 * h2) * s1 - h1 * h2 * s2) / sg, fb = ((R(1) + h1 * h1) * s2 - h1 * h2 * s1) / sg;
-            // the frame column's mass: its partial cells and a FLUID base
-            R M = R(0);
-            for (int m = MF[4]; m <= MT[4]; m++) {
-              int x[3]; R e;
-              cellx(fd, fsd, 0, 0, m, x);
-              const int cl = at(x, e);
-              if (cl == 1) { const R v = ms_(x[0], x[1], x[2]); M += v > R(0) ? v : R(0); }
-              else if (cl == 2 && m == MF[4] && x[2] >= 0 && ty(x[0], x[1], x[2]) == FLUID)
-                M += R(1) + rho_(x[0], x[1], x[2]);
-            }
-            const R im = R(1) / ((M > R(0.5) ? M : R(0.5)) * (hp ? R(1) + dn_(i, j, k) : R(1)));
-            const int d1 = fd == 0 ? 1 : 0, d2 = fd == 2 ? 1 : 2;
-            acc[d1] = fa * im; acc[d2] = fb * im; acc[fd] = R(fsd) * (fa * h1 + fb * h2) * im;
-          }
+        if (method == HF_OTHER) {
+          R H[9];
+          int C[9], MF[9], MT[9];
+          for (int q = 0; q < 9; q++) { H[q] = sH(9 * ft + q); C[q] = sC(9 * ft + q); MF[q] = sMF(9 * ft + q); MT[q] = sMT(9 * ft + q); }
+          fin(ic, Sc, fd, fsd, H, C, MF, MT, kap, acc);
         } else {
           // Popinet's fallback: a paraboloid z' = c0 + c1 x' + c2 y' + c3 x'^2
           // + c4 y'^2 + c5 x'y' in the normal's frame, through the surface
@@ -1274,10 +1355,10 @@ struct MeltFlow {
           for (int d = 0; d < 3; d++) {
             if (nv[d] == R(0)) continue;
             const int s = nv[d] < R(0) ? -1 : 1, d1 = d == 0 ? 1 : 0, d2 = d == 2 ? 1 : 2;
+            const int td = ord[0] == d ? 0 : ord[1] == d ? 1 : 2;    // its frame's columns
             for (int q = 0; q < 9; q++) {
-              R h;
-              int mf, mt;
-              if (column(d, s, q / 3 - 1, q % 3 - 1, h, mf, mt) != CL_LIQ) continue;
+              if (sC(9 * td + q) != CL_LIQ) continue;
+              const R h = sH(9 * td + q);
               R r[3];
               r[d1] = R(q / 3 - 1); r[d2] = R(q % 3 - 1); r[d] = R(s) * h;
               const R X = r[0] * tu[0] + r[1] * tu[1] + r[2] * tu[2];
@@ -1319,10 +1400,9 @@ struct MeltFlow {
             }
           }
         }
-        // the curvature, and this cell's sigma for the second pass
-        hs_(i, j, k, 0) = sl; hs_(i, j, k, 4) = kap;
-        hs_(i, j, k, 1) = acc[0]; hs_(i, j, k, 2) = acc[1]; hs_(i, j, k, 3) = acc[2];
-        hr_(i, j, k) = (unsigned char) (method << 3 | (2 * fd + (fsd > 0)));
+        if (tm.team_rank() == 0) put(i, j, k, sl, kap, acc, method, fd, fsd);
+        tm.team_barrier();    // the scratch is the next cell's
+      }
       });
     // A cell its own heights did not measure takes the mean curvature of
     // the INTERFACE cells around it that were, if any (Basilisk's last
@@ -1334,9 +1414,9 @@ struct MeltFlow {
     // of 8 or 16 cells, not converging; the mean is 1-2%). Then the gas
     // density from kappa.
     Kokkos::parallel_for("FlowFsHFKappa", LightRange(0, nc),
-      KOKKOS_LAMBDA(const int n) {
-        if (n >= hn_(cp)) return;
-        const int cl = hl_(n), i = a0 + cl % na0, j = a1 + (cl / na0) % na1, k = a2 + cl / (na0 * na1);
+      KOKKOS_LAMBDA(const int id) {
+        if (id >= hn_(cp)) return;
+        const int cl = hl_(id), i = a0 + cl % na0, j = a1 + (cl / na0) % na1, k = a2 + cl / (na0 * na1);
         const int c = hr_(i, j, k);
         R kap = hs_(i, j, k, 4);
         const R sl = hs_(i, j, k, 0);

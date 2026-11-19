@@ -254,10 +254,10 @@ struct MeltFlow {
   // viscous (nu = 1/6 lattice at 1), so the surface is dragged along with
   // the cell under it: a known bias on the surface speed.
   double fs_tau = 1.0;
-  // fs, per cell (see surface()): (0) the gas density less 1 an INTERFACE cell's gas
-  // links see; (1-3) the surface force as an acceleration (an INTERFACE
-  // cell's frame column's; a FLUID cell's, gathered from the columns it is
-  // the base of); (4) an INTERFACE cell's curvature. hfr: an INTERFACE
+  // fs, per INTERFACE cell (see surface()): (0) the gas density less 1 its
+  // gas links see; (1-3) its frame column's surface force as an
+  // acceleration (FlowStep gathers a FLUID cell's from the columns it is
+  // the base of: hf_base()); (4) its curvature. hfr: an INTERFACE
   // cell's method << 3 | frame, frame = 2 d + (s > 0) (heights along
   // s e_d), method HF_* below (heights in the dominant frame, in another,
   // a paraboloid fit, the mean of its neighbours, none).
@@ -398,7 +398,7 @@ struct MeltFlow {
     // fs: the gas density and the surface force per cell (surface());
     // the force only where there is a Marangoni term
     const bool hfm = fs && hf_mg() != R(0);
-    auto hs_ = hfs;
+    auto hs_ = hfs; auto hr_ = hfr;
     auto S_ = hp ? sig : T; auto dn_ = dens; auto vs_ = visc;
     const R nu3 = R(3.0 * p.nu), tauif = R(fs_tau);
     Kokkos::parallel_for("FlowStep",
@@ -515,8 +515,22 @@ struct MeltFlow {
         const R dT = hp ? -dn_(i, j, k) : T_(i, j, k) - Tref;
         R ax = a0x + bx * dT, ay = a0y + by * dT, az = a0z + bz * dT;
         if (fs_) {
-          // the surface force (see surface())
-          if (hfm) { ax += hs_(i, j, k, 1); ay += hs_(i, j, k, 2); az += hs_(i, j, k, 3); }
+          // the surface force (see surface()): an INTERFACE cell's own; a
+          // FLUID cell's from each frame column it is the base of
+          if (hfm && ifc) { ax += hs_(i, j, k, 1); ay += hs_(i, j, k, 2); az += hs_(i, j, k, 3); }
+          else if (hfm) {
+            R g[3] = {R(0), R(0), R(0)};
+            #pragma unroll
+            for (int q = 1; q < 7; q++) {
+              if (tq[opp(q)] != INTERFACE) continue;
+              int cx, cy, cz; vel(q, cx, cy, cz);
+              int ii = i + cx, jj = j + cy, kk = k + cz;
+              cell(ii, jj, kk);
+              if (hf_base(q, hr_(ii, jj, kk)))
+                for (int d = 0; d < 3; d++) g[d] += hs_(ii, jj, kk, 1 + d);
+            }
+            ax += g[0]; ay += g[1]; az += g[2];
+          }
           // a partial cell takes its fill's part of every force: the
           // pressure under the surface then follows the surface's height
           // within a cell (else a surface inside a cell layer feels no
@@ -904,7 +918,7 @@ struct MeltFlow {
        [((1 + hy^2) sx - hx hy sy) (1, 0, hx) + ((1 + hx^2) sy - hx hy sx)
        (0, 1, hy)] / sqrt(1 + hx^2 + hy^2) in the frame, shared as one
        acceleration by the frame column's partial cells and its FLUID base
-       (that base gathers it in a third kernel).
+       (that base gathers it in FlowStep, hf_base()).
      Several ranks: the halo of type, eps, cmass, rho and T (or sig) must
      be HF_L + 1 deep (a cell one beyond this rank's walks HF_L more).
      ponytail: cells given the mean or the fit carry no Marangoni force.
@@ -996,9 +1010,12 @@ struct MeltFlow {
     // walks its columns: over the whole block a wave holds few of them and
     // waits for its slowest. Those whose dominant frame fails go on a second
     // list (hfh), to a team each. The lists' order follows the atomics; no
-    // cell's result depends on it. No host read of the counts (hfn: two of
-    // each, used in turn; each call zeroes the next call's): the passes run
-    // over as many threads as there are cells, and those past the count return.
+    // cell's result depends on it. No host read of the counts on a GPU (hfn:
+    // two of each, used in turn; each call zeroes the next call's): the
+    // passes run over as many threads as there are cells, and those past the
+    // count return. On the host they run over the count (nhost): a static
+    // schedule over every cell gave the whole list to the first thread
+    // (FlowFsHF 4.5 times slower on 8 OpenMP threads).
     const int na0 = b[0] - a[0], na1 = b[1] - a[1], nc = na0 * na1 * (b[2] - a[2]);
     if ((int) hfl.extent(0) < nc) {
       hfl = Kokkos::View<int*>(Kokkos::view_alloc(Kokkos::WithoutInitializing, "flow_hfl"), nc + nc / 2);
@@ -1014,6 +1031,14 @@ struct MeltFlow {
         if (ty(i, j, k) != INTERFACE) return;
         hl_(Kokkos::atomic_fetch_add(&hn_(cp), 1)) = (i - a0) + na0 * ((j - a1) + na1 * (k - a2));
       });
+    constexpr bool hostx = std::is_same_v<Kokkos::DefaultExecutionSpace, Kokkos::DefaultHostExecutionSpace>;
+    auto nhost = [&](int w) -> int {
+      if (!hostx) return nc;
+      int v = 0;
+      Kokkos::deep_copy(v, Kokkos::subview(hn_, w));
+      return v;
+    };
+    const int nl = nhost(cp);
     // the surface's source value at a cell
     auto Sv = KOKKOS_LAMBDA(const int x[3]) -> R {
       if (hp) return sg_(x[0], x[1], x[2]);
@@ -1107,7 +1132,7 @@ struct MeltFlow {
     // A thread per cell: the normal and the dominant frame. A cell that
     // frame does not measure leaves its normal, sigma and source value in
     // hfs for the team pass.
-    Kokkos::parallel_for("FlowFsHF", LightRange(0, nc),
+    Kokkos::parallel_for("FlowFsHF", LightRange(0, nl),
       KOKKOS_LAMBDA(const int n) {
         if (n >= hn_(cp)) return;
         const int c = hl_(n), i = a0 + c % na0, j = a1 + (c / na0) % na1, k = a2 + c / (na0 * na1);
@@ -1159,8 +1184,8 @@ struct MeltFlow {
     using Scr = Kokkos::DefaultExecutionSpace::scratch_memory_space;
     using SR = Kokkos::View<R*, Scr, Kokkos::MemoryUnmanaged>;
     using SI = Kokkos::View<int*, Scr, Kokkos::MemoryUnmanaged>;
-    const int tsz = std::is_same_v<Kokkos::DefaultExecutionSpace, Kokkos::DefaultHostExecutionSpace> ? 1 : 32;
-    TP tpol(std::max(1, std::min(nc, 1 << 12)), tsz);
+    const int tsz = hostx ? 1 : 32;
+    TP tpol(std::max(1, hostx ? nhost(2 + cp) : std::min(nc, 1 << 12)), tsz);
     tpol.set_scratch_size(0, Kokkos::PerTeam(SR::shmem_size(27) + 3 * SI::shmem_size(27)));
     Kokkos::parallel_for("FlowFsHFHard", tpol,
       KOKKOS_LAMBDA(const TP::member_type &tm) {
@@ -1279,7 +1304,7 @@ struct MeltFlow {
     // steeper frames, which the fit takes for curvature (4-6% on a sphere
     // of 8 or 16 cells, not converging; the mean is 1-2%). Then the gas
     // density from kappa.
-    Kokkos::parallel_for("FlowFsHFKappa", LightRange(0, nc),
+    Kokkos::parallel_for("FlowFsHFKappa", LightRange(0, nl),
       KOKKOS_LAMBDA(const int id) {
         if (id >= hn_(cp)) return;
         const int cl = hl_(id), i = a0 + cl % na0, j = a1 + (cl / na0) % na1, k = a2 + cl / (na0 * na1);
@@ -1319,24 +1344,15 @@ struct MeltFlow {
         if (m == HF_NONE && kt_(i, j) >= 0 && k < kb_(i, j)) dg -= R(6) * sl;
         hs_(i, j, k, 0) = dg;
       });
-    if (mg == R(0)) return;
-    // a FLUID cell takes the force of each frame column it is the base of:
-    // the neighbour along q = s e_d whose frame is (d, s)
-    const Nbr nb = nbr();
-    Kokkos::parallel_for("FlowFsHFBase",
-      LightMD<3>({lo[0], lo[1], lo[2]}, {hi[0], hi[1], hi[2]}),
-      KOKKOS_LAMBDA(const int i, const int j, const int k) {
-        if (ty(i, j, k) != FLUID) return;
-        R acc[3] = {R(0), R(0), R(0)};
-        for (int q = 1; q < 7; q++) {
-          int ii, jj, kk;
-          if (!nb(q, i, j, k, ii, jj, kk) || ty(ii, jj, kk) != INTERFACE) continue;
-          const int c = hr_(ii, jj, kk), m = c >> 3;
-          if ((m == HF_DOM || m == HF_OTHER) && (c & 7) == 2 * ((q - 1) / 2) + (q & 1))
-            for (int d = 0; d < 3; d++) acc[d] += hs_(ii, jj, kk, 1 + d);
-        }
-        hs_(i, j, k, 1) = acc[0]; hs_(i, j, k, 2) = acc[1]; hs_(i, j, k, 3) = acc[2];
-      });
+  }
+
+  // Whether the INTERFACE cell along q from a FLUID cell has it as the base
+  // of its frame column, i.e. its frame is (d, s) with q = s e_d and its
+  // heights measured it: the FLUID cell then takes its surface force
+  // (gathered in FlowStep, in q order).
+  KOKKOS_INLINE_FUNCTION static bool hf_base(int q, int c) {
+    const int m = c >> 3;
+    return (m == HF_DOM || m == HF_OTHER) && (c & 7) == 2 * ((q - 1) / 2) + (q & 1);
   }
 
   // Mass arriving on the surface (powder): scale * dm(x, y), in cells of

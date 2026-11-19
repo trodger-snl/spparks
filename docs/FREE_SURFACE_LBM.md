@@ -55,7 +55,7 @@ run(h):                                    per thermal step (flow_step)
   choose n, rescale f if dt changed
   repeat n times:
     1. surface(lo, hi)        FlowFsColumns (2-D), FlowFsHFList, FlowFsHF,
-                              FlowFsHFHard, FlowFsHFKappa, FlowFsHFBase
+                              FlowFsHFHard, FlowFsHFKappa
     2. step(lo, hi)           FlowStep                             (3-D)
        post():   melt_advect  FlowAdvect x3 (+ copy)               transport
                  inject       FlowFsInject                         powder
@@ -159,7 +159,7 @@ height functions ran clean to 1.3 s.
 
 Popinet 2009 (sections 3–4) and Cummins, Francois & Kothe 2005. Per
 INTERFACE cell c, in `surface_hf()` (kernels `FlowFsHFList`, `FlowFsHF`,
-`FlowFsHFHard`, `FlowFsHFKappa`, `FlowFsHFBase`; see "Memory and cost"):
+`FlowFsHFHard`, `FlowFsHFKappa`; see "Memory and cost"):
 
 1. **Normal and frame.** n = −∇ε by Youngs' 3×3×3 weights (FLUID and WALL
    count as ε = 1, GAS 0, INTERFACE its clamped fill). The frame is the
@@ -224,7 +224,7 @@ INTERFACE cell c, in `surface_hf()` (kernels `FlowFsHFList`, `FlowFsHF`,
    without one. It is one acceleration f/M shared
    by the frame column's partial cells and its FLUID base (M their mass,
    at least ½): each INTERFACE cell stores it (`hfs(·,1..3)`) and
-   `FlowFsHFBase` lets each FLUID cell gather it from the axis neighbours
+   `FlowStep` lets each FLUID cell gather it from the axis neighbours
    whose frame column it is the base of. Cells measured by the mean or the
    fit carry no Marangoni force (`ponytail:`, a few corner cells).
 8. **Conversion.** Liquid may enter any gas cell beside a filled one
@@ -257,7 +257,7 @@ INTERFACE cell c, in `surface_hf()` (kernels `FlowFsHFList`, `FlowFsHF`,
 | Laser (`fs_surface_z`: hangs from each column's top metal cell) | the beam comes from above |
 | Powder (`FlowFsPowder`, `inject`, `fs_engulf` pool width) | it falls from above onto the column's top stack, which `FlowFsColumns` finds |
 | Freezing (`FlowFsTypes`) and write-back (`FlowFsOut`) | their interface stacks are z-stacks. An underside cell has no host below (gas): it keeps its own T and H and freezes whole when capped. `ponytail:` settling along the cell's frame instead of z if the scallop shapes need it |
-| Several ranks | the flow halo is HF_L + 1 = 6 cells deep under `free_surface` (2 for the flat lid), and type, fill, mass, ρ and T (or `sig`) are exchanged that deep: a cell one beyond this rank's (which `FlowFsHFBase` reads) walks its columns 5 more. The f, flux and advection exchanges stay 2 deep |
+| Several ranks | the flow halo is HF_L + 1 = 6 cells deep under `free_surface` (2 for the flat lid), and type, fill, mass, ρ and T (or `sig`) are exchanged that deep: a cell one beyond this rank's (whose force `FlowStep` gathers) walks its columns 5 more. The f, flux and advection exchanges stay 2 deep |
 
 ### Memory and cost
 
@@ -279,8 +279,10 @@ does not measure goes on a second list (`hfh`) with its normal, σ and
 source value parked in `hfs`, and `FlowFsHFHard` gives each such cell a
 team (a wave on the GPU, one thread on the host) whose lanes walk the 27
 columns of the three frames side by side, then picks the other frames or
-the fit from them. `FlowFsHFKappa` (the mean) runs on the list too;
-`FlowFsHFBase` stays a pass over the FLUID cells. The counts never come
+the fit from them. `FlowFsHFKappa` (the mean) runs on the list too. A
+FLUID cell's share of the force of the frame columns it is the base of is
+gathered in `FlowStep` (`hf_base()`), which already holds its neighbours'
+types; it was a full-block pass, `FlowFsHFBase`, until 2026-11-18. The counts never come
 back to the host: each pass runs over as many threads as cells, and those
 past the count return; two counts of each list are used in turn, each
 call zeroing the next call's.
@@ -295,19 +297,27 @@ three times `FlowStep`. Measured on a single-track DED deck
 gfx1151, KOKKOS_PREC mixed, kp_kernel_timer, 0–0.1 s, 366 002 flow steps,
 µs per call):
 
-| Kernel | `column` (removed) | `hf` before | list | list, fit in `FlowFsHFKappa` | team per cell | list + team for the rest (now) |
-|---|---|---|---|---|---|---|
-| `FlowFsHFList` | | | 10.3 | 10.1 | 10.3 | 10.3 |
-| `FlowFsHF` | | 301.7 | 162.4 | 90.9 | 152.1 | 72.9 |
-| `FlowFsHFHard` | | | | | | 34.3 |
-| `FlowFsHFKappa` | | 24.2 | 21.4 | 106.5 | 21.9 | 19.1 |
-| `FlowFsHFBase` | | 17.1 | 16.5 | 22.7 | 16.9 | 17.4 |
-| `FlowFsSurface` | 25.0 | | | | | |
-| surface, s per 0.1 s | 9.1 | 125.5 | 77.1 | 84.3 | 73.6 | 56.4 |
-| `FlowStep` (for scale) | 105.7 | 102.9 | 106.3 | 102.3 | 104.3 | 104.6 |
+| Kernel | `column` (removed) | `hf` before | list | list, fit in `FlowFsHFKappa` | team per cell | list + team for the rest | + `FlowFsHFBase` in `FlowStep` (now) |
+|---|---|---|---|---|---|---|---|
+| `FlowFsHFList` | | | 10.3 | 10.1 | 10.3 | 10.3 | 10.1 |
+| `FlowFsHF` | | 301.7 | 162.4 | 90.9 | 152.1 | 72.9 | 72.4 |
+| `FlowFsHFHard` | | | | | | 34.3 | 33.2 |
+| `FlowFsHFKappa` | | 24.2 | 21.4 | 106.5 | 21.9 | 19.1 | 18.8 |
+| `FlowFsHFBase` | | 17.1 | 16.5 | 22.7 | 16.9 | 17.4 | |
+| `FlowFsSurface` | 25.0 | | | | | | |
+| surface, s per 0.1 s | 9.1 | 125.5 | 77.1 | 84.3 | 73.6 | 56.4 | 49.2 |
+| `FlowStep` (for scale) | 105.7 | 102.9 | 106.3 | 102.3 | 104.3 | 104.6 | 105.9 |
 
 Wall time to 0.1 s without the timer: `column` 176.8 s; `hf` 285.1 s
-before (1.61×), 234.2 s with the list (1.33×), 211.1 s now (1.19×).
+before (1.61×), 234.2 s with the list (1.33×), 211.1 s with the team pass
+(1.19×; 209.1 s on a rerun), 206.5 s with the gather in `FlowStep`
+(1.17×).
+
+**Tried, no gain** (2026-11-18): walking the 9 columns of `FlowFsHF` side
+by side (each round loading the next cell of every column still walking,
+type and fill together, before looking at any) left it at 72.4 µs: the
+chains are not what bounds it, or the compiler did not overlap them.
+Reverted.
 Over 0.05–0.1 s (a grown pool) `FlowFsHF` alone had been 41% of the
 kernel time (429 µs per call, 3.2× `FlowStep`); everything else, `FlowStep`
 included, costs the same under either model. No FP64 instruction is in
@@ -330,13 +340,22 @@ kernel, reassociated), so a coupled run drifts from the old one as two
 thread counts do; every gate prints the same digits (OpenMP double and
 HIP, both precisions).
 
-On OpenMP (8 threads, mixed, `in.sdh` to 0.06 s, before this change) the
+On OpenMP (8 threads, mixed, `in.sdh` to 0.06 s, before the list) the
 surface was 7.0% of the run under `hf` (`FlowFsHF` 4.85%, `FlowFsHFBase`
 1.51, `FlowFsHFKappa` 0.61) against 0.4% under `column`, and the run took
 +12.6% (1058 s against 940 s). `FlowFsHF` took 253 µs per call on 8
 threads, about what the GPU took (302 µs): the GPU gains nothing on a
 chain of dependent loads, while `ConductionStep` (43% of an OpenMP run,
 20–30% of a HIP one) and `FlowStep` run about 12× faster there.
+
+The list passes first ran over every cell of the block on the host too,
+those past the count returning: OpenMP's static schedule then gave the
+whole list to the first thread, and `FlowFsHF` took 1130 µs per call
+(1101 s). On a host backend they now run over the count (read back, a
+copy within host memory): `FlowFsHF` 174 µs, `FlowFsHFHard` 24,
+`FlowFsHFKappa` 12; the surface is 6.0% of the run (1.2 points of it `FlowFsHFList`), and it took 888 s.
+(`ConductionStep` and `FlowStep` were 13% and 20% slower in the 1058 s
+and 940 s runs than in these two, so compare kernels, not totals.)
 
 ### Gates (tools/melt_flow_check: `melt_flow_check hf`, and all of them in `fs`)
 

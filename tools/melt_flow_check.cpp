@@ -1107,13 +1107,21 @@ void fs_force()
   m.surface(lo, hi);
   auto t = host(m.type.v); auto e = host(m.eps.v);
   double fx = 0, fz = 0, ex = 0, ez = 0, amax = 0;
-  auto hs = host(m.hfs.v);
+  auto hs = host(m.hfs.v); auto hr = host(m.hfr.v);
   for (int i = 4; i < nx / 2 - 4; i++) {
     // what the step applies: each liquid cell's acceleration, by its fill
+    // (a FLUID cell's gathered from the frame columns it is the base of)
     for (int k = 0; k < nz; k++) {
       if (!MeltFlow<R>::liq(t(i, 0, k))) continue;
-      const double w = t(i, 0, k) == MeltFlow<R>::INTERFACE ? std::min(1.0, std::max(0.0, (double) e(i, 0, k))) : 1.0;
-      const double cx = hs(i, 0, k, 1), cz = hs(i, 0, k, 3);
+      const bool ifc = t(i, 0, k) == MeltFlow<R>::INTERFACE;
+      const double w = ifc ? std::min(1.0, std::max(0.0, (double) e(i, 0, k))) : 1.0;
+      double cx = ifc ? (double) hs(i, 0, k, 1) : 0.0, cz = ifc ? (double) hs(i, 0, k, 3) : 0.0;
+      for (int q = 1; q < 7 && !ifc; q++) {
+        int c[3]; MeltFlow<R>::vel(q, c[0], c[1], c[2]);
+        const int ii = (i + c[0] + nx) % nx, jj = (c[1] + 2) % 2, kk = k + c[2];
+        if (kk < 0 || kk >= nz || t(ii, jj, kk) != MeltFlow<R>::INTERFACE || !MeltFlow<R>::hf_base(q, hr(ii, jj, kk))) continue;
+        cx += hs(ii, jj, kk, 1); cz += hs(ii, jj, kk, 3);
+      }
       fx += w * cx; fz += w * cz;
       amax = std::max(amax, std::hypot(cx, cz));
     }

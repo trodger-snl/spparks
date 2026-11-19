@@ -102,10 +102,9 @@ class ConductionTemperatureSource : public MoserTemperatureSource {
       // (default T0); only what lands on liquid is caught.
       double powder = 0.0, powder_radius = 0.0, powder_T = -1.0;
       // MeltFlow's free-surface stabilisers (see melt_flow_kokkos.h); < 0: its default
-      double fs_tau = -1.0, fs_raw = -1.0, fs_cap = -1.0, fs_angle = -1.0;
+      double fs_tau = -1.0, fs_cap = -1.0, fs_angle = -1.0;
       double fs_pin = -1.0;             // K: dry solid below it pins the contact line (< 0 off)
       double fs_engulf = 0.0;           // 1: powder landing ahead of the pool, within its width, is held until the front melts it in
-      bool fs_hf = false;               // fs_curv hf: curvature and Marangoni from local height functions along the normal
       // Tables made at setup. sig[iT * nx + ix] (N/m) on uniform grids from
       // (T0, x0), steps (dT, dx); linear beyond the T range, held in x.
       // rho = r0 + r1 (T - Tr) and the dynamic viscosity eta at n points

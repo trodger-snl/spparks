@@ -223,7 +223,8 @@ struct MeltFlow {
   // run(): dt <= this * sqrt(rho dx^3 / sigma), i.e. lattice sigma <= its
   // square. Measured on the pool of check 21 at rest: currents of 4e-5 m/s at
   // lattice sigma 0.021, 2e-3 at 0.032, 1.5 at 0.072.
-  // In a track (316L, 367 W, 1.5 mm spot) 0.18 with the smoothing below let
+  // (Measured on the column-height surface, removed 2026-11-18.)
+  // In a track (316L, 367 W, 1.5 mm spot) 0.18 with height smoothing let
   // one-column pits grow until the pool broke up at 150-200 ms; 0.08 with
   // no smoothing kept the surface within 1 cell of flat. A wider, hotter
   // pool (Ti-6Al-4V, 400 W, 1.5 mm spot) still grew a two-cell checkerboard
@@ -231,9 +232,10 @@ struct MeltFlow {
   // to 200 ms, and half smoothing at 0.08 was not.
   double fs_cap = 0.04;
   // surface(): contact angle (degrees) where the liquid meets a lower, dry
-  // column: that column counts as the liquid's height less tan(angle) cells,
-  // not below its own (0: mirrored, the liquid wets it; 90: at its own
-  // height). As a share of the height difference (the earlier fs_edge) any
+  // column of the height functions' frame: that column counts as the
+  // liquid's height less tan(angle) cells, not below its own (0: mirrored,
+  // the liquid wets it; 90: at its own height). Tuned on the column-height
+  // surface (removed 2026-11-18): as a share of the height difference (the earlier fs_edge) any
   // value held a tall bead's edge too stiffly: at 0.5 a 316L bead 16 cells
   // high balled and the pool broke away from it. 316L powder track (367 W,
   // 1.5 mm spot, 450 ms): 0 spread the bead flat and wide over gas pockets
@@ -252,15 +254,7 @@ struct MeltFlow {
   // viscous (nu = 1/6 lattice at 1), so the surface is dragged along with
   // the cell under it: a known bias on the surface speed.
   double fs_tau = 1.0;
-  // The unsmoothed part of the height the forces see. Smoothing lets a
-  // larger step be stable but takes the restoring force from cell-sized
-  // pits, which then never heal: off (1) by default.
-  double fs_raw = 1.0;
-  // (set before resize()) The surface's curvature and Marangoni force from
-  // local height functions along each interface cell's normal (Popinet
-  // 2009), not one height per column: see surface_hf(). fs_raw is not used.
-  bool fs_hf = false;
-  // fs_hf, per cell: (0) the gas density less 1 an INTERFACE cell's gas
+  // fs, per cell (see surface()): (0) the gas density less 1 an INTERFACE cell's gas
   // links see; (1-3) the surface force as an acceleration (an INTERFACE
   // cell's frame column's; a FLUID cell's, gathered from the columns it is
   // the base of); (4) an INTERFACE cell's curvature. hfr: an INTERFACE
@@ -269,18 +263,19 @@ struct MeltFlow {
   // a paraboloid fit, the mean of its neighbours, none).
   W4 hfs;
   FlowWin<Kokkos::View<unsigned char***>> hfr;
-  // fs_hf: the INTERFACE cells surface_hf() works on, packed; those its
+  // fs: the INTERFACE cells surface() works on, packed; those its
   // dominant frame does not measure; their counts (hfn: two of each, used
   // in turn, each call zeroing the next call's)
   Kokkos::View<int*> hfl, hfh, hfn;
   int hfp = 0;
   enum { HF_DOM = 1, HF_OTHER = 2, HF_FIT = 3, HF_AVG = 4, HF_NONE = 5 };
 
-  // per column (x, y), from surface(): the metal's height, the gas density
-  // the surface sees (less 1), the surface force as an acceleration of the
-  // cells kb..kt, and what the caller may set: the gas pressure on the
-  // surface (lattice units; e.g. recoil), less the ambient
-  Kokkos::View<R**> hcol, scol, slcol, mcol, drg, sax, say, saz, pgas, tcol;
+  // per column (x, y), from surface(): the top liquid cell of its surface
+  // stack and the FLUID cell under it (or the stack's lowest cell), kt -1
+  // with solid on top or liquid over gas, -2 with no metal; and what the
+  // caller may set: the gas pressure on the surface (lattice units; e.g.
+  // recoil), less the ambient
+  Kokkos::View<R**> pgas;
   Kokkos::View<int**> skt, skb;
   // fs: per column, the mass inject() and convert() took and lost since
   // tallies() (with dev: no reduction to the host per flow step)
@@ -317,16 +312,13 @@ struct MeltFlow {
       mark = Kokkos::View<unsigned char***>("flow_mark", a, b, c);
       type2 = Kokkos::View<unsigned char***>("flow_type2", a, b, c);
       xs = Kokkos::View<R****>("flow_xs", a, b, c, 3);
-      for (auto v : {&hcol, &scol, &slcol, &mcol, &drg, &sax, &say, &saz, &pgas, &tcol})
-        *v = Kokkos::View<R**>("flow_col", nx, ny);
+      pgas = Kokkos::View<R**>("flow_pgas", nx, ny);
       skt = Kokkos::View<int**>("flow_skt", nx, ny); skb = Kokkos::View<int**>("flow_skb", nx, ny);
       sgot = Kokkos::View<double**>("flow_sgot", nx, ny); slost = Kokkos::View<double**>("flow_slost", nx, ny);
       Kokkos::deep_copy(skt, -1);
-      if (fs_hf) {
-        hfs = Kokkos::View<R****>("flow_hfs", a, b, c, 5);
-        hfr = Kokkos::View<unsigned char***>("flow_hfr", a, b, c);
-        hfn = Kokkos::View<int*>("flow_hfn", 4);
-      }
+      hfs = Kokkos::View<R****>("flow_hfs", a, b, c, 5);
+      hfr = Kokkos::View<unsigned char***>("flow_hfr", a, b, c);
+      hfn = Kokkos::View<int*>("flow_hfn", 4);
     }
     Kokkos::deep_copy(fl.v, R(1));
     for (int d = 0; d < 3; d++) wlo[d] = 0;
@@ -343,8 +335,10 @@ struct MeltFlow {
     ux.move(lo, hi); uy.move(lo, hi); uz.move(lo, hi); rho.move(lo, hi);
     px.move(lo, hi); py.move(lo, hi); pz.move(lo, hi); flux.move(lo, hi);
     if (props) { sig.move(lo, hi); dens.move(lo, hi); visc.move(lo, hi); }
-    if (fs) { cmass.move(lo, hi); eps.move(lo, hi); mark.move(lo, hi); type2.move(lo, hi); xs.move(lo, hi); }
-    if (fs && fs_hf) { hfs.move(lo, hi); hfr.move(lo, hi); }
+    if (fs) {
+      cmass.move(lo, hi); eps.move(lo, hi); mark.move(lo, hi); type2.move(lo, hi); xs.move(lo, hi);
+      hfs.move(lo, hi); hfr.move(lo, hi);
+    }
     for (int d = 0; d < 3; d++) { wlo[d] = lo[d]; whi[d] = hi[d] > lo[d] ? hi[d] : lo[d]; }
   }
 
@@ -401,11 +395,9 @@ struct MeltFlow {
     // props: the Marangoni force follows sig, not T
     const bool hp = props, lazy_ = lazy, fs_ = fs;
     auto ms_ = cmass; auto ep_ = eps;
-    auto dg_ = drg; auto sax_ = sax; auto say_ = say; auto saz_ = saz; auto kt_ = skt; auto kb_ = skb;
-    auto sl_ = slcol;
-    // fs_hf: the gas density and the surface force per cell (surface_hf);
+    // fs: the gas density and the surface force per cell (surface());
     // the force only where there is a Marangoni term
-    const bool hf_ = fs && fs_hf, hfm = hf_ && hf_mg() != R(0);
+    const bool hfm = fs && hf_mg() != R(0);
     auto hs_ = hfs;
     auto S_ = hp ? sig : T; auto dn_ = dens; auto vs_ = visc;
     const R nu3 = R(3.0 * p.nu), tauif = R(fs_tau);
@@ -457,19 +449,7 @@ struct MeltFlow {
         // fs: what arrives from the gas is the gas's equilibrium at this
         // cell's velocity, less what left toward it (the pressure boundary)
         const R ug = px_(i, j, k), vg = py_(i, j, k), wg = pz_(i, j, k);
-        // An interface cell under its column's surface (a bubble's wall, or
-        // the underside of an overhang) is held a one-cell bubble's Laplace
-        // pressure, 2 sigma / r with r one cell, below the liquid: such a void
-        // closes, as a bubble that small does. At the surface's own pressure
-        // it neither closed nor grew; bubbles caught in a large 316L pool
-        // were stretched and merged until a slot opened through the pool and
-        // it collapsed (Sattari DED set, 380 ms).
-        R drg = R(0);
-        if (hf_) { if (ifc) drg = hs_(i, j, k, 0); }
-        else {
-          drg = fs_ ? dg_(i, j) : R(0);
-          if (fs_ && ifc && kt_(i, j) >= 0 && k < kb_(i, j)) drg -= R(6) * sl_(i, j);
-        }
+        const R drg = fs_ && ifc ? hs_(i, j, k, 0) : R(0);
         const R usg = ug * ug + vg * vg + wg * wg;
         auto rec = [&](int q) -> R {
           int cx, cy, cz; vel(q, cx, cy, cz);
@@ -535,9 +515,8 @@ struct MeltFlow {
         const R dT = hp ? -dn_(i, j, k) : T_(i, j, k) - Tref;
         R ax = a0x + bx * dT, ay = a0y + by * dT, az = a0z + bz * dT;
         if (fs_) {
-          // the surface force, on the column's surface cells (see surface())
-          if (hf_) { if (hfm) { ax += hs_(i, j, k, 1); ay += hs_(i, j, k, 2); az += hs_(i, j, k, 3); } }
-          else if (k >= kb_(i, j) && k <= kt_(i, j)) { ax += sax_(i, j); ay += say_(i, j); az += saz_(i, j); }
+          // the surface force (see surface())
+          if (hfm) { ax += hs_(i, j, k, 1); ay += hs_(i, j, k, 2); az += hs_(i, j, k, 3); }
           // a partial cell takes its fill's part of every force: the
           // pressure under the surface then follows the surface's height
           // within a cell (else a surface inside a cell layer feels no
@@ -857,148 +836,32 @@ struct MeltFlow {
   }
 
   /* --------------------------------------------------------------------
-     Before each step: the surface's shape and the forces it carries, per
-     column. The metal's height h(x, y) is the top full cell's top plus the
-     fill of the interface cells stacked above it, so the surface is one
-     height per column.
-     ponytail: no overhangs (a bead that wets past 90 degrees, a keyhole, a
-     droplet over a gap): local height functions along the normal if needed.
-     - Capillary pressure: curvature kappa = div(grad h / sqrt(1 + |grad
-       h|^2)) (negative on a hump); the surface sees the gas at
-       pgas - sigma kappa, as the density of the reconstructed populations.
-       A column with no liquid surface mirrors its liquid neighbour (a
-       right contact angle), as does the block's edge.
-     - Marangoni: the tangential force per column, sqrt(g) grad_s sigma =
-       [((1 + hy^2) sx - hx hy sy) (1, 0, hx) + ((1 + hx^2) sy - hx hy sx)
-       (0, 1, hy)] / sqrt(1 + hx^2 + hy^2), shared as one acceleration by the
-       column's interface cells and the fluid cell under them (so a cell
-       holding next to nothing is not thrown). sigma's difference is taken
-       as in the flat model: one-sided beside a column without it.
+     Before each step: the surface's shape and the forces it carries. The
+     z-stack of each column first (skt, skb: where inject() puts powder
+     and the conduction side hangs the laser), then the curvature and the
+     Marangoni force per INTERFACE cell (see the height functions below).
   -------------------------------------------------------------------- */
   void surface(const int lo[3], const int hi[3]) {
-    auto ty = type; auto ep_ = eps; auto ms_ = cmass; auto rho_ = rho; auto T_ = T;
-    auto h_ = hcol; auto S_ = scol; auto sl_ = slcol; auto M_ = mcol; auto dg_ = drg; auto pg_ = pgas;
-    auto sax_ = sax; auto say_ = say; auto saz_ = saz; auto kt_ = skt; auto kb_ = skb; auto tc_ = tcol;
-    const bool hp = props;
-    auto sg_ = sig; auto dn_ = dens;
-    const R pinT = R(fs_pin_T);
-    const R mar = R(p.marangoni), sig0 = R(p.sigma), Tref = R(p.Tref), rawp = R(fs_raw);
-    auto st_ = stab;
-    const bool tab = !hp && stab.extent(0) > 1;
-    const int nst = (int) stab.extent(0);
-    const R sT0 = stab_T0, siT = stab_idT, sc = R(p.sigconv);
-    const R mg = tab ? sc : mar;    // the lattice sigma per unit of S_
-    const R edge = R(fs_angle >= 89.99 ? 1e30 : std::tan(fs_angle * M_PI / 180.0));
+    auto ty = type; auto kt_ = skt; auto kb_ = skb;
     const int z0 = wlo[2], z1 = whi[2];
-    // the columns held, and those of them the step needs (one more around)
-    int a[2], b[2], c[2], d[2];
-    const int nn[2] = {nx, ny};
-    const bool per[2] = {p.periodic[0], p.periodic[1]};
-    for (int e = 0; e < 2; e++) {
-      a[e] = wlo[e]; b[e] = whi[e];
-      c[e] = std::max(a[e], lo[e] - 1); d[e] = std::max(c[e], std::min(b[e], hi[e] + 1));
-    }
-    const int a0 = a[0], a1 = a[1], b0 = b[0], b1 = b[1], n0 = nx, n1 = ny;
-    const bool p0 = per[0], p1 = per[1];
-    (void) nn;
     Kokkos::parallel_for("FlowFsColumns",
-      LightMD<2>({a[0], a[1]}, {b[0], b[1]}),
+      LightMD<2>({wlo[0], wlo[1]}, {whi[0], whi[1]}),
       KOKKOS_LAMBDA(const int i, const int j) {
         int k = z1 - 1;
         while (k >= z0 && ty(i, j, k) == GAS) k--;
-        kt_(i, j) = -1; kb_(i, j) = 0; M_(i, j) = R(1); S_(i, j) = R(0); sl_(i, j) = R(0);
-        if (k < z0) { h_(i, j) = R(z0); kt_(i, j) = -2; return; }      // no metal: -2
+        kt_(i, j) = -1; kb_(i, j) = 0;
+        if (k < z0) { kt_(i, j) = -2; return; }      // no metal: -2
         const int kt = k;
-        R sv = T_(i, j, kt);
-        tc_(i, j) = sv;
-        if (tab) {     // sigma(T) / rho from the table, linear between (and beyond) its rows
-          const R u = (sv - sT0) * siT;
-          const int m = u < R(0) ? 0 : u >= R(nst - 1) ? nst - 2 : (int) u;
-          sv = st_(m) + (u - R(m)) * (st_(m + 1) - st_(m));
-        }
-        S_(i, j) = hp ? sg_(i, j, kt) : sv;
-        if (ty(i, j, kt) == WALL) { h_(i, j) = R(kt + 1); return; }  // solid on top: -1
-        sl_(i, j) = hp ? mar * (sg_(i, j, kt) + sig0) : tab ? sc * sv : sig0 + mar * (T_(i, j, kt) - Tref);
-        R sum = 0, M = 0;
-        while (k >= z0 && ty(i, j, k) == INTERFACE) { sum += ep_(i, j, k); M += ms_(i, j, k); k--; }
+        if (ty(i, j, kt) == WALL) return;            // solid on top: -1
+        while (k >= z0 && ty(i, j, k) == INTERFACE) k--;
         int kb = k + 1;
-        if (k >= z0 && ty(i, j, k) == FLUID) { M += R(1) + rho_(i, j, k); kb = k; }
-        h_(i, j) = R(k + 1) + sum;
-        // Liquid hanging over gas (left on a frozen rim when what was under
-        // it drained or froze away) is not a surface one height describes:
-        // it carries no surface force, like a column with solid on top.
+        if (k >= z0 && ty(i, j, k) == FLUID) kb = k;
+        // liquid hanging over gas (left on a frozen rim when what was under
+        // it drained or froze away) takes no powder
         if (k >= z0 && ty(i, j, k) == GAS) return;
         kt_(i, j) = kt; kb_(i, j) = kb;
-        M_(i, j) = (M > R(0.5) ? M : R(0.5)) * (hp ? R(1) + dn_(i, j, kt) : R(1));
       });
-    // the columns stay: powder and the laser come from above
-    if (fs_hf) { surface_hf(lo, hi); return; }
-    Kokkos::parallel_for("FlowFsSurface",
-      LightMD<2>({c[0], c[1]}, {d[0], d[1]}),
-      KOKKOS_LAMBDA(const int i, const int j) {
-        dg_(i, j) = sax_(i, j) = say_(i, j) = saz_(i, j) = R(0);
-        if (kt_(i, j) < 0) return;
-        // a neighbouring column: wraps, or stays at the edge of what is held
-        auto col = [&](int di, int dj, int &ii, int &jj) {
-          ii = i + di; jj = j + dj;
-          if (p0) ii = (ii + n0) % n0;
-          if (p1) jj = (jj + n1) % n1;
-          ii = ii < a0 ? a0 : ii >= b0 ? b0 - 1 : ii;
-          jj = jj < a1 ? a1 : jj >= b1 ? b1 - 1 : jj;
-        };
-        // The height the forces see is smoothed over 3 x 3 columns (1 2 1
-        // each way). A capillary wave two cells long would travel at
-        // sqrt(pi sigma), near the lattice's speed of sound for a metal at
-        // any affordable step, and the surface breaks up; smoothed, that
-        // wave feels no force and one four cells long half of it.
-        // A column without a liquid surface (solid on top, or no metal)
-        // counts as this column's height: the liquid meets solid at a right
-        // angle, neither pulled over it nor held back, and where it stops
-        // is left to the flow and to freezing.
-        auto Hr = [&](int di, int dj) -> R {
-          int ii, jj; col(di, dj, ii, jj);
-          if (kt_(ii, jj) >= 0) return h_(ii, jj);
-          // Solid standing lower than this liquid (the frozen rim under a
-          // bead): the surface meets it at the contact angle, tan(fs_angle)
-          // cells down, not below the solid. Mirrored (fs_angle 0) nothing
-          // held a bead's edge, and it crept out over the rim and hung in
-          // the air beside the pool.
-          // Cold (below fs_pin_T): 90 degrees, the solid's own height.
-          if (kt_(ii, jj) == -1 && h_(ii, jj) < h_(i, j))
-            return tc_(ii, jj) < pinT || h_(i, j) - edge < h_(ii, jj) ? h_(ii, jj) : h_(i, j) - edge;
-          return h_(i, j);
-        };
-        auto H = [&](int di, int dj) -> R {
-          if (rawp == R(1)) return Hr(di, dj);     // no smoothing (the default): 9 lookups, not 81
-          const R sm = R(0.25) * Hr(di, dj)
-               + R(0.125) * (Hr(di - 1, dj) + Hr(di + 1, dj) + Hr(di, dj - 1) + Hr(di, dj + 1))
-               + R(0.0625) * (Hr(di - 1, dj - 1) + Hr(di + 1, dj - 1) + Hr(di - 1, dj + 1) + Hr(di + 1, dj + 1));
-          return sm + rawp * (Hr(di, dj) - sm);
-        };
-        const R hc = H(0, 0);
-        const R hx = R(0.5) * (H(1, 0) - H(-1, 0)), hy = R(0.5) * (H(0, 1) - H(0, -1));
-        const R hxx = H(1, 0) - R(2) * hc + H(-1, 0), hyy = H(0, 1) - R(2) * hc + H(0, -1);
-        const R hxy = R(0.25) * (H(1, 1) - H(1, -1) - H(-1, 1) + H(-1, -1));
-        const R g = R(1) + hx * hx + hy * hy, sg = Kokkos::sqrt(g);
-        const R kap = (hxx * (R(1) + hy * hy) + hyy * (R(1) + hx * hx) - R(2) * hxy * hx * hy) / (g * sg);
-        dg_(i, j) = R(3) * (pg_(i, j) - sl_(i, j) * kap);
-        if (mg == R(0)) return;
-        // sigma's difference per cell along x (e = 0) or y
-        auto grad = [&](int e) -> R {
-          int ia, ja, ib, jb;
-          col(e == 0 ? -1 : 0, e == 0 ? 0 : -1, ia, ja); col(e == 0 ? 1 : 0, e == 0 ? 0 : 1, ib, jb);
-          R w = R((e == 0 ? ib - ia : jb - ja));
-          if (w < R(0)) w += R(e == 0 ? n0 : n1);          // wrapped
-          // props: sigma is the liquid's only; else T, wherever there is metal
-          if (hp ? kt_(ia, ja) < 0 : kt_(ia, ja) == -2) { ia = i; ja = j; w -= R(1); }
-          if (hp ? kt_(ib, jb) < 0 : kt_(ib, jb) == -2) { ib = i; jb = j; w -= R(1); }
-          return w > R(0) ? mg * (S_(ib, jb) - S_(ia, ja)) / w : R(0);
-        };
-        const R sx = grad(0), sy = grad(1);
-        const R fa = ((R(1) + hy * hy) * sx - hx * hy * sy) / sg, fb = ((R(1) + hx * hx) * sy - hx * hy * sx) / sg;
-        const R im = R(1) / M_(i, j);
-        sax_(i, j) = fa * im; say_(i, j) = fb * im; saz_(i, j) = (fa * hx + fb * hy) * im;
-      });
+    surface_hf(lo, hi);
   }
 
   // the lattice sigma per unit of the surface's source value (T, sigma(T)
@@ -1006,9 +869,9 @@ struct MeltFlow {
   R hf_mg() const { return R(!props && stab.extent(0) > 1 ? p.sigconv : p.marangoni); }
 
   /* --------------------------------------------------------------------
-     fs_hf: the surface per INTERFACE cell, from local height functions
+     The surface per INTERFACE cell, from local height functions
      along its normal (Popinet 2009; Cummins, Francois & Kothe 2005). See
-     docs/FREE_SURFACE_LBM.md, section 3a.
+     docs/FREE_SURFACE_LBM.md, section 3.
      - The frame: the axis d of the largest component of n = -grad(fill)
        (Youngs' 3 x 3 x 3 weights; FLUID and WALL full), heights along
        s e_d with s the side of the gas.
@@ -1018,7 +881,7 @@ struct MeltFlow {
        A column is liquid, dry (full right under gas), empty (no full cell
        in reach), high (no gas in reach), at the edge of what is held, or
        bad (it crosses the surface twice in reach).
-     - The column model's boundary rules, in the frame: an empty, high or
+     - Boundary rules, in the frame: an empty, high or
        edge column counts as this one's height (a right angle); a dry one
        lower than this one is met at fs_angle (90 degrees if colder than
        fs_pin_T).
@@ -1029,14 +892,17 @@ struct MeltFlow {
        their heights measured; else a least-squares paraboloid in the
        normal's frame through the surface points of every liquid column of
        the three frames (at least 6; why it comes last: FlowFsHFKappa);
-       else none, and a cell under its column's surface keeps the column
-       model's void rule (-6 sigma).
+       else none, and a cell under its column's surface gets the void rule
+       (-6 sigma, FlowFsHFKappa).
      - The reach HF_L is 5: at 3 (Popinet's 3 x 7 stencil) a column beside
        a cell near 45 degrees often needs 4 cells to reach a full one, and
        a sphere of radius 8 cells left 35% of its cells to the fallbacks.
-     - kappa from the 9 heights as in the column model; the gas density
-       3 (pgas - sigma kappa), sigma from this cell's own value.
-     - Marangoni: the column model's force in the frame, shared as one
+     - kappa = div(grad h / sqrt(1 + |grad h|^2)) from the 9 heights
+       (negative on a hump); the gas density 3 (pgas - sigma kappa), sigma
+       from this cell's own value.
+     - Marangoni: the tangential force sqrt(g) grad_s sigma =
+       [((1 + hy^2) sx - hx hy sy) (1, 0, hx) + ((1 + hx^2) sy - hx hy sx)
+       (0, 1, hy)] / sqrt(1 + hx^2 + hy^2) in the frame, shared as one
        acceleration by the frame column's partial cells and its FLUID base
        (that base gathers it in a third kernel).
      Several ranks: the halo of type, eps, cmass, rho and T (or sig) must
@@ -1159,7 +1025,7 @@ struct MeltFlow {
       }
       return v;
     };
-    // the axes by |n|, ties to z (the column model's frame), then x
+    // the axes by |n|, ties to z, then x
     auto order = KOKKOS_LAMBDA(const R nv[3], int ord[3]) {
       ord[0] = 2; ord[1] = 0; ord[2] = 1;
       for (int u = 0; u < 2; u++)
@@ -1442,7 +1308,14 @@ struct MeltFlow {
           if (n) { kap = s / R(n); m = HF_AVG; hr_(i, j, k) = (unsigned char) (m << 3 | (c & 7)); }
         }
         R dg = R(3) * (pg_(i, j) - sl * kap);
-        // nothing resolves it (a void of a cell or two): the column model's void rule
+        // Nothing resolves it (a void of a cell or two). Under its column's
+        // surface (a bubble's wall, or the underside of an overhang) it is
+        // held a one-cell bubble's Laplace pressure, 2 sigma / r with r one
+        // cell, below the liquid: such a void closes, as a bubble that small
+        // does. At the surface's own pressure it neither closed nor grew;
+        // bubbles caught in a large 316L pool were stretched and merged
+        // until a slot opened through the pool and it collapsed (Sattari
+        // DED set, 380 ms).
         if (m == HF_NONE && kt_(i, j) >= 0 && k < kb_(i, j)) dg -= R(6) * sl;
         hs_(i, j, k, 0) = dg;
       });
@@ -1571,16 +1444,7 @@ struct MeltFlow {
     if (fs_halo) fs_halo(0);
     // 2. the new types, in type2. A gas cell that becomes interface starts
     //    at the equilibrium of its liquid neighbours' mean density and
-    //    velocity; an emptied cell is cleared. A gas cell is entered from
-    //    the side or below only where the cell under it is not gas, and
-    //    always from straight above: liquid does not grow out over gas
-    //    (left alone it made a lip that froze over a gap at a bead's toe,
-    //    which the column heights cannot see). A filled cell with a gas
-    //    neighbour that stays gas stays INTERFACE; its excess goes on (3.).
-    //    ponytail: a droplet in flight cannot move sideways over gas; none
-    //    seen in the DED decks. Relax to "liquid below the gas cell's
-    //    column somewhere" if they matter.
-    const bool sup = !p.periodic[2] && !fs_hf;   // fs_hf: side faces have their curvature
+    //    velocity; an emptied cell is cleared.
     Kokkos::parallel_for("FlowFsRetype", range, KOKKOS_LAMBDA(const int i, const int j, const int k) {
       const int t = ty(i, j, k), m = mk(i, j, k);
       // what a marked cell hands on, kept: one kept as interface writes its own
@@ -1590,19 +1454,8 @@ struct MeltFlow {
         if (two) xs_(i, j, k, 2) = q2(i, j, k);
       }
       // a gas cell beside a filled one becomes interface
-      auto opens = [&](int gi, int gj, int gk) -> bool {
-        int x, y, z;
-        if (!sup || !nb(6, gi, gj, gk, x, y, z) || ty(x, y, z) != GAS) return true;
-        return nb(5, gi, gj, gk, x, y, z) && mk(x, y, z) == FILL;
-      };
       int nt = t;
-      if (t == INTERFACE) {
-        nt = m == FILL ? FLUID : m == EMPTY ? GAS : INTERFACE;
-        for (int c = 1; nt == FLUID && c < 19; c++) {
-          int ii, jj, kk;
-          if (nb(c, i, j, k, ii, jj, kk) && ty(ii, jj, kk) == GAS && !opens(ii, jj, kk)) nt = INTERFACE;
-        }
-      }
+      if (t == INTERFACE) nt = m == FILL ? FLUID : m == EMPTY ? GAS : INTERFACE;
       else if (t == GAS || t == FLUID) {
         const int want = t == GAS ? FILL : EMPTY;
         bool hit = false;
@@ -1617,7 +1470,7 @@ struct MeltFlow {
             dr += rho_(ii, jj, kk); u += px_(ii, jj, kk); v += py_(ii, jj, kk); w += pz_(ii, jj, kk); n++;
           }
         }
-        if (hit && (t != GAS || opens(i, j, k))) {
+        if (hit) {
           nt = INTERFACE;
           if (t == GAS) {
             const R in = R(1) / n;

@@ -15,7 +15,7 @@ Code:
   thermal coupling, the powder feed and the write-back. `fs_surface_z()`
   sets where the laser lands.
 - `tools/melt_flow_check.cpp`: gates 14-26 cover the free surface (23-26
-  the height functions of `fs_curv hf`, section 3a).
+  the height functions, section 3).
 - `docs/figures/make_fs_figures.py`: draws the figures (`python3 docs/figures/make_fs_figures.py`).
 
 Developer notes on the flat-lid flow it extends:
@@ -39,9 +39,8 @@ A closed layer of `INTERFACE` cells always separates `FLUID` from `GAS`.
 Mass moves across the links between liquid cells. A cell that fills
 becomes `FLUID` and a cell that empties becomes `GAS`, with the interface
 layer moved to follow. Surface tension and Marangoni stress come from a
-**height function**: one metal height per (x, y) column, or with
-`fs_curv hf` local height functions along each interface cell's normal
-(section 3a), which also see side faces and overhangs. The thermal
+**height function**: local height functions along each interface cell's
+normal (section 3), which also see side faces and overhangs. The thermal
 solver decides what is liquid or solid, and the flow decides where the
 liquid is.
 
@@ -55,7 +54,8 @@ sub-steps (n even):
 run(h):                                    per thermal step (flow_step)
   choose n, rescale f if dt changed
   repeat n times:
-    1. surface(lo, hi)        FlowFsColumns, FlowFsSurface         (2-D)
+    1. surface(lo, hi)        FlowFsColumns (2-D), FlowFsHFList, FlowFsHF,
+                              FlowFsHFHard, FlowFsHFKappa, FlowFsHFBase
     2. step(lo, hi)           FlowStep                             (3-D)
        post():   melt_advect  FlowAdvect x3 (+ copy)               transport
                  inject       FlowFsInject                         powder
@@ -93,23 +93,28 @@ step. When dt changes, `rescale()` scales f as follows:
 
 ## 3. Step 1: the surface (`surface()`)
 
+Until 2026-11-18 there were two surfaces: one metal height per (x, y)
+column (`fs_curv column`, the default) and the local height functions
+below (`fs_curv hf`). The column surface, its `fs_raw` smoothing and the
+conversion rule it needed (a9ac6675: liquid enters a gas cell sideways
+only over metal) were removed; the keywords went with them. Its formulas
+live on in each frame of the height functions.
+
 ### Theory
 
-**Height function.** For each column (i, j) the metal height is
-
-$$h(i,j) = k_f + 1 + \sum_{\text{interface cells above}} \varepsilon,$$
-
-where k_f is the top full cell (FLUID or WALL) under the column's interface
-stack.
-
-**Capillary pressure.** The mean curvature of the graph z = h(x, y) is
+**Height function.** Along an axis d with the gas on side s, a column of
+cells has the height of its full cells plus the fill of the partial cells
+above them. Over the 3 × 3 columns around a cell that gives a graph
+h(x', y') in the other two axes, and
 
 $$\kappa = \nabla\cdot\frac{\nabla h}{\sqrt{1+|\nabla h|^2}}
 = \frac{h_{xx}(1+h_y^2) + h_{yy}(1+h_x^2) - 2h_{xy}h_xh_y}{(1+h_x^2+h_y^2)^{3/2}},$$
 
-which is negative on a hump. Young–Laplace puts the gas side of the surface
-at p_gas − σκ. In LBM pressure is ρ c_s² with c_s² = 1/3, so the gas
-density used in step 2's reconstruction is
+negative on a liquid hump in any frame (heights grow toward the gas).
+
+**Capillary pressure.** Young–Laplace puts the gas side of the surface at
+p_gas − σκ. In LBM pressure is ρ c_s² with c_s² = 1/3, so the gas density
+used in step 2's reconstruction is
 
 $$\rho_G - 1 = 3\,(p_\text{gas} - \sigma\kappa)\qquad(\text{lattice units}).$$
 
@@ -125,82 +130,36 @@ $$\mathbf f_s = \frac{\big[(1+h_y^2)\sigma_x - h_xh_y\sigma_y\big](1,0,h_x) + \b
 σ_x and σ_y are differences of σ between neighbouring columns. On a flat
 surface this reduces to the flat-lid model's force.
 
-### Implementation
+### The z-stacks (`FlowFsColumns`)
 
-![Cell types, the column height function, force cells and the contact-angle rule at a dry rim](figures/fs_cells.svg)
+![Cell types, a z-frame height function, force cells and the contact-angle rule at a dry rim](figures/fs_cells.svg)
 
-*Figure 1. An x–z slice of a pool. The black line is h. The red box is one column's force cells. The orange and purple dashes are the ghost heights a dry, lower rim is given: hot solid uses `fs_angle`, cold solid below `fs_pin` is held at 90° (`fs_pin`, off by default).*
+*Figure 1. An x–z slice of a pool, in the z frame. The black line is h. The orange and purple dashes are the ghost heights a dry, lower rim is given: hot solid uses `fs_angle`, cold solid below `fs_pin` is held at 90° (`fs_pin`, off by default). (Drawn for the removed column surface; in the z frame the rules are the same.)*
 
-**`FlowFsColumns`** is a 2-D kernel over the held columns. It walks down
-from the window top past GAS and records, per column:
+A 2-D kernel over the held columns walks down from the window top past
+GAS and records, per column, `skt` (the top metal cell; −2 with no metal,
+−1 with solid on top or liquid hanging over gas) and `skb` (the FLUID cell
+under the interface stack, or the stack's bottom). The powder lands there
+(`inject`), the laser hangs from it (`fs_surface_z`), and a void that no
+height measures is judged against it (step 4 below).
 
-| Field | Meaning |
-|---|---|
-| `skt` | the top metal cell. Set to −2 when there is no metal and −1 when solid is on top (no liquid surface) |
-| `skb` | the lowest cell that carries the surface force: the FLUID cell under the stack, or the stack's bottom |
-| `hcol` | h |
-| `scol` | the column's σ source value: T, or σ(T)/ρ from `sigma_table`, or `sig` under `properties cards` |
-| `slcol` | the lattice σ of the surface cell |
-| `mcol` | the column's mass from `skb` to `skt` (at least 0.5), times 1 + dens |
-
-A column whose stack hangs over gas, such as liquid left on a frozen rim,
-gets `skt` = −1 and no surface force: one height cannot describe it.
-
-**`FlowFsSurface`** is a 2-D kernel over the columns the step needs (one
-more around the window). It does three things:
-
-1. **Finite differences of h.** Central differences over 3 × 3 columns give
-   h_x, h_y, h_xx, h_yy and h_xy, then κ, then `drg` = 3(pgas − σκ).
-2. **Neighbours without a liquid surface** (`Hr`). Such a neighbour is
-   given an effective height:
-   - No metal, or solid standing higher: the column's own height. This
-     mirrors the liquid (a right angle), and it also applies at the block
-     edge.
-   - Dry solid standing lower (the frozen rim under a bead):
-     max(h_c − tan θ, h_n) with θ = `fs_angle` = 20°. The liquid meets the
-     rim at the contact angle and is not pulled over it.
-     - At 0° beads crept over the rim and hung in the air.
-     - At 45° the pool humped and broke away, throwing about 600 cells of
-       spatter.
-     - At 20° the 316L bead was dense, round and continuous.
-3. **Surface force.** `sax`, `say` and `saz` are f_s / `mcol`. Step 2
-   applies this as one acceleration to every cell from `skb` to `skt`, so
-   a nearly empty interface cell is not flung. σ differences are one-sided
-   beside a column without σ: with no metal for T, and with no liquid
-   under `properties cards`.
-
-**Smoothing.** `fs_raw` (default 1) blends the height with a 1-2-1 × 1-2-1
-smoothed height before the forces are computed. It is off by default.
-Smoothing allowed a larger step, but it removes the restoring force from
-one-cell pits, which then never heal.
-
-**Cost:** 3% of a late-run 316L track (Columns 1.6%, Surface 1.4%).
-
-**Limits** (`ponytail:` in the code). One height per column means no
-overhangs, keyholes, balling past 90°, or droplets over gaps. The fix for
-those is local height functions along the normal (section 3a).
-
-## 3a. Local height functions along the normal (`fs_curv hf`)
-
-`flow lbm ... free_surface fs_curv hf` (2026-11-18). The column surface of
-section 3 stays the default (`fs_curv column`) and is unchanged, bit for
-bit, when `hf` is off.
-
-**Why.** A DED thin wall is wavy: each layer's pool bulges out over the
-neck below and freezes, leaving re-entrant scallops 50–150 µm deep, 10–30
-cells at the 5 µm cells production will use. One height per z-column
-cannot describe a surface whose normal points sideways or down. Such cells
-get no surface force at all under `column` (`skt` = −1), so a lip of
-liquid over gas feels only the ambient pressure and spreads freely;
-a9ac6675 stopped that by forbidding liquid to enter a gas cell sideways
-over gas, which also forbids the overhangs the wall needs.
+**Why height functions along the normal.** A DED thin wall is wavy: each
+layer's pool bulges out over the neck below and freezes, leaving
+re-entrant scallops 50–150 µm deep, 10–30 cells at the 5 µm cells
+production will use. One height per z-column cannot describe a surface
+whose normal points sideways or down. Such cells got no surface force at
+all under the column surface, so a lip of liquid over gas felt only the
+ambient pressure and spread freely; a9ac6675 stopped that by forbidding
+liquid to enter a gas cell sideways over gas, which also forbade the
+overhangs the wall needs. The column surface also ran away on HIP (a 24
+m/s spike in a 316L DED track at 0.5 s, not root-caused) where the
+height functions ran clean to 1.3 s.
 
 ### Method
 
 Popinet 2009 (sections 3–4) and Cummins, Francois & Kothe 2005. Per
 INTERFACE cell c, in `surface_hf()` (kernels `FlowFsHFList`, `FlowFsHF`,
-`FlowFsHFHard`, `FlowFsHFKappa`, `FlowFsHFBase`; see "Memory and cost"),
-which replaces `FlowFsSurface`:
+`FlowFsHFHard`, `FlowFsHFKappa`, `FlowFsHFBase`; see "Memory and cost"):
 
 1. **Normal and frame.** n = −∇ε by Youngs' 3×3×3 weights (FLUID and WALL
    count as ε = 1, GAS 0, INTERFACE its clamped fill). The frame is the
@@ -223,7 +182,7 @@ which replaces `FlowFsSurface`:
    first: a column beside a cell near 45° often needs 4 cells to reach a
    full one, and a sphere of radius 8 cells left 35% of its interface cells
    to the fallbacks; at L = 5, 11%, nearly all holding less than 5% liquid.
-3. **Boundary heights**, the column model's rules in the frame: an empty,
+3. **Boundary heights**: an empty,
    high or edge column counts as c's own height (a right angle); a dry
    column lower than c's is given max(h_c − tan θ, h_n) with θ =
    `fs_angle`, or its own height (90°) when its cell is colder than
@@ -239,7 +198,12 @@ which replaces `FlowFsSurface`:
    Else Popinet's fit: a paraboloid z' = c0 + c1x' + c2y' + c3x'² + c4y'²
    + c5x'y' in the normal's frame through the surface points of every
    liquid column of all three frames (6 or more). Else none, and a cell
-   under its column's `skb` keeps the column model's void rule (−6σ).
+   under its column's `skb` is held a one-cell bubble's Laplace pressure
+   (−6σ in ρ_G − 1, i.e. 2σ/r with r one cell) below the liquid, so a void
+   that small closes. At the surface's own pressure it neither closed nor
+   grew; bubbles caught in a large 316L pool were stretched and merged
+   until a slot opened through the pool and it collapsed (Sattari DED set,
+   380 ms, 5b3f30a1).
 
    *Why the mean before the fit:* the heights are column means, not point
    heights, off the surface by about (h_11 + h_22)/24 cells, more in the
@@ -247,35 +211,32 @@ which replaces `FlowFsSurface`:
    curvature. On a sphere it was 4–6% wrong at radius 8 and 16 alike (it
    does not converge), the mean 1–2%. The cells that need either are
    corner cells holding next to nothing.
-5. **Curvature** from the 9 heights by the column model's central
-   differences, κ = (h_11(1+h_2²) + h_22(1+h_1²) − 2h_12h_1h_2)/g^{3/2},
+5. **Curvature** from the 9 heights by central differences, κ = (h_11(1+h_2²) + h_22(1+h_1²) − 2h_12h_1h_2)/g^{3/2},
    g = 1 + h_1² + h_2², negative on a liquid hump in any frame (heights
    grow toward the gas).
 6. **Capillary pressure per cell**: ρ_G − 1 = 3(p_gas(i,j) − σ_c κ_c),
    σ_c from the cell's own T (or `sig`), kept in `hfs(·,0)` and read by
    `FlowStep` for that cell's gas links. p_gas stays per column (a recoil
    pressure comes from the laser above).
-7. **Marangoni per frame column**, the column model's formula in the
-   frame: f = [((1+h_2²)σ_1 − h_1h_2σ_2) t_1 + ((1+h_1²)σ_2 − h_1h_2σ_1) t_2]/√g
+7. **Marangoni per frame column**, the formula above in the frame: f = [((1+h_2²)σ_1 − h_1h_2σ_2) t_1 + ((1+h_1²)σ_2 − h_1h_2σ_1) t_2]/√g
    with t_1 = e_1 + h_1 s e_d, t_2 = e_2 + h_2 s e_d, σ of a frame column
    from its top partial (or dry, by T) cell, one-sided beside a column
-   without one. As in the column model it is one acceleration f/M shared
+   without one. It is one acceleration f/M shared
    by the frame column's partial cells and its FLUID base (M their mass,
    at least ½): each INTERFACE cell stores it (`hfs(·,1..3)`) and
    `FlowFsHFBase` lets each FLUID cell gather it from the axis neighbours
    whose frame column it is the base of. Cells measured by the mean or the
    fit carry no Marangoni force (`ponytail:`, a few corner cells).
-8. **Conversion.** Under `hf` liquid may enter any gas cell beside a
-   filled one (Körner's rule), not only one over metal (a9ac6675, kept for
-   `column`): a lip over a gap now carries the curvature of its tip, which
-   pushes it back, and the a9ac6675 rule would forbid the bulges a wall
-   needs. Gate 26 tests it: a floating elliptic cylinder (semi-axes 4 and
-   10 cells) must round into a circle, its sides growing out over gas.
-   Under `hf` it does (half-width −0.5%, Laplace pressure +1.4%); with the
-   a9ac6675 rule kept it stalls (half-width −14%, the inside's pressure
-   lost); under `column` it falls apart (half-width +82%).
+8. **Conversion.** Liquid may enter any gas cell beside a filled one
+   (Körner's rule): a lip over a gap carries the curvature of its tip,
+   which pushes it back, and the a9ac6675 rule would forbid the bulges a
+   wall needs. Gate 26 tests it: a floating elliptic cylinder (semi-axes 4
+   and 10 cells) must round into a circle, its sides growing out over gas.
+   It does (half-width −0.5%, Laplace pressure +1.4%); with the a9ac6675
+   rule it stalled (half-width −14%, the inside's pressure lost); under
+   the column surface it fell apart (half-width +82%).
 9. **A solid face's contact angle depends on the frame** (`ponytail:`).
-   The column model's rules, carried into each frame, read a vertical
+   The boundary rules, carried into each frame, read a vertical
    solid face two ways: in the frame along the face (heights along z, the
    surface meeting the face) the solid column is *high* and mirrors, 90°;
    in the frame across it (heights along x) the solid above or below the
@@ -291,12 +252,12 @@ which replaces `FlowFsSurface`:
 
 ### Coupling (conduction solver)
 
-| Consumer | Under `hf` |
+| Consumer | |
 |---|---|
-| Laser (`fs_surface_z`: hangs from each column's top metal cell) | unchanged: the beam comes from above |
-| Powder (`FlowFsPowder`, `inject`, `fs_engulf` pool width) | unchanged: it falls from above onto the column's top stack, which `FlowFsColumns` still finds (it runs under `hf` too; only `FlowFsSurface` is replaced) |
-| Freezing (`FlowFsTypes`) and write-back (`FlowFsOut`) | unchanged: their interface stacks are z-stacks. An underside cell has no host below (gas): it keeps its own T and H and freezes whole when capped. `ponytail:` settling along the cell's frame instead of z if the scallop shapes need it |
-| Several ranks | the flow halo is HF_L + 1 = 6 cells deep under `hf` (2 otherwise), and type, fill, mass, ρ and T (or `sig`) are exchanged that deep: a cell one beyond this rank's (which `FlowFsHFBase` reads) walks its columns 5 more. The f, flux and advection exchanges stay 2 deep |
+| Laser (`fs_surface_z`: hangs from each column's top metal cell) | the beam comes from above |
+| Powder (`FlowFsPowder`, `inject`, `fs_engulf` pool width) | it falls from above onto the column's top stack, which `FlowFsColumns` finds |
+| Freezing (`FlowFsTypes`) and write-back (`FlowFsOut`) | their interface stacks are z-stacks. An underside cell has no host below (gas): it keeps its own T and H and freezes whole when capped. `ponytail:` settling along the cell's frame instead of z if the scallop shapes need it |
+| Several ranks | the flow halo is HF_L + 1 = 6 cells deep under `free_surface` (2 for the flat lid), and type, fill, mass, ρ and T (or `sig`) are exchanged that deep: a cell one beyond this rank's (which `FlowFsHFBase` reads) walks its columns 5 more. The f, flux and advection exchanges stay 2 deep |
 
 ### Memory and cost
 
@@ -334,7 +295,7 @@ three times `FlowStep`. Measured on a single-track DED deck
 gfx1151, KOKKOS_PREC mixed, kp_kernel_timer, 0–0.1 s, 366 002 flow steps,
 µs per call):
 
-| Kernel | `column` | `hf` before | list | list, fit in `FlowFsHFKappa` | team per cell | list + team for the rest (now) |
+| Kernel | `column` (removed) | `hf` before | list | list, fit in `FlowFsHFKappa` | team per cell | list + team for the rest (now) |
 |---|---|---|---|---|---|---|
 | `FlowFsHFList` | | | 10.3 | 10.1 | 10.3 | 10.3 |
 | `FlowFsHF` | | 301.7 | 162.4 | 90.9 | 152.1 | 72.9 |
@@ -394,7 +355,7 @@ relative, per INTERFACE cell, from the exact fills of the shape.
 | 24 | cylinder at rest R = 8: ρ inside / (3σ/R) − 1; u ν/σ | 0.8%; 1e-4 | ≤ 3%; ≤ 1e-2 |
 | 25 | half-cylinder on a vertical wall (overhang, 90° at the wall) R = 8: κ rms; Laplace pressure; u ν/σ; lowest point moved | 0.82%; 0.78%; 4e-6 / 6e-6; −0.02 cells | ≤ 1%; ≤ 3%; ≤ 1e-2; ≤ 0.5 |
 | 26 | floating elliptic cylinder 4 × 10 rounds into a circle (r = 6.32), sides growing over gas: middle row's half-width / r − 1; Laplace pressure | −0.52%; +1.4% | ≤ 5%; ≤ 3% |
-| 14–22 | the column gates rerun under `hf` | all pass; 17, 18, 19, 22 within 2e-3 of their column values (17: period +3.56%, decay −13.2%; 18: 0.70%; 19: tilt −2.03%; 22: 4.3e-4). 16: Σ m q off by 1.6e-5 (6.4e-4 under `column`: the a9ac6675 rule, see gate 16's note) | as for `column` |
+| 14–22 | the gates first written for the column surface | all pass; 17, 18, 19, 22 within 2e-3 of their column values (17: period +3.56%, decay −13.2%; 18: 0.70%; 19: tilt −2.03%; 22: 4.3e-4). 16: Σ m q off by 1.6e-5 (6.4e-4 under the column surface: the a9ac6675 rule, see gate 16's note) | as for the column surface |
 
 The largest κ errors (2.65% at R = 8 and 16, 1.05% at 32) are cells
 whose surface has slope near 1 in both transverse directions (normals near
@@ -402,12 +363,6 @@ whose surface has slope near 1 in both transverse directions (normals near
 constant (a cell on the diagonal: 2.7% at R = 16, 0.40% at 32, 0.13% at
 64). Spurious currents are steady but noisy at R = 8 (conversions at the
 surface) and fall with resolution.
-
-With `column` the gates print the same numbers as before this change, and
-a one-thread run of the multi-rank test deck (0.03 s) gives the same d6
-columns, conservation report and grid fields (T, fill, phase, u) as the
-code before, bit for bit. (Multi-threaded OpenMP runs of that deck are not
-repeatable from run to run, before this change as well: see section 8.)
 
 ### Coupled test: a 3-layer thin wall at 40 µm (OpenMP, 2026-11-18)
 
@@ -430,7 +385,7 @@ Both walls taper; neither side has a re-entrant scallop, which at 40 µm
 would be 1–4 cells. So this deck shows that `hf` runs stably through
 three layers, keeps the wall's mass and width, holds a tenth of the
 column model's gas in the pool and rounds less, but not the overhangs it
-is for. That takes 20 µm or less (`in.wall2` with `fs_curv hf`, on HIP).
+is for. That takes 20 µm or less (`in.wall2`, on HIP).
 
 ## 4. Step 2: the lattice Boltzmann step (`step()`, kernel `FlowStep`)
 
@@ -771,12 +726,12 @@ Extra ranks sharing one GPU or CPU are slower (HIP 38 s → 190 / 417 s; OpenMP
 `ponytail:` about 15 exchanges per flow sub-step. Batching them into one
 message per neighbour is the next lever if this runs at scale.
 
-**`fs_curv hf`** (2026-11-18): the halo is 6 deep and type, fill, mass, ρ
-and T go over that deep (section 3a). OpenMP, the same deck, 1 / 1×2 / 2×2
+**Height functions** (2026-11-18): the halo is 6 deep and type, fill, mass, ρ
+and T go over that deep (section 3). OpenMP, the same deck, 1 / 1×2 / 2×2
 ranks: caught 2473.1 / 2475.3 / 2474.9 cells (0.09%), enthalpy 26.84249 / 26.84267 / 26.84279 J (1.1e-5 relative), peak T 2353 / 2373 / 2353 K, surface heights (column sums of fill) within one cell of one rank's in one column and 1e-3 cell on average.
 
 **OpenMP runs are not repeatable** from run to run at more than one
-thread (found 2026-11-18, the code before `fs_curv` too): two runs of the
+thread (found 2026-11-18, the code before the height functions too): two runs of the
 same binary at 8 threads differed from the first stats line (Naccept 308
 against 300 at 10 ms, peak T 1954.9 against 1955.6 K). At one thread they
 are repeatable. Not traced; a race or a reduction whose order follows the
@@ -785,11 +740,13 @@ repeatable on 2026-11-17.
 
 ## 9. Where the time goes
 
-Kernel shares, 316L DED track, late in the run (0.4 s, HIP, FP64):
+Kernel shares, 316L DED track, late in the run (0.4 s, HIP, FP64; the
+column surface, before 2026-11-18: the height functions cost about 19%
+more wall time, section 3 "Memory and cost"):
 
 | Part | Kernels | Share |
 |---|---|---|
-| Step 1, surface | FlowFsColumns, FlowFsSurface | 3.0% |
+| Step 1, surface | FlowFsColumns, FlowFsSurface (column) | 3.0% |
 | Step 2, LBM | FlowStep | 49% |
 | Transport | FlowAdvect | 12% |
 | Step 3, conversion | FlowFsMark, FlowFsRetype, FlowFsExcess | 11.6% |
@@ -824,18 +781,18 @@ thermal step).
 | 20 | Injection into a basin | mass gained = fed; scalar mean as mixed |
 | 21 | Ti-6Al-4V pool through `run()`, 20 ms | finite; lattice speed ≤ 0.25 |
 | 22 | Marangoni force on a steep surface | total force within 5% |
-| 23 | Sphere (`hf`), R = 4–32 cells | κ second order; Laplace pressure 3%; spurious currents fall with R |
-| 24 | Horizontal cylinder (`hf`), R = 8–32 | κ second order; Laplace pressure 3% |
-| 25 | Half-cylinder on a vertical wall (`hf`) | κ, Laplace pressure; it stays put |
-| 26 | Elliptic cylinder rounding (`hf`) | final radius and Laplace pressure; growth over gas |
+| 23 | Sphere, R = 4–32 cells | κ second order; Laplace pressure 3%; spurious currents fall with R |
+| 24 | Horizontal cylinder, R = 8–32 | κ second order; Laplace pressure 3% |
+| 25 | Half-cylinder on a vertical wall | κ, Laplace pressure; it stays put |
+| 26 | Elliptic cylinder rounding | final radius and Laplace pressure; growth over gas |
 
-`melt_flow_check fs` runs 14-22 under `column` and again under `hf`, then
-23-26; `melt_flow_check hf` runs 23-26 alone.
+`melt_flow_check fs` runs 14-26; `melt_flow_check hf` runs 23-26 alone.
+(Gates 17 and 19 with the interface τ floor on ran under the column
+surface only and went with it.)
 
-Gates 17 and 19 also print their results with the interface τ floor on, to
-show its bias.
-
-**Against experiment** (Sattari 2024, 316L DED; LaCie `tinb_fs`):
+**Against experiment** (Sattari 2024, 316L DED; LaCie `tinb_fs`; column
+surface, before 2026-11-18; the height functions on the same deck, `in.sdh`
+at 1.3 s: H 0.58–0.61 mm, W 1.36–1.38 mm at x = 3–4 mm, capture 54.6%):
 
 | Case | Model | Measured |
 |---|---|---|
@@ -854,8 +811,7 @@ shape.
 
 | Limit | Effect | Upgrade path |
 |---|---|---|
-| One height per column (`fs_curv column`, the default) | no overhangs, keyholes or balling past 90° | `fs_curv hf` (section 3a) |
-| `fs_curv hf`: freezing and the enthalpy write-back still use z-stacks | an underside cell freezes whole, by its own T | settle along the cell's frame |
+| Freezing, the enthalpy write-back, powder and the laser use z-stacks | an underside cell freezes whole, by its own T | settle along the cell's frame |
 | Contact angle at a dry lower rim only (`fs_angle`) | it is a calibration knob; it may depend on the material | wetting from the surface energies |
 | Interface τ floor 1.0 | surface speed biased low | a stabilised interface collision |
 | Capillary step bound 0.04 | sets the flow cost | implicit surface tension |

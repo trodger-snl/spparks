@@ -21,13 +21,12 @@ using namespace SPPARKS_NS;
 namespace {
 
 int nfail = 0;
-bool g_hf = false;    // the free-surface checks run with fs_hf (their names start "hf")
 
 void check(const std::string &what, double value, double tol, bool below = true)
 {
   const bool ok = std::isfinite(value) && (below ? std::fabs(value) <= tol : std::fabs(value) >= tol);
   if (!ok) nfail++;
-  printf("  %-4s %-58s %10.3e  (%s %.1e)\n", ok ? "ok" : "FAIL", ((g_hf ? "hf " : "") + what).c_str(), value,
+  printf("  %-4s %-58s %10.3e  (%s %.1e)\n", ok ? "ok" : "FAIL", what.c_str(), value,
          below ? "<=" : ">=", tol);
 }
 
@@ -667,7 +666,7 @@ void fs_rest()
 {
   MeltFlow<R> m;
   const int nx = 12, ny = 6, nz = 16;
-  m.fs = true; m.fs_hf = g_hf; m.fs_tau = 0.0;
+  m.fs = true; m.fs_tau = 0.0;
   m.resize(nx, ny, nz);
   m.p.periodic[0] = m.p.periodic[1] = true;
   m.p.accel[2] = -1e-4;
@@ -714,7 +713,7 @@ void fs_dam()
 {
   MeltFlow<R> m;
   const int nx = 48, ny = 4, nz = 32;
-  m.fs = true; m.fs_hf = g_hf; m.fs_tau = 0.0;
+  m.fs = true; m.fs_tau = 0.0;
   m.resize(nx, ny, nz);
   m.p.periodic[1] = true;
   m.p.accel[2] = -5e-5;
@@ -776,11 +775,10 @@ void fs_dam()
   check("15 dam break: max |u| (lattice) <= 0.3", umax, 0.3);
   check("15   (the front runs: cells along x)", r1 - r0, 16.0, false);
   // not to round-off: a cell can be overdrawn (pass more mass than it holds),
-  // and its fields are then held between the values mixed. 1.6e-5 before
-  // liquid had to be supported to enter a gas cell sideways (2026-11-18);
-  // since, the column spills only along the floor, more cells are overdrawn
-  // as it falls and the clamp takes 6.4e-4 (all in the first 2000 steps).
-  check("16 moving surface, sum of mass x q: |change| / sum", s1 / s0 - 1.0, 1e-3);
+  // and its fields are then held between the values mixed (1.6e-5; 6.4e-4
+  // under the removed rule that liquid enters a gas cell sideways only over
+  // metal, a9ac6675: more cells were overdrawn as the column fell)
+  check("16 moving surface, sum of mass x q: |change| / sum", s1 / s0 - 1.0, 1e-4);
   check("16 uniform q stays: max |q - q0|", uni, pick<R>(1e-13, 1e-5));
   check("16 q stays in [0, 1]: over/undershoot", std::max(qhi - 1.0, -qlo), pick<R>(1e-12, 1e-5));
 }
@@ -825,7 +823,7 @@ void fs_wave(double floor)
   MeltFlow<R> m;
   const int nx = 64, nz = 48;
   const double H = 32.0, a0 = 1.0, kw = 2.0 * M_PI / nx;
-  m.fs = true; m.fs_hf = g_hf; m.fs_tau = floor;
+  m.fs = true; m.fs_tau = floor;
   m.resize(nx, 2, nz);
   m.p.periodic[0] = m.p.periodic[1] = true;
   m.p.nu = 0.005;
@@ -874,7 +872,7 @@ void fs_load()
   MeltFlow<R> m;
   const int nx = 64, nz = 24;
   const double H = 12.0, P0 = 2e-4, wd = 6.0;
-  m.fs = true; m.fs_hf = g_hf; m.fs_tau = 0.0;
+  m.fs = true; m.fs_tau = 0.0;
   m.resize(nx, 2, nz);
   m.p.periodic[0] = m.p.periodic[1] = true;
   m.p.nu = 0.1;
@@ -925,7 +923,7 @@ void fs_thermocapillary(double floor)
   MeltFlow<R> m;
   const int nx = 96, nz = 24;
   const double H = 16.0, g = 1e-4, tau = -1e-5;
-  m.fs = true; m.fs_hf = g_hf; m.fs_tau = floor;
+  m.fs = true; m.fs_tau = floor;
   m.resize(nx, 1, nz);
   m.p.periodic[1] = true;
   m.p.nu = 0.1;
@@ -970,7 +968,7 @@ void fs_pool()
 {
   MeltFlow<R> m;
   const int nx = 64, nz = 30, ns = 24;       // the surface starts at k = ns
-  m.fs = true; m.fs_hf = g_hf;
+  m.fs = true;
   m.resize(nx, nx, nz);
   m.ph.dx = 20e-6; m.ph.nu = 8.5e-7; m.ph.dsdT_rho = -2.6e-4 / 4100.0; m.ph.sig_rho = 1.5 / 4100.0;
   m.ph.beta_g = 1e-5 * 9.81; m.ph.Tref = 1928.0; m.ph.darcy = 1e4; m.ph.u_ref = 1.0;
@@ -1035,7 +1033,7 @@ void fs_inject()
 {
   MeltFlow<R> m;
   const int nx = 32, ny = 32, nz = 20;
-  m.fs = true; m.fs_hf = g_hf;
+  m.fs = true;
   m.resize(nx, ny, nz);
   m.p.periodic[0] = m.p.periodic[1] = true;
   m.p.accel[2] = -1e-4;
@@ -1094,7 +1092,7 @@ void fs_force()
   MeltFlow<R> m;
   const int nx = 64, nz = 48;
   const double H = 24.0, A = 8.0, kw = 2.0 * M_PI / nx, tau = 1e-5;
-  m.fs = true; m.fs_hf = g_hf;
+  m.fs = true;
   m.resize(nx, 2, nz);
   m.p.periodic[0] = m.p.periodic[1] = true;
   m.p.marangoni = tau; m.p.sigma = 0.01; m.p.Tref = 0.0;
@@ -1107,21 +1105,18 @@ void fs_force()
   fs_shape(m, [&](int i) { return 1.0 + H + A * std::cos(kw * (i + 0.5)); });
   const int lo[3] = {0, 0, 0}, hi[3] = {nx, 2, nz};
   m.surface(lo, hi);
-  auto ax = host(m.sax), az = host(m.saz); auto kt = host(m.skt), kb = host(m.skb);
   auto t = host(m.type.v); auto e = host(m.eps.v);
   double fx = 0, fz = 0, ex = 0, ez = 0, amax = 0;
-  auto hs = host(g_hf ? m.hfs.v : Kokkos::View<R****>("none", 1, 1, 1, 4));
+  auto hs = host(m.hfs.v);
   for (int i = 4; i < nx / 2 - 4; i++) {
-    // what the step applies: the column's acceleration on each cell, by its fill
-    // (hf: each liquid cell's own)
-    for (int k = g_hf ? 0 : kb(i, 0); k <= (g_hf ? nz - 1 : kt(i, 0)); k++) {
-      if (g_hf && !MeltFlow<R>::liq(t(i, 0, k))) continue;
+    // what the step applies: each liquid cell's acceleration, by its fill
+    for (int k = 0; k < nz; k++) {
+      if (!MeltFlow<R>::liq(t(i, 0, k))) continue;
       const double w = t(i, 0, k) == MeltFlow<R>::INTERFACE ? std::min(1.0, std::max(0.0, (double) e(i, 0, k))) : 1.0;
-      const double cx = g_hf ? hs(i, 0, k, 1) : ax(i, 0), cz = g_hf ? hs(i, 0, k, 3) : az(i, 0);
+      const double cx = hs(i, 0, k, 1), cz = hs(i, 0, k, 3);
       fx += w * cx; fz += w * cz;
-      if (g_hf) amax = std::max(amax, std::hypot(cx, cz));
+      amax = std::max(amax, std::hypot(cx, cz));
     }
-    if (!g_hf) amax = std::max(amax, std::hypot((double) ax(i, 0), (double) az(i, 0)));
     const double hx = -A * kw * std::sin(kw * (i + 0.5)), g = std::sqrt(1.0 + hx * hx);
     ex += tau / g; ez += tau * hx / g;
   }
@@ -1130,7 +1125,7 @@ void fs_force()
   check("22 steep surface: largest cell acceleration / sigma_x", amax / tau, 1.5);
 }
 
-/* 23-25 (fs_hf): curvature from local height functions.
+/* 23-25: curvature from local height functions.
    Shapes are set from their exact fills (the volume of each cell inside,
    by quadrature fine enough that its error is far below the curvature's),
    all cells FLUID, INTERFACE or GAS by fill, and WALL where wall(i, j, k). */
@@ -1252,7 +1247,7 @@ void fs_sphere(double r, int nstep, double &rms, double &med, double &mx, int cn
   MeltFlow<R> m;
   const int n = 2 * (int) std::ceil(r) + 8;
   const double c[3] = {0.5 * n + 0.1, 0.5 * n - 0.2, 0.5 * n + 0.3};   // off the grid's symmetry
-  m.fs = true; m.fs_hf = true; m.fs_tau = 0.0;
+  m.fs = true; m.fs_tau = 0.0;
   m.resize(n, n, n);
   m.p.periodic[0] = m.p.periodic[1] = m.p.periodic[2] = true;
   m.p.nu = 0.1;
@@ -1281,7 +1276,7 @@ void fs_cyl(bool wall, double r, int nstep, double &rms, double &med, double &mx
   MeltFlow<R> m;
   const int nx = wall ? (int) std::ceil(r) + 6 : 2 * (int) std::ceil(r) + 8, nz = 2 * (int) std::ceil(r) + 8;
   const double c0 = wall ? 1.0 : 0.5 * nx + 0.2, c2 = 0.5 * nz + 0.3;
-  m.fs = true; m.fs_hf = true; m.fs_tau = 0.0;
+  m.fs = true; m.fs_tau = 0.0;
   m.resize(nx, 2, nz);
   m.p.periodic[1] = m.p.periodic[2] = true;
   m.p.periodic[0] = !wall;
@@ -1309,22 +1304,22 @@ void fs_cyl(bool wall, double r, int nstep, double &rms, double &med, double &mx
 // 26. A horizontal elliptic cylinder of liquid (semi-axes a along x, b
 //     along z; along y, periodic), floating, no gravity: it must round into
 //     the cylinder of its area, radius r = sqrt(a b) > a, its sides growing
-//     out over gas (which the column model's conversion does not allow:
-//     liquid enters a gas cell sideways only over metal) and holding the
+//     out over gas and holding the
 //     Laplace pressure sigma / r. Returns the middle row's half-width / r
 //     - 1 and that pressure's error. (Not stuck to a wall: on a vertical
 //     wall face the contact angle depends on the frame: docs/
-//     FREE_SURFACE_LBM.md, 3a.) Kept under hf, the a9ac6675 rule held the
-//     sides back: half-width -14%, and the liquid lost its pressure.
+//     FREE_SURFACE_LBM.md, 3.) The column model's supported-conversion
+//     rule (a9ac6675, removed) held the sides back: half-width -14%, and
+//     the liquid lost its pressure.
 template <class R>
 void fs_relax(double &reach, double &dp)
 {
   MeltFlow<R> m;
   const int nx = 24, nz = 32;
   const double a = 4.0, b = 10.0, c0 = 12.2, c2 = 16.3;
-  m.fs = true; m.fs_hf = g_hf; m.fs_tau = 0.0;
+  m.fs = true; m.fs_tau = 0.0;
   m.resize(nx, 2, nz);
-  m.p.periodic[0] = m.p.periodic[1] = true;      // z closed: the conversion rule acts (it needs a floor)
+  m.p.periodic[0] = m.p.periodic[1] = true;
   m.p.nu = 0.1;
   m.p.sigma = 0.002;
   fs_fill(m, [&](int i, int, int k) { return cylinder_fill(i, k, c0, c2, a, -1e30, b); }, [](int, int, int) { return false; });
@@ -1404,25 +1399,11 @@ void fs_hf_shapes()
   fs_relax<R>(reach, dp);
   check("26 elliptic cylinder rounds: middle row's half-width / r - 1", reach, 5e-2);
   check("26 elliptic cylinder rounds: rho inside / (sigma / r) - 1", dp, 3e-2);
-  g_hf = false;
-  fs_relax<R>(reach, dp);
-  g_hf = true;
-  printf("       26 under fs_curv column: half-width / r - 1 = %+.3f, rho inside / (sigma / r) - 1 = %+.3f\n", reach, dp);
 }
 
 template <class R>
 void fs_all()
 {
-  fs_rest<R>();
-  fs_dam<R>();
-  fs_wave<R>(0.0); fs_wave<R>(1.0);
-  fs_load<R>();
-  fs_thermocapillary<R>(0.0); fs_thermocapillary<R>(1.0);
-  fs_inject<R>();
-  fs_force<R>();
-  fs_pool<R>();
-  // the same under fs_hf, then its own
-  g_hf = true;
   fs_rest<R>();
   fs_dam<R>();
   fs_wave<R>(0.0);
@@ -1432,7 +1413,6 @@ void fs_all()
   fs_force<R>();
   fs_pool<R>();
   fs_hf_shapes<R>();
-  g_hf = false;
 }
 
 template <class R>
@@ -1475,8 +1455,7 @@ int main(int argc, char **argv)
   Kokkos::initialize(argc, argv);
   {
     printf("melt_flow_check on %s\n", Kokkos::DefaultExecutionSpace::name());
-    if (argc > 1 && std::string(argv[1]) == "hf") {     // fs_hf's own checks alone
-      g_hf = true;
+    if (argc > 1 && std::string(argv[1]) == "hf") {     // the height-function shapes alone
       printf("double precision\n"); fs_hf_shapes<double>();
       printf("single precision\n"); fs_hf_shapes<float>();
     } else if (argc > 1 && std::string(argv[1]) == "fs") {     // the free-surface checks alone

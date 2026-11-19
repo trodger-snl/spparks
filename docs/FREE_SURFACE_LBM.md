@@ -198,8 +198,9 @@ over gas, which also forbids the overhangs the wall needs.
 ### Method
 
 Popinet 2009 (sections 3–4) and Cummins, Francois & Kothe 2005. Per
-INTERFACE cell c, in `surface_hf()` (kernels `FlowFsHF`, `FlowFsHFKappa`,
-`FlowFsHFBase`), which replaces `FlowFsSurface`:
+INTERFACE cell c, in `surface_hf()` (kernels `FlowFsHFList`, `FlowFsHF`,
+`FlowFsHFHard`, `FlowFsHFKappa`, `FlowFsHFBase`; see "Memory and cost"),
+which replaces `FlowFsSurface`:
 
 1. **Normal and frame.** n = −∇ε by Youngs' 3×3×3 weights (FLUID and WALL
    count as ε = 1, GAS 0, INTERFACE its clamped fill). The frame is the
@@ -300,19 +301,81 @@ INTERFACE cell c, in `surface_hf()` (kernels `FlowFsHF`, `FlowFsHFKappa`,
 ### Memory and cost
 
 Per held cell: `hfs` (ρ_G, the acceleration, κ: 5 R) and `hfr` (method and
-frame, 1 byte): 41 B in double, 21 B in mixed, against about 470 B of flow
-state per cell (+9%). The pass works on INTERFACE cells only; at 5 µm a
-part has 16× the interface cells of 20 µm but 64× the cells, so it shrinks
-against `FlowStep`. The surface is not what costs at 5 µm: the capillary
+frame, 1 byte) and the two cell lists (`hfl`, `hfh`, 4 B each): 49 B in
+double, 29 B in mixed, against about 470 B of flow state per cell (+10%).
+The pass works on INTERFACE cells only; at 5 µm a part has 16× the
+interface cells of 20 µm but 64× the cells, so it shrinks against
+`FlowStep`. The surface is not what costs at 5 µm: the capillary
 bound makes the step scale as Δx^{3/2}, so the same part has 64× the cells
 and 8× the steps, about 500× the flow work per second of process.
 
-Measured on OpenMP (4 threads, the multi-rank test deck of section 8, one
-rank, 30 ms): the surface went from 3.5% of the run (`FlowFsColumns` 1.8,
-`FlowFsSurface` 1.7) to 10.1% (`FlowFsColumns` 1.3, `FlowFsHF` 5.6,
-`FlowFsHFBase` 1.8, `FlowFsHFKappa` 1.3), +6% on the whole run;
-`FlowFsHF` costs 30% of `FlowStep`. Not yet measured on HIP, where the
-work concentrated on few threads (INTERFACE cells only) may cost more.
+**The passes** (2026-11-18). `FlowFsHFList` packs the INTERFACE cells of
+the block into a list (`hfl`, 4 B per held cell, an atomic append; the
+order is the atomics' and no result depends on it). `FlowFsHF` takes a
+thread per listed cell: Youngs' normal, the dominant frame's 9 columns,
+and for a cell that frame measures, κ and the Marangoni force. A cell it
+does not measure goes on a second list (`hfh`) with its normal, σ and
+source value parked in `hfs`, and `FlowFsHFHard` gives each such cell a
+team (a wave on the GPU, one thread on the host) whose lanes walk the 27
+columns of the three frames side by side, then picks the other frames or
+the fit from them. `FlowFsHFKappa` (the mean) runs on the list too;
+`FlowFsHFBase` stays a pass over the FLUID cells. The counts never come
+back to the host: each pass runs over as many threads as cells, and those
+past the count return; two counts of each list are used in turn, each
+call zeroing the next call's.
+
+**Why so.** A column is a chain of dependent loads (type, then fill, then
+the next cell), and a cell walks 9 of them, or 27 and the fit when the
+dominant frame fails. On the GPU the pass is as long as its slowest wave's
+chain, not its work: one pass over the whole block (most waves hold no
+INTERFACE cell, the rest a few, each waiting for its slowest lane) took
+three times `FlowStep`. Measured on a single-track DED deck
+(LaCie `tinb_fs/in.sdh`: 396×196×118 thermal grid, 20 µm, HIP,
+gfx1151, KOKKOS_PREC mixed, kp_kernel_timer, 0–0.1 s, 366 002 flow steps,
+µs per call):
+
+| Kernel | `column` | `hf` before | list | list, fit in `FlowFsHFKappa` | team per cell | list + team for the rest (now) |
+|---|---|---|---|---|---|---|
+| `FlowFsHFList` | | | 10.3 | 10.1 | 10.3 | 10.3 |
+| `FlowFsHF` | | 301.7 | 162.4 | 90.9 | 152.1 | 72.9 |
+| `FlowFsHFHard` | | | | | | 34.3 |
+| `FlowFsHFKappa` | | 24.2 | 21.4 | 106.5 | 21.9 | 19.1 |
+| `FlowFsHFBase` | | 17.1 | 16.5 | 22.7 | 16.9 | 17.4 |
+| `FlowFsSurface` | 25.0 | | | | | |
+| surface, s per 0.1 s | 9.1 | 125.5 | 77.1 | 84.3 | 73.6 | 56.4 |
+| `FlowStep` (for scale) | 105.7 | 102.9 | 106.3 | 102.3 | 104.3 | 104.6 |
+
+Wall time to 0.1 s without the timer: `column` 176.8 s; `hf` 285.1 s
+before (1.61×), 234.2 s with the list (1.33×), 211.1 s now (1.19×).
+Over 0.05–0.1 s (a grown pool) `FlowFsHF` alone had been 41% of the
+kernel time (429 µs per call, 3.2× `FlowStep`); everything else, `FlowStep`
+included, costs the same under either model. No FP64 instruction is in
+any of the surface kernels of a mixed build. `FlowFsHF` before used 192
+VGPRs (8 waves per SIMD of 16) and spilled 3; on a range policy it
+spilled 82 (336 B of scratch), with the fit in it. Without the fit
+(which moved to the team pass) it holds 182 and spills none.
+
+A team per cell for every cell (`team per cell`) was slower than a
+thread per cell: a wave per cell with 9 of its 32 lanes walking, where a
+thread per cell packs 32 cells into a wave. Only the few cells the dominant frame does not measure
+are worth a team. The fit inside `FlowFsHFKappa` (thread per cell, 27
+columns in a row) made that pass as long as `FlowFsHF` had been.
+
+The result is the same, bit for bit, on OpenMP (one thread, double: the
+multi-rank test deck's grid and conservation report at 0.01–0.025 s) and,
+for the list alone, on HIP. With the team pass the HIP mixed build (fast
+math) gives other last bits (κ, the force: the same arithmetic in another
+kernel, reassociated), so a coupled run drifts from the old one as two
+thread counts do; every gate prints the same digits (OpenMP double and
+HIP, both precisions).
+
+On OpenMP (8 threads, mixed, `in.sdh` to 0.06 s, before this change) the
+surface was 7.0% of the run under `hf` (`FlowFsHF` 4.85%, `FlowFsHFBase`
+1.51, `FlowFsHFKappa` 0.61) against 0.4% under `column`, and the run took
++12.6% (1058 s against 940 s). `FlowFsHF` took 253 µs per call on 8
+threads, about what the GPU took (302 µs): the GPU gains nothing on a
+chain of dependent loads, while `ConductionStep` (43% of an OpenMP run,
+20–30% of a HIP one) and `FlowStep` run about 12× faster there.
 
 ### Gates (tools/melt_flow_check: `melt_flow_check hf`, and all of them in `fs`)
 
